@@ -124,10 +124,10 @@ object Vlc {
 
     /** Play with sidecar subtitles riding as item options. VLC 3.0.x http intf
      *  (share/lua/intf/modules/httprequests.lua): in_play passes each option=
-     *  to playlist.add, so ":sub-file=<url>" attaches the phone-served sub. */
+     *  to playlist.add. Network subtitles use input-slave, verified on Windows VLC 3.0.24. */
     fun playUri(host: String, port: Int, pw: String, uri: String, subUrls: List<String>) {
         var cmd = "command=in_play&input=${encode(uri)}"
-        for (sub in subUrls) cmd += "&option=${encode(":sub-file=$sub")}"
+        for (sub in subUrls) cmd += "&option=${encode(":input-slave=$sub")}"
         command(host, port, pw, cmd)
     }
 

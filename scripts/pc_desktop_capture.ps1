@@ -184,12 +184,12 @@ for ($i = 0; $i -lt 20 -and $sw -eq [System.IntPtr]::Zero; $i++) {
 }
 if ($sw -eq [System.IntPtr]::Zero) { Write-Host "::error::settings window handle never appeared" }
 [ZWU32]::SetForegroundWindow($sw) | Out-Null
-[ZWU32]::SetWindowPos($sw, [System.IntPtr]::Zero, 40, 20, 700, 720, $SWP_NOZORDER) | Out-Null
+[ZWU32]::SetWindowPos($sw, [System.IntPtr]::new(-1), 40, 4, 700, 690, 0) | Out-Null
 Start-Sleep -Milliseconds 700
 $sz3 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings.png"
 [ZWU32]::SetCursorPos(390, 400) | Out-Null
 1..8 | ForEach-Object { [ZWU32]::mouse_event($MOUSEEVENTF_WHEEL, 0, 0, -120, [System.UIntPtr]::Zero); Start-Sleep -Milliseconds 120 }
-Start-Sleep -Milliseconds 600
+Start-Sleep -Seconds 9
 $sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-bottom.png"
 StopZephyr
 

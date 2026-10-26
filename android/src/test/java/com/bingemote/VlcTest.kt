@@ -8,6 +8,19 @@ import org.junit.Test
 
 class VlcTest {
     @Test
+    fun network_subtitles_use_verified_input_slave_route() {
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.start()
+        try {
+            server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("{}"))
+            Vlc.playUri(server.hostName, server.port, "pw", "http://phone/movie.mp4", listOf("http://phone/clip.srt"))
+            val request = server.takeRequest()
+            assertEquals("in_play", request.requestUrl!!.queryParameter("command"))
+            assertEquals(":input-slave=http://phone/clip.srt", request.requestUrl!!.queryParameter("option"))
+        } finally { server.shutdown() }
+    }
+
+    @Test
     fun status_parses_playing_with_subtitles() {
         val o = JSONObject(
             """
