@@ -158,3 +158,6 @@ enum class Source { VLC, ZEPHYR }
 private fun normalizeWinPath(p: String): String =
     // Lambda replacement on purpose: a "\" string replacement is an invalid escape and throws on a match.
     p.trim().replace('/', '\\').replace(Regex("(?<=.)\\\\{2,}")) { "\\" }
+
+/** Cold installs start with the integrated player; configured installs keep their source. */
+internal fun initialScreenForConfiguredInstall(configured: Boolean): String = if (configured) "main" else "setup-zephyr"
