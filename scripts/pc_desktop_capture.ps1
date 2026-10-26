@@ -253,7 +253,9 @@ if ($sliderEl -ne $null) {
     if ($thumbEl -ne $null) {
         $tr = $thumbEl.Current.BoundingRectangle
         $sr = $sliderEl.Current.BoundingRectangle
+        Write-Host "SEEK before: thumb=$tr slider=$sr value=$($sliderEl.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value)"
         DragPixels ($tr.X + $tr.Width / 2) ($tr.Y + $tr.Height / 2) ($sr.X + $sr.Width * 0.6) ($tr.Y + $tr.Height / 2)
+        Write-Host "SEEK after: value=$($sliderEl.GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).Current.Value)"
     } else { Write-Host "::warning::SeekBar thumb not found via UIA" }
 } else { Write-Host "::warning::SeekBar not found via UIA" }
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-seeked.png"

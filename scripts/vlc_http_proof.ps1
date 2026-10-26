@@ -112,7 +112,7 @@ try {
     Write-Output ("MATRIX " + $c.name + " => Subtitle stream: " + $attached)
     # The slave-attach evidence lives in the access/demux/subtitle lines; an
     # unfiltered delta floods on vout noise while the old narrow filter hid http.
-    Get-NewLogLines $logBefore | Select-String -Pattern 'slave|srt|subtitle|access|demux|http' | Select-Object -First 50 | ForEach-Object { Write-Output ("  vlc: " + $_.Line) }
+    Get-NewLogLines $logBefore | Select-String -Pattern 'slave|srt|subtitle|access|demux|http' | Select-Object -Last 110 | ForEach-Object { Write-Output ("  vlc: " + $_.Line) }
     if ($attached -and -not $winner) { $winner = $c.name }
   }
   # Standalone probe: http-served SRT as PRIMARY input, subtitle demux forced.
@@ -146,7 +146,7 @@ try {
     }
     Write-Output "range server log:"
     if (Test-Path $srvLog) { Get-Content $srvLog | Select-Object -Last 40 | ForEach-Object { $_ } } else { Write-Output "(none)" }
-    throw "no encoding candidate attached a Subtitle stream - desktop-VLC subtitle route unsupported on this VLC build"
+    throw "no encoding candidate attached a Subtitle stream - desktop-VLC subtitle attach not proven by tested routes"
   }
   Write-Output "MATRIX WINNER: $winner"
   Write-Output "VLC attached the subtitle (Subtitle stream present)"

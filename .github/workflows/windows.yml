@@ -84,7 +84,14 @@ jobs:
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           $installer = "windows/Output/ZephyrPlayer-$v.exe"
           if (-not (Test-Path $installer)) { throw "installer missing: $installer" }
-          Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $installLog = "$env:RUNNER_TEMP/installer-smoke.log"
+          $ip = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$installLog" -PassThru
+          if (-not $ip.WaitForExit(150000)) {
+            Get-Content $installLog -Tail 80 -ErrorAction SilentlyContinue
+            Get-Process | Where-Object { $_.ProcessName -match 'Zephyr|setup|netsh' } | Format-Table Id,ProcessName,MainWindowTitle
+            throw "installer timed out; see installer-smoke.log"
+          }
+          if ($ip.ExitCode -ne 0) { Get-Content $installLog -Tail 60; throw "installer exit $($ip.ExitCode)" }
           $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           if (-not (Test-Path $installed)) { throw "installed exe missing: $installed" }
           Write-Output "installed: $installed"
@@ -125,7 +132,9 @@ jobs:
             ${{ runner.temp }}/pc-desktop-settings-bottom.png
             ${{ runner.temp }}/pc-playing-controls-window.png
             ${{ runner.temp }}/pc-playing-controls-fullscreen.png
+            ${{ runner.temp }}/pc-smoke-*.png
             ${{ runner.temp }}/pc-desktop-note.txt
+            ${{ runner.temp }}/installer-smoke.log
           if-no-files-found: warn
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

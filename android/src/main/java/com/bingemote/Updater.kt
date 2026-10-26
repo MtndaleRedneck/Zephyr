@@ -24,10 +24,10 @@ data class UpdateInfo(
  * and every failure ends quietly or with a plain message.
  */
 object Updater {
-    const val API = "https://api.github.com/repos/MtndaleRedneck/BingeMote/releases?per_page=30"
+    const val API = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30"
     /** Android and PC release separately; this updater only ever looks at android-v* tags. */
     const val TAG_PREFIX = "android-v"
-    private const val DOWNLOAD_PREFIX = "https://github.com/MtndaleRedneck/BingeMote/releases/download/"
+    private const val DOWNLOAD_PREFIX = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/"
     private const val MAX_APK = 150L * 1024 * 1024
 
     /** "v1.8.0" or "1.8.0" as numbers, or null when it is not a plain dotted version. */
@@ -72,7 +72,7 @@ object Updater {
                 val name = a.optString("name", "")
                 val url = a.optString("browser_download_url", "")
                 val size = a.optLong("size", 0)
-                if (found == null && name.startsWith("BingeMote") && name.endsWith(".apk") && url.startsWith(DOWNLOAD_PREFIX) && size in 1..MAX_APK) {
+                if (found == null && name == "ZephyrRemote-$version.apk" && url == "$DOWNLOAD_PREFIX$tag/$name" && size in 1..MAX_APK) {
                     val d = a.optString("digest", "")
                     val hex = if (d.startsWith("sha256:") && Regex("[0-9a-fA-F]{64}").matches(d.removePrefix("sha256:"))) d.removePrefix("sha256:").lowercase() else null
                     found = UpdateInfo(version, notesBullets(o.optString("body", "")), url, size, hex)
@@ -93,6 +93,7 @@ object Updater {
     /** The manual "Check for updates" button gets to know which way a null went. */
     sealed interface CheckOutcome {
         data class Newer(val info: UpdateInfo) : CheckOutcome
+        object NoRelease : CheckOutcome
         object UpToDate : CheckOutcome
         object Unavailable : CheckOutcome
     }
@@ -103,14 +104,23 @@ object Updater {
         c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("User-Agent", "BingeMote")
         if (c.responseCode != 200) CheckOutcome.Unavailable else {
             val body = c.inputStream.use { it.readBytes(1024 * 1024) }
-            val arr = org.json.JSONArray(String(body, Charsets.UTF_8))
-            var found: UpdateInfo? = null
-            for (i in 0 until arr.length()) {
-                found = parseRelease(arr.getJSONObject(i).toString(), current)
-                if (found != null) break
-            }
-            if (found != null) CheckOutcome.Newer(found) else CheckOutcome.UpToDate
+            classifyFeed(String(body, Charsets.UTF_8), current)
         }
+    } catch (e: Exception) { CheckOutcome.Unavailable }
+
+    /** No compatible published APK is different from a verified current version. */
+    fun classifyFeed(body: String, current: String): CheckOutcome = try {
+        require(parseVersion(current) != null)
+        val arr = org.json.JSONArray(body)
+        var newest: UpdateInfo? = null
+        for (i in 0 until arr.length()) {
+            val candidate = parseRelease(arr.getJSONObject(i).toString(), "0.0.0") ?: continue
+            if (newest == null || isNewer(candidate.versionName, newest.versionName)) newest = candidate
+        }
+        val published = newest
+        if (published == null) CheckOutcome.NoRelease
+        else if (isNewer(published.versionName, current)) CheckOutcome.Newer(published)
+        else CheckOutcome.UpToDate
     } catch (e: Exception) { CheckOutcome.Unavailable }
 
     private fun java.io.InputStream.readBytes(max: Int): ByteArray {
