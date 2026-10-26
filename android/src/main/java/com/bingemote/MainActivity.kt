@@ -253,7 +253,7 @@ fun UpdateHost(store: Store) {
         updateJob = scope.launch {
             try {
                 val f = withContext(Dispatchers.IO) {
-                    val existing = File(Updater.updateDir(context), "BingeMote-update.apk")
+                    val existing = File(Updater.updateDir(context), "Zephyr-update.apk")
                     if (existing.exists()) {
                         try { Updater.verify(context, existing); return@withContext existing }
                         catch (e: Exception) { existing.delete() }
@@ -271,7 +271,7 @@ fun UpdateHost(store: Store) {
                 if (context.packageManager.canRequestPackageInstalls()) {
                     launchInstaller(f)
                 } else {
-                    updateUi = UpdateUi.Failed("Allow BingeMote to install updates, then check for updates again in Settings.")
+                    updateUi = UpdateUi.Failed("Allow Zephyr to install updates, then check for updates again in Settings.")
                     context.startActivity(
                         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${context.packageName}")),
                     )
@@ -309,7 +309,7 @@ fun UpdateHost(store: Store) {
             is UpdateUi.Offer -> AlertDialog(
                 onDismissRequest = { updateUi = null },
                 containerColor = Card2,
-                title = { Text("BingeMote ${u.info.versionName} is available", color = TextC) },
+                title = { Text("Zephyr ${u.info.versionName} is available", color = TextC) },
                 text = {
                     Column {
                         Text("You have ${BuildConfig.VERSION_NAME}.", color = Muted)

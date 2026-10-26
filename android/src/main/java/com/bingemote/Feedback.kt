@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-const val REPO_ISSUES = "https://github.com/MtndaleRedneck/BingeMote/issues"
+const val REPO_ISSUES = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues"
 /** A plain Google Form, like BumpLog's: the app opens it pre-filled, he reviews and submits in the browser. */
 const val BUG_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeD1ytVTxoA0GgftLr5wSu2kZm1yxRwCHcOV4Pb100Lm6hLcQ/viewform"
 private const val MAX_TEXT = 3000

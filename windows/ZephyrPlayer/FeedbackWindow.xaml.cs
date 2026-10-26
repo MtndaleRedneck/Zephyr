@@ -15,7 +15,7 @@ namespace ZephyrPlayer
     /// </summary>
     public partial class FeedbackWindow : Window
     {
-        private const string RepoIssues = "https://github.com/MtndaleRedneck/BingeMote/issues";
+        private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues";
         private const string BugFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLSeD1ytVTxoA0GgftLr5wSu2kZm1yxRwCHcOV4Pb100Lm6hLcQ/viewform";
         private const int MaxText = 3000;
         private const int MaxEncoded = 4500;
