@@ -45,7 +45,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-test-diagnostics
-          path: windows/ZephyrPlayer.Tests/TestResults/
+          path: |
+            windows/ZephyrPlayer.Tests/TestResults/
+            ${{ runner.temp }}/sta-error-*.txt
           if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
         if: always()

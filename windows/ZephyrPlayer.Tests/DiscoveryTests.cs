@@ -52,18 +52,21 @@ namespace ZephyrPlayer.Tests
             using var player = new DiscoveryResponder(47823, "TestPC");
             using var asker = new UdpClient();
             asker.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.Broadcast, true);
-            asker.Client.ReceiveTimeout = 250;
             var question = Encoding.UTF8.GetBytes("BINGEMOTE_DISCOVER_V1");
             var target = new IPEndPoint(IPAddress.Broadcast, 8489);
             var replies = new HashSet<string>();
             var deadline = DateTime.UtcNow.AddSeconds(4);
             var sends = 0;
+            // NOTE: async socket receives ignore ReceiveTimeout; bound each
+            // receive with a cancellation token so a lost reply fails fast
+            // instead of hanging the test host (CI-observed 40min hang).
             while (DateTime.UtcNow < deadline && replies.Count < 2)
             {
                 if (sends < 6) { try { await asker.SendAsync(question, question.Length, target); } catch (Exception) { } sends++; }
                 try
                 {
-                    var r = await asker.ReceiveAsync();
+                    using var rc = new CancellationTokenSource(250);
+                    var r = await asker.ReceiveAsync(rc.Token).AsTask();
                     replies.Add(Encoding.UTF8.GetString(r.Buffer));
                 }
                 catch (Exception) { /* wait for both */ }
@@ -77,10 +80,10 @@ namespace ZephyrPlayer.Tests
         {
             using var responder = new DiscoveryResponder(47823, "TestPC");
             using var asker = new UdpClient();
-            asker.Client.ReceiveTimeout = 3000;
             var question = Encoding.UTF8.GetBytes("BINGEMOTE_DISCOVER_V1");
             await asker.SendAsync(question, question.Length, new IPEndPoint(IPAddress.Loopback, 8489));
-            var reply = await asker.ReceiveAsync();
+            using var rc = new CancellationTokenSource(3000);
+            var reply = await asker.ReceiveAsync(rc.Token).AsTask();
             Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823",
                 Encoding.UTF8.GetString(reply.Buffer));
         }
@@ -90,10 +93,12 @@ namespace ZephyrPlayer.Tests
         {
             using var responder = new DiscoveryResponder(47823, "TestPC");
             using var asker = new UdpClient();
-            asker.Client.ReceiveTimeout = 700;
             var noise = Encoding.UTF8.GetBytes("BINGEMOTE_HERE_V1|not-a-question|1");
             await asker.SendAsync(noise, noise.Length, new IPEndPoint(IPAddress.Loopback, 8489));
-            await Assert.ThrowsAnyAsync<Exception>(async () => await asker.ReceiveAsync());
+            // No reply may arrive: bound the wait with a token (async receives
+            // ignore ReceiveTimeout) and require it to time out.
+            using var rc = new CancellationTokenSource(700);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await asker.ReceiveAsync(rc.Token).AsTask());
         }
     }
 }

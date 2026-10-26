@@ -39,7 +39,12 @@ namespace ZephyrPlayer.Tests
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
             t.Join(30000);
-            Assert.Null(error);
+                        if (error != null)
+            {
+                var f = System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");
+                try { System.IO.File.WriteAllText(f, error); } catch { }
+                Assert.True(false, "STA body error (full text also in " + f + "):\n" + error);
+            }
             try { File.Delete(path); } catch { }
         }
 
