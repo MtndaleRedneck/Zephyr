@@ -74,7 +74,7 @@ jobs:
         run: scripts/pc_desktop_capture.ps1
       - name: Install + update continuity smoke (real installer)
         if: always()
-        timeout-minutes: 6
+        timeout-minutes: 8
         shell: pwsh
         run: |
           # Actually INSTALL the artifact, not just build it: silent install,
@@ -119,6 +119,29 @@ jobs:
           if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { throw "installed exe died during the update-check window" }
           Write-Output "installed exe alive through launch + on-open update check window"
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          # Emulate updater handoff: app exits, installer replaces installed files,
+          # then relaunches. No release/tag is published for this local smoke.
+          $config = Join-Path $env:APPDATA 'ZephyrPlayer'
+          New-Item -ItemType Directory -Force $config | Out-Null
+          $settingsPath = Join-Path $config 'settings.json'
+          $pairingPath = Join-Path $config 'paired.json'
+          [IO.File]::WriteAllText($settingsPath, '{"SkipBackSeconds":10,"SkipForwardSeconds":60,"LastVolume":47}')
+          [IO.File]::WriteAllText($pairingPath, '["local-smoke-token"]')
+          $beforeSettings = (Get-FileHash $settingsPath).Hash
+          $beforePairing = (Get-FileHash $pairingPath).Hash
+          $updateLog = "$env:RUNNER_TEMP/installer-update-smoke.log"
+          $up = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$updateLog" -PassThru
+          if (-not $up.WaitForExit(150000)) { Get-Content $updateLog -Tail 50; throw 'replacement installer timed out' }
+          if ($up.ExitCode -ne 0) { throw "replacement installer exit $($up.ExitCode)" }
+          Start-Sleep -Seconds 8
+          $running = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
+          if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'replacement did not relaunch installed app' }
+          if ((Get-FileHash $settingsPath).Hash -ne $beforeSettings) { throw 'replacement changed settings' }
+          if ((Get-FileHash $pairingPath).Hash -ne $beforePairing) { throw 'replacement changed pairing' }
+          if (-not (Test-Path (Join-Path (Split-Path $installed) 'libvlc'))) { throw 'installed libvlc directory missing' }
+          Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings and pairing hashes unchanged. Same-version replacement, not published version upgrade.'
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -135,6 +158,7 @@ jobs:
             ${{ runner.temp }}/pc-smoke-*.png
             ${{ runner.temp }}/pc-desktop-note.txt
             ${{ runner.temp }}/installer-smoke.log
+            ${{ runner.temp }}/installer-update-smoke.log
           if-no-files-found: warn
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

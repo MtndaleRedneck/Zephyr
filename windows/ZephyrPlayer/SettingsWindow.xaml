@@ -89,7 +89,7 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
         <StackPanel Margin="20,16">
 
             <Border Style="{StaticResource Card}">
