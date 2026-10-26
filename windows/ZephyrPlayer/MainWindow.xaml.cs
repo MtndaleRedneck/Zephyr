@@ -46,6 +46,7 @@ namespace ZephyrPlayer
         public MainWindow(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
         {
             InitializeComponent();
+            WindowChrome.ApplyDarkTitleBar(this);
             _libvlc = libvlc;
             _player = player;
             _settings = settings ?? new PlayerSettings();

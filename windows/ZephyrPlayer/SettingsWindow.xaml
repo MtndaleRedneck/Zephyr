@@ -163,6 +163,7 @@
                     <TextBlock x:Name="VersionText" Foreground="{StaticResource TextBrush}" FontSize="13"/>
                     <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Small}" Margin="0,4,0,0"/>
                     <Button Style="{StaticResource OrangeButton}" Content="Check now" Click="OnCheckUpdates" Margin="0,10,0,0" HorizontalAlignment="Left"/>
+                    <Button x:Name="InstallUpdateButton" Style="{StaticResource OrangeButton}" Content="Download and install update" Click="OnInstallUpdate" Margin="0,10,0,0" HorizontalAlignment="Left" Visibility="Collapsed"/>
                     <TextBlock Style="{StaticResource Small}" Margin="0,8,0,0" Text="Zephyr also checks automatically every time it opens."/>
                 </StackPanel>
             </Border>

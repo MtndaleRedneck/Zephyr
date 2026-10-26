@@ -17,6 +17,7 @@ namespace ZephyrPlayer
         private readonly PlayerSettings _settings;
         private readonly PairedStore _store;
         private readonly Func<string> _newPairCode;
+        private (string Version, string ExeUrl, string? Sha256)? _updateOffer;
 
         public SettingsWindow(PlayerSettings settings, PairedStore store, Func<string> newPairCode)
         {
@@ -100,6 +101,7 @@ namespace ZephyrPlayer
                 try
                 {
                     UpdateState.Outcome = UpdateCheck.CheckOutcomeOrThrow(current);
+                    _updateOffer = UpdateCheck.LatestNewerThanOrThrow(current);
                     result = UpdateState.Display(UpdateState.Outcome);
                 }
                 catch (Exception ex)
@@ -107,8 +109,37 @@ namespace ZephyrPlayer
                     UpdateState.Outcome = "failed: " + ex.GetType().Name;
                     result = UpdateState.Display(UpdateState.Outcome);
                 }
-                Dispatcher.InvokeAsync(() => UpdateStatusText.Text = result);
+                Dispatcher.InvokeAsync(() =>
+                {
+                    UpdateStatusText.Text = result;
+                    InstallUpdateButton.Visibility = _updateOffer != null ? Visibility.Visible : Visibility.Collapsed;
+                });
             });
+        }
+
+        private async void OnInstallUpdate(object sender, RoutedEventArgs e)
+        {
+            var offer = _updateOffer;
+            if (offer == null) return;
+            if (offer.Value.Sha256 == null)
+            {
+                UpdateStatusText.Text = "The release has no verified checksum. Update was not installed.";
+                return;
+            }
+            InstallUpdateButton.IsEnabled = false;
+            try
+            {
+                UpdateStatusText.Text = "Downloading update...";
+                var progress = new Progress<int>(n => UpdateStatusText.Text = $"Downloading update: {n}%");
+                var path = await SelfUpdate.Download(offer.Value.Version, offer.Value.ExeUrl, offer.Value.Sha256, progress);
+                UpdateStatusText.Text = "Starting the verified installer...";
+                SelfUpdate.LaunchAndQuit(path);
+            }
+            catch (Exception)
+            {
+                UpdateStatusText.Text = "Could not install the update. Your current version is unchanged. Try again later.";
+                InstallUpdateButton.IsEnabled = true;
+            }
         }
 
         private void OnFeedback(object sender, RoutedEventArgs e)
