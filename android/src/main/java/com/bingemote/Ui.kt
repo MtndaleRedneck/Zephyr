@@ -125,7 +125,7 @@ fun TopBar(pill: @Composable () -> Unit, settings: @Composable () -> Unit) {
                 modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)),
             )
             Text(
-                "BingeMote", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                "Zephyr", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
             )
             pill()
