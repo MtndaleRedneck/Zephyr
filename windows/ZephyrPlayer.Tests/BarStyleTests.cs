@@ -77,7 +77,10 @@ namespace ZephyrPlayer.Tests
                 settings.IconStyle = "filled";
                 settings.ShowSpeed = true;
                 settings.ShowSleepTimer = true;
-                w.Dispatcher.Invoke(() => { }); // flush the async Changed handlers
+                // Flush the queued Changed handlers: a bare Invoke runs at Send priority and
+                // jumps AHEAD of the Normal-priority ApplyBarStyle callbacks; pumping at
+                // SystemIdle waits until they have all run.
+                w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle);
                 Assert.Equal("10", ((System.Windows.Controls.TextBlock)w.FindName("SkipBackLabel")!).Text);
                 Assert.Equal("60", ((System.Windows.Controls.TextBlock)w.FindName("SkipForwardLabel")!).Text);
                 Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));

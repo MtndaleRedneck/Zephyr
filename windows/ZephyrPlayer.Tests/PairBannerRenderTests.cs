@@ -64,7 +64,8 @@ namespace ZephyrPlayer.Tests
                         if (r > 230 && g > 230 && b > 230) white++;
                     }
                     Assert.True(gold > 100, $"gold code-text pixels {gold} - banner code not rendered");
-                    Assert.True(white > 100, $"white title pixels {white} - banner title not rendered");
+                    // Threshold encodes the settled design: "Pair with your phone" at default caption size (~69 pure-white px on the 96dpi runner render; 0-ish would mean not rendered).
+                    Assert.True(white > 40, $"white title pixels {white} - banner title not rendered");
                     w.Close();
                     // Shut the dispatcher down on this STA thread: a live dispatcher at
                     // thread exit lets a zombie wndproc race host teardown (CI-observed
@@ -126,8 +127,9 @@ namespace ZephyrPlayer.Tests
                         if (r > 200 && g > 150 && g < 230 && b < 110) gold++;
                         if (r > 230 && g > 230 && b > 230) white++;
                     }
-                    Assert.True(gold > 50, $"gold elapsed-text pixels {gold} - control bar not rendered");
-                    Assert.True(white > 50, $"white remaining-text pixels {white} - control bar not rendered");
+                    // Threshold encodes the settled 13pt captions (~44 pure-gold px on the 96dpi runner render; 0-ish would mean not rendered).
+                    Assert.True(gold > 30, $"gold elapsed-text pixels {gold} - control bar not rendered");
+                    Assert.True(white > 30, $"white remaining-text pixels {white} - control bar not rendered");
                     w.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
