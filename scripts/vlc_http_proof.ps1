@@ -40,12 +40,17 @@ try {
   $auth = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) }
   function Test-SubStream($status) {
     foreach ($cat in $status.information.category.PSObject.Properties) {
-      foreach ($stream in $cat.Value.PSObject.Properties) {
-        if ($stream.Value.Type -eq "Subtitle") { return $true }
-      }
+      # status.json category.Stream_N IS the stream object. Its properties
+      # (Type, Codec, etc.) are scalar fields, not another stream nesting.
+      if ($cat.Value.Type -eq "Subtitle") { return $true }
     }
     return $false
   }
+  # Pin the real VLC JSON shape so a false-negative detector cannot obscure
+  # a working attachment or turn a limitation into product scope.
+  $positive = '{"information":{"category":{"Stream_0":{"Type":"Video"},"Stream_1":{"Type":"Subtitle","Codec":"Text subtitles"}}}}' | ConvertFrom-Json
+  $negative = '{"information":{"category":{"Stream_0":{"Type":"Video"}}}}' | ConvertFrom-Json
+  if (-not (Test-SubStream $positive) -or (Test-SubStream $negative)) { throw "Subtitle detector self-test failed" }
   function Get-Status { (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json }
   function Wait-Sub($seconds) {
     for ($i = 0; $i -lt ($seconds * 2); $i++) {
