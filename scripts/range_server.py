@@ -5,7 +5,6 @@ import http.server, sys, os, re, functools
 DIR, PORT = sys.argv[1], int(sys.argv[2])
 
 class H(http.server.SimpleHTTPRequestHandler):
-    def log_message(self, *a): pass
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=DIR, **kw)
     def do_GET(self):
