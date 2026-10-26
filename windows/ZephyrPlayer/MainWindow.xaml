@@ -8,7 +8,7 @@
          (WPF airspace), not over the VideoView. -->
     <libvlc:VideoView x:Name="Video">
         <libvlc:VideoView.Content>
-            <Grid x:Name="Overlay" Background="Transparent">
+            <Grid x:Name="Overlay" Background="Transparent" MouseMove="OnMouseMove">
                 <Border x:Name="PairBanner" x:FieldModifier="public" Visibility="Collapsed"
                         VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,24,0,0"
                         Background="#CC202124" CornerRadius="12" Padding="16,10">

@@ -246,7 +246,9 @@ function DragPixels($x0, $y0, $x1, $y1) {
     Start-Sleep -Milliseconds 700
 }
 $rootEl = [System.Windows.Automation.AutomationElement]::FromHandle($hw3)
-$sliderEl = Find-ByAutoId $rootEl 'SeekBar'
+# Reveal and hold the floating overlay before finding physical thumb bounds.
+WakeControls
+$sliderEl = Find-ByAutoId $rootEl 'SeekBar' 
 if ($sliderEl -ne $null) {
     $thumbCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Thumb)
     $thumbEl = $sliderEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $thumbCond)

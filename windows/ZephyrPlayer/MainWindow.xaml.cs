@@ -53,7 +53,14 @@ namespace ZephyrPlayer
             _volume = volume ?? new VolumeService();
             Loaded += (_, __) => Video.MediaPlayer = _player;
             _idleTimer.Interval = TimeSpan.FromSeconds(3);
-            _idleTimer.Tick += (_, __) => { ControlBar.Opacity = 0; _idleTimer.Stop(); };
+            _idleTimer.Tick += (_, __) =>
+            {
+                // VideoView hosts controls in a separate floating window. Never
+                // hide the seek thumb while the pointer is using the bar.
+                if (ControlBar.IsMouseOver || _seeking) return;
+                ControlBar.Opacity = 0;
+                _idleTimer.Stop();
+            };
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
             _flashTimer.Tick += (_, __) => { _flashTimer.Stop(); ApplyBarStyle(); };
