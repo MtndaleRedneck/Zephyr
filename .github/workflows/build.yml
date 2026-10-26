@@ -1,34 +1,11 @@
-name: Build
-
-on:
-  push:
-    branches: [main]
-    paths:
-      - 'android/**'
-      - 'gradle/**'
-      - '*.gradle.kts'
-      - 'gradle.properties'
-      - 'gradlew'
-      - 'scripts/screenshots.sh'
-      - 'scripts/instrumented.sh'
-      - '.github/workflows/build.yml'
-  workflow_dispatch:
-
-# Zephyr CI (public repo): unit tests, instrumented suites, screenshot rig.
-# No release/publish job - no downloads while in development. Release signing
-# uses the existing Android signer from encrypted repo secrets (never committed).
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
+name: BingeMote capture only
+on: workflow_dispatch
 permissions:
   contents: read
-
 jobs:
-  android:
+  capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -36,26 +13,22 @@ jobs:
           distribution: temurin
           java-version: 17
       - uses: gradle/actions/setup-gradle@v3
-      - name: Unit tests
-        run: ./gradlew --no-daemon testDebugUnitTest
-      - name: Build debug APK
-        run: ./gradlew --no-daemon assembleDebug
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Zephyr-Android-debug-apk
-          path: android/build/outputs/apk/debug/*.apk
-
-  screenshots:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v3
-      - run: ./gradlew --no-daemon assembleDebug
+      - name: Exact BingeMote capture source
+        run: |
+          git clone https://github.com/MtndaleRedneck/BingeMote.git /tmp/binge
+          git -C /tmp/binge checkout ae1bda345d5f82ca67f03cad740bf155ca5cc3c1
+      - name: Build only unchanged BingeMote release and capture test
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: bingemote
+        run: |
+          set -euo pipefail
+          printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          cd /tmp/binge
+          ./gradlew --no-daemon -PrecoveryReleaseTest assembleRelease assembleReleaseAndroidTest
+          rm -f "$RUNNER_TEMP/release.keystore"
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -68,56 +41,12 @@ jobs:
           target: google_apis
           profile: pixel_6
           disable-animations: true
-          script: bash scripts/screenshots.sh
+          script: bash scripts/binge-capture-only.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: Zephyr-screenshots
-          path: screenshots/*
-
-  instrumented:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v3
-      - run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
-      - name: Build the headless wire host (real server classes, Linux)
-        run: dotnet build windows/ZephyrPlayer.HeadlessHost/ZephyrPlayer.HeadlessHost.csproj -c Release
-      - name: Start the wire host + seed its library
-        run: |
-          mkdir -p /tmp/zephyr-wire-lib/Documentaries
-          dd if=/dev/urandom of=/tmp/zephyr-wire-lib/"Wire Movie One (2024).mkv" bs=1k count=64
-          dd if=/dev/urandom of=/tmp/zephyr-wire-lib/Documentaries/"Wire Doc.mkv" bs=1k count=16
-          nohup dotnet run --project windows/ZephyrPlayer.HeadlessHost -c Release --no-build -- 47999 /tmp/zephyr-wire-lib > /tmp/wire-host.log 2>&1 &
-          for i in $(seq 1 30); do grep -q PAIRCODE /tmp/wire-host.log && break; sleep 1; done
-          cat /tmp/wire-host.log
-          grep -q PAIRCODE /tmp/wire-host.log || { echo "wire host never came up"; exit 1; }
-      - name: Enable KVM
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-      # Real emulator: StreamServer loopback (sockets), SAF listing, and the
-      # inherited gesture/migration rigs - one class per fresh am instrument
-      # session (see scripts/instrumented.sh for why a single session wedges).
-      - uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 34
-          arch: x86_64
-          target: google_apis
-          profile: pixel_6
-          disable-animations: true
-          script: bash scripts/instrumented.sh
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: instrument-results
-          path: instrument-results/*
+          name: binge-capture-only
+          path: |
+            screenshots/*
+            instrument-results/*
+          retention-days: 2
