@@ -50,7 +50,7 @@ class StreamTargetTest {
         assertNotNull("VLC never got in_play", hit)
         assertTrue(hit!!.path!!.startsWith("/requests/status.json?command=in_play&input="))
         assertTrue(hit.path!!.contains("Phone%2520Movie"))
-        assertTrue("subtitle must ride as a :sub-file option",
+        assertTrue("subtitle must ride as a :input-slave option",
             hit.path!!.contains("option=%3Asub-file%3Dhttp"))
         assertNull("zephyr got traffic while VLC selected", zephyr.takeRequest(1, TimeUnit.SECONDS))
     }

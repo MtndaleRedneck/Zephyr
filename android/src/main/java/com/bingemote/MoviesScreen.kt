@@ -196,7 +196,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     /** Phone-origin tap on a movie: serve it and hand the URL to the SELECTED
      *  target. Zephyr PC takes the Zephyr play call; VLC PC gets the same URL
      *  through VLC's in_play. No silent fallback between targets.
-     *  Sidecar subtitles ride as :sub-file options on the VLC route. */
+     *  Sidecar subtitles ride as :input-slave options on the VLC route. */
     fun streamPlay(item: BrowseItem) {
         if (starting) return
         val toZephyr = remote.store.selectedSource == Source.ZEPHYR
