@@ -61,7 +61,7 @@ namespace ZephyrPlayer.Tests
         [Fact]
         public void NewerPlayerTag_WithExe_Wins()
         {
-            Feed("[" + Release("player-v1.2.0", "ZephyrPlayer-1.2.0.exe", new string('a', 64)) + "]");
+            Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe", new string('a', 64)) + "]");
             var hit = UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases");
             Assert.NotNull(hit);
             Assert.Equal("1.2.0", hit!.Value.Version);
@@ -71,17 +71,17 @@ namespace ZephyrPlayer.Tests
         [Fact]
         public void OlderOrEqual_Skipped()
         {
-            Feed("[" + Release("player-v0.9.0", "ZephyrPlayer-0.9.0.exe") + "," + Release("player-v1.0.0", "ZephyrPlayer-1.0.0.exe") + "]");
+            Feed("[" + Release("player-v0.9.0", "Zephyr-PC-0.9.0.exe") + "," + Release("player-v1.0.0", "Zephyr-PC-1.0.0.exe") + "]");
             Assert.Null(UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases"));
         }
 
         [Fact]
         public void Drafts_Prereleases_OtherTags_Skipped()
         {
-            Feed("[" + Release("player-v2.0.0", "ZephyrPlayer-2.0.0.exe", draft: true) + ","
-                 + Release("player-v2.0.0", "ZephyrPlayer-2.0.0.exe", prerelease: true) + ","
-                 + Release("pc-v9.9.9", "ZephyrPlayer-9.9.9.exe") + ","
-                 + Release("v2.0.0", "ZephyrPlayer-2.0.0.exe") + "]");
+            Feed("[" + Release("player-v2.0.0", "Zephyr-PC-2.0.0.exe", draft: true) + ","
+                 + Release("player-v2.0.0", "Zephyr-PC-2.0.0.exe", prerelease: true) + ","
+                 + Release("pc-v9.9.9", "Zephyr-PC-9.9.9.exe") + ","
+                 + Release("v2.0.0", "Zephyr-PC-2.0.0.exe") + "]");
             Assert.Null(UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases"));
         }
 
@@ -97,9 +97,9 @@ namespace ZephyrPlayer.Tests
         {
             Feed("[]");
             Assert.Equal("no_release", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
-            Feed("[" + Release("player-v1.0.0", "ZephyrPlayer-1.0.0.exe") + "]");
+            Feed("[" + Release("player-v1.0.0", "Zephyr-PC-1.0.0.exe") + "]");
             Assert.Equal("up_to_date", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
-            Feed("[" + Release("player-v1.2.0", "ZephyrPlayer-1.2.0.exe") + "]");
+            Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe") + "]");
             Assert.Equal("available: 1.2.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
             Feed("not json");
             Assert.ThrowsAny<Exception>(() => UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
@@ -121,8 +121,8 @@ namespace ZephyrPlayer.Tests
         public void Feed_RejectsWrongAppAssets_ChoosesHighestVersion()
         {
             Feed("[" + Release("player-v9.0.0", "BingeMote-PC-9.0.0.exe") + "," +
-                Release("player-v1.1.0", "ZephyrPlayer-1.1.0.exe") + "," +
-                Release("player-v1.3.0", "ZephyrPlayer-1.3.0.exe") + "]");
+                Release("player-v1.1.0", "Zephyr-PC-1.1.0.exe") + "," +
+                Release("player-v1.3.0", "Zephyr-PC-1.3.0.exe") + "]");
             Assert.Equal("1.3.0", UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases")!.Value.Version);
         }
 
@@ -139,7 +139,7 @@ namespace ZephyrPlayer.Tests
         [Fact]
         public void LaunchOffer_IsAvailable_ThenClearedForNoReleaseOrFailedFeed()
         {
-            Feed("[" + Release("player-v1.2.0", "ZephyrPlayer-1.2.0.exe", new string('b', 64)) + "]");
+            Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe", new string('b', 64)) + "]");
             Assert.Equal("available: 1.2.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
             Assert.Equal("1.2.0", UpdateState.AvailableOffer?.Version);
             Feed("[]");
@@ -167,7 +167,7 @@ namespace ZephyrPlayer.Tests
             _exeBytes = Encoding.UTF8.GetBytes("fake installer payload");
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: _ => true));
-            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ZephyrPlayer-1.2.0.exe")));
+            Assert.False(System.IO.File.Exists(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Zephyr-PC-1.2.0.exe")));
         }
 
         [Fact]
