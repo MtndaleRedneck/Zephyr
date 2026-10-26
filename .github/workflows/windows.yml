@@ -72,6 +72,34 @@ jobs:
         timeout-minutes: 6
         shell: pwsh
         run: scripts/pc_desktop_capture.ps1
+      - name: Install + update continuity smoke (real installer)
+        if: always()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          # Actually INSTALL the artifact, not just build it: silent install,
+          # auto-launch as the original user, verify the installed exe is
+          # alive (its on-open update check runs in this window too), then
+          # stop it so nothing holds the single-instance mutex.
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $installer = "windows/Output/ZephyrPlayer-$v.exe"
+          if (-not (Test-Path $installer)) { throw "installer missing: $installer" }
+          Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $installed)) { throw "installed exe missing: $installed" }
+          Write-Output "installed: $installed"
+          Start-Sleep -Seconds 8
+          $proc = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
+          if (-not $proc) {
+            # skipifnotsilent auto-launch may not fire on a headless session;
+            # launch the installed exe directly, same thing the user gets.
+            $proc = Start-Process $installed -PassThru
+            Start-Sleep -Seconds 8
+          }
+          $proc.Refresh()
+          if ($proc.HasExited) { throw "installed exe exited during startup/update check" }
+          Write-Output "installed exe alive after launch + on-open update check window (pid $($proc.Id))"
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v4
         if: always()
         with:
