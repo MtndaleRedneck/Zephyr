@@ -36,7 +36,7 @@ adb exec-out screencap -p > screenshots/side-by-side-launcher.png
 adb install -r android/build/outputs/apk/debug/app-debug.apk
 adb install -r android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 adb shell am instrument -w -e class com.bingemote.ReleaseIdentityTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrument-results/identity-defaults.txt
-grep -q 'OK (1 test)' instrument-results/identity-defaults.txt
+grep -q 'OK (2 tests)' instrument-results/identity-defaults.txt
 adb shell am instrument -w -e class com.bingemote.PlaybackRoutingTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrument-results/playback-routing.txt
 grep -q 'OK (1 test)' instrument-results/playback-routing.txt
 bash scripts/screenshots.sh
@@ -57,7 +57,8 @@ adb shell cp /data/local/tmp/visual-settings.xml /data/user/0/com.zephyr.remote.
 adb shell chown "$UID_DEBUG:$UID_DEBUG" /data/user/0/com.zephyr.remote.debug/shared_prefs/settings.xml
 adb shell restorecon -R /data/user/0/com.zephyr.remote.debug/shared_prefs
 # Clear only debug Zephyr pairing, via existing test fixture setup/teardown.
-adb shell am instrument -w -e class com.bingemote.PlaybackRoutingTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner > instrument-results/visual-reset.txt
+adb shell am instrument -w -e class com.bingemote.ReleaseIdentityTest#clearVisualPairingSynchronously com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrument-results/visual-reset.txt
+grep -q 'OK (1 test)' instrument-results/visual-reset.txt
 adb shell am force-stop com.zephyr.remote.debug
 adb shell am start -n com.zephyr.remote.debug/com.bingemote.MainActivity --es screen settings
 sleep 4
