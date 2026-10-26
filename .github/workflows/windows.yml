@@ -80,9 +80,10 @@ jobs:
             ${{ runner.temp }}/pair-banner-render.png
             ${{ runner.temp }}/pc-controlbar-render.png
             ${{ runner.temp }}/pc-desktop.png
-            ${{ runner.temp }}/pc-desktop-controls.png
             ${{ runner.temp }}/pc-desktop-settings.png
-            ${{ runner.temp }}/pc-desktop-playing.png
+            ${{ runner.temp }}/pc-desktop-settings-bottom.png
+            ${{ runner.temp }}/pc-playing-controls-window.png
+            ${{ runner.temp }}/pc-playing-controls-fullscreen.png
             ${{ runner.temp }}/pc-desktop-note.txt
           if-no-files-found: warn
       - name: Upload installer artifact
