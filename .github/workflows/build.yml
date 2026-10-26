@@ -17,7 +17,7 @@ jobs:
       - name: Exact BingeMote repair source
         run: |
           git clone https://github.com/MtndaleRedneck/BingeMote.git /tmp/binge
-          git -C /tmp/binge checkout e6f0646bc3d5dd990c57ff00c00247119503778a
+          git -C /tmp/binge checkout 560b3edd520a84a2d417afd9d92c5d88cf26eeb2
       - name: Local suites and release candidates
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}

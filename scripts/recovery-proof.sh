@@ -10,6 +10,8 @@ proof() {
  grep -q 'OK (1 test)' "instrument-results/recovery-$1.txt"
 }
 proof seed
+adb shell cat /data/user/0/com.bingemote/shared_prefs/settings.xml | tee instrument-results/seed-disk-settings.xml
+grep -q 'DESKTOP-TEST' instrument-results/seed-disk-settings.xml
 adb install -r /tmp/faulty.apk
 proof faulty
 adb install -r /tmp/binge/app/build/outputs/apk/release/app-release.apk
