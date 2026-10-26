@@ -13,6 +13,9 @@ on:
 
 # Windows player: build, tests, real-VLC proof, installer, desktop captures.
 # Runs only when Windows-side files change.
+# Evidence steps (proof/publish/installer/captures) run even when tests fail,
+# so UI pixels and the installer are never held hostage by a test regression.
+# The overall job still fails when tests fail: evidence is not the gate.
 
 permissions:
   contents: read
@@ -20,23 +23,42 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
       - name: Build Zephyr Player
+        timeout-minutes: 8
         run: dotnet build windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release
-      - name: PlaybackServer loopback tests (auth mandatory, payload parse)
-        run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
-      # Tests land with the first test project; installer job lands with
-      # installer.iss; the airspace overlay still needs on-hardware validation.
+      - name: Windows test suite (blame-hang bounded; no silent host)
+        id: tests
+        timeout-minutes: 10
+        run: >
+          dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
+          --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
+          --logger "trx;LogFileName=win-tests.trx"
+          --logger "console;verbosity=detailed"
+      - name: Upload test diagnostics (TRX + hang dumps)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-diagnostics
+          path: windows/ZephyrPlayer.Tests/TestResults/
+          if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
+        if: always()
+        timeout-minutes: 5
         shell: pwsh
         run: scripts/vlc_http_proof.ps1
       - name: Publish single-file exe
+        if: always()
+        timeout-minutes: 8
         run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
       - name: Build installer (Inno Setup)
+        if: always()
+        timeout-minutes: 8
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
@@ -45,6 +67,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
       - name: Real-desktop capture of the actual exe (full window + chrome)
         if: always()
+        timeout-minutes: 6
         shell: pwsh
         run: scripts/pc_desktop_capture.ps1
       - uses: actions/upload-artifact@v4
@@ -60,12 +83,16 @@ jobs:
             ${{ runner.temp }}/pc-desktop-playing.png
             ${{ runner.temp }}/pc-desktop-note.txt
           if-no-files-found: warn
-      # Private CI artifact only - no release/publish job (distribution undecided).
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
-        if: success()
+        if: always()
         with:
           name: ZephyrPlayer-installer
           path: windows/Output/ZephyrPlayer-*.exe
           if-no-files-found: warn
-
+      - name: Gate summary (honest split: tests vs evidence)
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "TESTS OUTCOME: ${{ steps.tests.outcome }}"
+          Write-Host "Evidence steps run unconditionally; a green job requires tests green too."
