@@ -1,0 +1,15 @@
+name: Real four-button seek proof
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  seek:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter FullyQualifiedName~SkipPairPlaybackTests --blame-hang --blame-hang-timeout 120s --logger "console;verbosity=detailed"
