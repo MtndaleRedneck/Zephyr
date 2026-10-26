@@ -8,6 +8,12 @@ import org.junit.Test
 
 class VlcTest {
     @Test
+    fun cold_install_uses_player_setup_existing_install_keeps_main() {
+        assertEquals("setup-zephyr", initialScreenForConfiguredInstall(false))
+        assertEquals("main", initialScreenForConfiguredInstall(true))
+    }
+
+    @Test
     fun network_subtitles_use_verified_input_slave_route() {
         val server = okhttp3.mockwebserver.MockWebServer()
         server.start()

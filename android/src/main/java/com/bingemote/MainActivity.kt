@@ -95,7 +95,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val current = remember { mutableStateOf(
                 if (BuildConfig.DEBUG && intent.hasExtra("screen")) intent.getStringExtra("screen") ?: "setup"
-                else if (store.setupDone) "main" else "setup") }
+                else initialScreenForConfiguredInstall(store.setupDone)) }
             screen = current
             // Scroll positions live above the screen switch so leaving a screen and
             // coming back lands you where you were instead of back at the top.
@@ -141,7 +141,14 @@ class MainActivity : ComponentActivity() {
                     // screen for Zephyr, separate screen for VLC - never inline.
                     "setup-zephyr" -> ZephyrSetupScreen(
                         remote,
-                        onDone = { current.value = "settings" },
+                        onDone = {
+                            if (!store.setupDone) {
+                                store.setupDone = true
+                                store.selectedSource = Source.ZEPHYR
+                                remote.start()
+                                current.value = "main"
+                            } else current.value = "settings"
+                        },
                         onCancel = { current.value = "settings" },
                     )
                     // CI screenshot state (debug builds only): the Zephyr setup screen,
