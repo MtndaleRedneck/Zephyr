@@ -23,6 +23,7 @@ namespace ZephyrPlayer
         public FeedbackWindow()
         {
             InitializeComponent();
+            WindowChrome.ApplyDarkTitleBar(this);
             UpdatePreview();
         }
 

@@ -151,6 +151,27 @@ $sz1 = CaptureWindow $hw "$env:RUNNER_TEMP/pc-desktop.png"
 # can only open its window after this first instance exits.
 StopZephyr
 
+# 1b) Home with the designated movies folder set: the populated library view.
+$libDir = Join-Path $env:RUNNER_TEMP 'zephyr-library'
+New-Item -ItemType Directory -Force $libDir | Out-Null
+New-Item -ItemType Directory -Force (Join-Path $libDir 'Kids') | Out-Null
+Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $libDir 'Big Buck Bunny (clip).mp4')
+Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $libDir 'Zephyr Demo Reel.mp4')
+$cfgDir = Join-Path $env:APPDATA 'ZephyrPlayer'
+New-Item -ItemType Directory -Force $cfgDir | Out-Null
+$libJson = $libDir -replace '\\','\\\\'
+[IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$libJson`"}")
+$pH = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+$hwH = Wait-MainWindow $pH 15
+if ($hwH -ne [System.IntPtr]::Zero) {
+    [ZWU32]::SetWindowPos($hwH, [System.IntPtr]::Zero, 30, 8, 960, 740, $SWP_NOZORDER) | Out-Null
+    Start-Sleep -Milliseconds 900
+}
+$sz1b = CaptureWindow $hwH "$env:RUNNER_TEMP/pc-home-library.png"
+StopZephyr
+# Back to a clean first-run state for the sections below.
+Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
+
 # 2) Settings over the app's own dark window (neutral backdrop), top + scrolled bottom.
 $p2 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--open-settings" -PassThru
 $null = Wait-MainWindow $p2 15
@@ -252,12 +273,12 @@ $barWin = CountColored "$env:RUNNER_TEMP/pc-playing-controls-window.png" 0.82 1.
 $vidFs  = CountColored "$env:RUNNER_TEMP/pc-playing-controls-fullscreen.png" 0.2 0.7
 $barFs  = CountColored "$env:RUNNER_TEMP/pc-playing-controls-fullscreen.png" 0.82 1.0
 
-$incomplete = ($sz1 -eq '0 x 0') -or ($sz3 -eq '0 x 0') -or ($sz4 -eq '0 x 0') -or ($sz5 -eq '0 x 0') -or ($sz6 -eq '0 x 0')
+$incomplete = ($sz1 -eq '0 x 0') -or ($sz1b -eq '0 x 0') -or ($sz3 -eq '0 x 0') -or ($sz4 -eq '0 x 0') -or ($sz5 -eq '0 x 0') -or ($sz6 -eq '0 x 0')
 
 @"
 exe_started_alive_after_10s: $alive
 virtual_screen: $($vs.Width)x$($vs.Height)
-window_sizes: home=$sz1 settings=$sz3 settings_bottom=$sz4 player_windowed=$sz5 player_fullscreen=$sz6
+window_sizes: home_empty=$sz1 home_library=$sz1b settings=$sz3 settings_bottom=$sz4 player_windowed=$sz5 player_fullscreen=$sz6
 framing: app-window crops only; no runner terminal/taskbar pixels
 video_pixels_windowed: $vidWin
 bar_pixels_windowed: $barWin

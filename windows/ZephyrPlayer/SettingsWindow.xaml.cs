@@ -21,6 +21,7 @@ namespace ZephyrPlayer
         public SettingsWindow(PlayerSettings settings, PairedStore store, Func<string> newPairCode)
         {
             InitializeComponent();
+            WindowChrome.ApplyDarkTitleBar(this);
             _settings = settings;
             _store = store;
             _newPairCode = newPairCode;

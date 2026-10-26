@@ -81,7 +81,7 @@
         <Grid Grid.Row="1" Margin="24,16">
             <!-- Empty state: no movies folder chosen yet -->
             <StackPanel x:Name="EmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
-                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="56" Foreground="{StaticResource OrangeBrush}" HorizontalAlignment="Center"/>
+                <Viewbox Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="28" Height="28"><Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62" Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="{x:Null}"/></Canvas></Viewbox>
                 <TextBlock Text="Pick your movies folder" Foreground="{StaticResource TextBrush}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,4"/>
                 <TextBlock Text="Your designated folder lives in Settings." Foreground="{StaticResource MutedBrush}" FontSize="13" HorizontalAlignment="Center" Margin="0,0,0,16"/>
                 <Button Style="{StaticResource OrangeButton}" Content="Open Settings" Click="OnSettings" HorizontalAlignment="Center"/>
@@ -96,7 +96,7 @@
                 <Border Grid.Row="0" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="16,10" Margin="0,0,0,12">
                     <Grid>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="{StaticResource OrangeBrush}" VerticalAlignment="Center"/>
+                            <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="28" Height="28"><Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62" Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="{x:Null}"/></Canvas></Viewbox>
                             <TextBlock x:Name="FolderPathText" Text="" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center" Margin="10,0,0,0"/>
                         </StackPanel>
                         <Button x:Name="UpButton" Style="{StaticResource GhostButton}" Content="&#x2190; Up" HorizontalAlignment="Right" Click="OnUp"/>

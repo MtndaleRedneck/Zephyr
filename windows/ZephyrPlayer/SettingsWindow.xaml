@@ -12,6 +12,25 @@
         <Style TargetType="RadioButton">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
             <Setter Property="Margin" Value="0,3,14,3"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <StackPanel Orientation="Horizontal">
+                            <Grid VerticalAlignment="Center" Margin="0,0,8,0">
+                                <Ellipse x:Name="Ring" Width="15" Height="15" Stroke="{StaticResource MutedBrush}" StrokeThickness="1.5" Fill="#26262D"/>
+                                <Ellipse x:Name="Dot" Width="7" Height="7" Fill="{StaticResource OrangeBrush}" Visibility="Collapsed"/>
+                            </Grid>
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
+                                <Setter TargetName="Ring" Property="Stroke" Value="{StaticResource OrangeBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
         </Style>
         <Style TargetType="CheckBox">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
