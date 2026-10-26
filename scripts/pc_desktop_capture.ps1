@@ -285,6 +285,11 @@ StopZephyr
 # 4) Real video, real mouse event, controls shown - FULLSCREEN.
 $p4 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4","--fullscreen" -PassThru
 $hw4 = Wait-MainWindow $p4 15
+# Fullscreen transition and floating VideoView overlay can lag HWND creation.
+# Position the already-fullscreen window on the captured monitor and wait for
+# both host and overlay layout to settle. Do not crop an offscreen rectangle.
+[ZWU32]::SetWindowPos($hw4, [System.IntPtr]::new(-1), $vs.Left, $vs.Top, $vs.Width, $vs.Height, 0) | Out-Null
+Start-Sleep -Seconds 2
 WakeControls
 $sz6 = CaptureWindow $hw4 "$env:RUNNER_TEMP/pc-playing-controls-fullscreen.png"
 StopZephyr
