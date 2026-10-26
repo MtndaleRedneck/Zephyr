@@ -18,13 +18,17 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
+internal fun mediaSourceConfigured(store: Store) =
+    if (store.selectedSource == Source.ZEPHYR) store.zephyrToken.isNotBlank() && store.zephyrHost.ifBlank { store.host }.isNotBlank()
+    else store.isConfigured
+
 /** Starts or stops the lock-screen controls service to match the setting. */
 object MediaControls {
     fun sync(context: Context, store: Store) {
         val i = Intent(context, MediaControlsService::class.java)
         // The CI screenshot state seeds a demo session with no PC paired.
         val demo = BuildConfig.DEBUG && store.demoControls
-        if (store.lockScreenControls && (store.isConfigured || demo)) context.startService(i)
+        if (store.lockScreenControls && (mediaSourceConfigured(store) || demo)) context.startService(i)
         else context.stopService(i)
     }
 }
@@ -34,7 +38,7 @@ object MediaControls {
  * movie plays, the system media surface shows play/pause, the two skip intervals and the
  * position bar. A plain MediaSession - the system media controls are exempt from the
  * Android 13 notification permission, so no permission prompt and no notification of ours.
- * The service polls VLC itself (the app's own poll stops when the screen is off); every
+ * The service polls the selected player itself (the app's own poll stops when the screen is off); every
  * two seconds on the home Wi-Fi, only while the setting is on.
  */
 /** 34:12 or 1:50:24. */
@@ -63,8 +67,8 @@ class MediaControlsService : Service() {
         val store = Store(this)
         val s = MediaSession(this, "BingeMote")
         val cb = object : MediaSession.Callback() {
-            override fun onPlay() { run { Vlc.togglePause(store.host, store.vlcPort, store.vlcPassword) } }
-            override fun onPause() { run { Vlc.togglePause(store.host, store.vlcPort, store.vlcPassword) } }
+            override fun onPlay() { run { SelectedPlayback(store).togglePause() } }
+            override fun onPause() { run { SelectedPlayback(store).togglePause() } }
             override fun onRewind() { jump(store, -store.skipSecondarySec) }
             override fun onFastForward() { jump(store, store.skipMainSec) }
             // The system media surface renders its two extra slots from these actions;
@@ -94,9 +98,7 @@ class MediaControlsService : Service() {
     private fun jump(store: Store, deltaSec: Int) {
         scope.launch {
             try {
-                val st = Vlc.status(store.host, store.vlcPort, store.vlcPassword)
-                Vlc.seekTo(store.host, store.vlcPort, store.vlcPassword,
-                    (st.timeSec + deltaSec).coerceIn(0, st.lengthSec))
+                SelectedPlayback(store).skip(deltaSec)
                 refreshNow()
             } catch (_: Exception) {}
         }
@@ -131,13 +133,13 @@ class MediaControlsService : Service() {
 
     private suspend fun pollOnce() {
         val store = Store(this)
-        if (!store.lockScreenControls || !store.isConfigured) { stopSelf(); return }
+        if (!store.lockScreenControls || !mediaSourceConfigured(store)) { stopSelf(); return }
         if (refreshRequested) { refreshRequested = false } /* poll right away anyway */
         val st = try {
-            Vlc.status(store.host, store.vlcPort, store.vlcPassword)
+            SelectedPlayback(store).status()
         } catch (e: Vlc.BadAuth) {
             // The one automatic heal: adopt the PC's current password once; never push ours.
-            if (VlcAuthRepair.tryHealOnce(store)) return // the next poll uses it
+            if (store.selectedSource == Source.VLC && VlcAuthRepair.tryHealOnce(store)) return // the next poll uses it
             failures++
             if (failures >= 5) session?.isActive = false
             return

@@ -6,6 +6,28 @@ import org.junit.Assert.*
 import org.junit.Test
 import java.util.concurrent.TimeUnit
 class PlaybackRoutingTest {
+ @Test fun noStatusDoesNotInventSeekOrVolumeAndBackgroundUsesSelectedPlayer() = runBlocking {
+  val z=MockWebServer(); val v=MockWebServer();z.start();v.start()
+  val ctx=InstrumentationRegistry.getInstrumentation().targetContext
+  val s=Store(ctx);s.selectedSource=Source.ZEPHYR;s.zephyrHost="127.0.0.1";s.zephyrPort=z.port;s.zephyrToken="test-token"
+  s.host="127.0.0.1";s.vlcPort=v.port;s.helperPort=v.port;s.vlcPassword="test"
+  val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
+  try {
+   val r=RemoteState(ctx,s,scope);assertNull(r.status);r.skip(10);r.volumeStep(false)
+   assertNull(z.takeRequest(1,TimeUnit.SECONDS));assertNull(v.takeRequest(1,TimeUnit.SECONDS))
+   val controls=SelectedPlayback(s)
+   z.enqueue(MockResponse().setBody("""{"state":"Playing","time":50,"length":500,"volume":60}"""))
+   z.enqueue(MockResponse().setBody("{}"));controls.skip(30)
+   assertEquals("/control/status",z.takeRequest().path)
+   val seek=z.takeRequest();assertEquals("/control/seek",seek.path);assertTrue(seek.body.readUtf8().contains("80"))
+   z.enqueue(MockResponse().setBody("""{"state":"Playing","time":80,"length":500}"""))
+   z.enqueue(MockResponse().setBody("{}"));controls.togglePause()
+   assertEquals("/control/status",z.takeRequest().path);assertEquals("/control/pause",z.takeRequest().path)
+   s.selectedSource=Source.VLC
+   try { controls.skip(10);fail("Source change must drop queued background command") } catch (_: IllegalStateException) {}
+   assertNull("background selected Zephyr must never drive VLC",v.takeRequest(1,TimeUnit.SECONDS))
+  } finally { scope.cancel();s.selectedSource=Source.VLC;s.zephyrToken="";z.shutdown();v.shutdown() }
+ }
  @Test fun selectedZephyrGetsStatusAndCommandsWithoutVlcTraffic() = runBlocking {
   val z=MockWebServer(); val v=MockWebServer(); z.start(); v.start()
   val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)

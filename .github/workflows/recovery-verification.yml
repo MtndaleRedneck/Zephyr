@@ -17,7 +17,7 @@ jobs:
       - name: Exact BingeMote repair source
         run: |
           git clone https://github.com/MtndaleRedneck/BingeMote.git /tmp/binge
-          git -C /tmp/binge checkout 560b3edd520a84a2d417afd9d92c5d88cf26eeb2
+          git -C /tmp/binge checkout 7930f9958a366e99f83cf27bb0e8168f97156184
       - name: Local suites and release candidates
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
@@ -28,7 +28,7 @@ jobs:
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
           ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleDebugAndroidTest assembleRelease
-          (cd /tmp/binge && ./gradlew --no-daemon testDebugUnitTest assembleRelease assembleReleaseAndroidTest)
+          (cd /tmp/binge && ./gradlew --no-daemon testDebugUnitTest -PrecoveryReleaseTest assembleRelease assembleReleaseAndroidTest)
           rm -f "$RUNNER_TEMP/release.keystore"
           curl -fL https://github.com/MtndaleRedneck/BingeMote/releases/download/android-v1.11.1/BingeMote-Android-1.11.1.apk -o /tmp/original.apk
           curl -fL https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/android-v1.0.0/Zephyr-Android-1.0.0.apk -o /tmp/faulty.apk
