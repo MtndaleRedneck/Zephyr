@@ -115,6 +115,10 @@ try {
     Send-Vlc $c.query
     $attached = Wait-Sub 6
     Write-Output ("MATRIX " + $c.name + " => Subtitle stream: " + $attached)
+    if ($attached) {
+      $actual = Get-Status
+      Write-Output ("MATRIX RAW STATUS " + $c.name + ": " + ($actual | ConvertTo-Json -Depth 12 -Compress))
+    }
     # The slave-attach evidence lives in the access/demux/subtitle lines; an
     # unfiltered delta floods on vout noise while the old narrow filter hid http.
     Get-NewLogLines $logBefore | Select-String -Pattern 'slave|srt|subtitle|access|demux|http' | Select-Object -Last 110 | ForEach-Object { Write-Output ("  vlc: " + $_.Line) }
