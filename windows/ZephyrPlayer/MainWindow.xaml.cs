@@ -183,6 +183,9 @@ namespace ZephyrPlayer
 
         private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
+            // XAML sets the slider Value during InitializeComponent, before the
+            // ctor assigns _volume/_settings: a load-time change must be a no-op.
+            if (_volume is null || _settings is null) return;
             if (_volumeSync) return;
             var v = (int)Math.Round(VolumeSlider.Value);
             if (_volume.Available) _volume.SetMaster(v);
