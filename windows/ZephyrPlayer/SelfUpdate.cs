@@ -14,7 +14,7 @@ namespace ZephyrPlayer
 {
     internal static class SelfUpdate
     {
-        private static readonly HttpClient Http = new();
+        private static readonly HttpClient Http = new(new HttpClientHandler { AllowAutoRedirect = false });
 
         /// <summary>Fetch the installer to temp and verify its SHA-256 when published.
         /// Returns the local path; throws on any failure. A 60s silence cancels;
@@ -29,8 +29,9 @@ namespace ZephyrPlayer
             var current = exeUrl;
             for (var hops = 0; ; hops++)
             {
-                var host = new Uri(current).Host;
-                if (!hostAllowed(host))
+                var uri = new Uri(current);
+                var host = uri.Host;
+                if ((!uri.IsLoopback && uri.Scheme != Uri.UriSchemeHttps) || !hostAllowed(host))
                     throw new InvalidOperationException("The download address was not trusted: " + host);
                 using var req = new HttpRequestMessage(HttpMethod.Get, current);
                 req.Headers.UserAgent.ParseAdd("ZephyrPlayer");

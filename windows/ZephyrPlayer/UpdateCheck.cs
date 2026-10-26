@@ -14,6 +14,8 @@ namespace ZephyrPlayer
     {
         /// <summary>null = never ran; "checking"; "failed: <reason>"; "up_to_date"; or "available: <version>".</summary>
         public static volatile string? Outcome;
+        public sealed record Offer(string Version, string ExeUrl, string? Sha256);
+        public static Offer? AvailableOffer;
         public static string Display(string? outcome) => outcome switch
         {
             null => "Not checked yet.",
@@ -46,8 +48,11 @@ namespace ZephyrPlayer
         /// <summary>Failure propagates; no published compatible asset is not "current".</summary>
         public static string CheckOutcomeOrThrow(string current, string? apiOverride = null)
         {
+            UpdateState.AvailableOffer = null;
             var published = LatestPublishedOrThrow(apiOverride);
             if (published == null) return "no_release";
+            if (Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version")) > 0)
+                UpdateState.AvailableOffer = new UpdateState.Offer(published.Value.Version, published.Value.ExeUrl, published.Value.Sha256);
             return Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version")) > 0
                 ? "available: " + published.Value.Version : "up_to_date";
         }

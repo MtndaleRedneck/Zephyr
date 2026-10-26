@@ -24,12 +24,21 @@ namespace ZephyrPlayer
         {
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
+            MaxHeight = SystemParameters.WorkArea.Height;
+            MaxWidth = SystemParameters.WorkArea.Width;
             _settings = settings;
             _store = store;
             _newPairCode = newPairCode;
             VersionText.Text = "Zephyr Player " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
             UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
-            _updateStatusTimer.Tick += (_, __) => { if (InstallUpdateButton.IsEnabled && _updateOffer == null) UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome); };
+            _updateStatusTimer.Tick += (_, __) =>
+            {
+                if (!InstallUpdateButton.IsEnabled) return;
+                var offer = UpdateState.AvailableOffer;
+                _updateOffer = offer == null ? null : (offer.Version, offer.ExeUrl, offer.Sha256);
+                InstallUpdateButton.Visibility = _updateOffer != null ? Visibility.Visible : Visibility.Collapsed;
+                UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
+            };
             Loaded += (_, __) => _updateStatusTimer.Start();
             Closed += (_, __) => _updateStatusTimer.Stop();
             Refresh();
@@ -76,15 +85,14 @@ namespace ZephyrPlayer
 
         private void OnBrowse(object sender, RoutedEventArgs e)
         {
-            using var dlg = new System.Windows.Forms.FolderBrowserDialog
+            var dlg = new Microsoft.Win32.OpenFolderDialog
             {
-                Description = "Pick your designated movies folder",
-                UseDescriptionForTitle = true,
-                SelectedPath = _settings.LibraryFolder.Length > 0 ? _settings.LibraryFolder : "",
+                Title = "Pick your designated movies folder",
+                InitialDirectory = _settings.LibraryFolder,
             };
-            if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK)
+            if (dlg.ShowDialog(this) == true)
             {
-                _settings.LibraryFolder = dlg.SelectedPath;
+                _settings.LibraryFolder = dlg.FolderName;
                 Refresh();
             }
         }
@@ -97,6 +105,10 @@ namespace ZephyrPlayer
 
         private void OnCheckUpdates(object sender, RoutedEventArgs e)
         {
+            _updateOffer = null;
+            UpdateState.AvailableOffer = null;
+            UpdateState.Outcome = "checking";
+            InstallUpdateButton.Visibility = Visibility.Collapsed;
             UpdateStatusText.Text = "Checking...";
             var current = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
             Task.Run(() =>
@@ -105,7 +117,6 @@ namespace ZephyrPlayer
                 try
                 {
                     UpdateState.Outcome = UpdateCheck.CheckOutcomeOrThrow(current);
-                    _updateOffer = UpdateCheck.LatestNewerThanOrThrow(current);
                     result = UpdateState.Display(UpdateState.Outcome);
                 }
                 catch (Exception ex)
@@ -115,6 +126,8 @@ namespace ZephyrPlayer
                 }
                 Dispatcher.InvokeAsync(() =>
                 {
+                    var offer = UpdateState.AvailableOffer;
+                    _updateOffer = offer == null ? null : (offer.Version, offer.ExeUrl, offer.Sha256);
                     UpdateStatusText.Text = result;
                     InstallUpdateButton.Visibility = _updateOffer != null ? Visibility.Visible : Visibility.Collapsed;
                 });

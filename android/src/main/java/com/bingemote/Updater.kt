@@ -72,7 +72,7 @@ object Updater {
                 val name = a.optString("name", "")
                 val url = a.optString("browser_download_url", "")
                 val size = a.optLong("size", 0)
-                if (found == null && name == "ZephyrRemote-$version.apk" && url == "$DOWNLOAD_PREFIX$tag/$name" && size in 1..MAX_APK) {
+                if (found == null && name == "Zephyr-Android-$version.apk" && url == "$DOWNLOAD_PREFIX$tag/$name" && size in 1..MAX_APK) {
                     val d = a.optString("digest", "")
                     val hex = if (d.startsWith("sha256:") && Regex("[0-9a-fA-F]{64}").matches(d.removePrefix("sha256:"))) d.removePrefix("sha256:").lowercase() else null
                     found = UpdateInfo(version, notesBullets(o.optString("body", "")), url, size, hex)
@@ -101,7 +101,7 @@ object Updater {
     fun checkDetailed(current: String): CheckOutcome = try {
         val c = URL(API).openConnection() as HttpURLConnection
         c.connectTimeout = 6000; c.readTimeout = 8000; c.instanceFollowRedirects = false
-        c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("User-Agent", "BingeMote")
+        c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("User-Agent", "ZephyrRemote")
         if (c.responseCode != 200) CheckOutcome.Unavailable else {
             val body = c.inputStream.use { it.readBytes(1024 * 1024) }
             classifyFeed(String(body, Charsets.UTF_8), current)
@@ -138,7 +138,7 @@ object Updater {
     fun download(ctx: Context, info: UpdateInfo, progress: (Float) -> Unit, cancelled: () -> Boolean): File {
         clean(ctx)
         val dir = updateDir(ctx); dir.mkdirs()
-        val out = File(dir, "BingeMote-update.apk")
+        val out = File(dir, "Zephyr-update.apk")
         try {
             var url = info.apkUrl
             var conn: HttpURLConnection? = null
@@ -146,7 +146,7 @@ object Updater {
                 if (!hostAllowed(url)) throw Failure("The download address was not trusted, so it was stopped.")
                 val c = URL(url).openConnection() as HttpURLConnection
                 c.connectTimeout = 10000; c.readTimeout = 15000; c.instanceFollowRedirects = false
-                c.setRequestProperty("User-Agent", "BingeMote")
+                c.setRequestProperty("User-Agent", "ZephyrRemote")
                 val code = c.responseCode
                 if (code in 301..308) { url = c.getHeaderField("Location") ?: throw Failure("The download could not start."); c.disconnect(); continue }
                 if (code != 200) throw Failure("The download failed (error $code).")
@@ -199,7 +199,7 @@ object Updater {
         val cur = installed.signingInfo?.apkContentsSigners?.map { it.toByteArray().toList() }?.toSet().orEmpty()
         val next = arch.signingInfo?.apkContentsSigners?.map { it.toByteArray().toList() }?.toSet().orEmpty()
         val history = arch.signingInfo?.signingCertificateHistory?.map { it.toByteArray().toList() }?.toSet().orEmpty()
-        if (!signersAcceptable(cur, next, history)) throw Failure("The file is not signed by the same key as your installed BingeMote, so it was not installed.")
+        if (!signersAcceptable(cur, next, history)) throw Failure("The file is not signed by the same key as your installed app, so it was not installed.")
         if (arch.longVersionCode <= installed.longVersionCode) throw Failure("The downloaded file is not newer than this version.")
     }
 }

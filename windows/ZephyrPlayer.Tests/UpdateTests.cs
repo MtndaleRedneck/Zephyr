@@ -19,6 +19,7 @@ namespace ZephyrPlayer.Tests
         private readonly string _base;
         private string _releasesJson = "[]";
         private int _statusCode = 200;
+        private string? _redirectLocation;
         private byte[] _exeBytes = Array.Empty<byte>();
 
         public UpdateTests()
@@ -39,6 +40,7 @@ namespace ZephyrPlayer.Tests
                         ? _exeBytes
                         : Encoding.UTF8.GetBytes(_releasesJson);
                     ctx.Response.StatusCode = _statusCode;
+                    if (_redirectLocation != null) ctx.Response.RedirectLocation = _redirectLocation;
                     ctx.Response.ContentLength64 = bytes.Length;
                     await ctx.Response.OutputStream.WriteAsync(bytes);
                     ctx.Response.Close();
@@ -122,6 +124,30 @@ namespace ZephyrPlayer.Tests
                 Release("player-v1.1.0", "ZephyrPlayer-1.1.0.exe") + "," +
                 Release("player-v1.3.0", "ZephyrPlayer-1.3.0.exe") + "]");
             Assert.Equal("1.3.0", UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases")!.Value.Version);
+        }
+
+        [Fact]
+        public async Task Download_RedirectCannotBypassHostValidation()
+        {
+            _statusCode = 302;
+            _redirectLocation = "https://untrusted.invalid/payload.exe";
+            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                SelfUpdate.Download("1.2.0", _base + "/exe", null, hostAllowed: h => h == "127.0.0.1"));
+            Assert.Contains("not trusted", ex.Message);
+        }
+
+        [Fact]
+        public void LaunchOffer_IsAvailable_ThenClearedForNoReleaseOrFailedFeed()
+        {
+            Feed("[" + Release("player-v1.2.0", "ZephyrPlayer-1.2.0.exe", new string('b', 64)) + "]");
+            Assert.Equal("available: 1.2.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Assert.Equal("1.2.0", UpdateState.AvailableOffer?.Version);
+            Feed("[]");
+            Assert.Equal("no_release", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Assert.Null(UpdateState.AvailableOffer);
+            Feed("bad json");
+            Assert.ThrowsAny<Exception>(() => UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Assert.Null(UpdateState.AvailableOffer);
         }
 
         [Fact]

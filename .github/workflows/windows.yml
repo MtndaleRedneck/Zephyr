@@ -17,6 +17,10 @@ on:
 # so UI pixels and the installer are never held hostage by a test regression.
 # The overall job still fails when tests fail: evidence is not the gate.
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
