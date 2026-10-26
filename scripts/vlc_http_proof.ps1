@@ -37,14 +37,33 @@ try {
   Write-Output "VLC PLAYED the phone-style http URL (state=$($st.state), position=$($st.position))"
 
   # Subtitle attachment via :sub-file option, visible as a Subtitle stream.
-  $streams = $st.information.category.PSObject.Properties.Value | ForEach-Object { $_ }
-  $hasSub = $false
-  foreach ($cat in $st.information.category.PSObject.Properties) {
-    foreach ($stream in $cat.Value.PSObject.Properties) {
-      if ($stream.Value.Type -eq "Subtitle") { $hasSub = $true }
+  # The stream can take a moment to register after play starts: poll, and on
+  # failure dump the full status plus an addsubtitle comparison probe so the
+  # log carries the cause, not just the symptom.
+  $auth = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) }
+  function Test-SubStream($status) {
+    foreach ($cat in $status.information.category.PSObject.Properties) {
+      foreach ($stream in $cat.Value.PSObject.Properties) {
+        if ($stream.Value.Type -eq "Subtitle") { return $true }
+      }
     }
+    return $false
   }
-  if (-not $hasSub) { throw "no Subtitle stream attached - :sub-file option did not take" }
+  $hasSub = $false
+  for ($i = 0; $i -lt 10 -and -not $hasSub; $i++) {
+    Start-Sleep -Milliseconds 500
+    $st = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
+    $hasSub = Test-SubStream $st
+  }
+  if (-not $hasSub) {
+    Write-Output "STATUS DUMP (no Subtitle stream after :sub-file):"
+    Write-Output ($st.information | ConvertTo-Json -Depth 8)
+    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
+    Start-Sleep 2
+    $st2 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
+    Write-Output ("addsubtitle probe attached a Subtitle stream: " + (Test-SubStream $st2))
+    throw "no Subtitle stream attached - :sub-file option did not take"
+  }
   Write-Output "VLC attached the :sub-file subtitle (Subtitle stream present)"
 } finally {
   if ($vlc -and -not $vlc.HasExited) { Stop-Process -Id $vlc.Id -Force }
