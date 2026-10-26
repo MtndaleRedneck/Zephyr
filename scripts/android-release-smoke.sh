@@ -28,15 +28,27 @@ adb shell chown "$APP_UID:$APP_UID" /data/user/0/com.bingemote/shared_prefs/sett
 adb shell chmod 660 /data/user/0/com.bingemote/shared_prefs/settings.xml
 adb shell restorecon -R /data/user/0/com.bingemote/shared_prefs
 adb exec-out cat /data/user/0/com.bingemote/shared_prefs/settings.xml > /tmp/retained-before.xml
+adb shell sha256sum /data/user/0/com.bingemote/shared_prefs/secrets.xml > /tmp/secrets-before.sha256
 adb install -r signed-apk/Zephyr-Android-1.0.0.apk
 adb shell dumpsys package com.bingemote | grep -E 'versionCode=21|versionName=1.0.0'
 adb exec-out cat /data/user/0/com.bingemote/shared_prefs/settings.xml > /tmp/retained-after.xml
 cmp /tmp/retained-before.xml /tmp/retained-after.xml
+adb shell sha256sum /data/user/0/com.bingemote/shared_prefs/secrets.xml > /tmp/secrets-after.sha256
+cmp /tmp/secrets-before.sha256 /tmp/secrets-after.sha256
 adb shell am start -n com.bingemote/com.bingemote.MainActivity
 sleep 4
 adb shell uiautomator dump /sdcard/retained-ui.xml >/dev/null
 adb exec-out cat /sdcard/retained-ui.xml > /tmp/retained-ui.xml
 if grep -q 'Set up Zephyr Player' /tmp/retained-ui.xml; then echo 'configured install lost setup state'; exit 1; fi
+adb exec-out cat /data/user/0/com.bingemote/shared_prefs/settings.xml > /tmp/retained-launched.xml
+python3 - <<'PYXML'
+import xml.etree.ElementTree as E
+root=E.parse('/tmp/retained-launched.xml').getroot()
+entries={n.attrib['name']: n for n in root}
+assert entries['setupDone'].attrib['value']=='true'
+assert entries['selectedSource'].text=='vlc'
+assert entries['pcName'].text=='Upgrade continuity fixture'
+PYXML
 adb exec-out screencap -p > screenshots/release-retained-vlc.png
 echo 'SIGNED_UPGRADE_PREFERENCES_AND_VLC_SELECTION_RETAINED'
 # Separate fresh-install fixture AFTER checking retained configured-install data.
