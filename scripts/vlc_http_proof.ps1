@@ -30,26 +30,12 @@ try {
   if (-not $ok) { throw "VLC http interface never came up" }
 
   # Same URL shape StreamCoordinator hands over: percent-encoded path on the phone server.
-  # CI-observed (VLC 3.0.21, -vv log): httprequests.lua decodes the input
-  # parameter but passes option values to the core VERBATIM - a percent-encoded
-  # sub-file value becomes the literal relative path
-  # "http%3A%2F%2F..." under the CWD (access=file, open fails). Send option
-  # values raw; the values contain no & or # so query parsing is unaffected.
-  Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file=http://127.0.0.1:8123/clip.srt" -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) } -UseBasicParsing -TimeoutSec 5 | Out-Null
-
-  $played = $false
-  for ($i = 0; $i -lt 20 -and -not $played; $i++) {
-    Start-Sleep -Milliseconds 500
-    $st = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) } -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
-    if ($st.state -eq "playing") { $played = $true }
-  }
-  if (-not $played) { throw "VLC never entered playing state on the phone-style URL" }
-  Write-Output "VLC PLAYED the phone-style http URL (state=$($st.state), position=$($st.position))"
-
-  # Subtitle attachment via :sub-file option, visible as a Subtitle stream.
-  # The stream can take a moment to register after play starts: poll, and on
-  # failure dump the full status plus an addsubtitle comparison probe so the
-  # log carries the cause, not just the symptom.
+  # CI-observed (VLC 3.0.21, -vv log): a fully percent-encoded option value
+  # reached the core with the sub URL still encoded (loaded as a fake local
+  # path). The lua parser (parse_url_request) splits on literal & and = and
+  # decode_uri's each value, so the correct encoding is not obvious: raw breaks
+  # the parser, full-encode was observed failing. Run the truth-table matrix
+  # and let VLC itself name the encoding that attaches a subtitle ES.
   $auth = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) }
   function Test-SubStream($status) {
     foreach ($cat in $status.information.category.PSObject.Properties) {
@@ -59,39 +45,68 @@ try {
     }
     return $false
   }
-  $hasSub = $false
-  for ($i = 0; $i -lt 10 -and -not $hasSub; $i++) {
-    Start-Sleep -Milliseconds 500
-    $st = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
-    $hasSub = Test-SubStream $st
+  function Get-Status { (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json }
+  function Wait-Sub($seconds) {
+    for ($i = 0; $i -lt ($seconds * 2); $i++) {
+      Start-Sleep -Milliseconds 500
+      if (Test-SubStream (Get-Status)) { return $true }
+    }
+    return $false
   }
-  if (-not $hasSub) {
-    Write-Output "STATUS DUMP (no Subtitle stream after :sub-file):"
-    Write-Output ($st.information | ConvertTo-Json -Depth 8)
-    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=http://127.0.0.1:8123/clip.srt" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
-    Start-Sleep 2
-    $st2 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
-    Write-Output ("addsubtitle probe (http URL) attached a Subtitle stream: " + (Test-SubStream $st2))
-    # Discriminator: same addsubtitle with a LOCAL file path. If the local path
-    # attaches but the http URL does not, the failure is VLC's network subtitle
-    # fetch (product-relevant: the phone serves subs over http). If neither
-    # attaches, VLC's sub pipeline on this build is broken regardless of route.
-    $localUri = "file:///" + (($tmp + "\clip.srt") -replace "\\", "/")
-    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=$localUri" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
-    Start-Sleep 2
-    $st3 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
-    Write-Output ("addsubtitle probe (local file) attached a Subtitle stream: " + (Test-SubStream $st3))
-    # VLC's own verbose log names the exact failure (fetch error, demux probe,
-    # lua option handling). Dump the sub-relevant lines so the cause is in CI.
+  function Send-Vlc($query) {
+    Invoke-WebRequest -Uri ("http://127.0.0.1:8080/requests/status.json?" + $query) -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
+  }
+
+  # Start playback (input value percent-encoded: this half was already proven).
+  Send-Vlc "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4"
+  $played = $false
+  for ($i = 0; $i -lt 20 -and -not $played; $i++) {
+    Start-Sleep -Milliseconds 500
+    $st = Get-Status
+    if ($st.state -eq "playing") { $played = $true }
+  }
+  if (-not $played) { throw "VLC never entered playing state on the phone-style URL" }
+  Write-Output "VLC PLAYED the phone-style http URL (state=$($st.state), position=$($st.position))"
+
+  # Encoding matrix. Each candidate is the exact query substring for one
+  # option=/val= parameter carrying the sub URL http://127.0.0.1:8123/clip.srt.
+  # VLC 3.0.x parse_url_request splits on literal & and = then decode_uri's the
+  # value, so only forms whose value survives that round-trip can attach.
+  $candidates = @(
+    @{ name = "A_full_encode (option=%3Asub-file%3Dhttp%3A%2F%2F...)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=%3Asub-file%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" },
+    @{ name = "B1_encode_inner_eq_only (option=:sub-file%3Dhttp://127.0.0.1:8123/clip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file%3Dhttp://127.0.0.1:8123/clip.srt" },
+    @{ name = "B2_encode_eq_and_url (option=:sub-file%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" },
+    @{ name = "C_raw (option=:sub-file=http://127.0.0.1:8123/clip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file=http://127.0.0.1:8123/clip.srt" },
+    @{ name = "D_addsubtitle_raw (val=http://127.0.0.1:8123/clip.srt)"; query = "command=addsubtitle&val=http://127.0.0.1:8123/clip.srt" },
+    @{ name = "E_addsubtitle_encoded (val=http%3A%2F%2F...)"; query = "command=addsubtitle&val=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" }
+  )
+  $winner = $null
+  foreach ($c in $candidates) {
+    # Reset playback so a slow attach from the previous candidate cannot be
+    # misattributed: stop, wait for the Subtitle stream to clear, then send.
+    Send-Vlc "command=pl_stop"
+    for ($i = 0; $i -lt 6; $i++) {
+      Start-Sleep -Milliseconds 500
+      if (-not (Test-SubStream (Get-Status))) { break }
+    }
+    Send-Vlc $c.query
+    $attached = Wait-Sub 4
+    Write-Output ("MATRIX " + $c.name + " => Subtitle stream: " + $attached)
+    if ($attached -and -not $winner) { $winner = $c.name }
+  }
+  if (-not $winner) {
+    Write-Output "STATUS DUMP (no encoding attached a Subtitle stream):"
+    Write-Output ((Get-Status).information | ConvertTo-Json -Depth 8)
     Write-Output "VLC verbose log (sub/srt/slave/error lines):"
     if (Test-Path $vlcLog) {
-      Get-Content $vlcLog | Select-String -Pattern 'sub|srt|slave|error|http' | Select-Object -Last 40 | ForEach-Object { $_.Line }
+      Get-Content $vlcLog | Select-String -Pattern 'sub|srt|slave|error|http' | Select-Object -Last 60 | ForEach-Object { $_.Line }
     } else {
       Write-Output "(no vlc log file produced)"
     }
-    throw "no Subtitle stream attached - :sub-file option did not take"
+    throw "no encoding candidate attached a Subtitle stream - desktop-VLC subtitle route unsupported on this VLC build"
   }
-  Write-Output "VLC attached the :sub-file subtitle (Subtitle stream present)"
+  Write-Output "MATRIX WINNER: $winner"
+  Write-Output "VLC attached the subtitle (Subtitle stream present)"
 } finally {
   if ($vlc -and -not $vlc.HasExited) { Stop-Process -Id $vlc.Id -Force }
   if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force }
