@@ -30,7 +30,12 @@ try {
   if (-not $ok) { throw "VLC http interface never came up" }
 
   # Same URL shape StreamCoordinator hands over: percent-encoded path on the phone server.
-  Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=%3Asub-file%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) } -UseBasicParsing -TimeoutSec 5 | Out-Null
+  # CI-observed (VLC 3.0.21, -vv log): httprequests.lua decodes the input
+  # parameter but passes option values to the core VERBATIM - a percent-encoded
+  # sub-file value becomes the literal relative path
+  # "http%3A%2F%2F..." under the CWD (access=file, open fails). Send option
+  # values raw; the values contain no & or # so query parsing is unaffected.
+  Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file=http://127.0.0.1:8123/clip.srt" -Headers @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes(":zephyr")) } -UseBasicParsing -TimeoutSec 5 | Out-Null
 
   $played = $false
   for ($i = 0; $i -lt 20 -and -not $played; $i++) {
@@ -63,7 +68,7 @@ try {
   if (-not $hasSub) {
     Write-Output "STATUS DUMP (no Subtitle stream after :sub-file):"
     Write-Output ($st.information | ConvertTo-Json -Depth 8)
-    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
+    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=http://127.0.0.1:8123/clip.srt" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
     Start-Sleep 2
     $st2 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
     Write-Output ("addsubtitle probe (http URL) attached a Subtitle stream: " + (Test-SubStream $st2))
@@ -72,8 +77,7 @@ try {
     # fetch (product-relevant: the phone serves subs over http). If neither
     # attaches, VLC's sub pipeline on this build is broken regardless of route.
     $localUri = "file:///" + (($tmp + "\clip.srt") -replace "\\", "/")
-    $encLocal = [uri]::EscapeDataString($localUri)
-    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=$encLocal" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
+    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=$localUri" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
     Start-Sleep 2
     $st3 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
     Write-Output ("addsubtitle probe (local file) attached a Subtitle stream: " + (Test-SubStream $st3))

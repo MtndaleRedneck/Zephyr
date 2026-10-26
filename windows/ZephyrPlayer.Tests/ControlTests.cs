@@ -208,5 +208,83 @@ namespace ZephyrPlayer.Tests
                 "resume did not take (state: " + player.State + ")");
             player.Stop();
         }
+
+        /// <summary>
+        /// Product subtitle path: MainWindow.PlayFromUrl attaches phone-served
+        /// subtitles with Media.AddSlave over an http MRL. This proves the engine
+        /// the app embeds (libVLC) fetches and registers an http subtitle slave,
+        /// serving both files from a real in-process HTTP server with Range
+        /// support, the same shape the phone's StreamServer speaks.
+        /// (CI-observed: VLC DESKTOP's lua http interface passes option values
+        /// percent-encoded into a local file path, so desktop-VLC httprequests
+        /// cannot prove this route; the product never uses that interface.)
+        /// </summary>
+        [Fact]
+        public void Subtitle_Slave_Over_Http_Attaches()
+        {
+            var dir = AppContext.BaseDirectory;
+            var mp4 = File.ReadAllBytes(Path.Combine(dir, "fixtures", "clip.mp4"));
+            var srt = File.ReadAllBytes(Path.Combine(dir, "fixtures", "clip.srt"));
+
+            using var listener = new HttpListener();
+            listener.Prefixes.Add("http://127.0.0.1:48123/");
+            listener.Start();
+            var stop = new ManualResetEventSlim(false);
+            var serverThread = new Thread(() =>
+            {
+                while (!stop.IsSet)
+                {
+                    HttpListenerContext ctx;
+                    try { ctx = listener.GetContext(); }
+                    catch { break; }
+                    var path = ctx.Request.Url.AbsolutePath;
+                    byte[] body; string type;
+                    if (path == "/clip.mp4") { body = mp4; type = "video/mp4"; }
+                    else if (path == "/clip.srt") { body = srt; type = "application/x-subrip"; }
+                    else { ctx.Response.StatusCode = 404; ctx.Response.Close(); continue; }
+                    var range = ctx.Request.Headers["Range"];
+                    if (!string.IsNullOrEmpty(range) && range.StartsWith("bytes="))
+                    {
+                        var parts = range.Substring(6).Split('-');
+                        var start = long.Parse(parts[0]);
+                        var end = parts.Length > 1 && parts[1].Length > 0 ? long.Parse(parts[1]) : body.Length - 1;
+                        var len = (int)(end - start + 1);
+                        ctx.Response.StatusCode = 206;
+                        ctx.Response.Headers["Content-Range"] = $"bytes {start}-{end}/{body.Length}";
+                        ctx.Response.ContentType = type;
+                        ctx.Response.ContentLength64 = len;
+                        ctx.Response.OutputStream.Write(body, (int)start, len);
+                    }
+                    else
+                    {
+                        ctx.Response.ContentType = type;
+                        ctx.Response.ContentLength64 = body.Length;
+                        ctx.Response.OutputStream.Write(body, 0, body.Length);
+                    }
+                    ctx.Response.Close();
+                }
+            }) { IsBackground = true };
+            serverThread.Start();
+
+            try
+            {
+                Core.Initialize();
+                using var libvlc = new LibVLC("--no-video");
+                using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
+                using var media = new Media(libvlc, "http://127.0.0.1:48123/clip.mp4", FromType.FromLocation);
+                media.AddSlave(MediaSlaveType.Subtitle, 0, "http://127.0.0.1:48123/clip.srt");
+                Assert.True(player.Play(media), "libVLC refused to start the media");
+                Assert.True(SpinWait(() => player.State == VLCState.Playing, 8000),
+                    "never reached Playing (state: " + player.State + ")");
+                Assert.True(SpinWait(() => player.SpuTracks.Length > 0, 10000),
+                    "no subtitle ES registered: http AddSlave did not take");
+                player.Stop();
+            }
+            finally
+            {
+                stop.Set();
+                try { listener.Stop(); } catch { }
+            }
+        }
     }
 }
