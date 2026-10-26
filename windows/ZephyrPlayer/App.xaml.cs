@@ -139,7 +139,7 @@ namespace ZephyrPlayer
                     _home.Hide();
                     _player.Show();
                     _player.PlayFromUrl(url, null, Array.Empty<string>());
-                    if (e.Args.Contains("--fullscreen")) _player.SetFullscreen(true);
+                    if (System.Array.Exists(e.Args, a => a == "--fullscreen")) _player.SetFullscreen(true);
                 }
             }
         }
