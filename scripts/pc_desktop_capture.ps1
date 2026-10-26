@@ -26,6 +26,7 @@ public static class ZWU32 {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out ZRECT r);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out ZRECT r, int size);
 }
 '@
 $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -34,8 +35,13 @@ $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 function CaptureWindow($hWnd, $path) {
     # Crop to the app's own window rect: no runner chrome in UI evidence.
     if ($hWnd -eq [System.IntPtr]::Zero) { Write-Host "::error::no window handle for $path - capture skipped"; return "0 x 0" }
+    # DWMWA_EXTENDED_FRAME_BOUNDS (9): the window's REAL visible bounds.
+    # GetWindowRect includes the invisible drop-shadow ring; through that ring
+    # the runner's console/taskbar pixels bleed into UI evidence.
     $r = [ZRECT]::new()
-    if (-not [ZWU32]::GetWindowRect($hWnd, [ref]$r)) { Write-Host "::error::GetWindowRect failed for hwnd $hWnd"; return "0 x 0" }
+    if ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16) -ne 0) {
+        if (-not [ZWU32]::GetWindowRect($hWnd, [ref]$r)) { Write-Host "::error::GetWindowRect failed for hwnd $hWnd"; return "0 x 0" }
+    }
     $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
     if ($w -le 0 -or $h -le 0) { Write-Host "::error::zero-size window rect for hwnd $hWnd ($w x $h) - capture skipped"; return "0 x 0" }
     $bmp = New-Object System.Drawing.Bitmap $w, $h
@@ -61,7 +67,9 @@ function CountColored($path, $y0frac, $y1frac) {
 function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
 function FitWindow($hWnd) {
     # Whole window inside the virtual screen, top-left aligned, no clipping.
-    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::Zero, 0, 0, $vs.Width, $vs.Height, $SWP_NOZORDER) | Out-Null
+    # HWND_TOPMOST (-1): the runner taskbar otherwise overlaps the window's
+    # bottom strip and lands in UI evidence.
+    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, $vs.Width, $vs.Height, 0) | Out-Null
     Start-Sleep -Milliseconds 700
 }
 function Wait-MainWindow($proc, $seconds) {
@@ -96,6 +104,9 @@ $hw = Wait-MainWindow $p 15
 $alive = ($hw -ne [System.IntPtr]::Zero)
 FitWindow $hw
 $sz1 = CaptureWindow $hw "$env:RUNNER_TEMP/pc-desktop.png"
+# The app is single-instance (mutex "ZephyrPlayer"): the settings launch below
+# can only open its window after this first instance exits.
+StopZephyr
 
 # 2) Settings over the app's own dark window (neutral backdrop), top + scrolled bottom.
 $p2 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--open-settings" -PassThru
