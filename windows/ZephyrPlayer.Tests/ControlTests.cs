@@ -278,7 +278,7 @@ namespace ZephyrPlayer.Tests
                 Assert.True(SpinWait(() => player.State == VLCState.Playing, 8000),
                     "never reached Playing (state: " + player.State + ")");
                 Assert.True(SpinWait(
-                    () => player.SpuTrackDescription.Any(t => t.Id >= 0), 10000),
+                    () => player.SpuDescription.Any(t => t.Id >= 0), 10000),
                     "no subtitle ES registered: http AddSlave did not take");
                 player.Stop();
             }
