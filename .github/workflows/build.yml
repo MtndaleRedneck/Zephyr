@@ -16,7 +16,7 @@ on:
 
 # Zephyr CI (public repo): unit tests, instrumented suites, screenshot rig.
 # No release/publish job - no downloads while in development. Release signing
-# needs the keystore in repo secrets (not set; never committed).
+# uses the existing Android signer from encrypted repo secrets (never committed).
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,16 +40,38 @@ jobs:
         run: ./gradlew --no-daemon testDebugUnitTest
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
+      - name: Build signed release candidate (no publication)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+        run: |
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
+          ./gradlew --no-daemon assembleRelease
+          mkdir -p signed-apk
+          cp android/build/outputs/apk/release/app-release.apk signed-apk/Zephyr-Android-1.0.0.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs signed-apk/Zephyr-Android-1.0.0.apk
+          rm -f "$KEYSTORE_FILE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zephyr-Android-signed-candidate
+          path: signed-apk/*.apk
       - uses: actions/upload-artifact@v4
         with:
           name: Zephyr-Android-debug-apk
           path: android/build/outputs/apk/debug/*.apk
 
   screenshots:
+    needs: android
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: Zephyr-Android-signed-candidate
+          path: signed-apk
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -68,7 +90,7 @@ jobs:
           target: google_apis
           profile: pixel_6
           disable-animations: true
-          script: bash scripts/screenshots.sh
+          script: bash scripts/android-release-smoke.sh && bash scripts/screenshots.sh
       - uses: actions/upload-artifact@v4
         if: always()
         with:
