@@ -25,8 +25,8 @@ data class UpdateInfo(
  */
 object Updater {
     const val API = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30"
-    /** Android and PC release separately; this updater only ever looks at android-v* tags. */
-    const val TAG_PREFIX = "android-v"
+    /** Android and PC release separately; this updater only ever looks at zephyr-android-v* tags. */
+    const val TAG_PREFIX = "zephyr-android-v"
     private const val DOWNLOAD_PREFIX = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/"
     private const val MAX_APK = 150L * 1024 * 1024
 
@@ -87,7 +87,7 @@ object Updater {
         u.protocol == "https" && (u.host == "github.com" || u.host == "githubusercontent.com" || u.host.endsWith(".githubusercontent.com"))
     } catch (e: Exception) { false }
 
-    /** The newest android-v* release that beats [current]. The list comes newest-first; pc-v* tags are ignored. Null on any failure, offline, rate limit or odd response. Call off the main thread. */
+    /** The newest zephyr-android-v* release that beats [current]. The list comes newest-first; pc-v* tags are ignored. Null on any failure, offline, rate limit or odd response. Call off the main thread. */
     fun check(current: String): UpdateInfo? = (checkDetailed(current) as? CheckOutcome.Newer)?.info
 
     /** The manual "Check for updates" button gets to know which way a null went. */

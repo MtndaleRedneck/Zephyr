@@ -14,6 +14,14 @@ adb shell cat /data/user/0/com.bingemote/shared_prefs/settings.xml | tee instrum
 grep -q 'DESKTOP-TEST' instrument-results/seed-disk-settings.xml
 adb install -r /tmp/faulty.apk
 proof faulty
+# Exercise the exact shipped verifier while faulty code21 is the installed app.
+adb install -r android/build/outputs/apk/debug/app-debug.apk
+adb install -r android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb push /tmp/binge/app/build/outputs/apk/release/app-release.apk /data/local/tmp/bridge.apk
+adb push android/build/outputs/apk/release/app-release.apk /data/local/tmp/separate.apk
+adb shell chmod 644 /data/local/tmp/bridge.apk /data/local/tmp/separate.apk
+adb shell am instrument -w -e class com.bingemote.RecoveryBridgeTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrument-results/shipped-bridge-verifier.txt
+grep -q 'OK (1 test)' instrument-results/shipped-bridge-verifier.txt
 adb install -r /tmp/binge/app/build/outputs/apk/release/app-release.apk
 proof restored
 adb install android/build/outputs/apk/release/app-release.apk

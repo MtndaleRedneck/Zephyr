@@ -122,8 +122,8 @@ class UpdaterTest {
 
     @Test
     fun only_android_releases_count() {
-        val apk = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/android-v1.0.1/Zephyr-Android-1.0.1.apk"
-        val appRel = """{"tag_name":"android-v1.0.1","draft":false,"prerelease":false,"body":"- newer app","assets":[{"name":"Zephyr-Android-1.0.1.apk","browser_download_url":"$apk","size":1000}]}"""
+        val apk = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/zephyr-android-v1.0.1/Zephyr-Android-1.0.1.apk"
+        val appRel = """{"tag_name":"zephyr-android-v1.0.1","draft":false,"prerelease":false,"body":"- newer app","assets":[{"name":"Zephyr-Android-1.0.1.apk","browser_download_url":"$apk","size":1000}]}"""
         val helperRel = """{"tag_name":"pc-v1.0.2","draft":false,"prerelease":false,"body":"- newer PC","assets":[{"name":"BingeMote-PC-1.0.2.exe","browser_download_url":"https://github.com/MtndaleRedneck/BingeMote/releases/download/pc-v1.0.2/BingeMote-PC-1.0.2.exe","size":1000}]}"""
         // A PC release never prompts the app, even with a higher number.
         assertEquals(null, Updater.parseRelease(helperRel, "1.0.0"))
@@ -135,8 +135,8 @@ class UpdaterTest {
 
     @Test
     fun feed_states_and_asset_isolation() {
-        val url = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/android-v1.1.0/Zephyr-Android-1.1.0.apk"
-        val release = """{"tag_name":"android-v1.1.0","assets":[{"name":"Zephyr-Android-1.1.0.apk","browser_download_url":"$url","size":1000}]}"""
+        val url = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/zephyr-android-v1.1.0/Zephyr-Android-1.1.0.apk"
+        val release = """{"tag_name":"zephyr-android-v1.1.0","assets":[{"name":"Zephyr-Android-1.1.0.apk","browser_download_url":"$url","size":1000}]}"""
         assertEquals(Updater.CheckOutcome.NoRelease, Updater.classifyFeed("[]", "1.0.0"))
         assertEquals(Updater.CheckOutcome.UpToDate, Updater.classifyFeed("[$release]", "1.1.0"))
         assertTrue(Updater.classifyFeed("[$release]", "1.0.0") is Updater.CheckOutcome.Newer)
