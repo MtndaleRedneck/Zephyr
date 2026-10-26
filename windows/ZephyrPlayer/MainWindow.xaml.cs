@@ -17,6 +17,18 @@ namespace ZephyrPlayer
         private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));
         private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x1B, 0x1B, 0x1E));
 
+        // Brushes are shared app-wide; Freeze makes them safe to touch from any
+        // thread (each test case runs on its own STA thread - unfrozen statics
+        // threw cross-thread Freezable exceptions, CI-observed).
+        static MainWindow()
+        {
+            RingDefault.Freeze();
+            Orange.Freeze();
+            Gold.Freeze();
+            Muted.Freeze();
+            Dark.Freeze();
+        }
+
         private readonly LibVLC _libvlc;
         private readonly MediaPlayer _player;
         private readonly PlayerSettings _settings;
