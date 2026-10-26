@@ -84,7 +84,11 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("10", ((System.Windows.Controls.TextBlock)w.FindName("SkipBackLabel")!).Text);
                 Assert.Equal("60", ((System.Windows.Controls.TextBlock)w.FindName("SkipForwardLabel")!).Text);
                 Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
-                Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("PlayRing")!));
+                // Filled play/pause = colored DISC: the design fills the ring and
+                // clears its stroke (hollow keeps the stroke instead). Assert the
+                // filled semantics, not the hollow one.
+                Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("PlayRing")!).Fill).Color);
+                Assert.Equal(Colors.Transparent, StrokeOf((System.Windows.Shapes.Shape)w.FindName("PlayRing")!));
                 Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SpeedButton")!).Visibility);
                 Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SleepButton")!).Visibility);
             });
