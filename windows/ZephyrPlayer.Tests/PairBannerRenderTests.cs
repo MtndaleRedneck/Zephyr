@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using LibVLCSharp.Shared;
@@ -102,6 +103,17 @@ namespace ZephyrPlayer.Tests
                     // Plain-element render only: the full window blanks offscreen
                     // (VideoView airspace, see PairBannerRenderTests).
                     var bar = w.ControlBar;
+                    // Structural assertions, independent of pixel counts: the required
+                    // elements exist with readable labels, and CC/full are vectors, not text.
+                    Assert.Equal("5", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
+                    Assert.Equal("30", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                    Assert.Equal("0:00", ((TextBlock)w.FindName("ElapsedText")!).Text);
+                    Assert.Equal("of 0:00", ((TextBlock)w.FindName("TotalText")!).Text);
+                    Assert.Equal("-0:00", ((TextBlock)w.FindName("RemainingText")!).Text);
+                    foreach (var n in new[] { "VolumeButton", "PlayPauseButton", "SkipBackButton", "SkipForwardButton", "CaptionsButton", "FullscreenButton", "SeekBar" })
+                        Assert.Equal(Visibility.Visible, ((UIElement)w.FindName(n)!).Visibility);
+                    Assert.False(((Button)w.FindName("CaptionsButton")!).Content is string, "captions must be a vector icon, not literal text");
+                    Assert.False(((Button)w.FindName("FullscreenButton")!).Content is string, "fullscreen must be a vector icon, not literal text");
                     bar.Opacity = 1; // XAML starts it at 0 (fades in on mouse move); render the shown state
                     bar.Measure(new Size(1920, 200));
                     bar.Arrange(new Rect(0, 0, bar.DesiredSize.Width, bar.DesiredSize.Height));

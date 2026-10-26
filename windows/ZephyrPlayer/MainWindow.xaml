@@ -61,8 +61,8 @@
                                     <Grid>
                                         <Grid RenderTransformOrigin="0.5,0.5">
                                             <Grid.RenderTransform><RotateTransform x:Name="SkipBackSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Ellipse x:Name="SkipBackRing" Width="46" Height="46" Stroke="#F5F5F7" StrokeThickness="2.5" StrokeDashArray="30 4"/>
-                                            <Path x:Name="SkipBackArrow" Data="M24,2 L19,11 L29,11 Z" Fill="#F5F5F7"/>
+                                            <Path x:Name="SkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F5F5F7" StrokeThickness="3.9" Fill="None"/>
+                                            <Path x:Name="SkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F5F5F7"/>
                                         </Grid>
                                         <TextBlock x:Name="SkipBackLabel" Text="5" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
@@ -83,8 +83,8 @@
                                     <Grid>
                                         <Grid RenderTransformOrigin="0.5,0.5">
                                             <Grid.RenderTransform><RotateTransform x:Name="SkipForwardSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Ellipse x:Name="SkipForwardRing" Width="46" Height="46" Stroke="#F5F5F7" StrokeThickness="2.5" StrokeDashArray="30 4"/>
-                                            <Path x:Name="SkipForwardArrow" Data="M24,2 L19,11 L29,11 Z" Fill="#F5F5F7"/>
+                                            <Path x:Name="SkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F5F5F7" StrokeThickness="3.9" Fill="None"/>
+                                            <Path x:Name="SkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F5F5F7"/>
                                         </Grid>
                                         <TextBlock x:Name="SkipForwardLabel" Text="30" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
@@ -95,8 +95,17 @@
                                 </Button>
                             </StackPanel>
                             <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <Button x:Name="CaptionsButton" Content="CC" Margin="0,0,8,0" Click="OnCaptions" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
-                                <Button x:Name="FullscreenButton" Content="full" Click="OnFullscreen" Style="{StaticResource {x:Static ToolBar.ButtonStyleKey}}"/>
+                                <Button x:Name="CaptionsButton" Margin="0,0,8,0" Padding="6" Click="OnCaptions" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Subtitles">
+                                    <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="None" Data="M5.7,5.0 H22.3 A1.7,1.7 0 0 1 24,6.7 V17.3 A1.7,1.7 0 0 1 22.3,19.0 H14.5 L7.4,24.8 L9.5,19.0 H5.7 A1.7,1.7 0 0 1 4,17.3 V6.7 A1.7,1.7 0 0 1 5.7,5.0 Z"/>
+                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="None" Data="M7.2,9.0 H13.3 M14.7,9.0 H17.7 M19.1,9.0 H20.8 M7.2,12.0 H8.7 M10.1,12.0 H16.2 M17.6,12.0 H20.8 M7.2,15.0 H11.8 M13.2,15.0 H15.1 M16.5,15.0 H20.8"/>
+                                    </Canvas></Viewbox>
+                                </Button>
+                                <Button x:Name="FullscreenButton" Padding="6" Click="OnFullscreen" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Fullscreen">
+                                    <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Fill="None" Data="M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8"/>
+                                    </Canvas></Viewbox>
+                                </Button>
                             </StackPanel>
                         </Grid>
                     </Grid>
