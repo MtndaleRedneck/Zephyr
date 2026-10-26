@@ -3,6 +3,17 @@ import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.*
 import org.junit.Test
 class ReleaseIdentityTest {
+ @Test fun clearVisualPairingSynchronously() {
+  val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+  ctx.getSharedPreferences("settings",0).edit().remove("zephyrToken").commit()
+  val secrets=androidx.security.crypto.EncryptedSharedPreferences.create(ctx,"secrets",
+   androidx.security.crypto.MasterKey.Builder(ctx).setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM).build(),
+   androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+   androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
+  assertTrue(secrets.edit().remove("zephyrToken").commit())
+  assertEquals("", Store(ctx).zephyrToken)
+ }
+
  @Test fun separateIdentityAndSavedChoices() {
   val ctx = InstrumentationRegistry.getInstrumentation().targetContext
   assertTrue(ctx.packageName.startsWith("com.zephyr.remote"))
