@@ -16,7 +16,8 @@ Set-Content "$tmp\clip.srt" "1`r`n00:00:00,000 --> 00:00:04,000`r`nZephyr subtit
 
 $server = Start-Process -PassThru python -ArgumentList "scripts/range_server.py","$tmp","8123" -WindowStyle Hidden
 Start-Sleep 2
-$vlc = Start-Process -PassThru "C:\Program Files\VideoLAN\VLC\vlc.exe" -ArgumentList "-I","http","--http-password","zephyr","--no-video-title-show" -WindowStyle Hidden
+$vlcLog = "$tmp\vlc-verbose.log"
+$vlc = Start-Process -PassThru "C:\Program Files\VideoLAN\VLC\vlc.exe" -ArgumentList "-I","http","--http-password","zephyr","--no-video-title-show","-vv","--file-logging","--logfile=$vlcLog" -WindowStyle Hidden
 try {
   $ok = $false
   for ($i = 0; $i -lt 30 -and -not $ok; $i++) {
@@ -65,7 +66,25 @@ try {
     Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
     Start-Sleep 2
     $st2 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
-    Write-Output ("addsubtitle probe attached a Subtitle stream: " + (Test-SubStream $st2))
+    Write-Output ("addsubtitle probe (http URL) attached a Subtitle stream: " + (Test-SubStream $st2))
+    # Discriminator: same addsubtitle with a LOCAL file path. If the local path
+    # attaches but the http URL does not, the failure is VLC's network subtitle
+    # fetch (product-relevant: the phone serves subs over http). If neither
+    # attaches, VLC's sub pipeline on this build is broken regardless of route.
+    $localUri = "file:///" + (($tmp + "\clip.srt") -replace "\\", "/")
+    $encLocal = [uri]::EscapeDataString($localUri)
+    Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json?command=addsubtitle&val=$encLocal" -Headers $auth -UseBasicParsing -TimeoutSec 5 | Out-Null
+    Start-Sleep 2
+    $st3 = (Invoke-WebRequest -Uri "http://127.0.0.1:8080/requests/status.json" -Headers $auth -UseBasicParsing -TimeoutSec 3).Content | ConvertFrom-Json
+    Write-Output ("addsubtitle probe (local file) attached a Subtitle stream: " + (Test-SubStream $st3))
+    # VLC's own verbose log names the exact failure (fetch error, demux probe,
+    # lua option handling). Dump the sub-relevant lines so the cause is in CI.
+    Write-Output "VLC verbose log (sub/srt/slave/error lines):"
+    if (Test-Path $vlcLog) {
+      Get-Content $vlcLog | Select-String -Pattern 'sub|srt|slave|error|http' | Select-Object -Last 40 | ForEach-Object { $_.Line }
+    } else {
+      Write-Output "(no vlc log file produced)"
+    }
     throw "no Subtitle stream attached - :sub-file option did not take"
   }
   Write-Output "VLC attached the :sub-file subtitle (Subtitle stream present)"

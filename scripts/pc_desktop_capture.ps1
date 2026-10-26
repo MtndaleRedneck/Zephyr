@@ -25,9 +25,10 @@ $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 
 function CaptureWindow($hWnd, $path) {
     # Crop to the app's own window rect: no runner chrome in UI evidence.
-    $r = New-Object W.RECT
-    [W.U32]::GetWindowRect($hWnd, [ref]$r) | Out-Null
+    $r = [W.RECT]::new()
+    if (-not [W.U32]::GetWindowRect($hWnd, [ref]$r)) { Write-Host "::error::GetWindowRect failed for hwnd $hWnd"; return "0 x 0" }
     $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
+    if ($w -le 0 -or $h -le 0) { Write-Host "::error::zero-size window rect for hwnd $hWnd ($w x $h) - capture skipped"; return "0 x 0" }
     $bmp = New-Object System.Drawing.Bitmap $w, $h
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
