@@ -35,7 +35,7 @@ namespace ZephyrPlayer
         private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30";
         /// <summary>Phone, helper and player release separately; this only looks at player-v* tags.</summary>
         private const string TagPrefix = "player-v";
-        private const string AssetPrefix = "ZephyrPlayer";
+        private const string AssetPrefix = "Zephyr-PC";
         public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases";
 
         /// <summary>The published version newer than [current] shipping the installer, else null. Never throws.</summary>

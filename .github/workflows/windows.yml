@@ -86,7 +86,7 @@ jobs:
           # alive (its on-open update check runs in this window too), then
           # stop it so nothing holds the single-instance mutex.
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
-          $installer = "windows/Output/ZephyrPlayer-$v.exe"
+          $installer = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $installer)) { throw "installer missing: $installer" }
           $installLog = "$env:RUNNER_TEMP/installer-smoke.log"
           $ip = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$installLog" -PassThru
@@ -145,6 +145,15 @@ jobs:
           if ((Get-FileHash $pairingPath).Hash -ne $beforePairing) { throw 'replacement changed pairing' }
           if (-not (Test-Path (Join-Path (Split-Path $installed) 'libvlc'))) { throw 'installed libvlc directory missing' }
           Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings and pairing hashes unchanged. Same-version replacement, not published version upgrade.'
+          # Report actual installed shortcut display names, never user paths.
+          $shell = New-Object -ComObject WScript.Shell
+          $desktopFolders = @([Environment]::GetFolderPath('Desktop'), "$env:PUBLIC/Desktop")
+          foreach ($folder in $desktopFolders) {
+            Get-ChildItem $folder -Filter '*.lnk' -ErrorAction SilentlyContinue | ForEach-Object {
+              $target = $shell.CreateShortcut($_.FullName).TargetPath
+              if ($target -match 'vlc.exe$|ZephyrPlayer.exe$') { Write-Output ("INSTALLED_SHORTCUT_LABEL: " + $_.BaseName) }
+            }
+          }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v4
         if: always()
@@ -168,8 +177,8 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: ZephyrPlayer-installer
-          path: windows/Output/ZephyrPlayer-*.exe
+          name: Zephyr-PC-installer
+          path: windows/Output/Zephyr-PC-*.exe
           if-no-files-found: warn
       - name: "Gate summary (honest split - tests vs evidence)"
         if: always()
