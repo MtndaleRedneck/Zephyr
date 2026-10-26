@@ -105,12 +105,12 @@ namespace ZephyrPlayer.Tests
                     var bar = w.ControlBar;
                     // Structural assertions, independent of pixel counts: the required
                     // elements exist with readable labels, and CC/full are vectors, not text.
-                    Assert.Equal("5", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
-                    Assert.Equal("30", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                    Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
+                    Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
                     Assert.Equal("0:00", ((TextBlock)w.FindName("ElapsedText")!).Text);
                     Assert.Equal("of 0:00", ((TextBlock)w.FindName("TotalText")!).Text);
                     Assert.Equal("-0:00", ((TextBlock)w.FindName("RemainingText")!).Text);
-                    foreach (var n in new[] { "VolumeButton", "PlayPauseButton", "SkipBackButton", "SkipForwardButton", "CaptionsButton", "FullscreenButton", "SeekBar" })
+                    foreach (var n in new[] { "VolumeButton", "PlayPauseButton", "SkipBackButton", "SkipForwardButton", "SecondarySkipBackButton", "SecondarySkipForwardButton", "CaptionsButton", "FullscreenButton", "SeekBar" })
                         Assert.Equal(Visibility.Visible, ((UIElement)w.FindName(n)!).Visibility);
                     Assert.False(((Button)w.FindName("CaptionsButton")!).Content is string, "captions must be a vector icon, not literal text");
                     Assert.False(((Button)w.FindName("FullscreenButton")!).Content is string, "fullscreen must be a vector icon, not literal text");

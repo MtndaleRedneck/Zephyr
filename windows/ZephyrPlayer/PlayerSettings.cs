@@ -18,7 +18,8 @@ namespace ZephyrPlayer
         private readonly object _lock = new object();
 
         public static readonly int[] BoostChoices = { 100, 125, 150, 175, 200 };
-        public static readonly int[] SkipChoices = { 5, 10, 15, 30, 60 };
+        public static readonly int[] PrimarySkipChoices = { 5, 10, 15, 30 };
+        public static readonly int[] SecondarySkipChoices = { 15, 30, 60, 120, 180 };
         public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone" };
         public static readonly string[] IconStyles = { "hollow", "filled" };
 
@@ -40,17 +41,25 @@ namespace ZephyrPlayer
             set { if (Array.IndexOf(BoostChoices, value) < 0) return; Write(d => d with { VolumeBoostMaxPct = value }); }
         }
 
-        public int SkipBackSeconds
+        // Legacy directional fields are read only as the initial pair intervals.
+        // New values always control both directions of their own pair.
+        public int PrimarySkipSeconds
         {
-            get { lock (_lock) return Read().SkipBackSeconds ?? 5; }
-            set { if (Array.IndexOf(SkipChoices, value) < 0) return; Write(d => d with { SkipBackSeconds = value }); }
+            get { lock (_lock) { var d = Read(); return ValidSkip(d.PrimarySkipSeconds ?? d.SkipBackSeconds, PrimarySkipChoices, 10); } }
+            set { if (Array.IndexOf(PrimarySkipChoices, value) < 0) return; Write(d => d with { PrimarySkipSeconds = value }); }
         }
 
-        public int SkipForwardSeconds
+        public int SecondarySkipSeconds
         {
-            get { lock (_lock) return Read().SkipForwardSeconds ?? 30; }
-            set { if (Array.IndexOf(SkipChoices, value) < 0) return; Write(d => d with { SkipForwardSeconds = value }); }
+            get { lock (_lock) { var d = Read(); return ValidSkip(d.SecondarySkipSeconds ?? d.SkipForwardSeconds, SecondarySkipChoices, 30); } }
+            set { if (Array.IndexOf(SecondarySkipChoices, value) < 0) return; Write(d => d with { SecondarySkipSeconds = value }); }
         }
+
+        private static int ValidSkip(int? value, int[] choices, int fallback) =>
+            value.HasValue && Array.IndexOf(choices, value.Value) >= 0 ? value.Value : fallback;
+
+        public int SkipDelta(bool secondary, bool backward) =>
+            (secondary ? SecondarySkipSeconds : PrimarySkipSeconds) * (backward ? -1 : 1);
 
         public string BarColorStyle
         {
@@ -92,7 +101,9 @@ namespace ZephyrPlayer
             string? IconStyle,
             bool? ShowSpeed,
             bool? ShowSleepTimer,
-            int? LastVolume);
+            int? LastVolume,
+            int? PrimarySkipSeconds = null,
+            int? SecondarySkipSeconds = null);
 
         private Data Read()
         {

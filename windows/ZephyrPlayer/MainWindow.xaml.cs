@@ -172,9 +172,13 @@ namespace ZephyrPlayer
             UpdatePlayPauseGlyph();
         }
 
-        private void OnSkipBack(object sender, RoutedEventArgs e) => Skip(-_settings.SkipBackSeconds, SkipBackSpin, true);
+        private void OnSkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(false, true), SkipBackSpin, true);
 
-        private void OnSkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipForwardSeconds, SkipForwardSpin, false);
+        private void OnSkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(false, false), SkipForwardSpin, false);
+
+        private void OnSecondarySkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, true), SecondarySkipBackSpin, true);
+
+        private void OnSecondarySkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, false), SecondarySkipForwardSpin, false);
 
         private void Skip(int deltaSeconds, RotateTransform spin, bool backward)
         {
@@ -195,6 +199,8 @@ namespace ZephyrPlayer
         {
             SkipBackLabel.Foreground = Orange;
             SkipForwardLabel.Foreground = Orange;
+            SecondarySkipBackLabel.Foreground = Orange;
+            SecondarySkipForwardLabel.Foreground = Orange;
             _flashTimer.Stop();
             _flashTimer.Start();
         }
@@ -324,8 +330,16 @@ namespace ZephyrPlayer
             SkipForwardArrow.Fill = ring;
             SkipBackLabel.Foreground = label;
             SkipForwardLabel.Foreground = label;
-            SkipBackLabel.Text = _settings.SkipBackSeconds.ToString();
-            SkipForwardLabel.Text = _settings.SkipForwardSeconds.ToString();
+            SkipBackLabel.Text = _settings.PrimarySkipSeconds.ToString();
+            SkipForwardLabel.Text = _settings.PrimarySkipSeconds.ToString();
+            SecondarySkipBackRing.Stroke = ring;
+            SecondarySkipForwardRing.Stroke = ring;
+            SecondarySkipBackArrow.Fill = ring;
+            SecondarySkipForwardArrow.Fill = ring;
+            SecondarySkipBackLabel.Foreground = label;
+            SecondarySkipForwardLabel.Foreground = label;
+            SecondarySkipBackLabel.Text = _settings.SecondarySkipSeconds.ToString();
+            SecondarySkipForwardLabel.Text = _settings.SecondarySkipSeconds.ToString();
 
             var hollow = _settings.IconStyle == "hollow";
             PlayRing.Stroke = hollow ? ring : Brushes.Transparent;

@@ -116,13 +116,13 @@
                 </StackPanel>
             </Border>
 
-            <Border Style="{StaticResource Card}">
+            <Border x:Name="SkipSettingsCard" Style="{StaticResource Card}">
                 <StackPanel>
                     <TextBlock Text="Skip buttons" Style="{StaticResource Heading}"/>
-                    <TextBlock Text="Back:" Foreground="{StaticResource TextBrush}"/>
-                    <WrapPanel x:Name="SkipBackPanel"/>
-                    <TextBlock Text="Forward:" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
-                    <WrapPanel x:Name="SkipForwardPanel"/>
+                    <TextBlock Text="Primary skip buttons" Foreground="{StaticResource TextBrush}"/>
+                    <WrapPanel x:Name="PrimarySkipPanel"/>
+                    <TextBlock Text="Secondary skip buttons" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
+                    <WrapPanel x:Name="SecondarySkipPanel"/>
                 </StackPanel>
             </Border>
 

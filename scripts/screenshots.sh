@@ -1,8 +1,8 @@
 set -euo pipefail
 # CI screenshot rig (ported from BingeMote, trimmed to the new UI evidence):
-# installs the DEBUG build (com.bingemote.debug - never the working install) and
+# installs the DEBUG build (com.zephyr.remote.debug - never the working install) and
 # captures the Movies screen in both origins at the reference profile.
-PKG=com.bingemote.debug
+PKG=com.zephyr.remote.debug
 mkdir -p screenshots
 adb install -r android/build/outputs/apk/debug/app-debug.apk
 dismiss_anr() {

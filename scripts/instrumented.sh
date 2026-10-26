@@ -7,8 +7,8 @@
 # 39956293965). Fresh session per class = fresh accessibility tree. This is the
 # same invocation shape scripts/screenshots.sh used in the base repo.
 set -uo pipefail
-PKG=com.bingemote.debug
-TESTPKG=com.bingemote.debug.test
+PKG=com.zephyr.remote.debug
+TESTPKG=com.zephyr.remote.debug.test
 RUNNER=androidx.test.runner.AndroidJUnitRunner
 
 adb install -r android/build/outputs/apk/debug/app-debug.apk
