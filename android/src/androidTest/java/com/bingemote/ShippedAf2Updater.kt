@@ -1,0 +1,206 @@
+// Test-only verbatim af2bf063 Updater.kt, with type/object names changed to avoid collision.
+package com.bingemote
+
+import android.content.Context
+import android.content.pm.PackageManager
+import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
+import java.security.MessageDigest
+
+/** A published release that is newer than the installed app. */
+data class LegacyUpdateInfo(
+    val versionName: String,
+    val notes: List<String>,
+    val apkUrl: String,
+    val size: Long,
+    /** Lowercase hex SHA-256 from the release, or null when GitHub did not publish one. */
+    val sha256: String?,
+)
+
+/**
+ * Update check against this app's public GitHub releases. It runs automatically each time the app
+ * cold-opens (there is no switch), only talks to github.com and githubusercontent.com over HTTPS,
+ * and every failure ends quietly or with a plain message.
+ */
+object ShippedAf2Updater {
+    const val API = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30"
+    /** Android and PC release separately; this updater only ever looks at android-v* tags. */
+    const val TAG_PREFIX = "android-v"
+    private const val DOWNLOAD_PREFIX = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/"
+    private const val MAX_APK = 150L * 1024 * 1024
+
+    /** "v1.8.0" or "1.8.0" as numbers, or null when it is not a plain dotted version. */
+    fun parseVersion(s: String): List<Int>? {
+        val t = s.trim().removePrefix("v").removePrefix("V")
+        if (!Regex("""\d{1,4}(\.\d{1,4}){0,3}""").matches(t)) return null
+        return t.split('.').map { it.toInt() }
+    }
+
+    fun isNewer(remote: String, local: String): Boolean {
+        val r = parseVersion(remote) ?: return false
+        val l = parseVersion(local) ?: return false
+        for (i in 0 until maxOf(r.size, l.size)) {
+            val a = r.getOrElse(i) { 0 }; val b = l.getOrElse(i) { 0 }
+            if (a != b) return a > b
+        }
+        return false
+    }
+
+    /** Bullet lines and section headings from the release notes, with simple markdown removed. A heading comes back as "## Name". Other lines are ignored. */
+    fun notesBullets(body: String?): List<String> = body.orEmpty().lines().map { it.trim() }
+        .mapNotNull {
+            when {
+                it.startsWith("- ") || it.startsWith("* ") -> it.drop(2).replace("**", "").replace("`", "").trim().take(200)
+                it.startsWith("#") -> it.trimStart('#').replace("**", "").replace("`", "").trim().take(60).let { h -> if (h.isEmpty()) "" else "## $h" }
+                else -> null
+            }
+        }
+        .filter { it.isNotEmpty() }.take(16)
+
+    /** The offer for one release JSON, or null when it is not an app release, is a draft or prerelease, has no usable APK, or is not newer than [current]. */
+    fun parseRelease(json: String, current: String): LegacyUpdateInfo? = try {
+        val o = JSONObject(json)
+        val tag = o.optString("tag_name", "")
+        val version = tag.trim().removePrefix(TAG_PREFIX).takeIf { tag.trim().startsWith(TAG_PREFIX) } ?: ""
+        if (o.optBoolean("draft", false) || o.optBoolean("prerelease", false) || parseVersion(version) == null || !isNewer(version, current)) null
+        else {
+            val assets = o.optJSONArray("assets")
+            var found: LegacyUpdateInfo? = null
+            if (assets != null) for (i in 0 until assets.length()) {
+                val a = assets.getJSONObject(i)
+                val name = a.optString("name", "")
+                val url = a.optString("browser_download_url", "")
+                val size = a.optLong("size", 0)
+                if (found == null && name == "Zephyr-Android-$version.apk" && url == "$DOWNLOAD_PREFIX$tag/$name" && size in 1..MAX_APK) {
+                    val d = a.optString("digest", "")
+                    val hex = if (d.startsWith("sha256:") && Regex("[0-9a-fA-F]{64}").matches(d.removePrefix("sha256:"))) d.removePrefix("sha256:").lowercase() else null
+                    found = LegacyUpdateInfo(version, notesBullets(o.optString("body", "")), url, size, hex)
+                }
+            }
+            found
+        }
+    } catch (e: Exception) { null }
+
+    fun hostAllowed(url: String): Boolean = try {
+        val u = URL(url)
+        u.protocol == "https" && (u.host == "github.com" || u.host == "githubusercontent.com" || u.host.endsWith(".githubusercontent.com"))
+    } catch (e: Exception) { false }
+
+    /** The newest android-v* release that beats [current]. The list comes newest-first; pc-v* tags are ignored. Null on any failure, offline, rate limit or odd response. Call off the main thread. */
+    fun check(current: String): LegacyUpdateInfo? = (checkDetailed(current) as? CheckOutcome.Newer)?.info
+
+    /** The manual "Check for updates" button gets to know which way a null went. */
+    sealed interface CheckOutcome {
+        data class Newer(val info: LegacyUpdateInfo) : CheckOutcome
+        object NoRelease : CheckOutcome
+        object UpToDate : CheckOutcome
+        object Unavailable : CheckOutcome
+    }
+
+    fun checkDetailed(current: String): CheckOutcome = try {
+        val c = URL(API).openConnection() as HttpURLConnection
+        c.connectTimeout = 6000; c.readTimeout = 8000; c.instanceFollowRedirects = false
+        c.setRequestProperty("Accept", "application/vnd.github+json"); c.setRequestProperty("User-Agent", "ZephyrRemote")
+        if (c.responseCode != 200) CheckOutcome.Unavailable else {
+            val body = c.inputStream.use { it.readBytes(1024 * 1024) }
+            classifyFeed(String(body, Charsets.UTF_8), current)
+        }
+    } catch (e: Exception) { CheckOutcome.Unavailable }
+
+    /** No compatible published APK is different from a verified current version. */
+    fun classifyFeed(body: String, current: String): CheckOutcome = try {
+        require(parseVersion(current) != null)
+        val arr = org.json.JSONArray(body)
+        var newest: LegacyUpdateInfo? = null
+        for (i in 0 until arr.length()) {
+            val candidate = parseRelease(arr.getJSONObject(i).toString(), "0.0.0") ?: continue
+            if (newest == null || isNewer(candidate.versionName, newest.versionName)) newest = candidate
+        }
+        val published = newest
+        if (published == null) CheckOutcome.NoRelease
+        else if (isNewer(published.versionName, current)) CheckOutcome.Newer(published)
+        else CheckOutcome.UpToDate
+    } catch (e: Exception) { CheckOutcome.Unavailable }
+
+    private fun java.io.InputStream.readBytes(max: Int): ByteArray {
+        val out = java.io.ByteArrayOutputStream(); val buf = ByteArray(8192); var n = read(buf); var t = 0
+        while (n >= 0) { t += n; if (t > max) throw java.io.IOException("too large"); out.write(buf, 0, n); n = read(buf) }
+        return out.toByteArray()
+    }
+
+    class Failure(val msg: String) : Exception(msg)
+
+    fun updateDir(ctx: Context) = File(ctx.cacheDir, "updates")
+    fun clean(ctx: Context) { updateDir(ctx).listFiles()?.forEach { it.delete() } }
+
+    /** Downloads the APK, following only HTTPS redirects inside github.com and githubusercontent.com. Throws [Failure]. */
+    fun download(ctx: Context, info: LegacyUpdateInfo, progress: (Float) -> Unit, cancelled: () -> Boolean): File {
+        clean(ctx)
+        val dir = updateDir(ctx); dir.mkdirs()
+        val out = File(dir, "Zephyr-update.apk")
+        try {
+            var url = info.apkUrl
+            var conn: HttpURLConnection? = null
+            for (hop in 0..5) {
+                if (!hostAllowed(url)) throw Failure("The download address was not trusted, so it was stopped.")
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.connectTimeout = 10000; c.readTimeout = 15000; c.instanceFollowRedirects = false
+                c.setRequestProperty("User-Agent", "ZephyrRemote")
+                val code = c.responseCode
+                if (code in 301..308) { url = c.getHeaderField("Location") ?: throw Failure("The download could not start."); c.disconnect(); continue }
+                if (code != 200) throw Failure("The download failed (error $code).")
+                conn = c; break
+            }
+            val c = conn ?: throw Failure("The download was redirected too many times.")
+            val md = MessageDigest.getInstance("SHA-256")
+            var total = 0L
+            c.inputStream.use { ins -> out.outputStream().use { os ->
+                val buf = ByteArray(32 * 1024); var n = ins.read(buf)
+                while (n >= 0) {
+                    if (cancelled()) throw Failure("cancelled")
+                    total += n; if (total > info.size) throw Failure("The file was larger than expected.")
+                    md.update(buf, 0, n); os.write(buf, 0, n); progress(total.toFloat() / info.size)
+                    n = ins.read(buf)
+                }
+            } }
+            if (total != info.size) throw Failure("The download was incomplete.")
+            if (info.sha256 != null && toHex(md.digest()) != info.sha256) throw Failure("The file did not match the published checksum, so it was deleted.")
+            return out
+        } catch (e: Failure) { out.delete(); throw e }
+        catch (e: Exception) { out.delete(); throw Failure("The download failed. Check your connection and try again.") }
+    }
+
+    /**
+     * Same signer set, or a key rotation: the installed signer appears in the new file's signing history (Android's lineage).
+     * Android still makes the final call at install time.
+     */
+    fun signersAcceptable(installed: Set<List<Byte>>, incoming: Set<List<Byte>>, incomingHistory: Set<List<Byte>>): Boolean {
+        if (installed.isEmpty() || incoming.isEmpty()) return false
+        if (installed == incoming) return true
+        return installed.size == 1 && incoming.size == 1 && incomingHistory.containsAll(installed)
+    }
+
+    fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
+
+    /** Confirms the file is this app, newer, and signed with the same key as the installed copy. Throws [Failure]. */
+    fun verify(ctx: Context, f: File) {
+        try { verifyInner(ctx, f) }
+        catch (e: Failure) { throw e }
+        catch (e: Exception) { throw Failure("The downloaded file could not be checked, so it was not installed.") }
+    }
+
+    private fun verifyInner(ctx: Context, f: File) {
+        val pm = ctx.packageManager
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES
+        val arch = pm.getPackageArchiveInfo(f.path, flags) ?: throw Failure("The downloaded file is not a valid app.")
+        if (arch.packageName != ctx.packageName) throw Failure("The downloaded file is a different app.")
+        val installed = pm.getPackageInfo(ctx.packageName, flags)
+        val cur = installed.signingInfo?.apkContentsSigners?.map { it.toByteArray().toList() }?.toSet().orEmpty()
+        val next = arch.signingInfo?.apkContentsSigners?.map { it.toByteArray().toList() }?.toSet().orEmpty()
+        val history = arch.signingInfo?.signingCertificateHistory?.map { it.toByteArray().toList() }?.toSet().orEmpty()
+        if (!signersAcceptable(cur, next, history)) throw Failure("The file is not signed by the same key as your installed app, so it was not installed.")
+        if (arch.longVersionCode <= installed.longVersionCode) throw Failure("The downloaded file is not newer than this version.")
+    }
+}
