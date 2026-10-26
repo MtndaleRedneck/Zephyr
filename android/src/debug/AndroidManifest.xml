@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug-only bridge proof reads the installed faulty/recovery package identity. -->
+    <queries><package android:name="com.bingemote" /></queries>
+</manifest>
