@@ -148,6 +148,7 @@ class RemoteState(
     fun selectSource(source: Source) {
         if (store.selectedSource == source) return
         store.selectedSource = source
+        MediaControls.sync(app, store)
         status = null; winVolume = null; pickedSubtitle = null
         muted = false; vlcClosed = false; vlcRefused = false
         helperDown = false; helperNotice = false; unpaired = false
@@ -374,10 +375,15 @@ class RemoteState(
             ZephyrClient.fullscreen(zephyrHost(), store.zephyrPort, store.zephyrToken, !(status?.fullscreen ?: false))
         else Vlc.toggleFullscreen(store.host, store.vlcPort, store.vlcPassword)
     }
-    fun skip(seconds: Int) = fire("skip") {
-        if (store.selectedSource == Source.ZEPHYR)
-            ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken, ((status?.timeSec ?: 0L) + seconds).coerceAtLeast(0))
-        else Vlc.skip(store.host, store.vlcPort, store.vlcPassword, seconds)
+    fun skip(seconds: Int) {
+        val current = status
+        if (store.selectedSource == Source.ZEPHYR && current == null) return
+        fire("skip") {
+            if (store.selectedSource == Source.ZEPHYR)
+                ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken,
+                    (current!!.timeSec + seconds).coerceIn(0, current.lengthSec.coerceAtLeast(0)))
+            else Vlc.skip(store.host, store.vlcPort, store.vlcPassword, seconds)
+        }
     }
     fun seekTo(seconds: Long) {
         if (BuildConfig.DEBUG) Log.i("BMSeek", "seekTo seconds=$seconds")
@@ -389,7 +395,8 @@ class RemoteState(
 
     fun volumeStep(up: Boolean) {
         if (store.selectedSource == Source.ZEPHYR) {
-            val next = ((status?.volumePct ?: 100) + if (up) 5 else -5).coerceIn(0, 100)
+            val current = status ?: return
+            val next = (current.volumePct + if (up) 5 else -5).coerceIn(0, 100)
             status = status?.copy(volumeRaw = next * 256 / 100)
             val wasMuted = muted; muted = false
             fire("volume") {

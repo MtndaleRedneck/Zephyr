@@ -24,6 +24,11 @@ adb shell am instrument -w -e class com.bingemote.RecoveryBridgeTest com.zephyr.
 grep -q 'OK (1 test)' instrument-results/shipped-bridge-verifier.txt
 adb install -r /tmp/binge/app/build/outputs/apk/release/app-release.apk
 proof restored
+adb shell wm size 1080x2310
+adb shell wm density 400
+adb shell am instrument -w -e class com.bingemote.BingeSettingsVisualTest "$RUNNER" | tee instrument-results/binge-release-labels.txt
+grep -q 'OK (1 test)' instrument-results/binge-release-labels.txt
+adb exec-out screencap -p > screenshots/bingemote-release-settings-labels.png
 adb install android/build/outputs/apk/release/app-release.apk
 adb shell dumpsys package com.bingemote | grep -E 'versionCode=22|versionName=1.12.0'
 adb shell dumpsys package com.zephyr.remote | grep -E 'versionCode=22|versionName=1.1.0'
@@ -46,7 +51,7 @@ adb install -r android/build/outputs/apk/androidTest/debug/app-debug-androidTest
 adb shell am instrument -w -e class com.bingemote.ReleaseIdentityTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrument-results/identity-defaults.txt
 grep -q 'OK (2 tests)' instrument-results/identity-defaults.txt
 adb shell am instrument -w -e class com.bingemote.PlaybackRoutingTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner | tee instrument-results/playback-routing.txt
-grep -q 'OK (1 test)' instrument-results/playback-routing.txt
+grep -q 'OK (2 tests)' instrument-results/playback-routing.txt
 bash scripts/screenshots.sh
 # Fixture lives only in debug package. Keep release BingeMote data untouched.
 adb shell am force-stop com.zephyr.remote.debug
