@@ -88,17 +88,29 @@ jobs:
           $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           if (-not (Test-Path $installed)) { throw "installed exe missing: $installed" }
           Write-Output "installed: $installed"
-          Start-Sleep -Seconds 8
-          $proc = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
-          if (-not $proc) {
-            # skipifnotsilent auto-launch may not fire on a headless session;
-            # launch the installed exe directly, same thing the user gets.
-            $proc = Start-Process $installed -PassThru
-            Start-Sleep -Seconds 8
+          # The installer's runasoriginaluser auto-launch can take a while (or
+          # not fire headless); poll first, direct-launch as fallback. A
+          # mutex-handoff exit (second instance yields to the first) is FINE:
+          # the verdict is "a ZephyrPlayer process is alive", not "my launch
+          # survived".
+          $alive = $false
+          for ($i = 0; $i -lt 30 -and -not $alive; $i++) {
+            Start-Sleep -Seconds 1
+            $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)
           }
-          $proc.Refresh()
-          if ($proc.HasExited) { throw "installed exe exited during startup/update check" }
-          Write-Output "installed exe alive after launch + on-open update check window (pid $($proc.Id))"
+          if (-not $alive) {
+            Write-Output "auto-launch did not produce a running app; launching installed exe directly"
+            Start-Process $installed
+            for ($i = 0; $i -lt 30 -and -not $alive; $i++) {
+              Start-Sleep -Seconds 1
+              $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)
+            }
+          }
+          if (-not $alive) { throw "installed exe never stayed running (startup/update-check crash or auto-launch dead)" }
+          # Stay alive through the on-open update check window.
+          Start-Sleep -Seconds 6
+          if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { throw "installed exe died during the update-check window" }
+          Write-Output "installed exe alive through launch + on-open update check window"
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v4
         if: always()

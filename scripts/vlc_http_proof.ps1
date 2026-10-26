@@ -14,7 +14,8 @@ choco install ffmpeg --no-progress -y | Out-Null
 & "C:\ProgramData\chocolatey\bin\ffmpeg.exe" -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p "$tmp\clip.mp4" 2>$null
 Set-Content "$tmp\clip.srt" "1`r`n00:00:00,000 --> 00:00:04,000`r`nZephyr subtitle proof`r`n"
 
-$server = Start-Process -PassThru python -ArgumentList "scripts/range_server.py","$tmp","8123" -WindowStyle Hidden
+$srvLog = "$tmp\server.log"
+$server = Start-Process -PassThru python -ArgumentList "scripts/range_server.py","$tmp","8123" -WindowStyle Hidden -RedirectStandardError $srvLog
 Start-Sleep 2
 $vlcLog = "$tmp\vlc-verbose.log"
 $vlc = Start-Process -PassThru "C:\Program Files\VideoLAN\VLC\vlc.exe" -ArgumentList "-I","http","--http-password","zephyr","--no-video-title-show","-vv","--file-logging","--logfile=$vlcLog" -WindowStyle Hidden
@@ -109,18 +110,22 @@ try {
     Send-Vlc $c.query
     $attached = Wait-Sub 6
     Write-Output ("MATRIX " + $c.name + " => Subtitle stream: " + $attached)
-    Get-NewLogLines $logBefore | Select-String -Pattern 'slave|srt|subtitle' | Select-Object -First 12 | ForEach-Object { Write-Output ("  vlc: " + $_.Line) }
+    # Unfiltered delta: the access-http response lines after VLC's GET are the
+    # evidence when the slave fetch itself fails (filtered views hid them).
+    Get-NewLogLines $logBefore | Select-Object -First 40 | ForEach-Object { Write-Output ("  vlc: " + $_) }
     if ($attached -and -not $winner) { $winner = $c.name }
   }
   if (-not $winner) {
     Write-Output "STATUS DUMP (no encoding attached a Subtitle stream):"
     Write-Output ((Get-Status).information | ConvertTo-Json -Depth 8)
-    Write-Output "VLC verbose log (sub/srt/slave/error lines):"
+    Write-Output "VLC verbose log (tail):"
     if (Test-Path $vlcLog) {
-      Get-Content $vlcLog | Select-String -Pattern 'slave|srt|subtitle' | Select-Object -Last 60 | ForEach-Object { $_.Line }
+      Get-Content $vlcLog | Select-Object -Last 80 | ForEach-Object { $_ }
     } else {
       Write-Output "(no vlc log file produced)"
     }
+    Write-Output "range server log:"
+    if (Test-Path $srvLog) { Get-Content $srvLog | Select-Object -Last 40 | ForEach-Object { $_ } } else { Write-Output "(none)" }
     throw "no encoding candidate attached a Subtitle stream - desktop-VLC subtitle route unsupported on this VLC build"
   }
   Write-Output "MATRIX WINNER: $winner"

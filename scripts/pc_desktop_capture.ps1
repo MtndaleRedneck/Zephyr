@@ -203,13 +203,34 @@ $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused2.png"
 $fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-playing-controls-window.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
 $fnPauseClock = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-paused2.png" 0.02 0.10 0.82 0.87
 ClickAt 0.497 0.90   # resume
-ClickAt 0.60 0.807   # seek to ~60%
+# Seek by DRAGGING the thumb (WPF Slider ignores track clicks unless
+# IsMoveToPointEnabled; the real user path is the drag). Thumb sits at the
+# current position fraction of the track (track ~5%..96% of width).
+function DragSeek($x0f, $x1f, $yf) {
+    [ZWU32]::SetCursorPos([int]($vs.Width * $x0f), [int]($vs.Height * $yf)) | Out-Null
+    Start-Sleep -Milliseconds 250
+    [ZWU32]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)  # LEFTDOWN
+    for ($i = 1; $i -le 8; $i++) {
+        $x = [int]($vs.Width * ($x0f + ($x1f - $x0f) * $i / 8))
+        [ZWU32]::SetCursorPos($x, [int]($vs.Height * $yf)) | Out-Null
+        Start-Sleep -Milliseconds 90
+    }
+    [ZWU32]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)  # LEFTUP
+    Start-Sleep -Milliseconds 700
+}
+DragSeek 0.075 0.60 0.807
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-seeked.png"
 $fnSeek = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-seeked.png" 0.02 0.10 0.82 0.87
+# Fullscreen toggle verdict = bounds GROW to the virtual screen (the fitted
+# window is already near-full-size; compare against its own before-bounds).
+$rBefore = [ZRECT]::new()
+[ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$rBefore, 16) | Out-Null
 ClickAt 0.94 0.90    # fullscreen toggle
+Start-Sleep -Milliseconds 800
 $r = [ZRECT]::new()
 if ([ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$r, 16) -eq 0) {
-    if (($r.Right - $r.Left) -ge $vs.Width -and ($r.Bottom - $r.Top) -ge $vs.Height) { $fnFs = 1 }
+    $grewW = ($r.Right - $r.Left) - ($rBefore.Right - $rBefore.Left)
+    if (($r.Right - $r.Left) -ge $vs.Width -and ($r.Bottom - $r.Top) -ge $vs.Height -and $grewW -gt 5) { $fnFs = 1 }
 }
 StopZephyr
 
