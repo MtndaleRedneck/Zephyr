@@ -28,7 +28,7 @@ adb shell wm size 1080x2310
 adb shell wm density 400
 adb shell am instrument -w -e class com.bingemote.BingeSettingsVisualTest "$RUNNER" | tee instrument-results/binge-release-labels.txt
 grep -q 'OK (1 test)' instrument-results/binge-release-labels.txt
-adb exec-out screencap -p > screenshots/bingemote-release-settings-labels.png
+adb pull /sdcard/Android/data/com.bingemote/files/binge-settings-labels.png screenshots/bingemote-release-settings-labels.png
 adb install android/build/outputs/apk/release/app-release.apk
 adb shell dumpsys package com.bingemote | grep -E 'versionCode=22|versionName=1.12.0'
 adb shell dumpsys package com.zephyr.remote | grep -E 'versionCode=22|versionName=1.1.0'
