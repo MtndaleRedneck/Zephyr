@@ -48,8 +48,8 @@ namespace ZephyrPlayer
         {
             FolderText.Text = _settings.LibraryFolder.Length > 0 ? _settings.LibraryFolder : "Not set";
             BuildChoices(BoostPanel, PlayerSettings.BoostChoices, v => v + "%", () => _settings.VolumeBoostMaxPct, v => _settings.VolumeBoostMaxPct = v, "boost");
-            BuildChoices(SkipBackPanel, PlayerSettings.SkipChoices, v => v + "s", () => _settings.SkipBackSeconds, v => _settings.SkipBackSeconds = v, "skipback");
-            BuildChoices(SkipForwardPanel, PlayerSettings.SkipChoices, v => v + "s", () => _settings.SkipForwardSeconds, v => _settings.SkipForwardSeconds = v, "skipfwd");
+            BuildChoices(PrimarySkipPanel, PlayerSettings.PrimarySkipChoices, SkipLabel, () => _settings.PrimarySkipSeconds, v => _settings.PrimarySkipSeconds = v, "primaryskip");
+            BuildChoices(SecondarySkipPanel, PlayerSettings.SecondarySkipChoices, SkipLabel, () => _settings.SecondarySkipSeconds, v => _settings.SecondarySkipSeconds = v, "secondaryskip");
             BuildChoices(BarColorPanel, PlayerSettings.BarColorStyles, Label, () => _settings.BarColorStyle, v => _settings.BarColorStyle = v, "barcolor");
             BuildChoices(IconStylePanel, PlayerSettings.IconStyles, Label, () => _settings.IconStyle, v => _settings.IconStyle = v, "iconstyle");
             SpeedToggle.IsChecked = _settings.ShowSpeed;
@@ -58,6 +58,8 @@ namespace ZephyrPlayer
                 ? $"Paired with {_store.Count} phone{(_store.Count == 1 ? "" : "s")}."
                 : "Not paired yet.";
         }
+
+        private static string SkipLabel(int seconds) => seconds >= 60 ? (seconds / 60) + "m" : seconds + "s";
 
         private static string Label(string v) => v switch
         {

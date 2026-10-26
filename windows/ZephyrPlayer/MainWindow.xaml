@@ -51,12 +51,23 @@
                                         VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"
                                         ToolTip="Volume (matches Windows)"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel x:Name="CenterPlaybackControls" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <Button x:Name="SpeedButton" Visibility="Collapsed" Margin="0,0,10,0" Padding="8,4" Click="OnSpeed"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
                                     <TextBlock x:Name="SpeedLabel" Text="1x" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" FontSize="13" FontWeight="SemiBold"/>
                                 </Button>
-                                <Button x:Name="SkipBackButton" Width="60" Height="60" Padding="0" Click="OnSkipBack"
+                                <Button x:Name="SecondarySkipBackButton" ToolTip="Secondary skip backward" AutomationProperties.Name="Secondary skip backward" Width="60" Height="60" Padding="0" Click="OnSecondarySkipBack"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                    <Grid>
+                                        <Grid RenderTransformOrigin="0.5,0.5">
+                                            <Grid.RenderTransform><RotateTransform x:Name="SecondarySkipBackSpin" Angle="0"/></Grid.RenderTransform>
+                                            <Path x:Name="SecondarySkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
+                                            <Path x:Name="SecondarySkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F5F5F7"/>
+                                        </Grid>
+                                        <TextBlock x:Name="SecondarySkipBackLabel" Text="30" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </Button>
+                                <Button x:Name="SkipBackButton" ToolTip="Primary skip backward" AutomationProperties.Name="Primary skip backward" Width="60" Height="60" Padding="0" Click="OnSkipBack"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand">
                                     <Grid>
                                         <Grid RenderTransformOrigin="0.5,0.5">
@@ -64,7 +75,7 @@
                                             <Path x:Name="SkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
                                             <Path x:Name="SkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F5F5F7"/>
                                         </Grid>
-                                        <TextBlock x:Name="SkipBackLabel" Text="5" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="SkipBackLabel" Text="10" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Button>
                                 <Button x:Name="PlayPauseButton" Width="72" Height="72" Padding="0" Click="OnPlayPause"
@@ -78,7 +89,7 @@
                                         </Grid>
                                     </Grid>
                                 </Button>
-                                <Button x:Name="SkipForwardButton" Width="60" Height="60" Padding="0" Click="OnSkipForward"
+                                <Button x:Name="SkipForwardButton" ToolTip="Primary skip forward" AutomationProperties.Name="Primary skip forward" Width="60" Height="60" Padding="0" Click="OnSkipForward"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand">
                                     <Grid>
                                         <Grid RenderTransformOrigin="0.5,0.5">
@@ -86,7 +97,18 @@
                                             <Path x:Name="SkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
                                             <Path x:Name="SkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F5F5F7"/>
                                         </Grid>
-                                        <TextBlock x:Name="SkipForwardLabel" Text="30" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="SkipForwardLabel" Text="10" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid>
+                                </Button>
+                                <Button x:Name="SecondarySkipForwardButton" ToolTip="Secondary skip forward" AutomationProperties.Name="Secondary skip forward" Width="60" Height="60" Padding="0" Click="OnSecondarySkipForward"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                    <Grid>
+                                        <Grid RenderTransformOrigin="0.5,0.5">
+                                            <Grid.RenderTransform><RotateTransform x:Name="SecondarySkipForwardSpin" Angle="0"/></Grid.RenderTransform>
+                                            <Path x:Name="SecondarySkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
+                                            <Path x:Name="SecondarySkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F5F5F7"/>
+                                        </Grid>
+                                        <TextBlock x:Name="SecondarySkipForwardLabel" Text="30" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Button>
                                 <Button x:Name="SleepButton" Visibility="Collapsed" Margin="10,0,0,0" Padding="8,4" Click="OnSleep"

@@ -9,11 +9,11 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.bingemote"
+        applicationId = "com.zephyr.remote"
         minSdk = 31
         targetSdk = 34
-        versionCode = 21
-        versionName = "1.0.0"
+        versionCode = 22
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -32,8 +32,8 @@ android {
     }
     buildTypes {
         debug {
-            // Test/beta builds install alongside the working BingeMote (never upgrade it);
-            // release keeps applicationId com.bingemote for the v2.0 in-place update path.
+            // Development and release builds both use the independent Zephyr identity.
+            // BingeMote remains com.bingemote until the future 2.0 migration.
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }

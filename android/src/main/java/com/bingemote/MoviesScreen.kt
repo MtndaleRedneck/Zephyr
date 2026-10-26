@@ -470,7 +470,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         }
         Text(
             if (origin == Origin.PHONE)
-                "Phone" + (phoneStack.lastOrNull()?.let { " › " + it.second } ?: "")
+                phoneFolderDisplay(remote.store.moviesPhoneTreeUri) + phoneStack.joinToString("") { " › " + it.second }
             else prettyPath(path),
             color = Muted, fontSize = 13.sp,
             modifier = Modifier.padding(horizontal = 16.dp),

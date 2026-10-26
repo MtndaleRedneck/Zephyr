@@ -1,5 +1,6 @@
 package com.bingemote
 
+import com.zephyr.remote.ZephyrClient
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -144,7 +145,43 @@ class RemoteState(
         pollJob = null
     }
 
+    fun selectSource(source: Source) {
+        if (store.selectedSource == source) return
+        store.selectedSource = source
+        status = null; winVolume = null; pickedSubtitle = null
+        muted = false; vlcClosed = false; vlcRefused = false
+        helperDown = false; helperNotice = false; unpaired = false
+        failures = 0; connecting = true; unreachable = true
+        retry()
+    }
+
+    private fun zephyrHost() = store.zephyrHost.ifBlank { store.host }
+
+    private suspend fun pollZephyr() {
+        if (store.zephyrToken.isBlank()) {
+            unreachable = true; connecting = false; return
+        }
+        try {
+            val json = withContext(Dispatchers.IO) {
+                ZephyrClient.controlStatus(zephyrHost(), store.zephyrPort, store.zephyrToken)
+            }
+            if (store.selectedSource != Source.ZEPHYR) return
+            status = VlcStatus(json.optString("state", "stopped"), json.optString("title", ""),
+                json.optLong("time"), json.optLong("length"),
+                (json.optInt("volume", 100).coerceIn(0, 100) * 256 / 100),
+                json.optBoolean("fullscreen"), emptyList())
+            muted = json.optBoolean("muted")
+            failures = 0; unreachable = false; connecting = false
+            vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
+        } catch (e: Exception) {
+            if (store.selectedSource != Source.ZEPHYR) return
+            failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true
+            connecting = false
+        }
+    }
+
     suspend fun pollOnce() {
+        if (store.selectedSource == Source.ZEPHYR) { pollZephyr(); return }
         // The helper-notice state belongs to the pairing it was learned from: a new
         // or cleared token makes it stale. Reset it here so a re-paired phone never
         // sees "pair again" (or a leftover helper warning) about its NEW pairing.
@@ -200,6 +237,7 @@ class RemoteState(
         if (skipVlc) return
         try {
             val s = vlcDeferred!!.await()
+            if (store.selectedSource != Source.VLC) return
             status = s
             // A new video clears the remembered subtitle pick; the sheet then shows the
             // file's own selected track instead of a checkmark from the previous video.
@@ -301,7 +339,17 @@ class RemoteState(
         }
     }
 
-    private fun fire(kind: String, block: () -> Unit) { cmds.trySend(Cmd(kind, System.currentTimeMillis(), block)) }
+    private fun fire(kind: String, block: () -> Unit) {
+        val target = store.selectedSource
+        cmds.trySend(Cmd(kind, System.currentTimeMillis()) {
+            // A queued tap never moves to a different source after a selector change.
+            if (store.selectedSource == target) {
+                if (target == Source.ZEPHYR && store.zephyrToken.isBlank())
+                    throw java.io.IOException("Zephyr PC isn't paired yet.")
+                block()
+            }
+        })
+    }
 
     fun togglePause() {
         if (BuildConfig.DEBUG) Log.i("BMSeek", "togglePause")
@@ -314,16 +362,42 @@ class RemoteState(
                 else -> s
             }
         }
-        fire("playpause") { Vlc.togglePause(store.host, store.vlcPort, store.vlcPassword) }
+        fire("playpause") {
+            if (store.selectedSource == Source.ZEPHYR) {
+                if (s?.playing == true) ZephyrClient.pause(zephyrHost(), store.zephyrPort, store.zephyrToken)
+                else ZephyrClient.resume(zephyrHost(), store.zephyrPort, store.zephyrToken)
+            } else Vlc.togglePause(store.host, store.vlcPort, store.vlcPassword)
+        }
     }
-    fun toggleFullscreen() = fire("fullscreen") { Vlc.toggleFullscreen(store.host, store.vlcPort, store.vlcPassword) }
-    fun skip(seconds: Int) = fire("skip") { Vlc.skip(store.host, store.vlcPort, store.vlcPassword, seconds) }
+    fun toggleFullscreen() = fire("fullscreen") {
+        if (store.selectedSource == Source.ZEPHYR)
+            ZephyrClient.fullscreen(zephyrHost(), store.zephyrPort, store.zephyrToken, !(status?.fullscreen ?: false))
+        else Vlc.toggleFullscreen(store.host, store.vlcPort, store.vlcPassword)
+    }
+    fun skip(seconds: Int) = fire("skip") {
+        if (store.selectedSource == Source.ZEPHYR)
+            ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken, ((status?.timeSec ?: 0L) + seconds).coerceAtLeast(0))
+        else Vlc.skip(store.host, store.vlcPort, store.vlcPassword, seconds)
+    }
     fun seekTo(seconds: Long) {
         if (BuildConfig.DEBUG) Log.i("BMSeek", "seekTo seconds=$seconds")
-        fire("seek") { Vlc.seekTo(store.host, store.vlcPort, store.vlcPassword, seconds) }
+        fire("seek") {
+            if (store.selectedSource == Source.ZEPHYR) ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken, seconds)
+            else Vlc.seekTo(store.host, store.vlcPort, store.vlcPassword, seconds)
+        }
     }
 
     fun volumeStep(up: Boolean) {
+        if (store.selectedSource == Source.ZEPHYR) {
+            val next = ((status?.volumePct ?: 100) + if (up) 5 else -5).coerceIn(0, 100)
+            status = status?.copy(volumeRaw = next * 256 / 100)
+            val wasMuted = muted; muted = false
+            fire("volume") {
+                ZephyrClient.volume(zephyrHost(), store.zephyrPort, store.zephyrToken, next)
+                if (wasMuted) ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, false)
+            }
+            return
+        }
         val win = winVolume
         if (win != null) {
             // Windows system volume via the helper.
@@ -359,6 +433,11 @@ class RemoteState(
     }
 
     fun toggleMute() {
+        if (store.selectedSource == Source.ZEPHYR) {
+            val next = !muted; muted = next
+            fire("volume") { ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, next) }
+            return
+        }
         if (winVolume != null) {
             val next = !muted
             muted = next
@@ -379,6 +458,9 @@ class RemoteState(
 
     fun pickSubtitle(trackId: Int) {
         pickedSubtitle = trackId
-        fire("sub") { Vlc.setSubtitleTrack(store.host, store.vlcPort, store.vlcPassword, trackId) }
+        fire("sub") {
+            if (store.selectedSource == Source.ZEPHYR) ZephyrClient.captions(zephyrHost(), store.zephyrPort, store.zephyrToken, trackId)
+            else Vlc.setSubtitleTrack(store.host, store.vlcPort, store.vlcPassword, trackId)
+        }
     }
 }

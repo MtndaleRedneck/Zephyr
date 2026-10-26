@@ -14,7 +14,7 @@
 
     <!-- The remote talks to VLC and the helper on the home network over plain HTTP. -->
     <application
-        android:label="BingeMote"
+        android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/Theme.BingeMote"

@@ -116,7 +116,7 @@ fun PressTile(
  * font scale), the name shortens with an ellipsis first, then the pill caps and
  * ellipsizes - Settings is always fully on screen. */
 @Composable
-fun TopBar(pill: @Composable () -> Unit, settings: @Composable () -> Unit) {
+fun TopBar(source: @Composable () -> Unit, pill: @Composable () -> Unit, settings: @Composable () -> Unit) {
     Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         androidx.compose.ui.layout.Layout(content = {
             androidx.compose.foundation.Image(
@@ -124,10 +124,7 @@ fun TopBar(pill: @Composable () -> Unit, settings: @Composable () -> Unit) {
                 contentDescription = null,
                 modifier = Modifier.size(34.dp).clip(RoundedCornerShape(9.dp)),
             )
-            Text(
-                "Zephyr", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-            )
+            source()
             pill()
             settings()
         }) { measurables, constraints ->

@@ -157,11 +157,15 @@ fun SettingsScreen(
         Spacer(Modifier.height(14.dp))
 
         SettingsSection("Skip buttons") {
+            Text("Primary skip buttons", color = TextC, fontSize = 14.sp)
+            Spacer(Modifier.height(8.dp))
             ChoiceRow(
                 options = listOf(5 to "5s", 10 to "10s", 15 to "15s", 30 to "30s"),
                 selected = mainSkip,
             ) { mainSkip = it; store.skipMainSec = it }
             Spacer(Modifier.height(14.dp))
+            Text("Secondary skip buttons", color = TextC, fontSize = 14.sp)
+            Spacer(Modifier.height(8.dp))
             ChoiceRow(
                 options = listOf(15 to "15s", 30 to "30s", 60 to "1m", 120 to "2m", 180 to "3m"),
                 selected = secondarySkip,
@@ -357,12 +361,15 @@ fun ChoiceRow(options: List<Pair<Int, String>>, selected: Int, onPick: (Int) -> 
  * approved Connected Sources card. */
 @Composable
 fun SourceRow(label: String, value: String, onLabelClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
-        Text(
-            label, color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-            modifier = Modifier.width(96.dp).clickable(onClick = onLabelClick),
-        )
-        Text(value, color = TextC, fontSize = 14.sp)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        PressTile(onTap = onLabelClick, background = OrangeGradient,
+            modifier = Modifier.width(112.dp).height(48.dp), corner = 14.dp) {
+            Text(label, color = androidx.compose.ui.graphics.Color(0xFF1B1B1E), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        }
+        Spacer(Modifier.width(12.dp))
+        Text(value, color = if (value == "Not paired" || value == "Not set up") Muted else TextC,
+            fontSize = 14.sp, textAlign = androidx.compose.ui.text.style.TextAlign.End,
+            modifier = Modifier.weight(1f))
     }
 }
 

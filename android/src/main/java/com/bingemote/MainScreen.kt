@@ -64,6 +64,7 @@ fun MainScreen(
     Box(Modifier.fillMaxSize().background(Bg)) {
         Column(Modifier.fillMaxSize()) {
             TopBar(
+                source = { SourceSelector(remote) },
                 pill = { StatusPill(connected = !remote.unreachable) },
                 settings = {
                     HeaderIconButton(onSettings, remote.store.haptics, startPad = 6.dp) {
@@ -806,3 +807,28 @@ private fun SubtitleRow(name: String, checked: Boolean, hapticsOn: Boolean, onCl
     }
 }
 
+
+
+/** Quiet source name + chevron, not a competing status pill. */
+@Composable
+fun SourceSelector(remote: RemoteState) {
+    var expanded by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf(remote.store.selectedSource) }
+    Box {
+        Row(Modifier.heightIn(min = 44.dp).clickable { expanded = true },
+            verticalAlignment = Alignment.CenterVertically) {
+            Text(if (selected == Source.ZEPHYR) "Zephyr PC" else "VLC PC", color = TextC,
+                fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
+            Text(" ▾", color = Muted, fontSize = 14.sp)
+        }
+        androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            listOf(Source.VLC to "VLC PC", Source.ZEPHYR to "Zephyr PC").forEach { (source, label) ->
+                androidx.compose.material3.DropdownMenuItem(text = { Text(label) }, onClick = {
+                    selected = source; remote.selectSource(source); expanded = false
+                })
+            }
+        }
+    }
+}
