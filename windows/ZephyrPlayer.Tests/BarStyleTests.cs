@@ -52,10 +52,10 @@ namespace ZephyrPlayer.Tests
             {
                 Assert.Equal("5", w.FindName("SkipBackLabel") is System.Windows.Controls.TextBlock b ? b.Text : "");
                 Assert.Equal("30", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
-                // Speed + sleep hidden by default (his "Both hidden by default in settings").
+                // Speed + sleep hidden by default.
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
-                // Volume left, icons right (his final correction): volume stack is column 0.
+                // Volume left, icons right: volume stack is column 0.
                 var volumeStack = (StackPanel)((Button)w.FindName("VolumeButton")!).Parent;
                 Assert.Equal(0, Grid.GetColumn(volumeStack));
             });

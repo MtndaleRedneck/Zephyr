@@ -113,7 +113,7 @@ fun MainScreen(
                 // inter-tile gaps match the vertical gaps, in the content's own
                 // coordinate space. The placed gaps below come out to exactly
                 // this many px. Capped so taller phones grow only the vertical
-                // gaps (his re-spacing rule) and tiny or overflowing screens
+                // gaps (the re-spacing rule) and tiny or overflowing screens
                 // keep usable margins.
                 val rawShare = (availHdp / uniform - contentDp) / gapCount
                 val shareContent = rawShare.coerceIn(4f, 16f)
@@ -338,7 +338,7 @@ private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
         // Gaps are measured glyph-to-glyph, but digits only fill their
         // cap height: a natural line box reserves ascent/descent room the time
         // row never inks (~11px at font 1.0), which made the gap above this
-        // row read too big on his ruler. Measure the digit ink at runtime and
+        // row read too big on the reference ruler. Measure the digit ink at runtime and
         // report this row's height as that ink, centered, so the block's outer
         // gaps measure like every other row's. The glyphs are untouched; cap
         // height is identical across font weights, so a plain Paint suffices.

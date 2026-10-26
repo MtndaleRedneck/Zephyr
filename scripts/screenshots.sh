@@ -1,7 +1,7 @@
 set -euo pipefail
 # CI screenshot rig (ported from BingeMote, trimmed to the new UI evidence):
-# installs the DEBUG build (com.bingemote.debug - never his working install) and
-# captures the Movies screen in both origins at his measured profile.
+# installs the DEBUG build (com.bingemote.debug - never the working install) and
+# captures the Movies screen in both origins at the reference profile.
 PKG=com.bingemote.debug
 mkdir -p screenshots
 adb install -r android/build/outputs/apk/debug/app-debug.apk
@@ -30,7 +30,7 @@ shoot() { # $1 screen
     sleep 4
   done
 }
-# His measured phone profile (1080x2310 @ 480dpi), restored at the end.
+# Reference phone profile (1080x2310 @ 480dpi), restored at the end.
 adb shell settings put global hide_error_dialogs 1
 adb shell wm size 1080x2310
 adb shell wm density 480
@@ -40,6 +40,8 @@ sleep 6
 shoot main
 shoot settings
 shoot settings-pair
+shoot settings-pair-2
+shoot settings-pair-paired
 shoot movies-phone
 shoot movies
 adb shell wm size reset

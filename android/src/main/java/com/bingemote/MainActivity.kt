@@ -151,6 +151,27 @@ class MainActivity : ComponentActivity() {
                         onDone = { current.value = "settings" },
                         onCancel = { current.value = "settings" },
                     )
+                    // CI screenshot states: step 2 of the Zephyr setup screen, fresh
+                    // (find/address/code/pair) and with a saved pairing (continue/start-over).
+                    "settings-pair-2" -> ZephyrSetupScreen(
+                        remote,
+                        onDone = { current.value = "settings" },
+                        onCancel = { current.value = "settings" },
+                        initialStep = 2,
+                    )
+                    "settings-pair-paired" -> {
+                        // Debug capture only: fake a saved pairing so the already-paired
+                        // card renders. Captured LAST in the rig; demo values never ship.
+                        remote.store.zephyrHost = "192.168.1.50"
+                        remote.store.zephyrToken = "demo-token"
+                        remote.store.zephyrPcName = "Demo PC"
+                        ZephyrSetupScreen(
+                            remote,
+                            onDone = { current.value = "settings" },
+                            onCancel = { current.value = "settings" },
+                            initialStep = 2,
+                        )
+                    }
                     "feedback" -> FeedbackScreen(feedbackScroll) { current.value = "settings" }
                     else -> MainScreen(
                         remote,

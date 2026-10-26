@@ -57,7 +57,7 @@ class StreamService : Service() {
             PendingIntent.FLAG_IMMUTABLE
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setContentTitle("Zephyr") // placeholder name pending his logo/name work
+            .setContentTitle("Zephyr") // placeholder name pending final branding
             .setContentText("Serving a movie to your PC")
             .setSmallIcon(android.R.drawable.ic_media_play) // placeholder icon until branding lands
             .addAction(0, "Stop", stopIntent)

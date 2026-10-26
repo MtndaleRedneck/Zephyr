@@ -32,7 +32,7 @@ android {
     }
     buildTypes {
         debug {
-            // Test/beta builds install alongside his working BingeMote (never upgrade it);
+            // Test/beta builds install alongside the working BingeMote (never upgrade it);
             // release keeps applicationId com.bingemote for the v2.0 in-place update path.
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"

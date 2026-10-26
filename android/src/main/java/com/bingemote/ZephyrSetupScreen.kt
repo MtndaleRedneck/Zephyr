@@ -25,11 +25,12 @@ fun ZephyrSetupScreen(
     remote: RemoteState,
     onDone: () -> Unit,
     onCancel: () -> Unit,
+    initialStep: Int = 0,
 ) {
     val store = remote.store
     val scope = rememberCoroutineScope()
     // Re-entering with a saved pairing opens on the pair step, which offers to continue with it.
-    var step by remember { mutableStateOf(if (store.zephyrToken.isBlank()) 1 else 2) }
+    var step by remember { mutableStateOf(if (initialStep > 0) initialStep else if (store.zephyrToken.isBlank()) 1 else 2) }
     var host by remember { mutableStateOf(store.zephyrHost) }
     var code by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }

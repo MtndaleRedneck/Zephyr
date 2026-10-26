@@ -31,7 +31,7 @@ object MediaControls {
 
 /**
  * Lock-screen media controls (off by default, Phone 8): while the setting is on and a
- * movie plays, the system media surface shows play/pause, his two skip intervals and the
+ * movie plays, the system media surface shows play/pause, the two skip intervals and the
  * position bar. A plain MediaSession - the system media controls are exempt from the
  * Android 13 notification permission, so no permission prompt and no notification of ours.
  * The service polls VLC itself (the app's own poll stops when the screen is off); every
@@ -68,7 +68,7 @@ class MediaControlsService : Service() {
             override fun onRewind() { jump(store, -store.skipSecondarySec) }
             override fun onFastForward() { jump(store, store.skipMainSec) }
             // The system media surface renders its two extra slots from these actions;
-            // they fire his two chosen skip intervals (main forward, secondary back).
+            // they fire the two chosen skip intervals (main forward, secondary back).
             override fun onSkipToPrevious() { jump(store, -store.skipSecondarySec) }
             override fun onSkipToNext() { jump(store, store.skipMainSec) }
             // No onSeekTo and no ACTION_SEEK_TO: the bar shows the place but can't be dragged.
