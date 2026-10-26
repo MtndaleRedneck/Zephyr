@@ -159,12 +159,12 @@ Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $libDir 'Big Buck Bunny (clip).
 Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $libDir 'Zephyr Demo Reel.mp4')
 $cfgDir = Join-Path $env:APPDATA 'ZephyrPlayer'
 New-Item -ItemType Directory -Force $cfgDir | Out-Null
-$libJson = $libDir -replace '\\','\\\\'
+$libJson = $libDir -replace '\\','\\'
 [IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$libJson`"}")
 $pH = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
 $hwH = Wait-MainWindow $pH 15
 if ($hwH -ne [System.IntPtr]::Zero) {
-    [ZWU32]::SetWindowPos($hwH, [System.IntPtr]::Zero, 30, 8, 960, 740, $SWP_NOZORDER) | Out-Null
+    [ZWU32]::SetWindowPos($hwH, [System.IntPtr]::Zero, 30, 4, 940, 700, $SWP_NOZORDER) | Out-Null
     Start-Sleep -Milliseconds 900
 }
 $sz1b = CaptureWindow $hwH "$env:RUNNER_TEMP/pc-home-library.png"

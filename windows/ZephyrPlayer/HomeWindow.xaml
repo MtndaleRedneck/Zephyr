@@ -47,6 +47,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
@@ -78,7 +79,7 @@
         </Border>
 
         <!-- Content -->
-        <Grid Grid.Row="1" Margin="24,16">
+        <Grid Grid.Row="2" Margin="24,16">
             <!-- Empty state: no movies folder chosen yet -->
             <StackPanel x:Name="EmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
                 <Viewbox Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="28" Height="28"><Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62" Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="{x:Null}"/></Canvas></Viewbox>
@@ -137,7 +138,7 @@
         </Grid>
 
         <!-- Status strip -->
-        <Border Grid.Row="2" Background="#141417" Padding="20,8">
+        <Border Grid.Row="3" Background="#141417" Padding="20,8">
             <TextBlock x:Name="StatusText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
         </Border>
     </Grid>
