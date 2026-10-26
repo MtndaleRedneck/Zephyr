@@ -26,7 +26,7 @@ namespace ZephyrPlayer
             _store = store;
             _newPairCode = newPairCode;
             VersionText.Text = "Zephyr Player " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
-            UpdateStatusText.Text = "Last check: " + (UpdateState.Outcome ?? "not checked yet");
+            UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
             Refresh();
         }
 
@@ -99,12 +99,13 @@ namespace ZephyrPlayer
                 string result;
                 try
                 {
-                    var hit = UpdateCheck.LatestNewerThanOrThrow(current);
-                    result = hit != null ? "Update available: " + hit.Value.Version : "Up to date.";
+                    UpdateState.Outcome = UpdateCheck.CheckOutcomeOrThrow(current);
+                    result = UpdateState.Display(UpdateState.Outcome);
                 }
                 catch (Exception ex)
                 {
-                    result = "Check failed: " + ex.GetType().Name;
+                    UpdateState.Outcome = "failed: " + ex.GetType().Name;
+                    result = UpdateState.Display(UpdateState.Outcome);
                 }
                 Dispatcher.InvokeAsync(() => UpdateStatusText.Text = result);
             });

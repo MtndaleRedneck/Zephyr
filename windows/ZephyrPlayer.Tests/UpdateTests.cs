@@ -18,6 +18,7 @@ namespace ZephyrPlayer.Tests
         private readonly HttpListener _listener;
         private readonly string _base;
         private string _releasesJson = "[]";
+        private int _statusCode = 200;
         private byte[] _exeBytes = Array.Empty<byte>();
 
         public UpdateTests()
@@ -37,6 +38,7 @@ namespace ZephyrPlayer.Tests
                     var bytes = ctx.Request.Url.AbsolutePath == "/exe"
                         ? _exeBytes
                         : Encoding.UTF8.GetBytes(_releasesJson);
+                    ctx.Response.StatusCode = _statusCode;
                     ctx.Response.ContentLength64 = bytes.Length;
                     await ctx.Response.OutputStream.WriteAsync(bytes);
                     ctx.Response.Close();
@@ -86,6 +88,40 @@ namespace ZephyrPlayer.Tests
         {
             Feed("[" + Release("player-v2.0.0", "checksums.txt") + "]");
             Assert.Null(UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases"));
+        }
+
+        [Fact]
+        public void FeedStates_SeparateMissingCurrentNewerAndFailure()
+        {
+            Feed("[]");
+            Assert.Equal("no_release", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Feed("[" + Release("player-v1.0.0", "ZephyrPlayer-1.0.0.exe") + "]");
+            Assert.Equal("up_to_date", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Feed("[" + Release("player-v1.2.0", "ZephyrPlayer-1.2.0.exe") + "]");
+            Assert.Equal("available: 1.2.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Feed("not json");
+            Assert.ThrowsAny<Exception>(() => UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Assert.Equal("No published player installer available yet.", UpdateState.Display("no_release"));
+            Assert.DoesNotContain("up_to_date", UpdateState.Display("up_to_date"));
+        }
+
+        [Fact]
+        public void MissingOrFailedFeed_NeverReportsCurrent()
+        {
+            _statusCode = 404;
+            Assert.Throws<HttpRequestException>(() => UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            _statusCode = 503;
+            Assert.Throws<HttpRequestException>(() => UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Assert.Equal("Could not check for updates. Try again later.", UpdateState.Display("failed: HttpRequestException"));
+        }
+
+        [Fact]
+        public void Feed_RejectsWrongAppAssets_ChoosesHighestVersion()
+        {
+            Feed("[" + Release("player-v9.0.0", "BingeMote-PC-9.0.0.exe") + "," +
+                Release("player-v1.1.0", "ZephyrPlayer-1.1.0.exe") + "," +
+                Release("player-v1.3.0", "ZephyrPlayer-1.3.0.exe") + "]");
+            Assert.Equal("1.3.0", UpdateCheck.LatestNewerThanOrThrow("1.0.0", _base + "/releases")!.Value.Version);
         }
 
         [Fact]

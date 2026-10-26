@@ -105,16 +105,15 @@ namespace ZephyrPlayer
             // own reply identity). Failure to bind only costs auto-discovery.
             try { _discovery = new DiscoveryResponder(_server.Port); }
             catch (Exception) { _discovery = null; }
-            // Auto-update check on launch (silent on failure; private-phase feeds
-            // simply answer "no update"). Result surfaces via /control/status.
+            // Auto-update check on launch. Missing releases and failures remain
+            // distinct from a verified current published installer.
             _ = Task.Run(() =>
             {
                 UpdateState.Outcome = "checking";
                 try
                 {
                     var current = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
-                    var hit = UpdateCheck.LatestNewerThanOrThrow(current);
-                    UpdateState.Outcome = hit != null ? "available: " + hit.Value.Version : "up_to_date";
+                    UpdateState.Outcome = UpdateCheck.CheckOutcomeOrThrow(current);
                 }
                 catch (Exception ex)
                 {
