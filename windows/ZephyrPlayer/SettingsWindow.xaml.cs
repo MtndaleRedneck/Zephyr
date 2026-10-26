@@ -18,6 +18,7 @@ namespace ZephyrPlayer
         private readonly PairedStore _store;
         private readonly Func<string> _newPairCode;
         private (string Version, string ExeUrl, string? Sha256)? _updateOffer;
+        private readonly System.Windows.Threading.DispatcherTimer _updateStatusTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
 
         public SettingsWindow(PlayerSettings settings, PairedStore store, Func<string> newPairCode)
         {
@@ -28,6 +29,9 @@ namespace ZephyrPlayer
             _newPairCode = newPairCode;
             VersionText.Text = "Zephyr Player " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
             UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
+            _updateStatusTimer.Tick += (_, __) => { if (InstallUpdateButton.IsEnabled && _updateOffer == null) UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome); };
+            Loaded += (_, __) => _updateStatusTimer.Start();
+            Closed += (_, __) => _updateStatusTimer.Stop();
             Refresh();
         }
 
