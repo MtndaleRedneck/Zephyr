@@ -22,7 +22,9 @@ RestartApplications=no
 WizardStyle=modern
 
 [Files]
-Source: "out\ZephyrPlayer.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The whole publish dir: the exe alone crashes seconds after launch - the
+; LibVLC native dlls and plugins tree sit next to it and must install too.
+Source: "out\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{userprograms}\Zephyr Player"; Filename: "{app}\ZephyrPlayer.exe"

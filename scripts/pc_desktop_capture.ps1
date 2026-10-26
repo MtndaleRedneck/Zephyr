@@ -224,29 +224,52 @@ $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused2.png"
 $fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-playing-controls-window.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
 $fnPauseClock = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-paused2.png" 0.02 0.10 0.82 0.87
 ClickAt 0.497 0.90   # resume
-# Seek by DRAGGING the thumb (WPF Slider ignores track clicks unless
-# IsMoveToPointEnabled; the real user path is the drag). Thumb sits at the
-# current position fraction of the track (track ~5%..96% of width).
-function DragSeek($x0f, $x1f, $yf) {
-    [ZWU32]::SetCursorPos([int]($vs.Width * $x0f), [int]($vs.Height * $yf)) | Out-Null
+# Seek by DRAGGING the real thumb. Fraction-guessed coordinates miss the
+# thumb (a track press only steps LargeChange ~1%, invisible at second
+# granularity), so locate the controls through UI Automation: x:Name becomes
+# AutomationId in WPF.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function Find-ByAutoId($rootEl, $id) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    return $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+}
+function DragPixels($x0, $y0, $x1, $y1) {
+    [ZWU32]::SetCursorPos([int]$x0, [int]$y0) | Out-Null
     Start-Sleep -Milliseconds 250
     [ZWU32]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)  # LEFTDOWN
     for ($i = 1; $i -le 8; $i++) {
-        $x = [int]($vs.Width * ($x0f + ($x1f - $x0f) * $i / 8))
-        [ZWU32]::SetCursorPos($x, [int]($vs.Height * $yf)) | Out-Null
+        [ZWU32]::SetCursorPos([int]($x0 + ($x1 - $x0) * $i / 8), [int]$y0) | Out-Null
         Start-Sleep -Milliseconds 90
     }
     [ZWU32]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)  # LEFTUP
     Start-Sleep -Milliseconds 700
 }
-DragSeek 0.075 0.60 0.807
+$rootEl = [System.Windows.Automation.AutomationElement]::FromHandle($hw3)
+$sliderEl = Find-ByAutoId $rootEl 'SeekBar'
+if ($sliderEl -ne $null) {
+    $thumbCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Thumb)
+    $thumbEl = $sliderEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $thumbCond)
+    if ($thumbEl -ne $null) {
+        $tr = $thumbEl.Current.BoundingRectangle
+        $sr = $sliderEl.Current.BoundingRectangle
+        DragPixels ($tr.X + $tr.Width / 2) ($tr.Y + $tr.Height / 2) ($sr.X + $sr.Width * 0.6) ($tr.Y + $tr.Height / 2)
+    } else { Write-Host "::warning::SeekBar thumb not found via UIA" }
+} else { Write-Host "::warning::SeekBar not found via UIA" }
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-seeked.png"
 $fnSeek = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-seeked.png" 0.02 0.10 0.82 0.87
-# Fullscreen toggle verdict = bounds GROW to the virtual screen (the fitted
-# window is already near-full-size; compare against its own before-bounds).
+# Fullscreen toggle: invoke the real button through UIA (a blind click can
+# land while controls are fading), verdict = bounds GROW to the virtual
+# screen (the fitted window is already near-full-size).
 $rBefore = [ZRECT]::new()
 [ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$rBefore, 16) | Out-Null
-ClickAt 0.94 0.90    # fullscreen toggle
+$fsEl = Find-ByAutoId $rootEl 'FullscreenButton'
+if ($fsEl -ne $null) {
+    $fsEl.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+} else {
+    Write-Host "::warning::FullscreenButton not found via UIA; falling back to click"
+    ClickAt 0.94 0.90
+}
 Start-Sleep -Milliseconds 800
 $r = [ZRECT]::new()
 if ([ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$r, 16) -eq 0) {

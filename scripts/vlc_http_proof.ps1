@@ -110,11 +110,31 @@ try {
     Send-Vlc $c.query
     $attached = Wait-Sub 6
     Write-Output ("MATRIX " + $c.name + " => Subtitle stream: " + $attached)
-    # Unfiltered delta: the access-http response lines after VLC's GET are the
-    # evidence when the slave fetch itself fails (filtered views hid them).
-    Get-NewLogLines $logBefore | Select-Object -First 40 | ForEach-Object { Write-Output ("  vlc: " + $_) }
+    # The slave-attach evidence lives in the access/demux/subtitle lines; an
+    # unfiltered delta floods on vout noise while the old narrow filter hid http.
+    Get-NewLogLines $logBefore | Select-String -Pattern 'slave|srt|subtitle|access|demux|http' | Select-Object -First 50 | ForEach-Object { Write-Output ("  vlc: " + $_.Line) }
     if ($attached -and -not $winner) { $winner = $c.name }
   }
+  # Standalone probe: http-served SRT as PRIMARY input, subtitle demux forced.
+  # If this opens the SRT, fetch+parse work and the matrix failure is in the
+  # slave-attach path; if it fails, the http+subtitle demux combo is broken on
+  # this VLC build.
+  Write-Output "PROBE standalone http SRT (demux=subtitle, primary input):"
+  $probeLog = "$tmp\vlc-probe.log"
+  $probeVlc = Start-Process -PassThru -WindowStyle Hidden -FilePath "C:\Program Files\VideoLAN\VLC\vlc.exe" -ArgumentList @(
+    '-I','dummy','--no-video','--demux=subtitle','-vv','--file-logging',"--logfile=$probeLog",
+    'http://127.0.0.1:8123/clip.srt','--run-time=3','vlc://quit'
+  )
+  $null = $probeVlc.WaitForExit(20000)
+  if (-not $probeVlc.HasExited) { Stop-Process -Id $probeVlc.Id -Force; $null = $probeVlc.WaitForExit(5000) }
+  $probeOk = $false
+  if (Test-Path $probeLog) {
+    $pl = Get-Content $probeLog
+    $probeOk = [bool](($pl | Select-String -Pattern 'using demux module "subtitle"') -or ($pl | Select-String -Pattern 'spu-es'))
+    $pl | Select-String -Pattern 'subtitle|access_http|HTTP|demux|error|slave' | Select-Object -First 40 | ForEach-Object { Write-Output ("  probe: " + $_.Line) }
+  }
+  Write-Output "PROBE standalone http SRT => demux opened: $probeOk"
+
   if (-not $winner) {
     Write-Output "STATUS DUMP (no encoding attached a Subtitle stream):"
     Write-Output ((Get-Status).information | ConvertTo-Json -Depth 8)
