@@ -77,6 +77,7 @@ try {
     @{ name = "B1_encode_inner_eq_only (option=:sub-file%3Dhttp://127.0.0.1:8123/clip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file%3Dhttp://127.0.0.1:8123/clip.srt" },
     @{ name = "B2_encode_eq_and_url (option=:sub-file%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" },
     @{ name = "C_raw (option=:sub-file=http://127.0.0.1:8123/clip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=:sub-file=http://127.0.0.1:8123/clip.srt" },
+    @{ name = "F_input_slave (option=%3Ainput-slave%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt)"; query = "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4&option=%3Ainput-slave%3Dhttp%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" },
     @{ name = "D_addsubtitle_raw (val=http://127.0.0.1:8123/clip.srt)"; query = "command=addsubtitle&val=http://127.0.0.1:8123/clip.srt" },
     @{ name = "E_addsubtitle_encoded (val=http%3A%2F%2F...)"; query = "command=addsubtitle&val=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" }
   )
