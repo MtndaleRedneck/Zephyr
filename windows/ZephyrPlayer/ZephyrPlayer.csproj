@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Stack: WPF + LibVLCSharp.
+       Cross-builds in CI on Linux with EnableWindowsTargeting. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ZephyrPlayer</AssemblyName>
+    <Version>1.0.0</Version>
+    <ApplicationIcon>assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Unit tests probe internal updater/input helpers without widening the
+         app's public surface. -->
+    <InternalsVisibleTo Include="ZephyrPlayer.Tests" />
+    <Resource Include="assets\icon.ico" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp" Version="3.*" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.*" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.*" />
+  </ItemGroup>
+</Project>

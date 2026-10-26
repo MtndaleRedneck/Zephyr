@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Headless Linux host for the REAL server classes (PlaybackServer, Library,
+       PairingGate, PlayerSettings): the Android instrumented tests drive the
+       actual wire protocol against it (10.0.2.2 from the emulator). Stubs stand
+       in for the WPF window and SendInput. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ZephyrHeadlessHost</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="..\ZephyrPlayer\PlaybackServer.cs" Link="PlaybackServer.cs" />
+    <Compile Include="..\ZephyrPlayer\Library.cs" Link="Library.cs" />
+    <Compile Include="..\ZephyrPlayer\PairingGate.cs" Link="PairingGate.cs" />
+    <Compile Include="..\ZephyrPlayer\PlayerSettings.cs" Link="PlayerSettings.cs" />
+    <Compile Include="..\ZephyrPlayer\InputSender.cs" Link="InputSender.cs" />
+    <Compile Include="..\ZephyrPlayer\IPlaybackControl.cs" Link="IPlaybackControl.cs" />
+  </ItemGroup>
+</Project>

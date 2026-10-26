@@ -1,0 +1,144 @@
+<Window x:Class="ZephyrPlayer.HomeWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Zephyr" Width="1280" Height="800" MinWidth="900" MinHeight="600"
+        Background="#1B1B1E" Icon="/ZephyrPlayer;component/assets/icon.ico"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <SolidColorBrush x:Key="CardBrush" Color="#26262D"/>
+        <SolidColorBrush x:Key="Card2Brush" Color="#2E2E36"/>
+        <SolidColorBrush x:Key="OrangeBrush" Color="#F97C02"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
+        <Style x:Key="OrangeButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource OrangeBrush}"/>
+            <Setter Property="Foreground" Value="#1B1B1E"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="GhostButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="10" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header: app identity + settings gear -->
+        <Border Grid.Row="0" Background="#141417" Padding="20,12">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Image Source="/ZephyrPlayer;component/assets/icon.ico" Width="26" Height="26"/>
+                    <TextBlock Text="Zephyr" Foreground="{StaticResource TextBrush}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                </StackPanel>
+                <Button x:Name="SettingsButton" Style="{StaticResource GhostButton}" HorizontalAlignment="Right" Click="OnSettings">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center"/>
+                        <TextBlock Text=" Settings" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Pair banner: only while unpaired -->
+        <Border x:Name="PairBanner" Grid.Row="1" Visibility="Collapsed" VerticalAlignment="Top"
+                Background="#33270F" CornerRadius="12" Margin="24,16,24,0" Padding="16,10">
+            <StackPanel>
+                <TextBlock Text="Pair with your phone" Foreground="White" FontWeight="SemiBold" HorizontalAlignment="Center"/>
+                <TextBlock x:Name="PairCodeText" Text="" Foreground="#F0C23E" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                <TextBlock Text="Enter this code in the Zephyr phone app" Foreground="{StaticResource MutedBrush}" FontSize="12" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Content -->
+        <Grid Grid.Row="1" Margin="24,16">
+            <!-- Empty state: no movies folder chosen yet -->
+            <StackPanel x:Name="EmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="56" Foreground="{StaticResource OrangeBrush}" HorizontalAlignment="Center"/>
+                <TextBlock Text="Pick your movies folder" Foreground="{StaticResource TextBrush}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,4"/>
+                <TextBlock Text="Your designated folder lives in Settings." Foreground="{StaticResource MutedBrush}" FontSize="13" HorizontalAlignment="Center" Margin="0,0,0,16"/>
+                <Button Style="{StaticResource OrangeButton}" Content="Open Settings" Click="OnSettings" HorizontalAlignment="Center"/>
+            </StackPanel>
+
+            <!-- Library view -->
+            <Grid x:Name="LibraryView" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Border Grid.Row="0" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="16,10" Margin="0,0,0,12">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="16" Foreground="{StaticResource OrangeBrush}" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="FolderPathText" Text="" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                        </StackPanel>
+                        <Button x:Name="UpButton" Style="{StaticResource GhostButton}" Content="&#x2190; Up" HorizontalAlignment="Right" Click="OnUp"/>
+                    </Grid>
+                </Border>
+                <ListBox x:Name="MovieList" Grid.Row="1" Background="Transparent" BorderThickness="0"
+                         MouseDoubleClick="OnEntryOpen" KeyDown="OnEntryKey">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding Name}" FontSize="14"/>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Padding" Value="14,9"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter Property="Background" TargetName="Row" Value="{StaticResource Card2Brush}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter Property="Background" TargetName="Row" Value="{StaticResource Card2Brush}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                </ListBox>
+            </Grid>
+        </Grid>
+
+        <!-- Status strip -->
+        <Border Grid.Row="2" Background="#141417" Padding="20,8">
+            <TextBlock x:Name="StatusText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+        </Border>
+    </Grid>
+</Window>

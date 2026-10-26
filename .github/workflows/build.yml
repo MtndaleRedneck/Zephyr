@@ -1,0 +1,162 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Zephyr CI - private repo. Deliberate differences from BingeMote's workflow:
+# - No release/publish job: artifact distribution is UNDECIDED (user question
+#   pending). Publishing a release from this private repo would authenticate
+#   downloads, and public artifacts are not authorized yet.
+# - Android: unit tests + debug APK only. Release signing needs the keystore in
+#   repo secrets (not yet set - flagged, not silently copied).
+# - Windows: build + tests only; installer + e2e land with the player.
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+      - name: Unit tests
+        run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Build debug APK
+        run: ./gradlew --no-daemon assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zephyr-Android-debug-apk
+          path: android/build/outputs/apk/debug/*.apk
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build Zephyr Player
+        run: dotnet build windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release
+      - name: PlaybackServer loopback tests (auth mandatory, payload parse)
+        run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
+      # Tests land with the first test project; installer job lands with
+      # installer.iss; the airspace overlay still needs on-hardware validation.
+      - name: Real VLC network playback proof (phone->VLC route)
+        shell: pwsh
+        run: scripts/vlc_http_proof.ps1
+      - name: Publish single-file exe
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+      - name: Real-desktop capture of the actual exe (full window + chrome)
+        if: always()
+        shell: pwsh
+        run: scripts/pc_desktop_capture.ps1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-ui-evidence
+          path: |
+            ${{ runner.temp }}/pair-banner-render.png
+            ${{ runner.temp }}/pc-controlbar-render.png
+            ${{ runner.temp }}/pc-desktop.png
+            ${{ runner.temp }}/pc-desktop-controls.png
+            ${{ runner.temp }}/pc-desktop-settings.png
+            ${{ runner.temp }}/pc-desktop-playing.png
+            ${{ runner.temp }}/pc-desktop-note.txt
+          if-no-files-found: warn
+      # Private CI artifact only - no release/publish job (distribution undecided).
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ZephyrPlayer-installer
+          path: windows/Output/ZephyrPlayer-*.exe
+          if-no-files-found: warn
+
+  screenshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+      - run: ./gradlew --no-daemon assembleDebug
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: bash scripts/screenshots.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Zephyr-screenshots
+          path: screenshots/*
+
+  instrumented:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+      - run: ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Build the headless wire host (real server classes, Linux)
+        run: dotnet build windows/ZephyrPlayer.HeadlessHost/ZephyrPlayer.HeadlessHost.csproj -c Release
+      - name: Start the wire host + seed its library
+        run: |
+          mkdir -p /tmp/zephyr-wire-lib/Documentaries
+          dd if=/dev/urandom of=/tmp/zephyr-wire-lib/"Wire Movie One (2024).mkv" bs=1k count=64
+          dd if=/dev/urandom of=/tmp/zephyr-wire-lib/Documentaries/"Wire Doc.mkv" bs=1k count=16
+          nohup dotnet run --project windows/ZephyrPlayer.HeadlessHost -c Release --no-build -- 47999 /tmp/zephyr-wire-lib > /tmp/wire-host.log 2>&1 &
+          for i in $(seq 1 30); do grep -q PAIRCODE /tmp/wire-host.log && break; sleep 1; done
+          cat /tmp/wire-host.log
+          grep -q PAIRCODE /tmp/wire-host.log || { echo "wire host never came up"; exit 1; }
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # Real emulator: StreamServer loopback (sockets), SAF listing, and the
+      # inherited gesture/migration rigs - one class per fresh am instrument
+      # session (see scripts/instrumented.sh for why a single session wedges).
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          profile: pixel_6
+          disable-animations: true
+          script: bash scripts/instrumented.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: instrument-results
+          path: instrument-results/*

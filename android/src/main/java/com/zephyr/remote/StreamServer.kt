@@ -1,0 +1,180 @@
+package com.zephyr.remote
+
+import android.content.Context
+import android.net.Uri
+import android.os.ParcelFileDescriptor
+import java.io.EOFException
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
+import java.security.SecureRandom
+import java.util.concurrent.Executors
+
+/**
+ * Serves the original movie file (no re-encode) to the Zephyr Player over plain HTTP.
+ *
+ * URL shape: http://<wifi-ip>:<port>/s/<sessionToken>/<id>[/sub/<n>]
+ *  - Session token is random per serving session and dies with it; the pairing
+ *    token is never used here (libVLC can't set custom headers, so the token
+ *    rides in the path).
+ *  - Range requests get proper 206 + Content-Range so libVLC can seek.
+ *  - SAF content URIs are served directly via openFileDescriptor; if a provider
+ *    hands back a non-seekable (pipe) descriptor we fall back to copying the file
+ *    into the cache once and serving that.
+ *  - Binds to the Wi-Fi interface only.
+ *
+ * Prototype status: platform-verification list still open (SAF seekability across
+ * providers, service type, Wi-Fi lock behavior). Nothing here is final.
+ */
+class StreamServer(private val context: Context, private val wifiAddr: InetAddress, private val port: Int = 0) {
+
+    data class Entry(val uri: Uri, val displayName: String, val subtitles: List<Uri>)
+
+    private val random = SecureRandom()
+    private val token: String = ByteArray(18).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+    private val entries = LinkedHashMap<String, Entry>()
+    private var socket: ServerSocket? = null
+    private val pool = Executors.newCachedThreadPool()
+    @Volatile private var running = false
+
+    val baseUrl: String get() = "http://${wifiAddr.hostAddress}:${socket?.localPort ?: port}/s/$token"
+
+    fun addMovie(uri: Uri, name: String, subtitles: List<Uri> = emptyList()): String {
+        val id = (entries.size + 1).toString()
+        entries[id] = Entry(uri, name, subtitles)
+        return "$baseUrl/$id"
+    }
+
+    fun start() {
+        val srv = ServerSocket(port, 8, wifiAddr)
+        socket = srv
+        running = true
+        pool.execute {
+            while (running) {
+                val client = runCatching { srv.accept() }.getOrNull() ?: break
+                pool.execute { runCatching { handle(client) }; runCatching { client.close() } }
+            }
+        }
+    }
+
+    fun stop() {
+        running = false
+        runCatching { socket?.close() }
+        pool.shutdownNow()
+    }
+
+    private fun handle(client: Socket) {
+        val input = client.getInputStream().bufferedReader()
+        val requestLine = input.readLine() ?: return
+        val parts = requestLine.split(" ")
+        if (parts.size < 2 || parts[0] != "GET") return
+        var range: LongRange? = null
+        while (true) {
+            val line = input.readLine() ?: return
+            if (line.isEmpty()) break
+            if (line.startsWith("Range:", ignoreCase = true)) {
+                // bytes=a-b | bytes=a- | bytes=-b (suffix not supported -> ignore)
+                val spec = line.substringAfter('=').trim()
+                val (a, b) = spec.removePrefix("bytes=").split('-').let { it[0] to it.getOrElse(1) { "" } }
+                val start = a.toLongOrNull()
+                if (start != null) range = start..(b.toLongOrNull() ?: Long.MAX_VALUE)
+            }
+        }
+        val path = parts[1].removePrefix("/s/$token/")
+        if (path == parts[1]) return reply(client, 403, "bad token".toByteArray(), "text/plain")
+        val segs = path.split('/')
+        val entry = entries[segs.getOrNull(0)] ?: return reply(client, 404, ByteArray(0), "text/plain")
+        val uri: Uri = when {
+            segs.size == 1 -> entry.uri
+            segs.size == 3 && segs[1] == "sub" -> entry.subtitles.getOrNull(segs[2].toIntOrNull() ?: -1)
+                ?: return reply(client, 404, ByteArray(0), "text/plain")
+            else -> return reply(client, 404, ByteArray(0), "text/plain")
+        }
+        serve(client, uri, range)
+    }
+
+    /** Serve the document, honoring Range. Falls back to a cached copy when the
+     *  provider's descriptor is not seekable. */
+    private fun serve(client: Socket, uri: Uri, range: LongRange?) {
+        val pfd: ParcelFileDescriptor = context.contentResolver.openFileDescriptor(uri, "r")
+            ?: return reply(client, 404, ByteArray(0), "text/plain")
+        pfd.use { fd ->
+            val size = fd.statSize
+            if (size < 0) {
+                // Non-seekable provider: copy once into cache, then serve the copy.
+                val cached = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}")
+                if (!cached.exists()) {
+                    context.contentResolver.openInputStream(uri)?.use { inp ->
+                        cached.outputStream().use { inp.copyTo(it) }
+                    } ?: return reply(client, 404, ByteArray(0), "text/plain")
+                }
+                return serveFile(client, cached, cached.length(), range)
+            }
+            serveChannel(client, pfd, size, range, guessMime(uri))
+        }
+    }
+
+    private fun serveChannel(client: Socket, pfd: ParcelFileDescriptor, size: Long, range: LongRange?, mime: String) {
+        val channel = java.io.FileInputStream(pfd.fileDescriptor).channel
+        val (code, start, end) = resolveRange(size, range)
+        val out = client.getOutputStream()
+        headers(out, code, end - start + 1, mime, size, start, end)
+        channel.position(start)
+        val buf = java.nio.ByteBuffer.allocate(64 * 1024)
+        var left = end - start + 1
+        while (left > 0) {
+            buf.clear()
+            if (left < buf.capacity()) buf.limit(left.toInt())
+            val n = try { channel.read(buf) } catch (e: Exception) { -1 }
+            if (n <= 0) throw EOFException()
+            out.write(buf.array(), 0, n)
+            left -= n
+        }
+        out.flush()
+    }
+
+    private fun serveFile(client: Socket, f: java.io.File, size: Long, range: LongRange?) {
+        java.io.RandomAccessFile(f, "r").use { raf ->
+            val (code, start, end) = resolveRange(size, range)
+            val out = client.getOutputStream()
+            headers(out, code, end - start + 1, "video/*", size, start, end)
+            raf.seek(start)
+            val buf = ByteArray(64 * 1024)
+            var left = end - start + 1
+            while (left > 0) {
+                val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                if (n <= 0) break
+                out.write(buf, 0, n)
+                left -= n
+            }
+            out.flush()
+        }
+    }
+
+    internal fun resolveRange(size: Long, range: LongRange?): Triple<Int, Long, Long> {
+        if (range == null) return Triple(200, 0L, size - 1)
+        val start = range.first.coerceIn(0, size - 1)
+        val end = minOf(range.last, size - 1)
+        return Triple(206, start, end)
+    }
+
+    private fun headers(out: java.io.OutputStream, code: Int, len: Long, mime: String, total: Long, start: Long, end: Long) {
+        val sb = StringBuilder()
+        sb.append("HTTP/1.1 ").append(code).append(if (code == 206) " Partial Content" else if (code == 200) " OK" else " Error").append("\r\n")
+        sb.append("Content-Length: ").append(len).append("\r\n")
+        sb.append("Content-Type: ").append(mime).append("\r\n")
+        sb.append("Accept-Ranges: bytes\r\n")
+        if (code == 206) sb.append("Content-Range: bytes ").append(start).append('-').append(end).append('/').append(total).append("\r\n")
+        sb.append("Connection: close\r\n\r\n")
+        out.write(sb.toString().toByteArray(Charsets.US_ASCII))
+    }
+
+    private fun reply(client: Socket, code: Int, body: ByteArray, mime: String) {
+        val out = client.getOutputStream()
+        headers(out, code, body.size.toLong(), mime, body.size.toLong(), 0, body.size - 1L)
+        out.write(body); out.flush()
+    }
+
+    private fun guessMime(uri: Uri): String =
+        context.contentResolver.getType(uri) ?: "video/*"
+}

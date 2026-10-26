@@ -1,0 +1,9 @@
+bin/
+obj/
+windows/out/
+windows/Output/
+*.user
+.gradle/
+.kotlin/
+**/build/
+local.properties
