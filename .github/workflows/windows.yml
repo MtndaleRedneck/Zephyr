@@ -90,7 +90,7 @@ jobs:
           name: ZephyrPlayer-installer
           path: windows/Output/ZephyrPlayer-*.exe
           if-no-files-found: warn
-      - name: Gate summary (honest split: tests vs evidence)
+      - name: "Gate summary (honest split - tests vs evidence)"
         if: always()
         shell: pwsh
         run: |
