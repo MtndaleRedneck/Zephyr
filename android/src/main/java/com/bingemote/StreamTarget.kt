@@ -13,7 +13,7 @@ object StreamTarget {
             ZephyrClient.play(s.zephyrHost.ifBlank { s.host }, s.zephyrPort, s.zephyrToken, url, subs)
         } else {
             // VLC fetches the phone's URL over LAN; sidecar subtitles ride as
-            // :sub-file item options (VLC 3.0.x httprequests.lua in_play).
+            // :input-slave item options (VLC 3.0.x httprequests.lua in_play).
             Vlc.playUri(s.host, s.vlcPort, s.vlcPassword, url, subs)
         }
     }
