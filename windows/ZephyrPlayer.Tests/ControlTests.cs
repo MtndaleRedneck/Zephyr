@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -276,7 +277,8 @@ namespace ZephyrPlayer.Tests
                 Assert.True(player.Play(media), "libVLC refused to start the media");
                 Assert.True(SpinWait(() => player.State == VLCState.Playing, 8000),
                     "never reached Playing (state: " + player.State + ")");
-                Assert.True(SpinWait(() => player.SpuTracks.Length > 0, 10000),
+                Assert.True(SpinWait(
+                    () => player.SpuTrackDescription.Any(t => t.Id >= 0), 10000),
                     "no subtitle ES registered: http AddSlave did not take");
                 player.Stop();
             }

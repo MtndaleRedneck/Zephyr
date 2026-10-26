@@ -80,6 +80,12 @@ try {
     @{ name = "D_addsubtitle_raw (val=http://127.0.0.1:8123/clip.srt)"; query = "command=addsubtitle&val=http://127.0.0.1:8123/clip.srt" },
     @{ name = "E_addsubtitle_encoded (val=http%3A%2F%2F...)"; query = "command=addsubtitle&val=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.srt" }
   )
+  function Get-NewLogLines($before) {
+    if (-not (Test-Path $vlcLog)) { return @() }
+    $lines = Get-Content $vlcLog
+    if ($lines.Count -le $before) { return @() }
+    return $lines[$before..($lines.Count - 1)]
+  }
   $winner = $null
   foreach ($c in $candidates) {
     # Reset playback so a slow attach from the previous candidate cannot be
@@ -89,9 +95,20 @@ try {
       Start-Sleep -Milliseconds 500
       if (-not (Test-SubStream (Get-Status))) { break }
     }
+    # addsubtitle needs a PLAYING input (no-op on stopped): start a clean item.
+    if ($c.name -like "D_*" -or $c.name -like "E_*") {
+      Send-Vlc "command=in_play&input=http%3A%2F%2F127.0.0.1%3A8123%2Fclip.mp4"
+      for ($i = 0; $i -lt 16; $i++) {
+        Start-Sleep -Milliseconds 500
+        if ((Get-Status).state -eq "playing") { break }
+      }
+    }
+    $logBefore = 0
+    if (Test-Path $vlcLog) { $logBefore = (Get-Content $vlcLog).Count }
     Send-Vlc $c.query
-    $attached = Wait-Sub 4
+    $attached = Wait-Sub 6
     Write-Output ("MATRIX " + $c.name + " => Subtitle stream: " + $attached)
+    Get-NewLogLines $logBefore | Select-String -Pattern 'slave|srt|subtitle' | Select-Object -First 12 | ForEach-Object { Write-Output ("  vlc: " + $_.Line) }
     if ($attached -and -not $winner) { $winner = $c.name }
   }
   if (-not $winner) {
@@ -99,7 +116,7 @@ try {
     Write-Output ((Get-Status).information | ConvertTo-Json -Depth 8)
     Write-Output "VLC verbose log (sub/srt/slave/error lines):"
     if (Test-Path $vlcLog) {
-      Get-Content $vlcLog | Select-String -Pattern 'sub|srt|slave|error|http' | Select-Object -Last 60 | ForEach-Object { $_.Line }
+      Get-Content $vlcLog | Select-String -Pattern 'slave|srt|subtitle' | Select-Object -Last 60 | ForEach-Object { $_.Line }
     } else {
       Write-Output "(no vlc log file produced)"
     }
