@@ -521,7 +521,7 @@ try {
     # from vlcrc - what the RUNNING VLC actually read at launch - not a saved pair
     # variable: earlier cases re-pair and complete pending writes, so $paired's
     # password is stale by now.
-    $vlcrcNow = Join-Path $env:APPDATA 'vlclcrc'
+    $vlcrcNow = Join-Path $env:APPDATA 'vlc\vlcrc'
     $vlcPw = (Select-String -Path $vlcrcNow -Pattern '^http-password=(.+)$').Matches[0].Groups[1].Value.Trim()
     Assert ($vlcPw.Length -ge 16) "vlcrc carries the current VLC password for the seek"
     $vlcAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $vlcPw))

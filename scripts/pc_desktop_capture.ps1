@@ -482,7 +482,7 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Head
 Start-Sleep -Seconds 5   # well past the idle timer: a paused movie never loses the bar
 $szBar3 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-paused.png"
 StopZephyr
-Write-Host "phone-start bar captures: $szBar1 / $szBar2 / $szBar3"
+Write-Host "phone-start bar captures: $sz / $szBar2 / $szBar3"
 # C-1: bar-band pixel counts (bottom strip, like the windowed/fullscreen checks).
 # Judged honestly: the video keeps moving under the bar, so the verdict compares
 # lit pixels shown-vs-hidden and requires the paused bar to be lit again.
