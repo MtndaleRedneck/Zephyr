@@ -66,6 +66,17 @@ namespace ZephyrPlayer
                 Shutdown(FirewallSetup.RemoveElevated(e.Args.Length > 1 ? e.Args[1] : null));
                 return;
             }
+#if PAIR_CODE_HOOK
+            // CI only (compiled out of shipped builds): the upgrade smoke plants the
+            // 1.1.0-shaped rules and asserts this says "not current" before migration
+            // and "current" after - the Player's unelevated rejection proof, headless
+            // (round-9 N9-6). An EARLY arg check, before the mutex and any UI.
+            if (e.Args.Length >= 1 && e.Args[0] == "--firewall-shape-ok")
+            {
+                Shutdown(FirewallSetup.RulesHaveCurrentShape() ? 0 : 1);
+                return;
+            }
+#endif
             _singleInstance = new System.Threading.Mutex(true, "ZephyrPlayer", out bool createdNew);
             if (!createdNew)
             {
@@ -225,11 +236,21 @@ namespace ZephyrPlayer
             // adds them, so the FIRST run explains and asks Windows once. Declining
             // closes the app cleanly (retry on next launch) instead of failing the
             // listen with a misleading error.
-            // Versioned-marker fast path + ACTUAL shape verification inside: a 1.1.0
-            // upgrade keeps same-named rules with the old shape, and name-only checks
-            // would never rerun setup (round-7 B7-1).
+            // ACTUAL live shape verification on every start - no marker shortcut: a
+            // 1.1.0 upgrade keeps same-named rules with the old shape, and name-only
+            // checks would never rerun setup (round-7 B7-1).
             if (!FirewallSetup.SetupIsCurrent())
             {
+                if (FirewallSetup.LastReadFailed)
+                {
+                    // The firewall/ACL API could not be read at all: elevation cannot
+                    // fix that, so no setup prompt - one plain note and close
+                    // (round-9 N9-8).
+                    FirewallSetup.Note("Windows Firewall settings could not be read on this PC. Zephyr Player cannot check its network permission and will close now; a restart of Windows usually fixes the read.");
+                    _reallyQuit = true;
+                    Shutdown();
+                    return;
+                }
                 if (!FirewallSetup.ExplainAndRelaunch())
                 {
                     _reallyQuit = true;

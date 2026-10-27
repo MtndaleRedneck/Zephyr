@@ -168,6 +168,16 @@ internal static class Program
             return FirewallSetup.RemoveElevated(rsid);
         }
 
+#if PAIR_CODE_HOOK
+        // CI only: the e2e plants old-shaped rules and asserts this says "not current"
+        // before migration and "current" after - the unelevated detection, headless.
+        // Must be an EARLY arg check: nested inside --window-shot it fell through to a
+        // normal start and hung CI on the setup dialog (round-9 R9-2). Compiled out of
+        // shipped builds with the other hooks.
+        if (args.Contains("--firewall-shape-ok"))
+            return FirewallSetup.RulesHaveCurrentShape() ? 0 : 1;
+#endif
+
 #if WINDOW_SHOT_HOOK
         // CI-only: render the window (Wi-Fi strip + first-run line visible) to a PNG and exit.
         if (args.Contains("--window-shot"))
@@ -178,13 +188,6 @@ internal static class Program
             using var shot = new HelperWindow(windowShot: true);
             var shotPath = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT")
                 ?? Path.Combine(DataDir, "window.png");
-#if PAIR_CODE_HOOK
-        if (args.Contains("--firewall-shape-ok"))
-            // CI only: the e2e plants old-shaped rules and asserts this says "not current"
-            // before migration and "current" after - the unelevated detection, headless.
-            return FirewallSetup.RulesHaveCurrentShape() ? 0 : 1;
-
-#endif
 #if PAIR_CODE_HOOK
             // CI only: render specific window states for pixel review.
             var shotMode = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE");
@@ -329,6 +332,7 @@ internal static class Program
         // must never vouch for rules deleted or changed after it was written, and a
         // marker file can even be copied between machines (round-8). The marker is
         // still stamped (the upgrade smoke asserts it) but nothing trusts it.
+        FirewallSetup.LastReadFailed = false;
         if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
         {
             StampFirewallMarker();
@@ -338,6 +342,14 @@ internal static class Program
             // Watchdog launch: never pop the admin prompt every 5 minutes - stay quiet
             // until he opens the app himself and finishes the one-time setup.
             if (ensureRunning) { Log("Watchdog start skipped: firewall setup not done yet."); return 0; }
+            if (FirewallSetup.LastReadFailed)
+            {
+                // The firewall/ACL API could not be read at all: elevation cannot fix
+                // that, so no setup prompt - one plain note and close (round-9 N9-8).
+                Log("firewall/ACL read failed at startup; not offering elevation.");
+                NoteDialog.Show(null, "Windows Firewall settings could not be read on this PC. Zephyr VLC Remote cannot check its network permission and will close now; a restart of Windows usually fixes the read.");
+                return 0;
+            }
             // Any decline or failure: one dark note was already shown. Leave cleanly
             // (even if a leftover listen permission would let us bind) and offer the
             // setup again on the next launch.
@@ -1351,17 +1363,27 @@ internal sealed class HelperWindow : Form
             System.IO.File.WriteAllText(diagPath, sb.ToString());
         }
         catch { }
-        // Capture 2: what the user would see on the desktop (needs an interactive
-        // session on the runner; skipped silently where there is none).
+        // Capture 2: what the user would see on the desktop - ONLY when the window is
+        // really on a screen. The shot window sits OFFscreen, where CopyFromScreen
+        // would grab unrelated desktop pixels (round-9 N9-11: two "different" states
+        // produced byte-identical -screen.png files that showed neither state). No
+        // misleading artifact is better than a mislabeled one.
         try
         {
-            var screenPath = System.IO.Path.Combine(
-                System.IO.Path.GetDirectoryName(path) ?? ".",
-                System.IO.Path.GetFileNameWithoutExtension(path) + "-screen.png");
-            using var bmp2 = new Bitmap(Width, Height);
-            using var g2 = Graphics.FromImage(bmp2);
-            g2.CopyFromScreen(Left, Top, 0, 0, new Size(Width, Height));
-            bmp2.Save(screenPath, System.Drawing.Imaging.ImageFormat.Png);
+            var bounds = new System.Drawing.Rectangle(Left, Top, Width, Height);
+            var onScreen = false;
+            foreach (var scr in System.Windows.Forms.Screen.AllScreens)
+                if (scr.Bounds.IntersectsWith(bounds)) { onScreen = true; break; }
+            if (onScreen)
+            {
+                var screenPath = System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(path) ?? ".",
+                    System.IO.Path.GetFileNameWithoutExtension(path) + "-screen.png");
+                using var bmp2 = new Bitmap(Width, Height);
+                using var g2 = Graphics.FromImage(bmp2);
+                g2.CopyFromScreen(Left, Top, 0, 0, new Size(Width, Height));
+                bmp2.Save(screenPath, System.Drawing.Imaging.ImageFormat.Png);
+            }
         }
         catch { }
         Close();

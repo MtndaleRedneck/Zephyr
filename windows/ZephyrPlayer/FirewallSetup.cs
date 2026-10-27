@@ -37,8 +37,9 @@ namespace ZephyrPlayer
         /// <summary>Who the port's URL reservation belongs to.</summary>
         internal enum AclOwnership { None, Ours, Legacy, Foreign }
 
-        // The marker is per-MACHINE (Local, not Roaming): a Roaming marker would follow
-        // the user to another PC and vouch for rules that do not exist there (round-8).
+        // The marker is per user ON THIS MACHINE (Local, not Roaming): a Roaming marker
+        // would follow the user to another PC and vouch for rules that do not exist
+        // there (round-8).
         private static string MarkerPath => Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ZephyrPlayer", "firewall.ok");
@@ -50,6 +51,7 @@ namespace ZephyrPlayer
         /// upgrade smoke asserts it) but nothing trusts it.</summary>
         public static bool SetupIsCurrent()
         {
+            LastReadFailed = false;
             if (!RulesHaveCurrentShape() || !UrlAclNamesCurrentUser()) return false;
             StampMarker();
             return true;
@@ -78,7 +80,13 @@ namespace ZephyrPlayer
         /// display text, which is localized and made the old text parse re-ask for setup
         /// on every launch on a non-English PC (round-8 N-1).</summary>
         internal sealed record RuleShape(string Name, int Protocol, string LocalPorts, int Direction,
-            bool Enabled, int Profiles, string RemoteAddresses, string ApplicationName);
+            bool Enabled, int Profiles, string RemoteAddresses, string ApplicationName, int Action);
+
+        /// <summary>True when the last firewall/ACL READ failed at the API level (as
+        /// opposed to "read fine, not ours"). A read failure is a distinct state: the
+        /// user is told Windows Firewall settings could not be read, and setup does NOT
+        /// re-elevate, because admin cannot fix an unreadable API (round-9 N9-8).</summary>
+        internal static bool LastReadFailed;
 
         /// <summary>All rules carrying any of [names], via the firewall COM API. Null
         /// when the API itself failed (treated as "not current" - setup is re-offered).</summary>
@@ -87,7 +95,7 @@ namespace ZephyrPlayer
             try
             {
                 var policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
-                if (policyType == null) return null;
+                if (policyType == null) { LastReadFailed = true; return null; }
                 dynamic policy = Activator.CreateInstance(policyType)!;
                 var list = new List<RuleShape>();
                 foreach (dynamic r in policy.Rules)
@@ -103,11 +111,17 @@ namespace ZephyrPlayer
                         (bool)r.Enabled,
                         (int)r.Profiles,
                         (string)(r.RemoteAddresses ?? "") ?? "",
-                        (string)(r.ApplicationName ?? "") ?? ""));
+                        (string)(r.ApplicationName ?? "") ?? "",
+                        (int)r.Action));
                 }
                 return list;
             }
-            catch { return null; }
+            catch (Exception ex)
+            {
+                LastReadFailed = true;
+                System.Diagnostics.Debug.WriteLine("Firewall rules could not be read: " + ex.Message);
+                return null;
+            }
         }
 
         /// <summary>One rule carries the required shape: direction In, enabled, Private
@@ -116,6 +130,7 @@ namespace ZephyrPlayer
         internal static bool RuleMatches(RuleShape r, int protocol, int port, string program)
         {
             if (r.Protocol != protocol) return false;
+            if (r.Action != 1) return false; // NET_FW_ACTION_ALLOW - a same-named BLOCK rule is not our shape (round-9 N9-4)
             if (r.Direction != 1 || !r.Enabled) return false; // NET_FW_RULE_DIR_IN
             if (r.Profiles != 2) return false;                // NET_FW_PROFILE2_PRIVATE only
             if (!string.Equals(r.RemoteAddresses.Trim(), "LocalSubnet", StringComparison.OrdinalIgnoreCase)) return false;
@@ -145,8 +160,7 @@ namespace ZephyrPlayer
 
         public static bool UrlAclExists()
         {
-            var acl = Run("netsh", "http show urlacl");
-            return acl.Output.Contains(":" + PlaybackServer.DefaultPort + "/");
+            return QueryUrlAcl("http://+:" + PlaybackServer.DefaultPort + "/").Found;
         }
 
         /// <summary>True when the port's reservation names the CURRENT user (a read-only
@@ -157,21 +171,85 @@ namespace ZephyrPlayer
             return sid != null && UrlAclNamesUser(sid);
         }
 
-        /// <summary>Who the port's URL reservation belongs to: us (an exact per-user
+        /// <summary>The port's reservation record straight from http.sys (typed API,
+        /// no netsh display text - the "SDDL:" label is localized and a regex on it
+        /// fails OPEN; round-9 N9-3). Found=false: no reservation for the exact URL.
+        /// Sddl null on any read error: treated as existing-but-unreadable, i.e.
+        /// Foreign - we never delete what we cannot read.</summary>
+        private static (bool Found, string? Sddl) QueryUrlAcl(string urlPrefix)
+        {
+            var query = new HttpServiceConfigUrlAclQuery
+            {
+                KeyDesc = new HttpServiceConfigUrlAclKey { UrlPrefix = urlPrefix },
+            };
+            var outSize = System.Runtime.InteropServices.Marshal.SizeOf<HttpServiceConfigUrlAclSet>();
+            var buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+            try
+            {
+                uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
+                    ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize, IntPtr.Zero);
+                if (rc == ErrorNotFound) return (false, null);
+                if (rc != 0) { LastReadFailed = true; return (true, null); }
+                var set = System.Runtime.InteropServices.Marshal.PtrToStructure<HttpServiceConfigUrlAclSet>(buf);
+                return (true, set.Param.StringSecurityDescriptor);
+            }
+            catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or System.Runtime.InteropServices.MarshalDirectiveException)
+            {
+                LastReadFailed = true;
+                return (true, null);
+            }
+            finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+        }
+
+        private const int HttpServiceConfigUrlAclQueryId = 2; // HttpServiceConfigUrlAclQuery
+        private const uint ErrorNotFound = 1168;
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private struct HttpServiceConfigUrlAclKey
+        {
+            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
+            public string UrlPrefix;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private struct HttpServiceConfigUrlAclQuery
+        {
+            public HttpServiceConfigUrlAclKey KeyDesc;
+            public int Token;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private struct HttpServiceConfigUrlAclParam
+        {
+            [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
+            public string StringSecurityDescriptor;
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        private struct HttpServiceConfigUrlAclSet
+        {
+            public HttpServiceConfigUrlAclKey KeyDesc;
+            public HttpServiceConfigUrlAclParam Param;
+        }
+
+        [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
+        private static extern uint HttpQueryServiceConfiguration(IntPtr serviceHandle, int configId,
+            ref HttpServiceConfigUrlAclQuery input, int inputLength, IntPtr output, int outputLength, IntPtr overlapped);
+
+        /// <summary>Pure classification of one reservation SDDL: us (an exact per-user
         /// grant for [sid]), a legacy broad grant the published 1.1.0 wrote (Everyone,
         /// nothing else), nobody, or something else - another app or another Windows
         /// user, which must never be overwritten. Parsed-descriptor comparisons on both
-        /// sides: netsh stores well-known accounts as SDDL aliases (RID-500 admin comes
-        /// back "LA", Everyone "WD"), so substring checks mislead.</summary>
-        internal static AclOwnership ClassifyUrlAcl(string? sid)
+        /// sides (netsh/http.sys store well-known accounts as SDDL aliases, so substring
+        /// checks mislead), and EXACT whole-descriptor equality: a multi-ACE descriptor
+        /// that merely CONTAINS our user or an Everyone ACE is foreign (round-9 T4).</summary>
+        internal static AclOwnership ClassifySddl(string? sddl, string? sid)
         {
-            var block = UrlAclBlock();
-            var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
-            if (!m.Success) return AclOwnership.None;
+            if (string.IsNullOrWhiteSpace(sddl)) return AclOwnership.Foreign;
             string normalized;
             try
             {
-                normalized = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
+                normalized = new System.Security.AccessControl.RawSecurityDescriptor(sddl)
                     .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
             }
             catch { return AclOwnership.Foreign; }
@@ -193,6 +271,17 @@ namespace ZephyrPlayer
             }
             catch { }
             return AclOwnership.Foreign;
+        }
+
+        /// <summary>Classifies the port's LIVE reservation. A reservation that exists
+        /// but cannot be read or parsed is Foreign, never None (round-9 N9-3: the old
+        /// netsh-text version returned None on an unparsed block and setup would have
+        /// DELETED a reservation it could not read).</summary>
+        internal static AclOwnership ClassifyUrlAcl(string? sid)
+        {
+            var (found, sddl) = QueryUrlAcl("http://+:" + PlaybackServer.DefaultPort + "/");
+            if (!found) return AclOwnership.None;
+            return ClassifySddl(sddl, sid);
         }
 
         /// <summary>Runs inside the elevated copy. [userSid] is the UNelevated user's
@@ -218,6 +307,16 @@ namespace ZephyrPlayer
                     return 3;
                 }
                 var exe = Environment.ProcessPath ?? "";
+                // Classify the port reservation FIRST (round-9 N9-5): when it belongs to
+                // another app or another Windows user, setup stops BEFORE touching any
+                // machine-wide rule - rewriting the shared rules first would break the
+                // other install even though setup then stopped with the conflict exit.
+                var aclOwner = ClassifyUrlAcl(sid);
+                if (aclOwner == AclOwnership.Foreign)
+                {
+                    Console.Error.WriteLine("The network port Zephyr Player needs is reserved for another app or another Windows user on this PC.");
+                    return 4;
+                }
                 // Re-add our own rules from scratch: by name they are ours, whatever shape
                 // the 1.1.0 installer gave them (any-address TCP 47823, UDP 8489 - which
                 // was BingeMote's port and must go). Other apps' rules are never named.
@@ -227,7 +326,7 @@ namespace ZephyrPlayer
                 Run("netsh", $"advfirewall firewall delete rule name=\"{UdpRuleName}\"");
                 var udp = Run("netsh", $"advfirewall firewall add rule name=\"{UdpRuleName}\" dir=in action=allow protocol=UDP localport={DiscoveryResponder.OwnPort} program=\"{exe}\" profile=private remoteip=localsubnet");
                 if (udp.ExitCode != 0) return 2;
-                switch (ClassifyUrlAcl(sid))
+                switch (aclOwner)
                 {
                     case AclOwnership.Ours:
                         break; // already exactly right
@@ -237,9 +336,6 @@ namespace ZephyrPlayer
                         var acl = Run("netsh", "http add urlacl url=http://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
                         if (acl.ExitCode != 0 || !UrlAclExists()) return 3;
                         break;
-                    case AclOwnership.Foreign:
-                        Console.Error.WriteLine("The network port Zephyr Player needs is reserved for another app or another Windows user on this PC.");
-                        return 4;
                 }
                 // Verify the reservation really names the intended user, not just the port.
                 if (!UrlAclNamesUser(sid)) return 3;
@@ -310,8 +406,6 @@ namespace ZephyrPlayer
         /// app's reservation stays.</summary>
         public static int RemoveElevated(string? userSid)
         {
-            Run("netsh", $"advfirewall firewall delete rule name=\"{TcpRuleName}\"");
-            Run("netsh", $"advfirewall firewall delete rule name=\"{UdpRuleName}\"");
             string? sid = null;
             if (!string.IsNullOrWhiteSpace(userSid))
             {
@@ -326,11 +420,20 @@ namespace ZephyrPlayer
                 Console.Error.WriteLine("The uninstalling user's account could not be determined, so the listen permission on " + PlaybackServer.DefaultPort + " was left in place.");
                 return 0;
             }
+            // Classify the reservation BEFORE touching any rule (round-9 N9-5): when it
+            // is another app's or another Windows user's, their install likely owns the
+            // machine-wide rules too - deleting the rules out from under them would
+            // break their Player, so nothing is touched.
             var owner = ClassifyUrlAcl(sid);
+            if (owner == AclOwnership.Foreign)
+            {
+                Console.Error.WriteLine("The listen permission on " + PlaybackServer.DefaultPort + " belongs to another app or Windows user; the firewall rules were left in place too.");
+                return 0;
+            }
+            Run("netsh", $"advfirewall firewall delete rule name=\"{TcpRuleName}\"");
+            Run("netsh", $"advfirewall firewall delete rule name=\"{UdpRuleName}\"");
             if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
                 Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
-            else if (owner == AclOwnership.Foreign)
-                Console.Error.WriteLine("The listen permission on " + PlaybackServer.DefaultPort + " belongs to another app or Windows user; left in place.");
             return 0;
         }
 
@@ -365,8 +468,16 @@ namespace ZephyrPlayer
                 if (p == null) throw new InvalidOperationException("The elevated setup did not start.");
                 if (!p.WaitForExit(60_000)) throw new InvalidOperationException("Setup timed out.");
                 conflict = p.ExitCode == 4;
-                if (p.ExitCode != 0 || !RulesHaveCurrentShape() || !UrlAclExists())
+                LastReadFailed = false;
+                var verified = RulesHaveCurrentShape() && UrlAclExists();
+                if (p.ExitCode != 0 || !verified)
+                {
+                    if (LastReadFailed)
+                        // Elevation cannot fix an unreadable firewall/ACL API: say so,
+                        // and do NOT re-elevate or retry in a loop (round-9 N9-8).
+                        Note("Windows Firewall settings could not be read on this PC, so setup cannot check its own work. Zephyr Player will close now; a restart of Windows usually fixes the read.");
                     throw new InvalidOperationException("Setup could not be verified.");
+                }
                 StampMarker();
                 return true;
             }
@@ -374,9 +485,10 @@ namespace ZephyrPlayer
             {
                 if (conflict)
                     Note("Something else on this PC has already reserved the network port Zephyr Player needs (" + PlaybackServer.DefaultPort + "), and it is not one of ours, so setup stopped without changing it. Zephyr Player will close now; freeing that port needs whoever manages this PC.");
-                else
+                else if (!LastReadFailed)
                     // True in every failure case (declined UAC, partial setup, timeout):
-                    // setup did not finish - rules may or may not exist.
+                    // setup did not finish - rules may or may not exist. A read failure
+                    // already said its own plainer note above (round-9 N9-8).
                     Note("Setup did not finish, so the phone cannot reach this PC yet. Zephyr Player will now close and offer to set up again next time you open it.");
                 return false;
             }
@@ -392,7 +504,7 @@ namespace ZephyrPlayer
             return answer;
         }
 
-        private static void Note(string text)
+        internal static void Note(string text)
         {
             var dlg = DarkDialog(text, "OK", null, () => { });
             dlg.ShowDialog();
@@ -481,6 +593,11 @@ namespace ZephyrPlayer
         {
             var template = new ControlTemplate(typeof(Button));
             var border = new FrameworkElementFactory(typeof(Border));
+            // Round-9 N9-7: the state setters must TARGET the named border. Setters on
+            // the button itself lose to the button's LOCAL Background/BorderBrush
+            // values (local value outranks a template trigger), so hover, pressed and
+            // the focus ring never painted.
+            border.Name = "Chrome";
             border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
             border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
             border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
@@ -494,39 +611,22 @@ namespace ZephyrPlayer
             border.AppendChild(text);
             template.VisualTree = border;
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Control.BackgroundProperty, hoverBackground));
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, hoverBackground, "Chrome"));
             template.Triggers.Add(hover);
             var press = new Trigger { Property = Button.IsPressedProperty, Value = true };
-            press.Setters.Add(new Setter(Control.BackgroundProperty, pressedBackground));
+            press.Setters.Add(new Setter(Border.BackgroundProperty, pressedBackground, "Chrome"));
             template.Triggers.Add(press);
             var focus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
-            focus.Setters.Add(new Setter(Control.BorderBrushProperty, focusRing));
+            focus.Setters.Add(new Setter(Border.BorderBrushProperty, focusRing, "Chrome"));
             template.Triggers.Add(focus);
             return template;
         }
 
         private static bool UrlAclNamesUser(string sid)
         {
-            var block = UrlAclBlock();
-            var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
-            if (!m.Success) return false;
-            try
-            {
-                var actual = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
-                    .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
-                var expected = new System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;" + sid + ")")
-                    .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
-                return actual == expected;
-            }
-            catch { return block.Contains(sid); }
-        }
-
-        private static string UrlAclBlock()
-        {
-            var all = Run("netsh", "http show urlacl").Output;
-            foreach (var block in all.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.None))
-                if (block.Contains(":" + PlaybackServer.DefaultPort + "/")) return block;
-            return "";
+            // Exact whole-descriptor equality via the typed query; a SID substring is
+            // never enough (round-9 T4: ...-1001 vs ...-10012).
+            return ClassifyUrlAcl(sid) == AclOwnership.Ours;
         }
 
         private static (int ExitCode, string Output) Run(string file, string args)

@@ -305,6 +305,11 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                     return@launch
                 }
                 loading = false
+                if (e is HelperClient.BadToken) {
+                    // A revoked pairing is never "the folder failed": same pair-again
+                    // route as the play path (round-9 N9-10).
+                    remote.onHelperBadToken()
+                }
                 error = e.message?.takeIf { e is HelperClient.Unreachable || e is HelperClient.ConnectTimeout || e is HelperClient.BadToken } ?: "Couldn't open that folder on the PC."
             }
         }
