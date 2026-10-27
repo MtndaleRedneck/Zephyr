@@ -87,7 +87,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         /** S9: refuse a cache copy the phone cannot hold (floor for system + VLC). */
         const val MIN_FREE_BYTES = 512L * 1024 * 1024
         /** Drop every cached stream copy (called when the service stops). */
-        private fun cacheFile(uri: Uri, suffix: String): java.io.File {
+        private fun cacheFile(context: android.content.Context, uri: Uri, suffix: String): java.io.File {
             val hex = java.security.MessageDigest.getInstance("SHA-256")
                 .digest(uri.toString().toByteArray(Charsets.UTF_8))
                 .joinToString("") { "%02x".format(it) }
@@ -142,7 +142,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 // COMPLETE, so a cut-off copy is never reused; oversized copies are capped.
                 // N-4: SHA-256 of the URI - a 32-bit hashCode collision between two
                 // different files must never share one cache slot.
-                val cached = cacheFile(uri, "")
+                val cached = cacheFile(context, uri, "")
                 if (!cached.exists()) {
                     // S9: one copy per URI at a time - two first requests for the same
                     // non-seekable file must not write the same .part together. The
@@ -150,7 +150,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     val lock = copyLocks.getOrPut(uri.toString()) { Object() }
                     synchronized(lock) {
                     if (!cached.exists()) {
-                    val tmp = cacheFile(uri, ".part")
+                    val tmp = cacheFile(context, uri, ".part")
                     try {
                         CacheCopier.copy(
                             open = { context.contentResolver.openInputStream(uri) },
