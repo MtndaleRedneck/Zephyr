@@ -60,7 +60,7 @@ internal static class Program
         catch { /* the next start tries again */ }
     }
 
-    private static string ConfigPath => Path.Combine(DataDir, "config.json");
+    internal static string ConfigPath => Path.Combine(DataDir, "config.json");
     private static string FirewallMarker => Path.Combine(DataDir, "firewall.ok");
     private static string QuitMarkerPath => Path.Combine(DataDir, "quit-on-purpose");
     /// <summary>Fresh while an update installer runs: the watchdog skips its round so it cannot
@@ -383,6 +383,57 @@ internal static class Program
         catch { /* logging must never break the helper */ }
     }
 
+    /// <summary>Parse every pairing record format (1.3 "phones", 1.2 "tokens", 1.0/1.1
+    /// single "token"). Returns false when any stored token cannot be decrypted - the
+    /// caller fails the whole store closed rather than dropping that phone's record on
+    /// the next save. Pure: reads the JSON only, never touches the file.</summary>
+    internal static bool TryParsePhones(JsonElement root, out List<PairedPhone> phones, out string? unreadableName)
+    {
+        phones = new List<PairedPhone>();
+        unreadableName = null;
+        string? failName = null; bool failed = false;
+        bool Fail(string? name) { failName = name; failed = true; return false; }
+        if (root.TryGetProperty("phones", out var ps))
+            foreach (var p in ps.EnumerateArray())
+            {
+                var traw = p.TryGetProperty("token", out var pt) ? pt.GetString() : null;
+                var n = p.TryGetProperty("name", out var pn) ? pn.GetString() : null;
+                if (traw == null) return Fail(n);
+                var tok = Dpapi.Unwrap(traw);
+                if (tok == null) return Fail(n);
+                var spent = p.TryGetProperty("adoptSpent", out var asp) && asp.GetBoolean();
+                string? adoptReq = p.TryGetProperty("adoptRequestId", out var ari) ? ari.GetString() : null;
+                DateTime? adoptAt = null;
+                if (p.TryGetProperty("adoptServedAtUtc", out var asa) && asa.GetString() is string asas
+                    && DateTime.TryParse(asas, null, System.Globalization.DateTimeStyles.RoundtripKind, out var asad))
+                    adoptAt = asad;
+                phones.Add(new PairedPhone { Token = tok, Name = string.IsNullOrWhiteSpace(n) ? "Phone " + (phones.Count + 1) : n, AdoptSpent = spent, AdoptRequestId = adoptReq, AdoptServedAtUtc = adoptAt });
+            }
+        // 1.2 stored bare tokens without names; those phones show as "Phone 1" etc.
+        if (phones.Count == 0 && root.TryGetProperty("tokens", out var ts))
+            foreach (var el in ts.EnumerateArray())
+            {
+                var vraw = el.GetString();
+                if (vraw == null) return Fail(null);
+                var v = Dpapi.Unwrap(vraw);
+                if (v == null) return Fail(null);
+                phones.Add(new PairedPhone { Token = v, Name = "Phone " + (phones.Count + 1) });
+            }
+        // 1.0/1.1 configs stored one token; keep that phone paired.
+        if (phones.Count == 0 && root.TryGetProperty("token", out var old))
+        {
+            var vraw = old.GetString();
+            if (vraw != null)
+            {
+                var v = Dpapi.Unwrap(vraw);
+                if (v == null) return Fail(null);
+                phones.Add(new PairedPhone { Token = v, Name = "Phone 1" });
+            }
+        }
+        if (failed) unreadableName = failName;
+        return !failed;
+    }
+
     internal static void LoadConfig()
     {
         // Settled migration: a first run on a PC that had the BingeMote helper keeps the
@@ -393,41 +444,24 @@ internal static class Program
         {
             if (!File.Exists(ConfigPath)) return;
             using var doc = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+            // Fail closed on ANY unreadable record (round-5, Main's catch): a dropped
+            // entry would be permanently lost on the NEXT save, so one undecryptable
+            // token marks the whole store broken - the file is preserved byte-for-byte,
+            // reads look unpaired, no code is minted, and every save refuses.
+            if (!TryParsePhones(doc.RootElement, out var parsedPhones, out var unreadableName))
+            {
+                StoreBroken = true;
+                Log("A saved phone" + (unreadableName != null ? " (\"" + unreadableName + "\")" : "")
+                    + " could not be decrypted. The file is left untouched; pairing and saving are refused until it is removed by hand.");
+                lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
+                return;
+            }
             lock (PhonesLock)
             {
             Phones.Clear();
+            Phones.AddRange(parsedPhones);
             DeclinedNetworks.Clear();
             HomeNetworks.Clear();
-            if (doc.RootElement.TryGetProperty("phones", out var ps))
-                foreach (var p in ps.EnumerateArray())
-                {
-                    var traw = p.TryGetProperty("token", out var pt) ? pt.GetString() : null;
-                    var t = traw == null ? null : Dpapi.Unwrap(traw);
-                    if (t == null) { Log("One saved phone could not be decrypted and was skipped (the file is unchanged)."); continue; }
-                    var n = p.TryGetProperty("name", out var pn) ? pn.GetString() : null;
-                    var spent = p.TryGetProperty("adoptSpent", out var asp) && asp.GetBoolean();
-                    string? adoptReq = p.TryGetProperty("adoptRequestId", out var ari) ? ari.GetString() : null;
-                    DateTime? adoptAt = null;
-                    if (p.TryGetProperty("adoptServedAtUtc", out var asa) && asa.GetString() is string asas
-                        && DateTime.TryParse(asas, null, System.Globalization.DateTimeStyles.RoundtripKind, out var asad))
-                        adoptAt = asad;
-                    Phones.Add(new PairedPhone { Token = t, Name = string.IsNullOrWhiteSpace(n) ? "Phone " + (Phones.Count + 1) : n, AdoptSpent = spent, AdoptRequestId = adoptReq, AdoptServedAtUtc = adoptAt });
-                }
-            // 1.2 stored bare tokens without names; those phones show as "Phone 1" etc.
-            if (Phones.Count == 0 && doc.RootElement.TryGetProperty("tokens", out var ts))
-                foreach (var t in ts.EnumerateArray())
-                {
-                    var vraw = t.GetString();
-                    var v = vraw == null ? null : Dpapi.Unwrap(vraw);
-                    if (v != null) Phones.Add(new PairedPhone { Token = v, Name = "Phone " + (Phones.Count + 1) });
-                }
-            // 1.0/1.1 configs stored one token; keep that phone paired.
-            if (Phones.Count == 0 && doc.RootElement.TryGetProperty("token", out var old))
-            {
-                var vraw = old.GetString();
-                var v = vraw == null ? null : Dpapi.Unwrap(vraw);
-                if (v != null) Phones.Add(new PairedPhone { Token = v, Name = "Phone 1" });
-            }
             if (doc.RootElement.TryGetProperty("declinedNetworks", out var dn))
                 foreach (var n in dn.EnumerateArray())
                 {
@@ -1207,8 +1241,28 @@ internal sealed class HelperWindow : Form
     }
 
     /// <summary>Roll an expired pairing code (window-visible work).</summary>
+    private bool _brokenShown;
+
     private void TickStatus()
     {
+        if (Program.StoreBroken)
+        {
+            // Broken store (round-5): plainly say the saved pairings could not be loaded
+            // instead of inviting a fresh pair - a pair here could never persist, and the
+            // existing file is being preserved, not reset.
+            if (!_brokenShown)
+            {
+                _brokenShown = true;
+                _codeShown = true;
+                _codeCaption.Visible = _code.Visible = _cancelPair.Visible = false;
+                _codeNote.Visible = true;
+                _codeNote.Text = "The saved pairings on this PC could not be read. Pairing is off and nothing is being overwritten - the file is kept safe at "
+                    + Program.ConfigPath + ". To start fresh, delete that file yourself and reopen Zephyr VLC Remote.";
+                _pair.Enabled = false;
+                ApplyLayout();
+            }
+            return;
+        }
         if (Program.PairCode != null && DateTime.UtcNow > Program.PairCodeExpires)
         {
             // Stop at expiry instead of rolling a new code forever: the typed name goes back
