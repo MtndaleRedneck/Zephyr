@@ -24,26 +24,26 @@ object InputRouter {
     }
 
     fun move(remote: RemoteState, dx: Float, dy: Float) = routed(remote.store,
-        { ZephyrClient.inputMove(remote.store.zephyrHost.ifBlank { remote.store.host }, remote.store.zephyrPort, remote.store.zephyrToken, dx.toDouble(), dy.toDouble()) },
+        { ZephyrClient.inputMove(remote.store.zephyrHost, remote.store.zephyrPort, remote.store.zephyrToken, dx.toDouble(), dy.toDouble()) },
         { HelperClient.move(remote.liveHost, remote.livePort, remote.liveToken, dx, dy) })
 
     fun button(remote: RemoteState, button: String, down: Boolean) = routed(remote.store,
-        { ZephyrClient.inputButton(remote.store.zephyrHost.ifBlank { remote.store.host }, remote.store.zephyrPort, remote.store.zephyrToken, button, down) },
+        { ZephyrClient.inputButton(remote.store.zephyrHost, remote.store.zephyrPort, remote.store.zephyrToken, button, down) },
         { HelperClient.button(remote.liveHost, remote.livePort, remote.liveToken, button, down) })
 
     fun scroll(remote: RemoteState, dy: Float) = routed(remote.store,
-        { ZephyrClient.inputScroll(remote.store.zephyrHost.ifBlank { remote.store.host }, remote.store.zephyrPort, remote.store.zephyrToken, dy.toDouble()) },
+        { ZephyrClient.inputScroll(remote.store.zephyrHost, remote.store.zephyrPort, remote.store.zephyrToken, dy.toDouble()) },
         { HelperClient.scroll(remote.liveHost, remote.livePort, remote.liveToken, dy) })
 
     fun zoom(remote: RemoteState, delta: Float) = routed(remote.store,
-        { ZephyrClient.inputZoom(remote.store.zephyrHost.ifBlank { remote.store.host }, remote.store.zephyrPort, remote.store.zephyrToken, delta.toDouble()) },
+        { ZephyrClient.inputZoom(remote.store.zephyrHost, remote.store.zephyrPort, remote.store.zephyrToken, delta.toDouble()) },
         { HelperClient.zoom(remote.liveHost, remote.livePort, remote.liveToken, delta) })
 
     fun key(remote: RemoteState, key: String) = routed(remote.store,
-        { ZephyrClient.inputKey(remote.store.zephyrHost.ifBlank { remote.store.host }, remote.store.zephyrPort, remote.store.zephyrToken, key) },
+        { ZephyrClient.inputKey(remote.store.zephyrHost, remote.store.zephyrPort, remote.store.zephyrToken, key) },
         { HelperClient.key(remote.liveHost, remote.livePort, remote.liveToken, key) })
 
     fun typeText(remote: RemoteState, text: String) = routed(remote.store,
-        { ZephyrClient.inputType(remote.store.zephyrHost.ifBlank { remote.store.host }, remote.store.zephyrPort, remote.store.zephyrToken, text) },
+        { ZephyrClient.inputType(remote.store.zephyrHost, remote.store.zephyrPort, remote.store.zephyrToken, text) },
         { HelperClient.typeText(remote.liveHost, remote.livePort, remote.liveToken, text) })
 }

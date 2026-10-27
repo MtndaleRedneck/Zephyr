@@ -110,7 +110,7 @@ fun SettingsScreen(
                 // like the VLC row - never a bare "Paired".
                 if (!remote.zephyrPaired) "Not paired"
                 else (remote.store.zephyrPcName.ifBlank { "PC" }) +
-                    " (" + remote.store.zephyrHost.ifBlank { remote.store.host } + ":" + remote.store.zephyrPort + ")",
+                    " (" + remote.store.zephyrHost + ":" + remote.store.zephyrPort + ")",
                 onLabelClick = onZephyrSetup,
             )
         }
@@ -136,7 +136,7 @@ fun SettingsScreen(
                     val row = withContext(kotlinx.coroutines.Dispatchers.IO) {
                         try {
                             com.zephyr.remote.ZephyrClient.libraryFolder(
-                                store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrToken)
+                                store.zephyrHost, store.zephyrPort, store.zephyrToken)
                         } catch (e: Exception) { null }
                     }
                     // NEW-2: loading, unpaired and failed are different rows - a

@@ -134,9 +134,9 @@ class StreamService : Service() {
         val store = watchdogStore
         return when (StreamCoordinator.servedTarget) {
             StreamCoordinator.ServedTarget.ZEPHYR -> {
-                if (store.zephyrToken.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN
+                if (store.zephyrToken.isBlank() || store.zephyrHost.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN
                 val j = ZephyrClient.controlStatus(
-                    store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrToken)
+                    store.zephyrHost, store.zephyrPort, store.zephyrToken)
                 StreamIdlePolicy.mapState(j.optString("state", ""))
             }
             StreamCoordinator.ServedTarget.VLC -> {

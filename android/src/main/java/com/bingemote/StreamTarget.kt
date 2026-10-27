@@ -10,7 +10,8 @@ import com.zephyr.remote.ZephyrClient
 object StreamTarget {
     fun play(s: Store, url: String, subs: List<String>) {
         if (s.selectedSource == Source.ZEPHYR) {
-            ZephyrClient.play(s.zephyrHost.ifBlank { s.host }, s.zephyrPort, s.zephyrToken, url, subs)
+            val host = s.zephyrEndpoint ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
+            ZephyrClient.play(host, s.zephyrPort, s.zephyrToken, url, subs)
             com.zephyr.remote.StreamCoordinator.servedTarget = com.zephyr.remote.StreamCoordinator.ServedTarget.ZEPHYR
         } else {
             // VLC fetches the phone's URL over LAN; sidecar subtitles ride as

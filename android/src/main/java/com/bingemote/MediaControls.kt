@@ -20,7 +20,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 internal fun mediaSourceConfigured(store: Store) =
-    if (store.selectedSource == Source.ZEPHYR) store.zephyrToken.isNotBlank() && store.zephyrHost.ifBlank { store.host }.isNotBlank()
+    if (store.selectedSource == Source.ZEPHYR) store.zephyrToken.isNotBlank() && store.zephyrHost.isNotBlank()
     else store.isConfigured
 
 /** Starts or stops the lock-screen controls service to match the setting. */

@@ -171,8 +171,8 @@ namespace ZephyrPlayer
         /// 40 VIDEO candidates examined, ordinal order. Non-video files (.srt, .nfo,
         /// posters) are skipped for free - a folder full of them must not spend the
         /// budget before the descent (round-3 P8). The per-folder OrderBy below
-        /// materializes one directory's listing; the 40-folder budget still bounds
-        /// directory never gets fully listed before the cap applies.</summary>
+        /// materializes one directory's listing; the 40-folder budget still bounds the
+        /// descent, so a huge directory never gets fully listed before the cap applies.</summary>
         private static string? PeekFirstVideo(string dir)
         {
             var pending = new Queue<(string Path, int Depth)>();
@@ -217,10 +217,16 @@ namespace ZephyrPlayer
             // bitmap pixels) cannot be pixel-proven through the shell there. With the seam,
             // real bitmaps travel the exact Peek/Thumb pipeline the shell bitmaps would take.
             // When unset, behavior is unchanged: shell thumbnails or drawn placeholders only.
-            // Test seam: only with the capture switch, same as every other CI-only hook.
+            // Test seam: COMPILED OUT of the shipped binary, same as every other
+            // CI-only hook (round-6 S6-7); the capture build additionally opts in per
+            // run with ZEPHYR_CI_CAPTURE.
+#if CI_CAPTURE_HOOK
             var fixtureDir = Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null
                 ? Environment.GetEnvironmentVariable("ZEPHYR_THUMB_FIXTURE_DIR")
                 : null;
+#else
+            string? fixtureDir = null;
+#endif
             var generation = ++_thumbGeneration;
             Task.Run(() =>
             {

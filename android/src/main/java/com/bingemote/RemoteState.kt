@@ -231,7 +231,7 @@ class RemoteState(
                 // host - a spoofed same-name answer proves nothing. run() takes no
                 // token and no HTTP client at all (ZephyrRediscover.kt).
                 val plan = com.zephyr.remote.ZephyrRediscover.run(
-                    store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrPcName,
+                    store.zephyrHost, store.zephyrPort, store.zephyrPcName,
                     discover = { ZephyrClient.discoverPlayers(3000) })
                 withContext(Dispatchers.Main) {
                     when (plan) {

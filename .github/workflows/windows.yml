@@ -36,7 +36,7 @@ jobs:
           dotnet-version: 8.0.x
 
       - name: Publish helper exe (with the CI-only pairing hook)
-        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:DefineConstants=TRACE%3BPAIR_CODE_HOOK" -o windows/ZephyrVlcRemote/out
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/out
 
       # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
       - name: Install VLC (for the movies launch test)
@@ -57,7 +57,7 @@ jobs:
 
       - name: Render the helper window for layout review (CI only)
         run: |
-          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:DefineConstants=TRACE%3BWINDOW_SHOT_HOOK" -o windows/ZephyrVlcRemote/shot
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window.png"
           & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
 
@@ -136,7 +136,7 @@ jobs:
       - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
         if: always()
         timeout-minutes: 8
-        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:DefineConstants=TRACE%3BCI_CAPTURE_HOOK" -o windows/capture-out
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
       - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
         if: always()
         timeout-minutes: 6
@@ -165,6 +165,54 @@ jobs:
           $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           if (-not (Test-Path $installed)) { throw "installed exe missing: $installed" }
           Write-Output "installed: $installed"
+          # The per-user installer no longer adds firewall rules or the listen
+          # permission (round-6 N-8): run the app's own setup step headless (the CI
+          # runner is elevated, so the same code path the explained first-run
+          # elevation takes just runs without the prompt) and verify its shape.
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $fw = Start-Process $installed -ArgumentList '--install-firewall',$sid -PassThru -Wait -WindowStyle Hidden
+          if ($fw.ExitCode -ne 0) { throw "--install-firewall exit $($fw.ExitCode)" }
+          $tcp = netsh advfirewall firewall show rule name="Zephyr Player" verbose | Out-String
+          if ($tcp -notmatch 'LocalPort:\s*47823') { throw 'TCP rule missing 47823' }
+          if ($tcp -notmatch 'System') { throw 'TCP rule must scope program=System (http.sys attribution)' }
+          if ($tcp -notmatch 'Private') { throw 'TCP rule must be Private-only' }
+          if ($tcp -notmatch 'Local subnet|Localsubnet|localsubnet') { throw 'TCP rule must be LocalSubnet' }
+          $udp = netsh advfirewall firewall show rule name="Zephyr Player Discovery" verbose | Out-String
+          if ($udp -notmatch [regex]::Escape($installed.Replace('\','\')) -and $udp -notmatch 'ZephyrPlayer.exe') { throw 'UDP rule must scope the exe' }
+          $acl = netsh http show urlacl | Out-String
+          if ($acl -notmatch '47823') { throw 'URL ACL for 47823 missing' }
+          if ($acl -notmatch [regex]::Escape($sid)) { throw 'URL ACL must scope the installing user SID' }
+          Write-Output "firewall shape: TCP System/47823/Private/LocalSubnet, UDP exe/Private/LocalSubnet, ACL user SID - verified"
+          # Negative-hook test on the SHIPPED binary (round-6 G6): even with the capture
+          # env switch set, the shipped exe has no ci-capture-token compiled in, so the
+          # hook token must be rejected like any other unknown token.
+          $config = Join-Path $env:APPDATA 'ZephyrPlayer'
+          New-Item -ItemType Directory -Force $config | Out-Null
+          [IO.File]::WriteAllText((Join-Path $config 'paired.json'), '["local-smoke-token"]')
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $psi = [System.Diagnostics.ProcessStartInfo]::new($installed)
+          $psi.UseShellExecute = $false
+          $psi.Environment['ZEPHYR_CI_CAPTURE'] = '1'
+          $neg = [System.Diagnostics.Process]::Start($psi)
+          $ok = $false
+          for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer local-smoke-token' } -TimeoutSec 2 -UseBasicParsing
+              $ok = ($r.StatusCode -eq 200)
+            } catch {}
+          }
+          if (-not $ok) { throw 'shipped exe never answered with its real paired token' }
+          $negCode = 0
+          try {
+            $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer ci-capture-token' } -TimeoutSec 3 -UseBasicParsing
+            $negCode = [int]$r.StatusCode
+          } catch { if ($_.Exception.Response) { $negCode = [int]$_.Exception.Response.StatusCode } }
+          if ($negCode -ne 401) { throw "NEGATIVE HOOK FAILED: shipped exe answered ci-capture-token with $negCode, expected 401" }
+          Write-Output 'NEGATIVE HOOK: PASS - shipped exe rejects ci-capture-token even with ZEPHYR_CI_CAPTURE=1'
+          $neg.Kill()
+          Start-Sleep -Seconds 2
           # The installer's runasoriginaluser auto-launch can take a while (or
           # not fire headless); poll first, direct-launch as fallback. A
           # mutex-handoff exit (second instance yields to the first) is FINE:

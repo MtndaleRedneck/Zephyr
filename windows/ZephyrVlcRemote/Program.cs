@@ -35,6 +35,11 @@ internal static class Program
     /// racing at sign-in never fight over it.</summary>
     internal static string DataDir { get; private set; } = PickDataDir();
 
+    /// <summary>Test-only seam (InternalsVisibleTo): points the store at a temp folder so
+    /// save/retry/concurrency tests never touch the real profile. Not an env or argument
+    /// hook - production behavior is unchanged.</summary>
+    internal static void RedirectDataDirForTests(string dir) { DataDir = dir; }
+
     private static string PickDataDir()
     {
         var dir = Path.Combine(LocalRoot, "Zephyr VLC Remote");

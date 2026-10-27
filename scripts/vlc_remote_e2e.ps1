@@ -67,6 +67,13 @@ function Assert-HelperFirewallRules([string]$exePath) {
     $acl = netsh http show urlacl | Out-String
     Assert ($acl -match ':8492/') "the listen permission exists"
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    if ($acl -notmatch [regex]::Escape($sid)) {
+        # Diagnose, don't just fail: show the actual reservation this port got.
+        $blocks = $acl -split "\r?\n\r?\n"
+        $ours = ($blocks | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
+        Write-Host "8492 reservation block:"; Write-Host $ours
+        Write-Host "expected SID: $sid"
+    }
     Assert ($acl -match [regex]::Escape($sid)) "the listen permission names the installing user's SID, not Everyone"
     Assert ($acl -notmatch 'S-1-1-0') "the listen permission is not Everyone"
 }
@@ -98,7 +105,11 @@ Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
 $rule0 = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String
 Assert ($rule0 -notmatch 'Zephyr VLC Remote') "unelevated installer adds no firewall rule (the app's explained elevation owns it)"
 # The elevated setup, run from the installed exe (CI runners are already admin).
-$fw0 = Start-Process $installed -ArgumentList '--install-firewall' -Wait -PassThru
+# Pass the user's SID + data dir exactly as the unelevated parent does in production,
+# so the listen permission is scoped to the user even if the prompt's identity differs.
+$sid0 = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$data0 = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote'
+$fw0 = Start-Process $installed -ArgumentList '--install-firewall',$sid0,$data0 -Wait -PassThru
 Assert ($fw0.ExitCode -eq 0) "installed exe's elevated firewall setup succeeds"
 Assert-HelperFirewallRules $installed
 # Negative hook proof on the SHIPPED build: it was published without PAIR_CODE_HOOK,
@@ -136,7 +147,7 @@ Start-Sleep -Seconds 1
 # --- Part 1: the one-time elevated setup, run as-is (CI runners are already admin) ---
 Write-Host "== install-firewall =="
 # The helper is a WinExe, so `&` returns immediately and $LASTEXITCODE stays empty.
-$fw = Start-Process $exe -ArgumentList '--install-firewall' -Wait -PassThru
+$fw = Start-Process $exe -ArgumentList '--install-firewall',$sid0,$data0 -Wait -PassThru
 $fwExit = $fw.ExitCode
 Write-Host "install-firewall exit code: $fwExit"
 netsh advfirewall firewall show rule name="Zephyr VLC Remote"

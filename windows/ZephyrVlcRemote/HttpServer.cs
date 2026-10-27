@@ -485,10 +485,12 @@ internal sealed class HttpServer : IDisposable
         catch { }
     }
 
-    /// <summary>503 with a reason the phone can show, instead of a bare "internal" error.</summary>
+    /// <summary>503 with a reason the phone can show - plain words, never a raw .NET
+    /// exception message (the detail text is UI on the phone).</summary>
     private static void NoAudio(HttpListenerResponse res, VolumeControl.NoAudioDeviceException ex)
     {
-        Reply(res, 503, JsonSerializer.Serialize(new { error = "no audio device", detail = ex.Message }));
+        Program.Log("Volume control failed: " + ex.Message);
+        Reply(res, 503, JsonSerializer.Serialize(new { error = "no audio device", detail = "The PC's volume control failed. Try again in a moment." }));
     }
 
     private static string ReadBody(HttpListenerRequest req)

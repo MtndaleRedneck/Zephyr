@@ -5,12 +5,13 @@ import com.zephyr.remote.ZephyrClient
 /** Source routing shared by background media controls. Never falls back to another player. */
 internal class SelectedPlayback(private val store: Store) {
     private val source = store.selectedSource
-    private val host = if (source == Source.ZEPHYR) store.zephyrHost.ifBlank { store.host } else store.host
+    private val host = if (source == Source.ZEPHYR) store.zephyrHost else store.host
     private val port = if (source == Source.ZEPHYR) store.zephyrPort else store.vlcPort
     private val secret = if (source == Source.ZEPHYR) store.zephyrToken else store.vlcPassword
     private fun checkTarget() {
         check(store.selectedSource == source) { "Selected player changed" }
         check(source != Source.ZEPHYR || secret.isNotBlank()) { "Zephyr PC isn't paired" }
+        check(source != Source.ZEPHYR || host.isNotBlank()) { "Zephyr PC isn't paired" }
     }
     fun status(): VlcStatus {
         checkTarget()

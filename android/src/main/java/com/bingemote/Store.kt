@@ -153,10 +153,16 @@ class Store internal constructor(
         set(v) = prefs.edit().putString("moviesPhoneTreeUri", v).apply()
 
     /** Zephyr Player source identity (paired separately from the BingeMote helper; port distinct). */
-    /** Zephyr Player host; blank = same PC as the BingeMote helper (store.host). */
+    /** Zephyr Player host, written by pairing. Blank = no Zephyr PC paired. */
     var zephyrHost: String
         get() = prefs.getString("zephyrHost", "") ?: ""
         set(v) = prefs.edit().putString("zephyrHost", v).apply()
+
+    /** The paired Zephyr PC's address, or null when none is paired. NEVER falls back to
+     *  another host (round-6 N-3): the pairing token may only ever go to the address it
+     *  was paired with - "probably the same PC" is not authentication (S11). */
+    val zephyrEndpoint: String?
+        get() = zephyrHost.ifBlank { null }
 
     var zephyrPcName: String
         get() = prefs.getString("zephyrPcName", "") ?: ""
