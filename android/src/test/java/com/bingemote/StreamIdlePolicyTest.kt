@@ -40,7 +40,7 @@ class StreamIdlePolicyTest {
     @Test fun openConnectionCancelsEvenWhenStopped() {
         val p = StreamIdlePolicy()
         assertFalse(ticks(p, 4, STOPPED_OR_ENDED))
-        assertFalse(p.tick(true, open = 1, playerState = STOPPED_OR_ENDED)) // stream alive again
+        assertFalse(p.tick(true, openStreams = 1, playerState = STOPPED_OR_ENDED)) // stream alive again
         assertFalse(ticks(p, 4, STOPPED_OR_ENDED)) // streak restarted from zero
         assertTrue(p.tick(true, 0, STOPPED_OR_ENDED))
     }

@@ -13,20 +13,22 @@ import java.net.URL
 data class DiscoveredHelper(val host: String, val port: Int, val name: String)
 
 /**
- * Client for the BingeMote Windows helper: mouse, scroll, zoom and keyboard over LAN HTTP.
+ * Client for the Zephyr VLC Remote Windows helper: mouse, scroll, zoom and keyboard over LAN HTTP.
+ * It only ever talks the Zephyr VLC Remote identity (port 8491 discovery / 8492 HTTP),
+ * so a BingeMote install on the same PC is never discovered or driven by this app.
  * Every request carries the pairing token. Pairing trades a one-time 6-digit code
  * (shown on the PC) for the token. HTTP is not encrypted. Use only on a trusted private network;
  * a device on that network could observe the token and input.
  */
 object HelperClient {
-    const val DEFAULT_PORT = 8488
-    const val DISCOVERY_PORT = 8489
+    const val DEFAULT_PORT = 8492 // Zephyr VLC Remote HTTP (BingeMote keeps 8488)
+    const val DISCOVERY_PORT = 8491 // Zephyr VLC Remote discovery (BingeMote keeps 8489)
     private const val DISCOVER_MAGIC = "BINGEMOTE_DISCOVER_V1"
-    private const val REPLY_MAGIC = "BINGEMOTE_HERE_V1"
+    private const val REPLY_MAGIC = "ZEPHYR_VLC_REMOTE_HERE_V1"
 
     class Unreachable(val msg: String) : Exception(msg)
     /** Shown to the user. The raw socket text ("failed to connect to /192.168.1.5 (port 8488) after 2500ms") used to leak into Movies. */
-    private const val NO_PC = "Can't reach BingeMote on the PC. Check that the PC is on and BingeMote is open."
+    private const val NO_PC = "Can't reach Zephyr VLC Remote on the PC. Check that the PC is on and Zephyr VLC Remote is open."
     class BadToken(val msg: String) : Exception(msg)
     class BadPairCode(val msg: String) : Exception(msg)
     /** The PC could not be connected to at all (off, sleeping, new address). */
@@ -39,7 +41,7 @@ object HelperClient {
     /** One shared worker for fire-and-forget calls (button release on background/leave) -
      * replaces ad-hoc `Thread {}` spawns that piled up one executor per gesture. */
     val io: java.util.concurrent.ExecutorService = java.util.concurrent.Executors.newSingleThreadExecutor { r ->
-        Thread(r, "bingemote-io").apply { isDaemon = true }
+        Thread(r, "vlc-remote-io").apply { isDaemon = true }
     }
 
     private fun post(host: String, port: Int, path: String, body: JSONObject, token: String?, timeoutMs: Int = 5000) {
@@ -50,7 +52,7 @@ object HelperClient {
             c.requestMethod = "POST"
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            if (token != null) c.setRequestProperty("X-BingeMote-Token", token)
+            if (token != null) c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             val bytes = body.toString().toByteArray(Charsets.UTF_8)
             c.outputStream.use { os: OutputStream -> os.write(bytes) }
             when (c.responseCode) {
@@ -78,7 +80,7 @@ object HelperClient {
         try {
             c.connectTimeout = timeoutMs
             c.readTimeout = timeoutMs
-            c.setRequestProperty("X-BingeMote-Token", token)
+            c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             when (c.responseCode) {
                 in 200..299 -> return JSONObject(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
                 else -> throw failure(c)
@@ -106,8 +108,8 @@ object HelperClient {
                 ?.takeIf { it.isNotBlank() }
         } catch (e: Exception) { null }
         if (detail != null) return Unreachable(detail)
-        if (code == 404) return Unreachable("BingeMote PC is too old for this app.")
-        return Unreachable("BingeMote PC answered with error $code.")
+        if (code == 404) return Unreachable("Zephyr VLC Remote on the PC is too old for this app.")
+        return Unreachable("Zephyr VLC Remote on the PC answered with error $code.")
     }
 
     /** Let OkHttp pool the socket (keep-alive); disconnect() forced a fresh TCP handshake on every
@@ -167,7 +169,7 @@ object HelperClient {
             c.requestMethod = "POST"
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            if (token != null) c.setRequestProperty("X-BingeMote-Token", token)
+            if (token != null) c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             c.outputStream.use { os: OutputStream -> os.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val text = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)
                 ?.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) } ?: ""
@@ -225,7 +227,7 @@ object HelperClient {
             when (c.responseCode) {
                 200 -> return parsePairJson(text)
                 401, 403 -> throw BadPairCode("Wrong code. Check the code on the PC and try again.")
-                429 -> throw BadPairCode("Too many tries. Restart BingeMote PC on the computer to pair again.")
+                429 -> throw BadPairCode("Too many tries. Restart Zephyr VLC Remote on the computer to pair again.")
                 else -> throw Unreachable("Pairing failed (error ${c.responseCode}).")
             }
         } catch (e: BadPairCode) { throw e }
@@ -263,7 +265,7 @@ object HelperClient {
             c.connectTimeout = 4000; c.readTimeout = 4000
             c.requestMethod = "POST"; c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            c.setRequestProperty("X-BingeMote-Token", token)
+            c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             if (c.responseCode !in 200..299) return null
             val text = c.inputStream.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) }
@@ -364,7 +366,7 @@ object HelperClient {
             c.connectTimeout = 1500; c.readTimeout = 5000
             c.requestMethod = "POST"; c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            c.setRequestProperty("X-BingeMote-Token", token)
+            c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             // Connect explicitly so a dead PC (connect timeout) is told apart from an error answer.
             try { c.connect() } catch (e: java.net.SocketTimeoutException) { throw ConnectTimeout(NO_PC) }
             c.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }

@@ -24,7 +24,7 @@ import kotlinx.coroutines.withContext
 /**
  * Pick the PC's movies folder by browsing instead of typing: walk into folders with a
  * tap, back out with "Up one folder", and confirm with "Select this folder".
- * Browsing asks the BingeMote app on the PC first, so it works with VLC closed
+ * Browsing asks the Zephyr VLC Remote app on the PC first, so it works with VLC closed
  * (drives > Users > ... > the folder). An older PC app without folder browsing falls
  * back to browsing through VLC, which needs VLC open.
  */

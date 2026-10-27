@@ -56,7 +56,7 @@ class LiveWs(private val host: String, private val port: Int, private val token:
         val req = try {
             Request.Builder()
                 .url("ws://$host:$port/ws")
-                .header("X-BingeMote-Token", token)
+                .header("X-Zephyr-VLC-Remote-Token", token)
                 .build()
         } catch (e: Exception) { return } // a malformed saved host must never crash the screen
         ws = client.newWebSocket(req, object : WebSocketListener() {

@@ -26,7 +26,10 @@ namespace ZephyrPlayer.Tests
             });
             thread.SetApartmentState(ApartmentState.STA);
             thread.Start();
-            Assert.True(thread.Join(30000), "Skip-pair STA test did not finish");
+            // LibVLC init on a loaded CI runner can sit in device contention for tens of
+            // seconds (several STA suites run at once); the assertion is about the layout,
+            // not the clock, so the guard only catches a genuine hang.
+            Assert.True(thread.Join(90000), "Skip-pair STA test did not finish");
             try { Directory.Delete(dir, true); } catch { }
             if (error != null) throw new Exception("Skip-pair UI test failed", error);
         }

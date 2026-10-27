@@ -59,7 +59,7 @@ class Store(context: Context) {
         set(v) = prefs.edit().putInt("vlcPort", v).apply()
 
     var helperPort: Int
-        get() = prefs.getInt("helperPort", 8488)
+        get() = prefs.getInt("helperPort", 8492) // Zephyr VLC Remote default
         set(v) = prefs.edit().putInt("helperPort", v).apply()
 
     /// Touchpad gain: 1.0 = raw finger movement. Range 0.5-2.0 in 0.1 steps (the steppers enforce it).
