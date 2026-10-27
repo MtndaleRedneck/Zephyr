@@ -55,9 +55,49 @@ Filename: "{app}\ZephyrVlcRemote.exe"; Flags: nowait skipifnotsilent runasorigin
 
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Zephyr VLC Remote Watchdog"" /F"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "delwatchdog"
-; Firewall note: the app's rules are program-scoped to {app}\ZephyrVlcRemote.exe, which
-; this uninstaller deletes - a rule for a missing program matches nothing, so the
-; leftover is inert. Deleting rules needs admin, which a per-user uninstall must not
-; demand as a surprise. The vlc.exe rule (also program-scoped, Private-only) is shared
-; with any co-installed BingeMote install and is deliberately left; the app's ownership
-; marker next to its data folder lets a future elevated step remove what it created.
+
+[Code]
+function InitializeSetup(): Boolean;
+var
+  I: Integer;
+begin
+  // The self-updater launches us a moment before its old helper copy has fully exited:
+  // give the single-instance mutex up to ~10 s to release instead of failing the update.
+  for I := 1 to 20 do
+  begin
+    if not CheckForMutexes('ZephyrVlcRemote.SingleInstance') then
+    begin
+      Result := True;
+      Exit;
+    end;
+    Sleep(500);
+  end;
+  // Still held after the grace period: let Inno's own AppMutex handling take over.
+  Result := True;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // Remove our firewall rules and the listen permission while the exe still exists.
+    // The TCP rule names program=System (http.sys owns the listener), so unlike the old
+    // exe-scoped rule it is NOT inert after the exe is gone - it must not be left
+    // behind. This needs one admin prompt; on a decline the leftover is a LocalSubnet,
+    // Private-only rule on an unused port plus the user's own URL ACL, and the app says
+    // so in its log the next time it runs elevated.
+    // Decline-safe: a cancelled prompt (or any failure) skips cleanup and the uninstall
+    // still completes; the leftover is a Private+LocalSubnet rule on an unused port plus
+    // the user's own URL ACL - accurately described in the comment below, not hidden.
+    if not ShellExec('runas', ExpandConstant('{app}\ZephyrVlcRemote.exe'), '--remove-firewall', '',
+      SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+      Log('firewall cleanup was declined or failed to start; rules left in place');
+  end;
+end;
+; Firewall note: the UDP discovery rule is program-scoped to {app}\ZephyrVlcRemote.exe
+; (inert once the exe is deleted, but removed anyway by the step above). The vlc.exe rule
+; (program-scoped, Private-only, LocalSubnet) may be shared with a co-installed BingeMote
+; install and is deliberately left; the app's ownership marker next to its data folder
+; lets a future elevated step remove what it created.

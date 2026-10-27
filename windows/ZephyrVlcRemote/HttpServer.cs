@@ -69,6 +69,13 @@ internal sealed class HttpServer : IDisposable
             }
 
             var path = req.Url?.AbsolutePath?.TrimEnd('/') ?? "";
+            // Broken pairing store (round-5/6): say so plainly instead of answering as if
+            // the phone were unpaired - the file is preserved and nothing here can succeed.
+            if (Program.StoreBroken)
+            {
+                Reply(res, 503, "{\"error\":\"store broken\",\"detail\":\"The PC's saved pairings could not be read. Pairing is off until that is fixed on the PC - see the Zephyr VLC Remote window.\"}");
+                return;
+            }
             switch (path)
             {
                 case "/ping":
@@ -192,7 +199,8 @@ internal sealed class HttpServer : IDisposable
         var ack = r.TryGetProperty("ack", out var ak) && ak.GetBoolean();
         if (ack)
         {
-            var a = AdoptGrant.Ack(phone, requestId, Program.SaveConfig);
+            AdoptGrant.Result a;
+            lock (Program.ConfigSaveLock) { a = AdoptGrant.Ack(phone, requestId, Program.SaveConfig); }
             if (a.Acked)
             {
                 Program.Log("Phone \"" + phone.Name + "\" stored the VLC password; its one-time fetch is spent.");
@@ -201,7 +209,8 @@ internal sealed class HttpServer : IDisposable
             else Reply(res, 409, "{\"error\":\"nothing to ack\"}");
             return;
         }
-        var result = AdoptGrant.Serve(phone, VlcSetup.ReadOrCreatePassword, requestId, DateTime.UtcNow, Program.SaveConfig);
+        AdoptGrant.Result result;
+        lock (Program.ConfigSaveLock) { result = AdoptGrant.Serve(phone, VlcSetup.ReadOrCreatePassword, requestId, DateTime.UtcNow, Program.SaveConfig); }
         if (result.Served)
         {
             if (!result.Replayed)
@@ -268,7 +277,9 @@ internal sealed class HttpServer : IDisposable
         catch (Exception ex)
         {
             // Transactional (round-5 B3): the save failed, so the in-memory add was rolled
-            // back and the code is NOT spent - he can try the same code again.
+            // back and the code is NOT spent - he can try the same code again. The typed
+            // name goes back too, so the retry pairs under the name he chose.
+            Program.PendingPhoneName = phoneName;
             Program.Log("Pairing could not be saved: " + ex.Message);
             Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"The pairing worked but could not be saved on the PC. Try the same code again in a moment.\"}");
             return;
@@ -299,15 +310,18 @@ internal sealed class HttpServer : IDisposable
             return;
         }
         var folder = JsonDocument.Parse(ReadBody(req)).RootElement.GetProperty("moviesFolder").GetString() ?? "";
-        var previous = Program.MoviesFolder;
-        Program.MoviesFolder = folder.Trim();
-        try { Program.SaveConfig(); }
-        catch (Exception ex)
+        lock (Program.ConfigSaveLock)
         {
-            Program.MoviesFolder = previous; // transactional: a refused write leaves no phantom
-            Program.Log("Movies folder could not be saved: " + ex.Message);
-            Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"That could not be saved on the PC. Try again in a moment.\"}");
-            return;
+            var previous = Program.MoviesFolder;
+            Program.MoviesFolder = folder.Trim();
+            try { Program.SaveConfig(); }
+            catch (Exception ex)
+            {
+                Program.MoviesFolder = previous; // transactional: a refused write leaves no phantom
+                Program.Log("Movies folder could not be saved: " + ex.Message);
+                Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"That could not be saved on the PC. Try again in a moment.\"}");
+                return;
+            }
         }
         Program.Log("Movies folder set from the phone: " + (Program.MoviesFolder.Length == 0 ? "(cleared)" : Program.MoviesFolder));
         Reply(res, 200, "{\"ok\":true}");

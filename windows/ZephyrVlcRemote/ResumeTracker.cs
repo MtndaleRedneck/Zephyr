@@ -22,6 +22,8 @@ internal static class ResumeTracker
     private static bool _pollerStarted;
     private static DateTime _lastSave = DateTime.MinValue;
     private static string? _currentFile;
+    private static bool _dirty;
+    private static bool _saveSuppressed;
 
     // Settled windows: under a minute watched is not worth asking about; the last couple
     // of minutes counts as finished.
@@ -44,7 +46,7 @@ internal static class ResumeTracker
 
     public static void Clear(string file)
     {
-        lock (Gate) { ByFile.Remove(file); SaveLocked(); }
+        lock (Gate) { if (ByFile.Remove(file)) _dirty = true; SaveLocked(); }
     }
 
     /// <summary>A phone-launched play hands the web-remote password over; remember it and
@@ -67,7 +69,23 @@ internal static class ResumeTracker
                 if (map != null) lock (Gate) { foreach (var kv in map) ByFile[kv.Key] = kv.Value; }
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            // An unreadable places file is preserved, not silently erased by the next
+            // save: move it aside so the tracker starts fresh. If it cannot be moved,
+            // never write over it - the poller keeps running but stays read-only.
+            try
+            {
+                var aside = StorePath + ".unreadable-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                File.Move(StorePath, aside);
+                Program.Log("Saved playback places could not be read (" + ex.GetType().Name + "); moved aside to " + aside + ".");
+            }
+            catch
+            {
+                _saveSuppressed = true;
+                Program.Log("Saved playback places could not be read (" + ex.GetType().Name + ") and could not be moved aside; no resume data will be written over it.");
+            }
+        }
         var pw = VlcSetup.EffectivePassword();
         if (pw != null && pw.Length > 0)
         {
@@ -101,7 +119,9 @@ internal static class ResumeTracker
         if (Process.GetProcessesByName("vlc").Length == 0)
         {
             // VLC closed: forget the "current" file (its last place is already saved).
-            lock (Gate) { _currentFile = null; SaveLocked(); }
+            // Save only when something actually changed - not every 5 s while VLC is
+            // closed, which would mean thousands of identical writes a day.
+            lock (Gate) { _currentFile = null; if (_dirty) SaveLocked(); }
             return;
         }
         var status = await Get(port, pw, "status.json");
@@ -117,6 +137,7 @@ internal static class ResumeTracker
         {
             _currentFile = file;
             ByFile[file] = new Entry { Position = t.GetDouble(), Length = l.GetDouble() };
+            _dirty = true;
             if (DateTime.UtcNow - _lastSave > TimeSpan.FromSeconds(30)) SaveLocked();
         }
     }
@@ -162,6 +183,7 @@ internal static class ResumeTracker
 
     private static void SaveLocked()
     {
+        if (_saveSuppressed || !_dirty) return;
         try
         {
             var path = StorePath;
@@ -176,6 +198,7 @@ internal static class ResumeTracker
                 else File.Move(tmp, path);
             }
             _lastSave = DateTime.UtcNow;
+            _dirty = false;
         }
         catch { }
     }

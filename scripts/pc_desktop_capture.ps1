@@ -56,6 +56,18 @@ public static class ZWU32 {
         }, IntPtr.Zero);
         return found;
     }
+    public static System.Collections.Generic.List<IntPtr> FindAllVisible(uint pid) {
+        var list = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows((h, l) => {
+            GetWindowThreadProcessId(h, out uint wp);
+            if (wp != pid || !IsWindowVisible(h)) return true;
+            var sb = new System.Text.StringBuilder(256);
+            GetWindowTextW(h, sb, 256);
+            if (sb.Length > 0) list.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
 }
 '@
 $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
@@ -344,8 +356,14 @@ StopZephyr
 # smaller than the screen and the cursor parked at (5,5), provably outside it.
 [ZWU32]::SetCursorPos(5, 5) | Out-Null
 $pBar = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
-$hwBar = Wait-MainWindow $pBar 15
-[ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
+$hwHome = Wait-MainWindow $pBar 15
+# /control/play opens a SEPARATE player window (App.xaml.cs _player.Show()); the home
+# window is the process's MainWindowHandle and must NOT be topmost - put it at the
+# BOTTOM of the z-order so the player window paints above it in the captures.
+[ZWU32]::SetWindowPos($hwHome, [System.IntPtr]::new(1), 100, 100, 800, 500, 0) | Out-Null
+# The first-run pairing window covers the video: close it like a user would.
+$hwPair = [ZWU32]::FindByTitle($pBar.Id, 'Zephyr Player - Pair your phone')
+if ($hwPair -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($hwPair, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
 $hdr = @{ Authorization = "Bearer ci-capture-token" }
 # The control server comes up after the window exists: wait for a real answer
 # instead of POSTing into a closed port and silently capturing the home window.
@@ -357,12 +375,28 @@ foreach ($i in 1..40) {
 if (-not $ctrlUp) { throw "control server did not come up for the phone-start bar proof" }
 $playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
 if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
-Start-Sleep -Seconds 2
+# Find the player window: any visible titled window of this process that is NOT the
+# home window (the pairing window was closed above).
+$hwBar = [System.IntPtr]::Zero
+foreach ($i in 1..40) {
+    foreach ($h in [ZWU32]::FindAllVisible($pBar.Id)) {
+        if ($h -ne $hwHome -and $h -ne $hwPair) { $hwBar = $h; break }
+    }
+    if ($hwBar -ne [System.IntPtr]::Zero) { break }
+    Start-Sleep -Milliseconds 500
+}
+if ($hwBar -eq [System.IntPtr]::Zero) { throw "phone-start bar proof: no player window opened after /control/play" }
+# A 200 POST means the request was accepted, not that frames flow: poll for REAL video
+# pixels (the working --play= sections do the same) before judging the bar.
+$videoPx = 0
+foreach ($i in 1..40) {
+    CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png" | Out-Null
+    $videoPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.15 0.80
+    if ($videoPx -ge 2000) { break }
+    Start-Sleep -Milliseconds 500
+}
 $szBar1 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
-# Fail loudly when playback never started (home window captured) instead of
-# writing three identical NOT PROVEN captures.
-$videoPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.15 0.80
-if ($videoPx -lt 2000) { throw "phone-start bar proof captured no video ($videoPx px) - playback did not start" }
+if ($videoPx -lt 2000) { throw "phone-start bar proof captured no video in the player window ($videoPx px after ~20s) - playback did not start" }
 Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
 $szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
