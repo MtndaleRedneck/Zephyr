@@ -48,8 +48,18 @@ if [ "${SUITE:-full}" = "badtoken-ui" ]; then
     grep -q '^OK (' "instrument-results/$(basename $1).txt" || { echo "SUITE FAIL: $(basename $1)"; FAIL=1; }
     sleep 2
   }
-  BT_CODE_A="$PAIR_CODE"
-  if [ -z "$BT_CODE_A" ]; then echo "wire host never came up"; exit 1; fi
+  # The pair card has no port field: the app pairs on its product default
+  # (Store.kt zephyrPort=47823). Run the wire host on that REAL default so the
+  # UI flow needs no prefs seeding at all; the workflow-started host on 47999
+  # is replaced for this suite.
+  WIRE_PORT=47823
+  pkill -f ZephyrPlayer.HeadlessHost || true
+  sleep 2
+  : > /tmp/wire-host.log
+  nohup dotnet run --project windows/ZephyrPlayer.HeadlessHost -c Release --no-build -- "$WIRE_PORT" /tmp/zephyr-wire-lib > /tmp/wire-host.log 2>&1 &
+  for i in $(seq 1 30); do grep -q PAIRCODE /tmp/wire-host.log && break; sleep 1; done
+  BT_CODE_A=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log || true)
+  if [ -z "$BT_CODE_A" ]; then echo "wire host (47823) never came up"; exit 1; fi
   bt_run com.zephyr.remote.ZephyrUiPairTest "$BT_CODE_A"
   # Baseline first: if the real-UI pairing did not complete, later classes can
   # prove nothing - stop instead of running them.
