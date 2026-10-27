@@ -111,6 +111,11 @@ class RemoteState(
     private var failures = 0
     private var helperFailures = 0
     private var rediscovering = false
+    private var helperLastRediscoverAt = 0L
+    /** S11b: the saved helper appears at a NEW address. The saved token never
+     *  follows a discovered host; the hero offers the safe re-pair path instead.
+     *  Cleared on a good helper poll and on source switches. */
+    var helperMovedTo by mutableStateOf<String?>(null); private set
     private var closedPolls = 0
     private var lastTitle: String? = null
     private var lastLengthSec: Long = -1
@@ -151,7 +156,7 @@ class RemoteState(
         MediaControls.sync(app, store)
         status = null; winVolume = null; pickedSubtitle = null
         muted = false; vlcClosed = false; vlcRefused = false
-        helperDown = false; helperNotice = false; unpaired = false
+        helperDown = false; helperNotice = false; helperMovedTo = null; unpaired = false
         failures = 0; connecting = true; unreachable = true
         retry()
     }
@@ -289,6 +294,7 @@ class RemoteState(
                 helperDown = false
                 helperDownAt = 0L
                 helperNotice = false
+                helperMovedTo = null
                 unpaired = false
                 // Trust the phone's own taps briefly: the poll doesn't overwrite a volume
                 // change that is still landing (that overwrite made the number jump back).
@@ -345,30 +351,37 @@ class RemoteState(
         }
     }
 
-    /** The laptop's IP changes with DHCP: ask the network for the helper and update the address.
-     *  VLC path only - never broadcast for a BingeMote helper while Zephyr is selected
-     *  or VLC was never set up (teardown A1). */
+    /** The laptop's IP changes with DHCP: ask the network for the helper. S11b
+     *  (security-settled): the saved helper token is NEVER sent to a discovered
+     *  host - the ping already discloses it, and the VLC password would follow.
+     *  Only the pairing-learned SAVED endpoint may see the token; a discovered
+     *  helper earns a notice, and re-pairing is the only safe way to move.
+     *  VLC path only - never broadcast while Zephyr is selected or VLC was
+     *  never set up (teardown A1). */
     fun rediscover() {
         if (store.selectedSource != Source.VLC || store.helperToken.isBlank()) return
         if (rediscovering) return
+        // Same 60 s backoff as the Zephyr path: a dead PC must not mean a
+        // broadcast every failed poll (round-4b).
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - helperLastRediscoverAt < 60_000) return
+        helperLastRediscoverAt = nowMs
         rediscovering = true
         scope.launch(Dispatchers.IO) {
             try {
-                // The saved address usually still answers (VLC was the one down): one quick ping first.
+                // The saved address usually still answers (VLC was the one down):
+                // one quick ping first. Pairing-learned endpoint - the one place
+                // the token may go.
                 if (HelperClient.ping(store.host, store.helperPort, store.helperToken)) {
-                    failures = 0
+                    withContext(Dispatchers.Main) { failures = 0 }
                     return@launch
                 }
                 val found = HelperClient.discover(3000)
-                // The pairing token is the PC's identity; its name is only a label.
-                val match = found.firstOrNull { HelperClient.ping(it.host, it.port, store.helperToken) }
-                if (match != null) {
-                    withContext(Dispatchers.Main) {
-                        store.host = match.host
-                        store.helperPort = match.port
-                        publishAddress(match.host, match.port, store.helperToken)
-                        failures = 0
+                when (val plan = HelperRediscover.plan(store.host, store.helperPort, found)) {
+                    is HelperRediscover.Plan.MovedNotice -> withContext(Dispatchers.Main) {
+                        helperMovedTo = plan.name.ifBlank { plan.host }
                     }
+                    else -> { /* saved endpoint seen or nothing: the poll recovers on its own */ }
                 }
             } finally {
                 rediscovering = false
@@ -405,7 +418,7 @@ class RemoteState(
                         if (nxt.kind == "volume") { Diag.volumeCoalesced.incrementAndGet(); c = nxt }
                         else { pushback = nxt; break }
                     }
-                } else if (System.currentTimeMillis() - c.ts > CmdPolicy.EXPIRY_MS) {
+                } else if (c.kind != "mute" && System.currentTimeMillis() - c.ts > CmdPolicy.EXPIRY_MS) {
                     Diag.cmdsExpired.incrementAndGet()
                     continue
                 }

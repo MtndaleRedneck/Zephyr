@@ -316,12 +316,19 @@ fun UpdateHost(store: Store) {
             }
         }
         val current = BuildConfig.VERSION_NAME
-        val info = withContext(Dispatchers.IO) { Updater.check(current) } ?: return@LaunchedEffect
-        // Stamp only after an answered check: an offline launch must not skip the
-        // next 6 hours of auto-checks (S10).
-        store.lastUpdateCheckAt = System.currentTimeMillis()
-        if (info.versionName == store.skippedUpdate) return@LaunchedEffect
-        updateUi = UpdateUi.Offer(info)
+        // Stamp every ANSWERED check - newer, up to date AND no release (NEW-1:
+        // "up to date" returned null, so the stamp never landed and the GitHub
+        // API was hit on every launch). Only an unavailable answer leaves the
+        // throttle open so the next launch retries (S10).
+        when (val outcome = withContext(Dispatchers.IO) { Updater.checkDetailed(current) }) {
+            is Updater.CheckOutcome.Newer -> {
+                store.lastUpdateCheckAt = System.currentTimeMillis()
+                if (outcome.info.versionName != store.skippedUpdate) updateUi = UpdateUi.Offer(outcome.info)
+            }
+            Updater.CheckOutcome.UpToDate, Updater.CheckOutcome.NoRelease ->
+                store.lastUpdateCheckAt = System.currentTimeMillis()
+            Updater.CheckOutcome.Unavailable -> { /* offline: retry next launch */ }
+        }
     }
 
     // The Settings "Check for updates" button drops its find here; a manual ask always

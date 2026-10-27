@@ -10,6 +10,7 @@ import android.content.Intent
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.IBinder
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -137,6 +138,9 @@ class MediaControlsService : Service() {
     // S8: when a session goes inactive the foreground notification must not linger
     // over a dead player; a successful poll re-foregrounds via the normal path.
     private var controlsDropped = false
+    // Teardown 1b: stopSelf after a few minutes of nothing playing (unreachable
+    // PC or a player that only reports "stopped"). Paused sessions stay alive.
+    private val idlePolicy = ControlsIdlePolicy()
 
     private suspend fun pollOnce() {
         val store = cachedStore
@@ -153,6 +157,7 @@ class MediaControlsService : Service() {
             if (failures >= 5) {
                 session?.isActive = false; pollDelayMs = 30_000L
                 if (!controlsDropped) { controlsDropped = true; stopForeground(STOP_FOREGROUND_REMOVE) }
+                if (idlePolicy.onFailure(SystemClock.elapsedRealtime(), failures)) { stopSelf(); return }
             }
             return
         } catch (e: Exception) {
@@ -161,12 +166,14 @@ class MediaControlsService : Service() {
             if (failures >= 5) {
                 session?.isActive = false; pollDelayMs = 30_000L
                 if (!controlsDropped) { controlsDropped = true; stopForeground(STOP_FOREGROUND_REMOVE) }
+                if (idlePolicy.onFailure(SystemClock.elapsedRealtime(), failures)) { stopSelf(); return }
             }
             return
         }
         failures = 0
         pollDelayMs = 2000L
         controlsDropped = false
+        if (idlePolicy.onSuccess(SystemClock.elapsedRealtime(), st.state)) { stopSelf(); return }
         val s = session ?: return
         val playing = st.playing
         lastPlaying = playing
