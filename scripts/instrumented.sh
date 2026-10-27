@@ -40,7 +40,7 @@ if [ "${SUITE:-full}" = "badtoken-ui" ]; then
     echo "=== $1 ==="
     adb logcat -c
     adb shell am instrument -w -e class "$1" -e wire_port "$WIRE_PORT" -e pair_code "$2" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/$(basename $1).txt"
-    adb logcat -d -s BMSeek:I AndroidRuntime:E > "instrument-results/$(basename $1).logcat.txt" 2>/dev/null || true
+    adb logcat -d -s BMSeek:I AndroidRuntime:E ActivityManager:W > "instrument-results/$(basename $1).logcat.txt" 2>/dev/null || true
     for f in $(adb shell ls /sdcard/badtoken-ui-*.png /sdcard/badtoken-ui-*.xml 2>/dev/null); do
       adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true
       adb shell rm -f "$f"
@@ -51,6 +51,9 @@ if [ "${SUITE:-full}" = "badtoken-ui" ]; then
   BT_CODE_A="$PAIR_CODE"
   if [ -z "$BT_CODE_A" ]; then echo "wire host never came up"; exit 1; fi
   bt_run com.zephyr.remote.ZephyrUiPairTest "$BT_CODE_A"
+  # Baseline first: if the real-UI pairing did not complete, later classes can
+  # prove nothing - stop instead of running them.
+  if [ "$FAIL" -ne 0 ]; then echo "baseline pairing failed - stopping targeted suite"; adb shell wm size reset; adb shell wm density reset; exit 1; fi
   # Revoke: restarting the host drops every pairing server-side (the same 401
   # the PC's remove-phone produces) and mints a fresh one-shot code.
   pkill -f ZephyrPlayer.HeadlessHost || true

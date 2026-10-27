@@ -249,23 +249,47 @@ private fun launchToZephyrSetup(device: UiDevice, pkg: String) {
 /** Evidence is captured BEFORE assertions, so a failure still ships the screen.
  *  Captures only ever run on the main/settings screens: the one-shot pair code
  *  is cleared with the pair form (ZephyrSetupScreen clears it on success), and
- *  the bearer token is never displayed or logged by the app. */
+ *  the bearer token is never displayed or logged by the app. The hierarchy dump
+ *  goes through the ACTIVE UiAutomation connection - a shell `uiautomator dump`
+ *  crashes inside a UiAutomator session ("UiAutomationService already
+ *  registered!", run 40579926962 logcat). */
 private fun capture(device: UiDevice, tag: String) {
     device.executeShellCommand("screencap -p /sdcard/badtoken-ui-$tag.png")
-    device.executeShellCommand("uiautomator dump /sdcard/badtoken-ui-$tag.xml")
+    try {
+        device.dumpWindowHierarchy(java.io.File("/sdcard/badtoken-ui-$tag.xml"))
+    } catch (e: Exception) { /* hierarchy is best-effort; the screenshot stands */ }
+}
+
+/** A system ANR overlay steals window focus and silently blanks every
+ * findObject (run 40579926962). Dismiss it ONCE via "Wait"; if it persists the
+ * emulator is sick and the class stops instead of dismissing in a loop. */
+private fun requireCleanScreen(device: UiDevice, tag: String) {
+    val anr = device.findObject(By.textContains("isn't responding")) ?: return
+    device.findObject(By.text("Wait"))?.click()
+    Thread.sleep(2000)
+    if (device.findObject(By.textContains("isn't responding")) != null) {
+        capture(device, "$tag-sick-env")
+        fail("persistent system ANR overlay - sick emulator, stopping ($tag)")
+    }
 }
 
 /** Drive the real pair card (ZephyrPairCard): address + the PC's one-shot code,
  * then tap Pair. Success runs the app's own save path (fail-closed Store write)
  * - the token is app-owned, no cross-process injection anywhere in this suite. */
-private fun pairThroughUi(device: UiDevice, code: String) {
+private fun pairThroughUi(device: UiDevice, code: String, tag: String) {
+    requireCleanScreen(device, tag)
     // Step 1 -> 2 on a fresh install; already at step 2 when re-pairing.
-    device.wait(Until.findObject(By.text("Set up Zephyr Player")), 10_000)
+    if (device.wait(Until.findObject(By.text("Set up Zephyr Player")), 10_000) == null) {
+        capture(device, "$tag-nosetup")
+        fail("Zephyr setup screen never appeared")
+    }
     device.findObject(By.text("Zephyr Player is open"))?.click()
-    val card = device.wait(Until.findObject(By.text("Pair with the Zephyr Player")), 10_000)
-    assertNotNull("pair card never appeared", card)
+    if (device.wait(Until.findObject(By.text("Pair with the Zephyr Player")), 10_000) == null) {
+        capture(device, "$tag-nocard")
+        fail("pair card never appeared")
+    }
     val fields = device.findObjects(By.clazz("android.widget.EditText"))
-    assertTrue("pair card fields not found (${fields.size})", fields.size >= 2)
+    if (fields.size < 2) { capture(device, "$tag-nofields"); fail("pair card fields not found (${fields.size})") }
     fields[0].text = WIRE_HOST  // "PC address"
     fields[1].text = code       // "6-digit code"
     device.findObject(By.text("Pair")).click()
@@ -285,7 +309,7 @@ class ZephyrUiPairTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         launchToZephyrSetup(device, ctx.packageName)
-        pairThroughUi(device, code)
+        pairThroughUi(device, code, "paired")
 
         val pill = device.wait(Until.findObject(By.text("Connected")), 20_000)
         capture(device, "paired")
@@ -307,6 +331,7 @@ class ZephyrUiRevokedTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         launchApp(device, ctx.packageName)
+        requireCleanScreen(device, "revoked")
 
         val notice = device.wait(Until.findObject(By.textContains(PAIR_AGAIN_MARKER)), 30_000)
         capture(device, "revoked")
@@ -334,6 +359,7 @@ class ZephyrUiRepairedTest {
         // Cold start (fresh per-class session) with the revoked pairing: the
         // notice must be showing before we touch anything.
         launchApp(device, ctx.packageName)
+        requireCleanScreen(device, "repair-before")
         val before = device.wait(Until.findObject(By.textContains(PAIR_AGAIN_MARKER)), 30_000)
         capture(device, "repair-before")
         assertNotNull("no pair-again notice before re-pair - recovery would prove nothing", before)
@@ -344,7 +370,7 @@ class ZephyrUiRepairedTest {
         assertNotNull("Settings Zephyr PC entry not found", label)
         label.click()
         device.findObject(By.text("Start over with a new code"))?.click()
-        pairThroughUi(device, code)
+        pairThroughUi(device, code, "repair")
 
         // Re-pair must have COMPLETED (setup flow landed back on Settings) for
         // anything below to count as recovery.
