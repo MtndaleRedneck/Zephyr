@@ -43,10 +43,10 @@ Type: files; Name: "{userdesktop}\Zephyr VLC Remote Helper.lnk"
 ; permission: no surprise admin prompt on first run. Old 1.x rule name removed too.
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr VLC Remote Helper"""; Flags: runhidden waituntilterminated
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr VLC Remote"""; Flags: runhidden waituntilterminated
-Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr VLC Remote"" dir=in action=allow protocol=TCP localport=8488 profile=private"; Flags: runhidden waituntilterminated
-Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr VLC Remote"" dir=in action=allow protocol=UDP localport=8489 profile=private"; Flags: runhidden waituntilterminated
-Filename: "netsh"; Parameters: "http delete urlacl url=http://+:8488/"; Flags: runhidden waituntilterminated
-Filename: "netsh"; Parameters: "http add urlacl url=http://+:8488/ sddl=D:(A;;GX;;;WD)"; Flags: runhidden waituntilterminated
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr VLC Remote"" dir=in action=allow protocol=TCP localport=8492 profile=private"; Flags: runhidden waituntilterminated
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr VLC Remote"" dir=in action=allow protocol=UDP localport=8491 profile=private"; Flags: runhidden waituntilterminated
+Filename: "netsh"; Parameters: "http delete urlacl url=http://+:8492/"; Flags: runhidden waituntilterminated
+Filename: "netsh"; Parameters: "http add urlacl url=http://+:8492/ sddl=D:(A;;GX;;;WD)"; Flags: runhidden waituntilterminated
 Filename: "{app}\ZephyrVlcRemote.exe"; Description: "Open Zephyr VLC Remote"; Flags: nowait postinstall skipifsilent
 ; After a silent update, reopen the app for him as the signed-in user (not elevated).
 Filename: "{app}\ZephyrVlcRemote.exe"; Flags: nowait skipifnotsilent runasoriginaluser
@@ -54,4 +54,4 @@ Filename: "{app}\ZephyrVlcRemote.exe"; Flags: nowait skipifnotsilent runasorigin
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Zephyr VLC Remote Watchdog"" /F"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "delwatchdog"
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr VLC Remote"""; Flags: runhidden waituntilterminated; RunOnceId: "delrule"
-Filename: "netsh"; Parameters: "http delete urlacl url=http://+:8488/"; Flags: runhidden waituntilterminated; RunOnceId: "delacl"
+Filename: "netsh"; Parameters: "http delete urlacl url=http://+:8492/"; Flags: runhidden waituntilterminated; RunOnceId: "delacl"

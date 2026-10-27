@@ -494,7 +494,16 @@ internal sealed class DiscoveryResponder : IDisposable
 
     public void Start()
     {
-        _udp = new UdpClient(Program.DiscoveryPort) { EnableBroadcast = true };
+        // Exclusive claim on 8491: BingeMote keeps 8489 and the Player keeps 8490, and
+        // nothing else may co-bind ours. ICMP port-unreachable must not kill the loop.
+        var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp)
+        {
+            ExclusiveAddressUse = true,
+            EnableBroadcast = true,
+        };
+        try { sock.IOControl(-1744830452 /* SIO_UDP_CONNRESET */, new byte[] { 0 }, null); } catch { /* non-Windows */ }
+        sock.Bind(new IPEndPoint(IPAddress.Any, Program.DiscoveryPort));
+        _udp = new UdpClient { Client = sock };
         _running = true;
         _thread = new Thread(Loop) { IsBackground = true };
         _thread.Start();
