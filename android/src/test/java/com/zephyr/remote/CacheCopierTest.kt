@@ -37,8 +37,9 @@ class CacheCopierTest {
     @Test fun freeSpaceIsEnforcedAsBytesGrow() {
         val d = dir(); val tmp = File(d, "x.part"); val fin = File(d, "x")
         var free = 10_000_000L
-        // 1 MB of data; the floor is 5 MB and the "disk" drains as bytes are written.
-        val data = ByteArray(1024 * 1024) { 7 }
+        // 9 MB of data; the floor is 5 MB and the "disk" drains as bytes are written,
+        // so a copy this size can only finish by breaching the floor mid-copy.
+        val data = ByteArray(9 * 1024 * 1024) { 7 }
         try {
             CacheCopier.copy({ data.inputStream() }, tmp, fin,
                 { free - tmp.length().coerceAtLeast(0) }, 1L shl 33, 5_000_000)

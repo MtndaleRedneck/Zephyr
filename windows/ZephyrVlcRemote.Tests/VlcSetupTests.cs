@@ -30,21 +30,21 @@ public class VlcSetupTests : IDisposable
     [Fact]
     public void UnchangedSettingsAreANoOpNotAPendingWrite()
     {
-        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=pw-1");
-        var r = VlcSetup.WriteVlcrc("pw-1");
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=pw-1-long-password");
+        var r = VlcSetup.WriteVlcrc("pw-1-long-password");
         using var doc = JsonDocument.Parse(r);
         Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
         // A running VLC read exactly this vlcrc at startup, so nothing may be deferred:
         // a false pending would tell the owner a reopen is required when control works now.
         Assert.False(VlcSetup.Pending);
-        Assert.Equal("pw-1", VlcSetup.ReadVlcrcValue("http-password"));
+        Assert.Equal("pw-1-long-password", VlcSetup.ReadVlcrcValue("http-password"));
     }
 
     [Fact]
     public void ReusingThePasswordAlsoEnsuresInterfaceAndBind()
     {
-        WriteVlcrc("http-password=pw-1"); // a vlcrc can carry a password with the interface off
-        var r = VlcSetup.WriteVlcrc("pw-1");
+        WriteVlcrc("http-password=pw-1-long-password"); // a vlcrc can carry a password with the interface off
+        var r = VlcSetup.WriteVlcrc("pw-1-long-password");
         using var doc = JsonDocument.Parse(r);
         Assert.True(doc.RootElement.GetProperty("ok").GetBoolean());
         Assert.Equal("http", VlcSetup.ReadVlcrcValue("extraintf"));
@@ -58,7 +58,7 @@ public class VlcSetupTests : IDisposable
     {
         Directory.CreateDirectory(Path.GetDirectoryName(VlcrcPath)!);
         if (File.Exists(VlcrcPath)) File.Delete(VlcrcPath);
-        WriteVlcrc("http-password=pw-1");
+        WriteVlcrc("http-password=pw-1-long-password");
         Assert.False(VlcSetup.Configured); // no interface, no bind: never a green attestation
     }
 }
