@@ -307,7 +307,6 @@ fun UpdateHost(store: Store) {
     LaunchedEffect(Unit) {
         // Once per 6 hours, not per activity recreation (teardown 9c).
         if (System.currentTimeMillis() - store.lastUpdateCheckAt < 6L * 60 * 60 * 1000) return@LaunchedEffect
-        store.lastUpdateCheckAt = System.currentTimeMillis()
         // A leftover APK from an already-installed update is deleted on launch (teardown 9b):
         // verify() rejects anything not newer than the running version.
         withContext(Dispatchers.IO) {
@@ -318,6 +317,9 @@ fun UpdateHost(store: Store) {
         }
         val current = BuildConfig.VERSION_NAME
         val info = withContext(Dispatchers.IO) { Updater.check(current) } ?: return@LaunchedEffect
+        // Stamp only after an answered check: an offline launch must not skip the
+        // next 6 hours of auto-checks (S10).
+        store.lastUpdateCheckAt = System.currentTimeMillis()
         if (info.versionName == store.skippedUpdate) return@LaunchedEffect
         updateUi = UpdateUi.Offer(info)
     }
