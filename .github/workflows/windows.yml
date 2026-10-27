@@ -411,20 +411,36 @@ jobs:
           # reservation to survive; the log is printed either way for inspection.
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
           $unins = Join-Path (Split-Path $installed) 'unins000.exe'
           if (-not (Test-Path $unins)) { throw "uninstaller missing: $unins" }
           $unLog = "$env:RUNNER_TEMP/uninstall-upgrade-smoke.log"
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$unLog" -PassThru
           if (-not $uu.WaitForExit(150000)) { Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue; throw 'post-upgrade uninstaller timed out' }
           Start-Sleep -Seconds 3
-          $afterUn = netsh http show urlacl | Out-String
-          if ($afterUn -notmatch ':47823/') {
+          $aclAfter = (netsh http show urlacl url=http://+:47823/) | Out-String
+          if ($aclAfter -notmatch [regex]::Escape('http://+:47823/')) {
             Write-Output '--- uninstall log tail ---'
             Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue
             throw 'N-10: the foreign 47823 reservation was DELETED by the post-upgrade uninstall - 1.1.0-era blind [UninstallRun] steps fired'
           }
+          # Full preservation, not just presence: URL, SDDL and Listen/Delegate flags
+          # must be byte-identical (whitespace-normalized) to the planted reservation.
+          $norm = { param($t) ($t -replace '\s+', ' ').Trim() }
+          if ((& $norm $aclAfter) -ne (& $norm $aclBefore)) {
+            Write-Output "--- before ---`n$aclBefore`n--- after ---`n$aclAfter"
+            throw 'N-10: the foreign 47823 reservation survived but was CHANGED by the post-upgrade uninstall (SDDL or flags differ)'
+          }
+          # Suppression proof, not just end state: the uninstall log must not show the
+          # legacy blind delete command executing at all (RunOnceId latest-only rule).
+          $unLogText = Get-Content $unLog -Raw -ErrorAction SilentlyContinue
+          if ($unLogText -match 'http delete urlacl') {
+            Write-Output '--- uninstall log tail ---'
+            Get-Content $unLog -Tail 80
+            throw 'N-10: the uninstall log shows the legacy blind urlacl delete EXECUTED - RunOnceId suppression failed'
+          }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
-          Write-Output 'N-10 UNINSTALL: a foreign 47823 reservation survived the post-upgrade uninstall.' 
+          Write-Output 'N-10 UNINSTALL: a foreign 47823 reservation survived the post-upgrade uninstall byte-identical (URL + SDDL + flags), and the log shows the legacy blind delete never ran.' 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
