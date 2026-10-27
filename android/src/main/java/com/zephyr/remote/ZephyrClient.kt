@@ -23,8 +23,20 @@ object ZephyrClient {
      *  helper's discovery, answered with the player's own identity
      *  (ZEPHYR_PLAYER_HERE_V1) so the two apps never get confused. */
     const val REPLY_MAGIC = "ZEPHYR_PLAYER_HERE_V1"
-    fun discoverPlayers(waitMs: Int = 1500, targets: List<java.net.InetAddress>? = null): List<com.bingemote.DiscoveredHelper> =
-        com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets)
+
+    /** Zephyr Player 1.2+ answers discovery on its own port; the BingeMote helper
+     *  keeps 8489 unconditionally, so the player never binds it. Players still on
+     *  1.1.0 answer on 8489. "Find my PC" must hear BOTH generations. */
+    const val DISCOVERY_PORT = 8490
+    const val LEGACY_DISCOVERY_PORT = 8489
+    fun discoverPlayers(waitMs: Int = 1500, targets: List<java.net.InetAddress>? = null): List<com.bingemote.DiscoveredHelper> {
+        val found = LinkedHashMap<String, com.bingemote.DiscoveredHelper>()
+        // Legacy first, then current: if both generations somehow answer for one
+        // host, the 1.2+ player wins.
+        for (h in com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets, LEGACY_DISCOVERY_PORT)) found[h.host] = h
+        for (h in com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets, DISCOVERY_PORT)) found[h.host] = h
+        return found.values.toList()
+    }
 
     /** POST /pair - trade the 6-digit code on the player screen for a pairing token.
      *  The one unauthenticated call; everything after rides on the returned token. */
@@ -44,17 +56,22 @@ object ZephyrClient {
     private fun authReq(host: String, port: Int, token: String, path: String): Request.Builder =
         Request.Builder().url("http://$host:$port$path").header("Authorization", "Bearer $token")
 
+    /** The PC removed this phone's pairing: distinct from an outage so the app can say "pair again". */
+    class BadToken : java.io.IOException("This phone isn't paired with Zephyr Player anymore. Pair again in Settings.")
+
     private fun post(host: String, port: Int, token: String, path: String, json: JSONObject? = null) {
         val req = authReq(host, port, token, path)
             .post((json ?: JSONObject()).toString().toRequestBody("application/json".toMediaType()))
             .build()
         client.newCall(req).execute().use { resp ->
+            if (resp.code == 401) throw BadToken()
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
         }
     }
 
     private fun get(host: String, port: Int, token: String, path: String): JSONObject {
         client.newCall(authReq(host, port, token, path).get().build()).execute().use { resp ->
+            if (resp.code == 401) throw BadToken()
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
             return JSONObject(resp.body!!.string())
         }
@@ -141,7 +158,21 @@ object ZephyrClient {
             .post(body)
             .build()
         client.newCall(req).execute().use { resp ->
+            if (resp.code == 401) throw BadToken()
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
         }
+    }
+
+    /** /control/status's subtitle track list (PC 1.2+); empty from older players. */
+    fun parseSpuTracks(json: JSONObject): List<com.bingemote.SubTrack> {
+        val current = json.optInt("spu", -1)
+        val arr = json.optJSONArray("spuTracks") ?: return emptyList()
+        val out = ArrayList<com.bingemote.SubTrack>(arr.length())
+        for (i in 0 until arr.length()) {
+            val t = arr.getJSONObject(i)
+            val id = t.getInt("id")
+            out.add(com.bingemote.SubTrack(id, t.optString("name", "Track ${i + 1}"), id == current))
+        }
+        return out
     }
 }

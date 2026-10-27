@@ -65,7 +65,7 @@ fun MainScreen(
         Column(Modifier.fillMaxSize()) {
             TopBar(
                 source = { SourceSelector(remote) },
-                pill = { StatusPill(connected = !remote.unreachable) },
+                pill = { StatusPill(paired = remote.store.isPaired(remote.store.selectedSource), connected = !remote.unreachable) },
                 settings = {
                     HeaderIconButton(onSettings, remote.store.haptics, startPad = 6.dp) {
                         androidx.compose.material3.Icon(
@@ -93,7 +93,7 @@ fun MainScreen(
                 // Probe pass: the true non-gap content height in dp (seed margins
                 // only affect width; the +14dp is the fixed bottom margin).
                 val probe = subcompose("probe") {
-                    HomeContent(remote, flashAll, 12f, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse)
+                    HomeContent(remote, flashAll, 12f, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings)
                 }.map { it.measure(loose) }
                 val gapCount = (probe.size - 1).coerceAtLeast(1)
                 val contentDp = probe.sumOf { it.height } / d + 14f
@@ -121,7 +121,7 @@ fun MainScreen(
                 val scaled = Density(d * uniform, fs)
                 val placeables = subcompose("main") {
                     CompositionLocalProvider(LocalDensity provides scaled) {
-                        HomeContent(remote, flashAll, shareContent, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse)
+                        HomeContent(remote, flashAll, shareContent, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings)
                     }
                 }.map { it.measure(loose) }
                 val bottomPx = 14f * d * uniform
@@ -167,6 +167,7 @@ private fun HomeContent(
     onSubtitles: () -> Unit,
     onMovies: () -> Unit,
     onMouse: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     val s = remote.status
     // Now playing
@@ -175,6 +176,9 @@ private fun HomeContent(
     val vlcOut = remote.vlcClosed && !remote.expectingVlc
     val lost = remote.unreachable && !remote.expectingVlc && !remote.vlcClosed
     val refused = remote.vlcRefused
+    // Teardown A1: nothing paired -> the hero is a quiet way into Settings pairing,
+    // never a forced setup screen. One line, whole card tappable.
+    val unpairedSource = !remote.store.isPaired(remote.store.selectedSource)
     Box(
         Modifier
             .padding(horizontal = marginDp.dp)
@@ -182,9 +186,22 @@ private fun HomeContent(
             .shadow(10.dp, RoundedCornerShape(20.dp), ambientColor = Orange, spotColor = Orange)
             .clip(RoundedCornerShape(20.dp))
             .background(OrangeGradient)
+            .then(
+                if (unpairedSource) Modifier.clickable(
+                    role = androidx.compose.ui.semantics.Role.Button,
+                    onClickLabel = "Go to Settings to pair",
+                ) { onSettings() } else Modifier
+            )
             .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {
         Column {
+            if (unpairedSource) {
+                Text(
+                    "Go to Settings to pair to PC",
+                    color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                )
+            } else {
             Text(
                 if (refused) "VLC refused the password" else if (lost) "Can't reach your PC" else if (vlcOut) "VLC isn't open"
                 else s?.title?.let { displayName(it).ifBlank { "Nothing playing" } } ?: "Nothing playing",
@@ -202,6 +219,7 @@ private fun HomeContent(
                 },
                 color = Color(0xFF3D2A12), fontSize = 14.sp,
             )
+            }
             // Strictly-necessary helper notices ride the hero itself - no second card.
             // A removed pairing says pair again; a silent helper says what it affects.
             // Neither shows while the hero already says the PC is unreachable.
@@ -216,7 +234,7 @@ private fun HomeContent(
             }
             // Screenshot-rig only: the proposed helper/unpaired note rendered inside the
             // hero for the review captures. Never set outside the rig; release never shows it.
-            if (BuildConfig.DEBUG) remote.mockHeroNote?.let {
+            if (BuildConfig.DEBUG && !unpairedSource) remote.mockHeroNote?.let {
                 Spacer(Modifier.height(6.dp))
                 Text(it, color = Color(0xFF3D2A12), fontSize = 13.sp)
             }
@@ -233,7 +251,7 @@ private fun HomeContent(
 
 /** The connection state, top right: a quiet dot + word. An indicator only - not tappable. */
 @Composable
-private fun StatusPill(connected: Boolean, modifier: Modifier = Modifier) {
+private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier = Modifier) {
     Row(
         modifier
             .clip(RoundedCornerShape(24.dp))
@@ -245,11 +263,11 @@ private fun StatusPill(connected: Boolean, modifier: Modifier = Modifier) {
             Modifier
                 .size(9.dp)
                 .clip(CircleShape)
-                .background(if (connected) Orange else ErrorRed),
+                .background(if (!paired) Dimmed else if (connected) Orange else ErrorRed),
         )
         Spacer(Modifier.width(8.dp))
         Text(
-            if (connected) "Connected" else "Disconnected",
+            if (!paired) "Not paired" else if (connected) "Connected" else "Disconnected",
             color = TextC, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
         )

@@ -8,8 +8,9 @@ import org.junit.Test
 
 class VlcTest {
     @Test
-    fun cold_install_uses_player_setup_existing_install_keeps_main() {
-        assertEquals("setup-zephyr", initialScreenForConfiguredInstall(false))
+    fun every_install_opens_on_home_pairing_never_forced() {
+        // Teardown A1: a fresh install lands on Home with a pair card, not a setup screen.
+        assertEquals("main", initialScreenForConfiguredInstall(false))
         assertEquals("main", initialScreenForConfiguredInstall(true))
     }
 

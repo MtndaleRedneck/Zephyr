@@ -150,6 +150,11 @@ class Store(context: Context) {
 
     val isConfigured: Boolean
         get() = setupDone && host.isNotBlank() && vlcPassword.isNotBlank()
+
+    /** Pairing state per source: the Zephyr PC rides on its own token, the VLC PC on a
+     *  finished setup. Home gates its pair card and command sends on this (teardown A1). */
+    fun isPaired(source: Source): Boolean =
+        if (source == Source.ZEPHYR) zephyrToken.isNotBlank() else isConfigured
 }
 
 enum class Source { VLC, ZEPHYR }
@@ -159,5 +164,5 @@ private fun normalizeWinPath(p: String): String =
     // Lambda replacement on purpose: a "\" string replacement is an invalid escape and throws on a match.
     p.trim().replace('/', '\\').replace(Regex("(?<=.)\\\\{2,}")) { "\\" }
 
-/** Cold installs start with the integrated player; configured installs keep their source. */
-internal fun initialScreenForConfiguredInstall(configured: Boolean): String = if (configured) "main" else "setup-zephyr"
+/** Every install opens on Home (teardown A1); pairing starts from Settings, never forced. */
+internal fun initialScreenForConfiguredInstall(configured: Boolean): String = "main"

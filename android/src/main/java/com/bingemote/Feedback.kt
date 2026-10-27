@@ -20,13 +20,31 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 const val REPO_ISSUES = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues"
-/** A plain Google Form, like BumpLog's: the app opens it pre-filled, he reviews and submits in the browser. */
-const val BUG_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSeD1ytVTxoA0GgftLr5wSu2kZm1yxRwCHcOV4Pb100Lm6hLcQ/viewform"
+/** The Zephyr family's own form (BingeMote's is untouched). Entry IDs come from the form's
+ *  pre-filled link; the reply-email field (entry.1538046022) is NEVER prefilled. */
+const val BUG_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdzwHtL4OAUFpffzp0WqLq99AfY0QIHrl-CPjFLTp4nL1ThuA/viewform"
+private const val ENTRY_MESSAGE = "entry.574867238"
+private const val ENTRY_SENT_FROM = "entry.2130527520"
+private const val ENTRY_SOURCE = "entry.764416810"
+private const val ENTRY_PAIRED = "entry.1337995316"
+private const val ENTRY_APP_VERSION = "entry.2049802033"
+private const val ENTRY_ANDROID_VERSION = "entry.585666476"
+private const val ENTRY_PHONE_MODEL = "entry.1454320634"
+private const val ENTRY_DISPLAY = "entry.1450449499"
 private const val MAX_TEXT = 3000
 private const val MAX_ENCODED = 4500
 
 /** The only things a feedback report carries besides what he typed. No PC name, Wi-Fi names, paired phones or file paths. */
-data class FeedbackContext(val appVersion: String, val androidVersion: String, val phoneModel: String, val display: String = "")
+data class FeedbackContext(
+    val appVersion: String,
+    val androidVersion: String,
+    val phoneModel: String,
+    val display: String = "",
+    /** "VLC PC" or "Zephyr PC" - which source was selected when he wrote in. */
+    val source: String = "",
+    /** e.g. "Zephyr PC paired, VLC PC not paired" - states only, never names or tokens. */
+    val paired: String = "",
+)
 
 object Feedback {
     /** Trims the text so the encoded link stays well under the roughly 8 KB web servers accept. The preview shows this same trimmed text. */
@@ -38,20 +56,28 @@ object Feedback {
 
     /** Exactly what is sent, shown before he taps. */
     fun preview(text: String, c: FeedbackContext): String =
-        "Message:\n${clean(text).ifEmpty { "(nothing written yet)" }}\n\nApp version: ${c.appVersion}\nAndroid version: ${c.androidVersion}\nPhone model: ${c.phoneModel}${displayLine(c)}"
+        "Message:\n${clean(text).ifEmpty { "(nothing written yet)" }}\n\nSent from: Zephyr Android${contextLines(c)}"
 
-    private fun displayLine(c: FeedbackContext) = if (c.display.isBlank()) "" else "\nDisplay: ${c.display}"
+    private fun contextLines(c: FeedbackContext): String {
+        var out = ""
+        if (c.source.isNotBlank()) out += "\nSource selected: ${c.source}"
+        if (c.paired.isNotBlank()) out += "\nPaired: ${c.paired}"
+        out += "\nApp version: ${c.appVersion}\nAndroid version: ${c.androidVersion}\nPhone model: ${c.phoneModel}"
+        if (c.display.isNotBlank()) out += "\nDisplay: ${c.display}"
+        return out
+    }
 
     fun githubUrl(text: String, c: FeedbackContext): String {
         val t = clean(text)
         val title = "Feedback: " + t.lineSequence().firstOrNull().orEmpty().take(60)
-        val body = "$t\n\n---\nApp version: ${c.appVersion}\nAndroid version: ${c.androidVersion}\nPhone model: ${c.phoneModel}${displayLine(c)}"
+        val body = "$t\n\n---\nSent from: Zephyr Android${contextLines(c)}"
         return "$REPO_ISSUES/new?title=${enc(title)}&body=${enc(body)}"
     }
 
     fun formUrl(text: String, c: FeedbackContext): String =
-        "$BUG_FORM_URL?usp=pp_url&entry.1980878269=${enc(clean(text) + (if (c.display.isBlank()) "" else "\n\nDisplay: ${c.display}"))}&entry.857472167=${enc(c.phoneModel)}" +
-            "&entry.2017214675=${enc(c.androidVersion)}&entry.446486963=${enc(c.appVersion)}"
+        "$BUG_FORM_URL?usp=pp_url&$ENTRY_MESSAGE=${enc(clean(text))}&$ENTRY_SENT_FROM=${enc("Zephyr Android")}" +
+            "&$ENTRY_SOURCE=${enc(c.source)}&$ENTRY_PAIRED=${enc(c.paired)}&$ENTRY_APP_VERSION=${enc(c.appVersion)}" +
+            "&$ENTRY_ANDROID_VERSION=${enc(c.androidVersion)}&$ENTRY_PHONE_MODEL=${enc(c.phoneModel)}&$ENTRY_DISPLAY=${enc(c.display)}"
 
     private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
@@ -78,10 +104,19 @@ object Feedback {
 }
 
 @Composable
-fun FeedbackScreen(scrollState: ScrollState, onBack: () -> Unit) {
+fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> Unit) {
     val ctx = LocalContext.current
     var text by remember { mutableStateOf("") }
-    val c = remember { Feedback.context(ctx) }
+    val c = remember {
+        val base = Feedback.context(ctx)
+        // Pairing STATES only - never PC names, tokens or addresses.
+        val paired = (if (remote.store.zephyrToken.isNotBlank()) "Zephyr PC paired" else "Zephyr PC not paired") +
+            ", " + (if (remote.store.isConfigured) "VLC PC paired" else "VLC PC not paired")
+        base.copy(
+            source = if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC" else "VLC PC",
+            paired = paired,
+        )
+    }
     fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
     Column(Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {

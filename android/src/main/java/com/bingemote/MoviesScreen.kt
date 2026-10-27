@@ -72,6 +72,9 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     var viaHelper by remember { mutableStateOf(false) }
     // PC origin browsing the Zephyr Player's /library instead (selected source).
     var viaZephyr by remember { mutableStateOf(false) }
+    // The player's OWN at-root flag: its paths are relative, so they can never be
+    // compared to the (absolute) VLC folder (teardown C4).
+    var zephyrAtRoot by remember { mutableStateOf(true) }
     var zephyrFolder: String? = null
     // In-flight guard: a double-tap must not start two movies (two VLCs, two soundtracks).
     var starting by remember { mutableStateOf(false) }
@@ -111,7 +114,8 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     }
 
     fun atRoot(p: String) =
-        if (viaHelper) p.isEmpty()
+        if (viaZephyr) zephyrAtRoot
+        else if (viaHelper) p.isEmpty()
         else root.isNotEmpty() && p.trimEnd('\\', '/').equals(root.trimEnd('\\', '/'), ignoreCase = true)
 
     fun show(raw: List<BrowseItem>, dir: String, helperAtRoot: Boolean, restore: Pair<Int, Int>? = null) {
@@ -119,7 +123,9 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         // listing has no ".." row of its own, so make one from the relative path.
         val up = when {
             atRoot(dir) || helperAtRoot -> emptyList()
-            viaHelper -> listOf(BrowseItem(name = "..", isDir = true, path = dir.substringBeforeLast('\\', ""), uri = "", sizeBytes = 0L))
+            // The Zephyr player's list has no ".." rows: make one from the relative path,
+            // like the helper path does.
+            viaHelper || viaZephyr -> listOf(BrowseItem(name = "..", isDir = true, path = dir.substringBeforeLast('\\', ""), uri = "", sizeBytes = 0L))
             else -> raw.filter { it.name == ".." }
         }
         val dirs = raw.filter { it.isDir && it.name != ".." }
@@ -296,6 +302,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 val (atRootZ, rows) = withContext(Dispatchers.IO) {
                     ZephyrClient.libraryList(zHost, remote.store.zephyrPort, remote.store.zephyrToken, rel)
                 }
+                zephyrAtRoot = atRootZ
                 show(rows.map { (name, dir) ->
                     BrowseItem(name = name, isDir = dir, path = if (rel.isEmpty()) name else "$rel\\$name", uri = "", sizeBytes = 0L)
                 }, rel, atRootZ, restore)
@@ -454,7 +461,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         phoneStack.removeAt(phoneStack.size - 1)
         loadPhone()
     }
-    val insideFolder = origin == Origin.PC && root.isNotEmpty() && !atRoot(path)
+    val insideFolder = origin == Origin.PC && if (viaZephyr) !zephyrAtRoot else root.isNotEmpty() && !atRoot(path)
     BackHandler(enabled = insideFolder) { upOne() }
     BackHandler(enabled = !insideFolder) { onBack() }
 
