@@ -165,9 +165,10 @@ try {
     Assert ($r.code -eq 400) "an empty request id is rejected"
     Write-Host "paired with machine: $($paired.name)"
     # Paired phones get stored with a name; a code made outside the window pairs as "Phone N".
+    # The migrated BingeMote phone above is already phone #1, so THIS pairing is #2.
     $cfg = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote/config.json'
     $cfgText = Get-Content $cfg -Raw
-    Assert ($cfgText -match '"name":"Phone 1"') "first paired phone gets a default name: $cfgText"
+    Assert ($cfgText -match '"name":"Phone 2"') "the first NEW pairing after a migration is named Phone 2: $cfgText"
 
     $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
     Assert ($r.code -eq 403) "pairing code is single-use"
