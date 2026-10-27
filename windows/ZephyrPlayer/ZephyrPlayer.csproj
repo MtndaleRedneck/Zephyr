@@ -6,7 +6,7 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <UseWPF>true</UseWPF>
-    <UseWindowsForms>true</UseWindowsForms>
+
     <Nullable>enable</Nullable>
     <AssemblyName>ZephyrPlayer</AssemblyName>
     <Version>1.2.0</Version>
@@ -22,5 +22,6 @@
     <PackageReference Include="LibVLCSharp" Version="3.*" />
     <PackageReference Include="LibVLCSharp.WPF" Version="3.*" />
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.*" />
+      <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
   </ItemGroup>
 </Project>

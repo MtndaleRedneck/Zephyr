@@ -22,7 +22,6 @@ namespace ZephyrPlayer
         private PairedStore? _store;
         private PlayerSettings? _settings;
         private bool _reallyQuit;
-        private bool _trayHintShown;
         private volatile string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
@@ -139,11 +138,6 @@ namespace ZephyrPlayer
                 // instead of exiting; the icon brings it back.
                 ev.Cancel = true;
                 _home.Hide();
-                if (!_trayHintShown)
-                {
-                    _trayHintShown = true;
-                    _tray?.ShowStillRunningHint();
-                }
             };
 
             // Pairing (protocol.md): the gate owns the code's lifetime, one-shot
