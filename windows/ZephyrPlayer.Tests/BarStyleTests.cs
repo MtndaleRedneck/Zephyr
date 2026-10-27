@@ -57,8 +57,8 @@ namespace ZephyrPlayer.Tests
             {
                 Assert.Equal("10", w.FindName("SkipBackLabel") is System.Windows.Controls.TextBlock b ? b.Text : "");
                 Assert.Equal("10", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
-                Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 // Speed + sleep hidden by default.
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
@@ -86,9 +86,11 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("10", ((System.Windows.Controls.TextBlock)w.FindName("SkipBackLabel")!).Text);
                 Assert.Equal("10", ((System.Windows.Controls.TextBlock)w.FindName("SkipForwardLabel")!).Text);
                 Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
-                Assert.Equal("60", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                Assert.Equal("60", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
-                Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardRing")!));
+                // Settled units: 60 reads "1m", never raw seconds.
+                Assert.Equal("1m", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                Assert.Equal("1m", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                // Secondary icons are double-triangles (fill restyles, no ring).
+                Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!).Fill).Color);
                 // Filled play/pause = colored DISC: the design fills the ring and
                 // clears its stroke (hollow keeps the stroke instead). Assert the
                 // filled semantics, not the hollow one.

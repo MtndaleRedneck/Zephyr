@@ -51,7 +51,7 @@ namespace ZephyrPlayer.Tests
             Sta(path =>
             {
                 var settings = new PlayerSettings(path);
-                var w = new SettingsWindow(settings, new PairedStore(), () => "135792");
+                var w = new SettingsWindow(settings, new PairedStore(), () => { });
                 try
                 {
                     var primary = (WrapPanel)w.FindName("PrimarySkipPanel")!;
@@ -111,8 +111,8 @@ namespace ZephyrPlayer.Tests
                     }
                     Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
                     Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
-                    Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                    Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                    Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                    Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 }
                 finally { w.Close(); }
             });

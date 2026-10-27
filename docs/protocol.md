@@ -65,9 +65,12 @@ Separate from BingeMote helper pairing: the Zephyr Player holds its OWN token st
   or unreadable store fails closed (401 for all).
 - Protections (BingeMote helper pairing parity, xunit-covered): crypto-RNG code,
   10-minute lifetime, one-shot on success, constant-time compare, 5 wrong codes
-  lock pairing until the player restarts (429), guesses while no code is showing
-  never count toward the lock, 8 paired phones max (409), and every request
-  (including /pair) is only served to loopback/RFC1918/link-local addresses.
+  lock pairing for 5 minutes (429; time-based since player 1.2.0 - no restart
+  needed), an EXPIRED code answers 410 "code expired" (distinct from a wrong
+  code's 403, so the phone can say "use the code showing on the PC now"),
+  guesses while no code is showing never count toward the lock, 8 paired phones
+  max (409), and every request (including /pair) is only served to
+  loopback/RFC1918/link-local addresses.
 - Still open (not blocking dev): an unpair/forget flow and a "pair another phone"
   surface player-side (the banner currently shows only while nothing is paired).
 
@@ -132,6 +135,9 @@ the control seam is wired, `/control/status` answers state for the phone UI.
 - `POST /control/captions` `{"track":<id>}` (-1 = off)
 - `POST /control/fullscreen` `{"on":<bool>}`
 - `GET /control/status` -> `{"state","time","length","volume","muted","spu","fullscreen"}`
+  plus (player 1.2.0) `"spuTracks":[{"id","name"}]` so the phone's subtitle
+  sheet can list and check tracks (the empty-sheet teardown bug), and
+  `"update_available"` / `"update_check"` diagnostics.
 
 Verification honesty: route parsing + dispatch are loopback-tested; media
 open/decode/pause/seek/volume are integration-tested headless against real

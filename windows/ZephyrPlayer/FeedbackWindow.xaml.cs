@@ -16,28 +16,30 @@ namespace ZephyrPlayer
     public partial class FeedbackWindow : Window
     {
         private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues";
-        // TODO(feedback-form): wire the NEW Zephyr feedback form here - the
-        // /viewform URL and its entry IDs arrive via Main once the form is
-        // created. The shared BingeMote form must NOT be used (not even as a
-        // fallback): until the URL lands, the form button stays disabled and
-        // the GitHub issue path carries feedback. Entry IDs below follow the
-        // settled schema (message / sentfrom / source / paired / appver /
-        // android / model / display); PC fills message + source + appver + os.
-        private const string? BugFormUrl = null;
-        private const string EntryMessage = "";
-        private const string EntrySource = "";
-        private const string EntryOs = "";
-        private const string EntryAppVer = "";
+        // The dedicated Zephyr feedback form (created + verified public by the
+        // coordinator, Oct 26). The shared BingeMote form is NEVER used. The
+        // "Reply email" field (entry.1538046022) is never prefilled - the user
+        // types it only if they want an answer. Phone-only fields (Android
+        // version / Phone model / Display) stay empty on PC; the Windows build
+        // rides in App version.
+        private const string? BugFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLSdzwHtL4OAUFpffzp0WqLq99AfY0QIHrl-CPjFLTp4nL1ThuA/viewform";
+        private const string EntryMessage = "entry.574867238";   // Your message (required)
+        private const string EntrySentFrom = "entry.2130527520"; // Sent from
+        private const string EntrySource = "entry.764416810";    // Source selected
+        private const string EntryPaired = "entry.1337995316";   // Paired
+        private const string EntryAppVer = "entry.2049802033";   // App version
         private const int MaxText = 3000;
         private const int MaxEncoded = 4500;
 
-        public FeedbackWindow()
+        private readonly int _pairedCount;
+
+        /// <param name="pairedCount">Current paired-phone count, prefilled into the
+        /// form's "Paired" field (the phone flow does the same).</param>
+        public FeedbackWindow(int pairedCount = 0)
         {
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
-            // The new Zephyr form URL is pending (see BugFormUrl above): until it
-            // is wired, the form button stays off rather than pointing anywhere
-            // else. The GitHub issue path works today.
+            _pairedCount = pairedCount;
             FormButton.IsEnabled = BugFormUrl != null;
             FormNote.Visibility = BugFormUrl == null ? Visibility.Visible : Visibility.Collapsed;
             UpdatePreview();
@@ -57,18 +59,21 @@ namespace ZephyrPlayer
             return t;
         }
 
-        private static string Preview(string text) =>
+        private string Preview(string text) =>
             "Message:\n" + (Clean(text).Length > 0 ? Clean(text) : "(nothing written yet)")
-            + "\n\nApp version: " + Version() + "\nOS: " + OsVersion();
+            + "\n\nSent from: Windows PC\nSource selected: Zephyr Player\nPaired: "
+            + (_pairedCount > 0 ? _pairedCount + (_pairedCount == 1 ? " phone" : " phones") : "Not paired")
+            + "\nApp version: " + Version() + " (" + OsVersion() + ")";
 
         private string FormUrl()
         {
             var t = Clean(MessageBox.Text);
             return BugFormUrl! + "?usp=pp_url"
                 + "&" + EntryMessage + "=" + Enc(t)
-                + "&" + EntrySource + "=" + Enc("Windows PC")
-                + "&" + EntryOs + "=" + Enc(OsVersion())
-                + "&" + EntryAppVer + "=" + Enc(Version());
+                + "&" + EntrySentFrom + "=" + Enc("Windows PC")
+                + "&" + EntrySource + "=" + Enc("Zephyr Player")
+                + "&" + EntryPaired + "=" + Enc(_pairedCount > 0 ? _pairedCount + (_pairedCount == 1 ? " phone" : " phones") : "Not paired")
+                + "&" + EntryAppVer + "=" + Enc(Version() + " (" + OsVersion() + ")");
         }
 
         private string IssueUrl()
