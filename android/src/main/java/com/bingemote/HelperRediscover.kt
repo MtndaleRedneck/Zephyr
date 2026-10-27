@@ -26,19 +26,22 @@ object HelperRediscover {
      *  API, so rediscovery structurally cannot leak a credential or mutate the
      *  saved pairing. */
     fun run(
-        savedHost: String, savedPort: Int,
+        savedHost: String, savedPort: Int, savedName: String = "",
         pingSaved: () -> Boolean,
         discover: () -> List<DiscoveredHelper>,
     ): Plan {
         if (pingSaved()) return Plan.SavedEndpointSeen
-        return plan(savedHost, savedPort, discover())
+        return plan(savedHost, savedPort, savedName, discover())
     }
 
-    fun plan(savedHost: String, savedPort: Int, found: List<DiscoveredHelper>): Plan {
+    fun plan(savedHost: String, savedPort: Int, savedName: String = "", found: List<DiscoveredHelper>): Plan {
         for (h in found) {
             if (h.host == savedHost && h.port == savedPort) return Plan.SavedEndpointSeen
         }
-        val first = found.firstOrNull() ?: return Plan.None
+        // S-6: only a responder with the SAVED helper's name can be "the helper
+        // moved" - any other PC running the helper is just another helper.
+        if (savedName.isBlank()) return Plan.None
+        val first = found.firstOrNull { it.name.equals(savedName, ignoreCase = true) } ?: return Plan.None
         return Plan.MovedNotice(first.host, first.port, first.name)
     }
 }

@@ -613,6 +613,9 @@ fun prettyPath(path: String): String {
  *  already-plain messages (pairing errors, BadToken) pass through untouched. */
 internal fun plainPlayerError(e: Exception, fallback: String): String {
     val m = e.message ?: return fallback
+    // Typed errors already carry one plain sentence written for him: pass it through.
+    if (e is com.zephyr.remote.ZephyrClient.PairFailed || e is com.zephyr.remote.ZephyrClient.BadToken
+        || e is HelperClient.BadPairCode || e is HelperClient.BadToken || e is HelperClient.Unreachable) return m
     if (m.startsWith("Player returned")) return "Zephyr Player had a problem. Try again."
     // Raw plumbing never reaches the screen (S2): socket text, timeouts and the
     // stream server's "server not ready" each get one plain sentence.
@@ -620,8 +623,14 @@ internal fun plainPlayerError(e: Exception, fallback: String): String {
         return "Your phone needs to be on Wi-Fi to play from it."
     if (m.contains("failed to connect", true) || m.contains("connection refused", true)
         || m.contains("connect timed out", true) || m.contains("timeout", true)
-        || m.contains("unable to resolve host", true))
+        || m.contains("unable to resolve host", true) || m.contains("connection reset", true)
+        || m.contains("no route to host", true) || m.contains("end of stream", true)
+        || m.contains("software caused connection abort", true))
         return "Can't reach the PC. Check it's on and on the same Wi-Fi, then try again."
     if (m.startsWith("{") || m.contains("Json", false) || m.contains("JSON")) return fallback
-    return m
+    // S-5 (allowlist, not deny-list): only messages a typed exception carried as a
+    // user-facing sentence pass through. Anything else - "Read timed out",
+    // "Connection reset", "unexpected end of stream on http://..." - gets the
+    // caller's plain fallback, never raw plumbing.
+    return fallback
 }

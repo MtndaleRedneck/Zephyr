@@ -145,7 +145,12 @@ fun SetupScreen(
                 say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr VLC Remote's paired list, then pair again.", true)
             } catch (e: HelperClient.BadPairCode) {
                 pairing = false
-                say("That code didn't work. Get a fresh one: on your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)
+                // S-3: the helper's own reason (wrong/expired/too many tries/too many
+                // phones) is written for him - show it instead of one generic line.
+                say(e.msg, true)
+            } catch (e: HelperClient.Unreachable) {
+                pairing = false
+                say(e.msg, true)
             } catch (e: Exception) {
                 pairing = false
                 say("Couldn't reach Zephyr VLC Remote on ${target.host}. Check the PC is awake and try again.", true)

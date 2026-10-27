@@ -87,6 +87,13 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         /** S9: refuse a cache copy the phone cannot hold (floor for system + VLC). */
         const val MIN_FREE_BYTES = 512L * 1024 * 1024
         /** Drop every cached stream copy (called when the service stops). */
+        private fun cacheFile(uri: Uri, suffix: String): java.io.File {
+            val hex = java.security.MessageDigest.getInstance("SHA-256")
+                .digest(uri.toString().toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
+            return java.io.File(context.cacheDir, "stream-$hex$suffix")
+        }
+
         fun cleanCache(context: android.content.Context) {
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-") }?.forEach { it.delete() }
         }
@@ -95,7 +102,6 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private fun handle(client: Socket) {
         val input = client.getInputStream().bufferedReader()
         val requestLine = input.readLine() ?: return
-        servedAny = true
         val parts = requestLine.split(" ")
         if (parts.size < 2 || parts[0] != "GET") return
         var range: LongRange? = null
@@ -134,7 +140,9 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 // Non-seekable provider: copy once into cache, then serve the copy.
                 // Teardown C12: the copy lands under a temp name and is renamed only when
                 // COMPLETE, so a cut-off copy is never reused; oversized copies are capped.
-                val cached = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}")
+                // N-4: SHA-256 of the URI - a 32-bit hashCode collision between two
+                // different files must never share one cache slot.
+                val cached = cacheFile(uri, "")
                 if (!cached.exists()) {
                     // S9: one copy per URI at a time - two first requests for the same
                     // non-seekable file must not write the same .part together. The
@@ -142,7 +150,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     val lock = copyLocks.getOrPut(uri.toString()) { Object() }
                     synchronized(lock) {
                     if (!cached.exists()) {
-                    val tmp = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}.part")
+                    val tmp = cacheFile(uri, ".part")
                     try {
                         CacheCopier.copy(
                             open = { context.contentResolver.openInputStream(uri) },
@@ -160,8 +168,13 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     }
                     }
                 }
-                return serveFile(client, cached, cached.length(), range)
+                // S-2: "served" means a valid /s/<token>/<id> request actually starting
+            // to send bytes - not any stray request line. Arming on junk (bad token,
+            // 404 path, port scan) would strand the service on the served rule forever.
+            servedAny = true
+            return serveFile(client, cached, cached.length(), range)
             }
+            servedAny = true
             serveChannel(client, pfd, size, range, guessMime(uri))
         }
     }

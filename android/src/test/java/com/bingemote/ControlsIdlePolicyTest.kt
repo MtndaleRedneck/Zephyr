@@ -35,6 +35,21 @@ class ControlsIdlePolicyTest {
         assertTrue(p.onSuccess(t0 + w + w + w, "stopped"))
     }
 
+    @Test fun `the Zephyr Player's capitalized states end the controls`() {
+        // S-1: the Player reports LibVLC enum names ("Stopped", "Ended") - they
+        // must end the controls exactly like VLC's lowercase "stopped".
+        val p = ControlsIdlePolicy()
+        val t0 = 1_000_000L
+        assertFalse(p.onSuccess(t0, "Stopped"))
+        assertFalse(p.onSuccess(t0 + w - 1, "Stopped"))
+        assertTrue(p.onSuccess(t0 + w, "Stopped"))
+
+        val q = ControlsIdlePolicy()
+        assertFalse(q.onSuccess(t0, "Ended"))
+        assertFalse(q.onSuccess(t0 + w - 1, "Ended"))
+        assertTrue(q.onSuccess(t0 + w, "Ended"))
+    }
+
     @Test fun `an unanswered player ends the controls after the window`() {
         val p = ControlsIdlePolicy()
         val t0 = 1_000_000L
