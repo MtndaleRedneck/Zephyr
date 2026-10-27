@@ -67,7 +67,9 @@ namespace ZephyrPlayer
 
         public string BarColorStyle
         {
-            get { lock (_lock) return Read().BarColorStyle ?? "original"; }
+            // Unset default is orange; a stored choice is never null, so an explicit
+            // pick in Settings always wins over this fallback.
+            get { lock (_lock) return Read().BarColorStyle ?? "orange"; }
             set { if (Array.IndexOf(BarColorStyles, value) < 0) return; Write(d => d with { BarColorStyle = value }); }
         }
 
