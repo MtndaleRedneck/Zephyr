@@ -3,14 +3,18 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Collections.Generic;
 using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace ZephyrPlayer
 {
     /// <summary>
-    /// Centered settings panel (an open box in the middle of the
-    /// screen, live preview, not VLC's top-bar dialog). Every change writes
-    /// through PlayerSettings, whose Changed event restyles the player live.
+    /// Compact centered settings window (owner-approved Task-Manager-style
+    /// layout): clickable section list on the LEFT, one section's content on
+    /// the right, Feedback & bugs and Updates pinned at the bottom with the
+    /// version under Updates. Every change writes through PlayerSettings,
+    /// whose Changed event restyles the player live.
     /// </summary>
     public partial class SettingsWindow : Window
     {
@@ -38,9 +42,44 @@ namespace ZephyrPlayer
                 InstallUpdateButton.Visibility = _updateOffer != null ? Visibility.Visible : Visibility.Collapsed;
                 UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
             };
+            NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
             Loaded += (_, __) => _updateStatusTimer.Start();
             Closed += (_, __) => _updateStatusTimer.Stop();
+            WireSections();
             Refresh();
+        }
+
+        private readonly Dictionary<string, (Button Nav, UIElement Section, string Title)> _sections = new();
+
+        private void WireSections()
+        {
+            _sections["movies"] = (NavMovies, SectionMovies, "Movies folder");
+            _sections["volume"] = (NavVolume, SectionVolume, "Volume");
+            _sections["skip"] = (NavSkip, SkipSettingsCard, "Skip buttons");
+            _sections["bar"] = (NavBar, SectionBar, "Playback bar");
+            _sections["remote"] = (NavRemote, SectionRemote, "Android remote");
+            _sections["feedback"] = (NavFeedback, SectionFeedback, "Feedback & bugs");
+            _sections["updates"] = (NavUpdates, SectionUpdates, "Updates");
+            SelectSection("movies");
+        }
+
+        private void OnNav(object sender, RoutedEventArgs e)
+        {
+            if (sender is Button b && b.Tag is string key) SelectSection(key);
+        }
+
+        private void SelectSection(string key)
+        {
+            foreach (var (k, (nav, section, _)) in _sections)
+            {
+                var selected = k == key;
+                section.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+                var pill = (FrameworkElement)nav.Template.FindName("Pill", nav);
+                var bg = (FrameworkElement)nav.Template.FindName("Bg", nav);
+                pill.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+                ((Border)bg).Background = selected ? (Brush)FindResource("NavSelectedBrush") : Brushes.Transparent;
+            }
+            SectionTitle.Text = _sections[key].Title;
         }
 
         private void Refresh()
