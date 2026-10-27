@@ -71,12 +71,12 @@ public class BingeMigrationTests : IDisposable
         Assert.Null(BingeMigration.Parse("{}"));
 
         // Malformed or unreadable legacy: no success, no own file created, nothing erased.
+        File.Delete(OwnPath); // the "nothing created" half starts from no own file
         File.WriteAllText(LegacyPath, "{ this is not json ");
         Assert.False(BingeMigration.TryImport(LegacyPath, OwnPath));
         Assert.False(File.Exists(OwnPath));
         Assert.Equal("{ this is not json ", File.ReadAllText(LegacyPath));
         File.WriteAllText(LegacyPath, "{}");
-        File.Delete(OwnPath);
         Assert.False(BingeMigration.TryImport(LegacyPath, OwnPath));
     }
 }

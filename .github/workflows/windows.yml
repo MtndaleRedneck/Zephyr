@@ -80,12 +80,6 @@ jobs:
       - name: Build Zephyr VLC Remote helper
         timeout-minutes: 8
         run: dotnet build windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release
-      - name: Zephyr VLC Remote test suite
-        timeout-minutes: 10
-        run: >
-          dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
-          --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
-          --logger "trx;LogFileName=zvr-tests.trx"
       - name: Windows test suite (blame-hang bounded; no silent host)
         id: tests
         timeout-minutes: 10
@@ -94,6 +88,12 @@ jobs:
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "trx;LogFileName=win-tests.trx"
           --logger "console;verbosity=detailed"
+      - name: Zephyr VLC Remote test suite
+        timeout-minutes: 10
+        run: >
+          dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
+          --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
+          --logger "trx;LogFileName=zvr-tests.trx"
       - name: Upload test diagnostics (TRX + hang dumps)
         if: always()
         uses: actions/upload-artifact@v4
@@ -291,6 +291,7 @@ jobs:
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
             ${{ runner.temp }}/pc-tray-menu.png
+            ${{ runner.temp }}/pc-tray-icon.png
             ${{ runner.temp }}/pc-controlbar-render.png
             ${{ runner.temp }}/pc-desktop.png
             ${{ runner.temp }}/pc-home-library.png
