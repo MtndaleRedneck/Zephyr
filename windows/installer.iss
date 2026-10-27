@@ -90,12 +90,68 @@ begin
   end;
 end;
 
+var
+  ForeignUrlSddl: String;
+
+// Round-8 N-10: 1.2.0 inherits 1.1.0's recorded [UninstallRun] steps, one of which is
+// a BLIND "netsh http delete urlacl" with no ownership check. Our own cleanup (below)
+// is ownership-checked, but the legacy step fires anyway during uninstall. So: before
+// anything runs, snapshot the reservation when it is NOT ours (not the uninstalling
+// user's SID, not the broad 1.1.0 Everyone grant); after everything ran, if it is gone,
+// put back exactly what was there. We never delete it - we repair the legacy damage.
+procedure SnapshotForeignUrlAcl(userSid: String);
+var
+  TmpFile, S, Token: String;
+  Raw: AnsiString;
+  Rc, P: Integer;
+begin
+  ForeignUrlSddl := '';
+  TmpFile := ExpandConstant('{tmp}\zeph-acl-before.txt');
+  Exec('cmd.exe', '/c netsh http show urlacl url=http://+:47823/ > "' + TmpFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  if not LoadStringFromFile(TmpFile, Raw) then Exit;
+  S := String(Raw);
+  P := Pos('SDDL:', S);
+  if P = 0 then Exit;
+  Token := Trim(Copy(S, P + 5, Length(S)));
+  // One line only: cut at the first line break.
+  P := Pos(#13#10, Token);
+  if P > 0 then Token := Copy(Token, 1, P - 1);
+  Token := Trim(Token);
+  if Token = '' then Exit;
+  // Ours (the uninstalling user's SID) or the legacy Everyone grant: deleting those is
+  // our own cleanup's job - nothing to repair. Anything else is someone else's.
+  if (userSid <> '') and (Pos(Lowercase(userSid), Lowercase(Token)) > 0) then Exit;
+  if Pos('WD)', Token) > 0 then Exit;
+  ForeignUrlSddl := Token;
+end;
+
+procedure RestoreForeignUrlAcl;
+var
+  TmpFile, S: String;
+  Raw: AnsiString;
+  Rc: Integer;
+begin
+  if ForeignUrlSddl = '' then Exit;
+  TmpFile := ExpandConstant('{tmp}\zeph-acl-after.txt');
+  Exec('cmd.exe', '/c netsh http show urlacl > "' + TmpFile + '"', '', SW_HIDE, ewWaitUntilTerminated, Rc);
+  if LoadStringFromFile(TmpFile, Raw) then
+  begin
+    S := String(Raw);
+    if Pos(':47823/', S) > 0 then Exit; // survived - nothing to repair
+  end;
+  if ShellExec('runas', 'netsh', 'http add urlacl url=http://+:47823/ sddl=' + ForeignUrlSddl, '', SW_HIDE, ewWaitUntilTerminated, Rc) and (Rc = 0) then
+    Log('Restored the port 47823 listen permission that belonged to another app or Windows user; a legacy uninstall step had removed it.')
+  else
+    Log('A legacy uninstall step removed the port 47823 listen permission that belonged to another app or Windows user, and it could not be restored here.');
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
 begin
   if CurUninstallStep = usUninstall then
   begin
+    SnapshotForeignUrlAcl(GetUninstallUserSid);
     // Remove our firewall rules and the listen permission while the exe still exists.
     // The TCP rule names program=System (http.sys owns the listener), so unlike an
     // exe-scoped rule it is NOT inert once the exe is gone - it must not be left
@@ -110,4 +166,6 @@ begin
       SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       Log('firewall cleanup was declined or failed to start; rules left in place');
   end;
+  if CurUninstallStep = usPostUninstall then
+    RestoreForeignUrlAcl;
 end;
