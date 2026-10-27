@@ -409,7 +409,10 @@ foreach ($i in 1..40) {
     catch { Start-Sleep -Milliseconds 500 }
 }
 if (-not $ctrlUp) { throw "control server did not come up for the phone-start bar proof" }
-$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
+# /play is the route the real phone uses to START playback (ZephyrClient.play): it
+# hides Home and SHOWS the player window. /control/play only drives the current
+# session (no Show) - using it here proved nothing about the phone-start flow.
+$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
 if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
 # Find the player window BY TITLE: Home and MainWindow are both titled "Zephyr
 # Player", the pairing window has its own title, and any transient dialog (which
