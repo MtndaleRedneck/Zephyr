@@ -81,7 +81,9 @@ fun ZephyrSetupScreen(
                 Spacer(Modifier.height(14.dp))
             }
             ZephyrPairCard(
-                host = host, onHost = { host = it },
+                // N-5: a hand-typed address is a different PC - drop the stale Find
+                // result's name so the moved notice never names the wrong machine.
+                host = host, onHost = { host = it; foundName = "" },
                 code = code, onCode = { code = it },
                 busy = busy, error = error,
                 finding = finding, findNote = findNote, found = found,

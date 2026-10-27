@@ -16,13 +16,13 @@ class HelperRediscoverTest {
         DiscoveredHelper(host, port, name)
 
     @Test fun `saved endpoint answering discovery needs no action`() {
-        val plan = HelperRediscover.plan("192.168.1.50", 8492,
+        val plan = HelperRediscover.plan("192.168.1.50", 8492, "Office PC",
             listOf(helper("192.168.1.50"), helper("10.0.0.9")))
         assertEquals(HelperRediscover.Plan.SavedEndpointSeen, plan)
     }
 
     @Test fun `a new address earns only a notice - never a credential`() {
-        val plan = HelperRediscover.plan("192.168.1.50", 8492, listOf(helper("10.0.0.9")))
+        val plan = HelperRediscover.plan("192.168.1.50", 8492, "Office PC", listOf(helper("10.0.0.9")))
         val moved = plan as HelperRediscover.Plan.MovedNotice
         assertEquals("10.0.0.9", moved.host)
         assertEquals(8492, moved.port)
@@ -33,11 +33,11 @@ class HelperRediscoverTest {
         // Name collision: the attacker copied the PC's discovery name. Names are
         // labels - the answer is still only a notice, never the token.
         val found = listOf(helper("10.0.0.66", "Office PC"), helper("10.0.0.67", "Office PC"))
-        val plan = HelperRediscover.plan("192.168.1.50", 8492, found)
+        val plan = HelperRediscover.plan("192.168.1.50", 8492, "Office PC", found)
         assertTrue(plan is HelperRediscover.Plan.MovedNotice)
     }
 
-    @Test fun `SPOOF REGRESSION: a discovered host receives no HTTP request - no token, no password`() {
+    @Test fun `SPOOF REGRESSION - a discovered host receives no HTTP request - no token, no password`() {
         // The actual client-call proof, not a plan-shape argument: the spoof is a
         // real HTTP server answering discovery, and the saved endpoint is a real
         // server refusing. run() must send the token ONLY to the saved endpoint.
@@ -47,7 +47,7 @@ class HelperRediscoverTest {
         saved.start()
         try {
             val plan = HelperRediscover.run(
-                "127.0.0.1", saved.port,
+                "127.0.0.1", saved.port, "Office PC",
                 pingSaved = { HelperClient.ping("127.0.0.1", saved.port, "c7".repeat(32)) },
                 discover = { listOf(DiscoveredHelper("127.0.0.1", spoof.port, "Office PC")) },
             )
@@ -81,6 +81,20 @@ class HelperRediscoverTest {
 
     @Test fun `nothing found keeps the saved endpoint`() {
         assertEquals(HelperRediscover.Plan.None,
-            HelperRediscover.plan("192.168.1.50", 8492, emptyList()))
+            HelperRediscover.plan("192.168.1.50", 8492, "Office PC", emptyList()))
+    }
+
+    @Test fun `a different PC running the helper never earns a moved notice`() {
+        // S-6: two helpers on one Wi-Fi - "Den PC" answering while "Office PC" is
+        // asleep must not be announced as the saved helper moving.
+        val plan = HelperRediscover.plan("192.168.1.50", 8492, "Office PC",
+            listOf(helper("10.0.0.9", "Den PC")))
+        assertEquals(HelperRediscover.Plan.None, plan)
+    }
+
+    @Test fun `no saved name means no moved notice at all`() {
+        val plan = HelperRediscover.plan("192.168.1.50", 8492, "",
+            listOf(helper("10.0.0.9", "Office PC")))
+        assertEquals(HelperRediscover.Plan.None, plan)
     }
 }

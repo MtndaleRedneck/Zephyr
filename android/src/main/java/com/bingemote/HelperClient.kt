@@ -102,7 +102,15 @@ object HelperClient {
      */
     private fun failure(c: HttpURLConnection): Exception {
         val code = c.responseCode
-        if (code == 401 || code == 403) return BadToken("The PC rejected the pairing token.")
+        // The helper's IP guard also answers 403 ("not a private address") - that is a
+        // network path problem, not a revoked pairing (I5). Only a token 401/403 with a
+        // "bad token" body means pair again.
+        if (code == 401 || code == 403) {
+            val err = try {
+                c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optString("error") }
+            } catch (e: Exception) { null }
+            if (code == 401 || err == "bad token") return BadToken("The PC rejected the pairing token.")
+        }
         val detail = try {
             c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optString("detail") }
                 ?.takeIf { it.isNotBlank() }
@@ -226,9 +234,19 @@ object HelperClient {
             } ?: ""
             when (c.responseCode) {
                 200 -> return parsePairJson(text)
-                401, 403 -> throw BadPairCode("Wrong code. Check the code on the PC and try again.")
-                429 -> throw BadPairCode("Too many tries. Restart Zephyr VLC Remote on the computer to pair again.")
-                else -> throw Unreachable("Pairing failed (error ${c.responseCode}).")
+                else -> {
+                    // The helper answers refusals with {"error","detail"}: the detail is
+                    // written for him, so show it instead of a bare code (NEW-A1 parity).
+                    val detail = try { JSONObject(text).optString("detail") } catch (e: Exception) { "" }
+                    val fallback = when (c.responseCode) {
+                        401, 403 -> "Wrong code. Check the code on the PC and try again."
+                        410 -> "That code expired - press Pair again in the Zephyr VLC Remote window on the PC."
+                        429 -> "Too many tries. Press Pair again in the Zephyr VLC Remote window on the PC."
+                        409 -> "That PC already has too many phones paired. Remove one in the Zephyr VLC Remote window first."
+                        else -> "Pairing failed (error ${c.responseCode})."
+                    }
+                    throw BadPairCode(if (detail.isNotBlank()) detail else fallback)
+                }
             }
         } catch (e: BadPairCode) { throw e }
         catch (e: Unreachable) { throw e }
@@ -371,7 +389,12 @@ object HelperClient {
             try { c.connect() } catch (e: java.net.SocketTimeoutException) { throw ConnectTimeout(NO_PC) }
             c.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
             if (c.responseCode == 401) throw BadToken("phone no longer paired")
-            if (c.responseCode !in 200..299) throw Unreachable("volume get failed (${c.responseCode})")
+            if (c.responseCode !in 200..299) {
+                val detail = try {
+                    c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optString("detail") }?.takeIf { it.isNotBlank() }
+                } catch (e: Exception) { null }
+                throw Unreachable(detail ?: "volume get failed (${c.responseCode})")
+            }
             val text = c.inputStream.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) }
             val o = JSONObject(text)
             return o.getInt("volume") to o.getBoolean("mute")

@@ -15,7 +15,10 @@ class ControlsIdlePolicy(private val windowMs: Long = 5 * 60_000L) {
     /** The player answered. True exactly when the controls service should stop. */
     fun onSuccess(nowMs: Long, state: String): Boolean {
         lastSuccessMs = nowMs
-        if (state == "stopped") {
+        // VLC reports lowercase "stopped"; the Zephyr Player reports LibVLC enum
+        // names ("Stopped", "Ended"). Both end the controls service (S-1).
+        val s = state.lowercase()
+        if (s == "stopped" || s == "ended") {
             if (stoppedSinceMs < 0) stoppedSinceMs = nowMs
             return nowMs - stoppedSinceMs >= windowMs
         }

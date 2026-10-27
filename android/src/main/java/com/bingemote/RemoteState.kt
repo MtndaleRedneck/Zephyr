@@ -110,8 +110,8 @@ class RemoteState(
     private var pollJob: Job? = null
     private var failures = 0
     private var helperFailures = 0
-    private var rediscovering = false
-    private var helperLastRediscoverAt = 0L
+    @Volatile private var rediscovering = false
+    @Volatile private var helperLastRediscoverAt = 0L
     /** S11b: the saved helper appears at a NEW address. The saved token never
      *  follows a discovered host; the hero offers the safe re-pair path instead.
      *  Cleared on a good helper poll and on source switches. */
@@ -161,7 +161,9 @@ class RemoteState(
         retry()
     }
 
-    private fun zephyrHost() = store.zephyrHost.ifBlank { store.host }
+    // N-3: no fallback to the helper host - the Zephyr bearer only ever goes to
+    // the address it was paired with. (Blank simply fails the poll while unpaired.)
+    private fun zephyrHost() = store.zephyrHost
 
     private suspend fun pollZephyr() {
         if (store.zephyrToken.isBlank()) {
@@ -376,7 +378,7 @@ class RemoteState(
                 // pairing-learned endpoint; a discovered host is never probed
                 // (S11b regression-tested at the HTTP level).
                 when (val plan = HelperRediscover.run(
-                    store.host, store.helperPort,
+                    store.host, store.helperPort, store.pcName,
                     pingSaved = { HelperClient.ping(store.host, store.helperPort, store.helperToken) },
                     discover = { HelperClient.discover(3000) },
                 )) {
@@ -428,6 +430,10 @@ class RemoteState(
                 try { c.block() }
                 catch (e: ZephyrClient.BadToken) {
                     // A revoked pairing is not a PC outage (N2): say "pair again".
+                    PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+                }
+                catch (e: HelperClient.BadToken) {
+                    // S-4: a revoked HELPER pairing is not a PC outage either.
                     PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
                 }
                 catch (_: Exception) {
