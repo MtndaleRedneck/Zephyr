@@ -152,8 +152,16 @@ namespace ZephyrPlayer
             return s >= 3600 ? $"{s / 3600}:{s % 3600 / 60:00}:{s % 60:00}" : $"{s / 60}:{s % 60:00}";
         }
 
+        // The last REAL cursor position: WPF re-raises MouseMove for a stationary
+        // cursor when content repaints under it (video frames!), and treating those
+        // as movement would pin the bar visible for the whole movie.
+        private System.Windows.Point? _lastMousePos;
+
         private void OnMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
         {
+            var pos = e.GetPosition(this);
+            if (_lastMousePos.HasValue && pos == _lastMousePos.Value) return;
+            _lastMousePos = pos;
             ControlBar.Opacity = 1;
             _idleTimer.Stop();
             _idleTimer.Start();
