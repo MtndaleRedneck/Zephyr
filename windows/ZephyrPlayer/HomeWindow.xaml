@@ -43,6 +43,28 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="CrumbButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource Card2Brush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid>
         <Grid.RowDefinitions>
@@ -77,52 +99,127 @@
                 <Button Style="{StaticResource OrangeButton}" Content="Open Settings" Click="OnSettings" HorizontalAlignment="Center"/>
             </StackPanel>
 
-            <!-- Library view -->
+            <!-- Explorer view -->
             <Grid x:Name="LibraryView" Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <Border Grid.Row="0" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="16,10" Margin="0,0,0,12">
-                    <Grid>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <Viewbox Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="28" Height="28"><Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62" Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="{x:Null}"/></Canvas></Viewbox>
-                            <TextBlock x:Name="FolderPathText" Text="" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center" Margin="10,0,0,0"/>
+
+                <!-- Toolbar: back / up + clickable breadcrumb + search -->
+                <Grid Grid.Row="0" Margin="0,0,0,12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="BackButton" Grid.Column="0" Style="{StaticResource GhostButton}" Content="&#x2190;" FontSize="15" Click="OnBack" ToolTip="Back"/>
+                    <Button x:Name="UpButton" Grid.Column="1" Style="{StaticResource GhostButton}" Content="&#x2191;" FontSize="15" Click="OnUp" ToolTip="Up one folder" Margin="2,0,0,0"/>
+                    <Border Grid.Column="2" Background="{StaticResource CardBrush}" CornerRadius="10" Padding="8,4" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE7F4;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="2,0,4,0"/>
+                            <ItemsControl x:Name="Breadcrumb" VerticalAlignment="Center">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                            </ItemsControl>
                         </StackPanel>
-                        <Button x:Name="UpButton" Style="{StaticResource GhostButton}" Content="&#x2190; Up" HorizontalAlignment="Right" Click="OnUp"/>
+                    </Border>
+                    <Grid Grid.Column="3" Width="220" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBox x:Name="SearchBox" Background="{StaticResource CardBrush}" Foreground="{StaticResource TextBrush}"
+                                 BorderThickness="0" Padding="10,6" FontSize="13" VerticalContentAlignment="Center"
+                                 TextChanged="OnSearchChanged"/>
+                        <TextBlock x:Name="SearchHint" Text="Search Movies" Foreground="{StaticResource MutedBrush}" FontSize="13"
+                                   IsHitTestVisible="False" VerticalAlignment="Center" Margin="11,0,0,0"/>
                     </Grid>
-                </Border>
-                <ListBox x:Name="MovieList" Grid.Row="1" Background="Transparent" BorderThickness="0"
-                         MouseDoubleClick="OnEntryOpen" KeyDown="OnEntryKey">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding Name}" FontSize="14"/>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Padding" Value="14,9"/>
-                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="ListBoxItem">
-                                        <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
-                                            <ContentPresenter/>
+                </Grid>
+
+                <!-- Large-icons grid -->
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <Grid>
+                        <ListBox x:Name="MovieList" Background="Transparent" BorderThickness="0"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 MouseDoubleClick="OnEntryOpen" KeyDown="OnEntryKey">
+                            <ListBox.ItemsPanel>
+                                <ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate>
+                            </ListBox.ItemsPanel>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Width="124" Margin="6,6">
+                                        <!-- Folder tile: poster peeking out of the wireframe outline -->
+                                        <Grid Width="104" Height="88" Visibility="{Binding FolderVis}">
+                                            <Border Width="64" Height="52" CornerRadius="3" Margin="0,0,0,22"
+                                                    VerticalAlignment="Center" HorizontalAlignment="Center" ClipToBounds="True">
+                                                <Image Source="{Binding Peek}" Stretch="UniformToFill"/>
+                                            </Border>
+                                            <Viewbox Width="96" Height="80" HorizontalAlignment="Center" VerticalAlignment="Bottom">
+                                                <Canvas Width="28" Height="28">
+                                                    <Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62"
+                                                          Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round"
+                                                          StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="#1B1B1E"/>
+                                                </Canvas>
+                                            </Viewbox>
+                                        </Grid>
+                                        <!-- File tile: film-strip frame around the real shell thumbnail -->
+                                        <Border Width="104" Height="88" Background="#141417" CornerRadius="6" Padding="7,6" Visibility="{Binding FileVis}">
+                                            <Grid>
+                                                <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left">
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                </StackPanel>
+                                                <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Right">
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
+                                                </StackPanel>
+                                                <!-- Placeholder play glyph sits BEHIND the thumbnail; the
+                                                     real frame covers it once loaded. -->
+                                                <Path Data="M0,0 L12,7 L0,14 Z" Fill="{StaticResource OrangeBrush}" Stretch="Uniform"
+                                                      Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                <Image Source="{Binding Thumb}" Stretch="UniformToFill" Margin="7,0"/>
+                                            </Grid>
                                         </Border>
-                                        <ControlTemplate.Triggers>
-                                            <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter Property="Background" TargetName="Row" Value="{StaticResource Card2Brush}"/>
-                                            </Trigger>
-                                            <Trigger Property="IsSelected" Value="True">
-                                                <Setter Property="Background" TargetName="Row" Value="{StaticResource Card2Brush}"/>
-                                            </Trigger>
-                                        </ControlTemplate.Triggers>
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                </ListBox>
+                                        <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="12"
+                                                   TextAlignment="Center" TextWrapping="Wrap" MaxHeight="32" TextTrimming="CharacterEllipsis"
+                                                   Margin="0,6,0,0"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="2"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="Tile" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="Tile" Property="Background" Value="{StaticResource CardBrush}"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="Tile" Property="Background" Value="{StaticResource Card2Brush}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                        </ListBox>
+                        <TextBlock x:Name="EmptyFolderText" Text="This folder is empty." Foreground="{StaticResource MutedBrush}"
+                                   FontSize="13" Margin="8,10" Visibility="Collapsed"/>
+                    </Grid>
+                </ScrollViewer>
             </Grid>
         </Grid>
 
