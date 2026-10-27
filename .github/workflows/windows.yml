@@ -6,6 +6,7 @@ on:
     paths:
       - 'windows/**'
       - 'scripts/pc_desktop_capture.ps1'
+      - 'scripts/vlc_remote_e2e.ps1'
       - 'scripts/vlc_http_proof.ps1'
       - 'scripts/range_server.py'
       - '.github/workflows/windows.yml'
