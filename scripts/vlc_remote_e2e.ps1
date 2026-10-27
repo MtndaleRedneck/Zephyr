@@ -107,9 +107,19 @@ Assert ($rule0 -notmatch 'Zephyr VLC Remote') "unelevated installer adds no fire
 # The elevated setup, run from the installed exe (CI runners are already admin).
 # Pass the user's SID + data dir exactly as the unelevated parent does in production,
 # so the listen permission is scoped to the user even if the prompt's identity differs.
+# NOTE: array ArgumentList does NOT quote elements containing spaces - build one
+# pre-quoted string or "Zephyr VLC Remote" arrives as three arguments.
 $sid0 = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $data0 = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote'
-$fw0 = Start-Process $installed -ArgumentList '--install-firewall',$sid0,$data0 -Wait -PassThru
+$fw0 = Start-Process $installed -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
+if ($fw0.ExitCode -ne 0) {
+    Write-Host "install-firewall exit: $($fw0.ExitCode)"
+    $log0 = Join-Path $data0 'helper.log'
+    if (Test-Path $log0) { Write-Host "== helper.log tail =="; Get-Content $log0 -Tail 20 }
+    $acl0 = netsh http show urlacl | Out-String
+    $block0 = ($acl0 -split "\r?\n\r?\n" | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
+    Write-Host "8492 reservation after setup:"; Write-Host $block0
+}
 Assert ($fw0.ExitCode -eq 0) "installed exe's elevated firewall setup succeeds"
 Assert-HelperFirewallRules $installed
 # Negative hook proof on the SHIPPED build: it was published without PAIR_CODE_HOOK,
@@ -147,7 +157,7 @@ Start-Sleep -Seconds 1
 # --- Part 1: the one-time elevated setup, run as-is (CI runners are already admin) ---
 Write-Host "== install-firewall =="
 # The helper is a WinExe, so `&` returns immediately and $LASTEXITCODE stays empty.
-$fw = Start-Process $exe -ArgumentList '--install-firewall',$sid0,$data0 -Wait -PassThru
+$fw = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
 $fwExit = $fw.ExitCode
 Write-Host "install-firewall exit code: $fwExit"
 netsh advfirewall firewall show rule name="Zephyr VLC Remote"
