@@ -68,6 +68,18 @@ public static class ZWU32 {
         }, IntPtr.Zero);
         return found;
     }
+    public static System.Collections.Generic.List<string> AllTitles(uint pid) {
+        var list = new System.Collections.Generic.List<string>();
+        EnumWindows((h, l) => {
+            GetWindowThreadProcessId(h, out uint wp);
+            if (wp != pid) return true;
+            var sb = new System.Text.StringBuilder(256);
+            GetWindowTextW(h, sb, 256);
+            list.Add((IsWindowVisible(h) ? "[visible] " : "[hidden] ") + sb.ToString());
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
     public static System.Collections.Generic.List<IntPtr> FindAllByTitle(uint pid, string title) {
         var list = new System.Collections.Generic.List<IntPtr>();
         EnumWindows((h, l) => {
@@ -416,7 +428,22 @@ foreach ($i in 1..40) {
     if ($hwBar -ne [System.IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 500
 }
-if ($hwBar -eq [System.IntPtr]::Zero) { throw "phone-start bar proof: no player window opened after /control/play" }
+if ($hwBar -eq [System.IntPtr]::Zero) {
+    # Diagnose, don't just fail: list every visible window this process owns,
+    # grab the whole desktop, and dump the crash forensics.
+    Write-Host "play POST answered $($playResp.StatusCode): $($playResp.Content)"
+    Write-Host "process alive: $(-not $pBar.HasExited)"
+    foreach ($h in [ZWU32]::FindAllVisible($pBar.Id)) { Write-Host "visible window hwnd=$h" }
+    $titles = [ZWU32]::AllTitles($pBar.Id)
+    foreach ($t in $titles) { Write-Host "window title: [$t]" }
+    $fs = New-Object System.Drawing.Bitmap $vs.Width, $vs.Height
+    $fg = [System.Drawing.Graphics]::FromImage($fs)
+    $fg.CopyFromScreen($vs.Left, $vs.Top, 0, 0, $fs.Size)
+    $fs.Save("$env:RUNNER_TEMP/pc-bar-nowindow-fullscreen.png")
+    $fg.Dispose(); $fs.Dispose()
+    DumpCrashLog "no player window after /control/play"
+    throw "phone-start bar proof: no player window opened after /control/play"
+}
 # A 200 POST means the request was accepted, not that frames flow: poll for REAL video
 # pixels (the working --play= sections do the same) before judging the bar. The window
 # is RE-RESOLVED every poll: starting playback can recreate the OS window (a stale

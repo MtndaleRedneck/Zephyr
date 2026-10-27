@@ -51,6 +51,8 @@ function Wait-HelperListening([int]$pidToServe, [string]$what) {
 # LocalSubnet; UDP discovery is program-scoped to the exe + Private + LocalSubnet; the
 # listen permission names the installing user's SID, not Everyone.
 function Assert-HelperFirewallRules([string]$exePath) {
+    # The rule stores the exe's FULL path; a relative argument can never match.
+    $exePath = (Resolve-Path $exePath).Path
     $ruleV = netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Out-String
     $blocks = $ruleV -split "\r?\n\r?\n"
     $tcp = ($blocks | Where-Object { $_ -match 'Protocol:\s*TCP' } | Select-Object -First 1)
