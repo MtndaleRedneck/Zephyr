@@ -168,8 +168,10 @@ namespace ZephyrPlayer
 
         /// <summary>First video inside a folder, descending into subfolders when the
         /// top level has none (series libraries). Bounded: at most 3 levels down and
-        /// 40 directory entries examined, ordinal order, so a deep tree costs a few
-        /// quick enumerations and never walks the whole drive.</summary>
+        /// 40 VIDEO candidates examined, ordinal order. Non-video files (.srt, .nfo,
+        /// posters) are skipped for free - a folder full of them must not spend the
+        /// budget before the descent (round-3 P8). Enumeration is lazy, so a large
+        /// directory never gets fully listed before the cap applies.</summary>
         private static string? PeekFirstVideo(string dir)
         {
             var pending = new Queue<(string Path, int Depth)>();
@@ -178,17 +180,18 @@ namespace ZephyrPlayer
             while (pending.Count > 0)
             {
                 var (d, depth) = pending.Dequeue();
-                string[] files, subs;
+                IEnumerable<string> files, subs;
                 try
                 {
-                    files = Directory.GetFiles(d);
-                    subs = Directory.GetDirectories(d);
+                    files = Directory.EnumerateFiles(d);
+                    subs = Directory.EnumerateDirectories(d);
                 }
                 catch { continue; }
                 foreach (var f in files.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
                 {
+                    if (!LibraryIsVideo(f)) continue;
                     if (++examined > 40) return null;
-                    if (LibraryIsVideo(f)) return f;
+                    return f;
                 }
                 if (depth < 3)
                     foreach (var sub in subs.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
@@ -202,7 +205,7 @@ namespace ZephyrPlayer
 
         /// <summary>Real shell thumbnails, loaded off the UI thread; each tile
         /// fills in when its bitmap is ready. Folders peek the first video
-        /// inside them (one level); files show their own frame.</summary>
+        /// inside them (up to 3 levels down); files show their own frame.</summary>
         private void LoadThumbnails(string root, List<Entry> entries)
         {
             if (!OperatingSystem.IsWindows()) return; // headless CI keeps placeholders

@@ -116,6 +116,11 @@ namespace ZephyrPlayer
                             // the phone can say "use the code showing on the PC now".
                             await Reply(ctx, 410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Use the code showing on the PC screen now.\"}");
                             return;
+                        case PairOutcome.StoreUnavailable:
+                            // Fail-closed store: nothing saved, no code spent, the
+                            // phone gets one plain sentence (round-3 P4).
+                            await Reply(ctx, 503, "{\"error\":\"pairing paused\",\"detail\":\"Pairing is paused on this PC right now - nothing was changed. Restart the Player and try again.\"}");
+                            return;
                         case PairOutcome.NoCode:
                             await Reply(ctx, 403, "{\"error\":\"no code\",\"detail\":\"No code is showing on the PC. Open pairing on the PC first.\"}");
                             return;

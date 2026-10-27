@@ -29,6 +29,48 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void Broken_Store_Refused_Add_Leaves_No_Phantom_In_Memory()
+        {
+            // Round-3 P4: a refused write must not leak into the cached list -
+            // IsPaired/Count/Entries stay exactly what the unreadable file says.
+            File.WriteAllText(FilePath, "{ this is not json ");
+            var store = new PairedStore(FilePath);
+            Assert.Throws<InvalidOperationException>(() => store.Add("tok-phantom", "My phone"));
+            Assert.Throws<InvalidOperationException>(() => store.Add("tok-phantom", "My phone"));
+            Assert.False(store.IsPaired("tok-phantom"));
+            Assert.Equal(0, store.Count);
+            Assert.Empty(store.Entries());
+        }
+
+        [Fact]
+        public void Broken_Store_Remove_Refuses_Before_Touching_Anything()
+        {
+            File.WriteAllText(FilePath, "{ this is not json ");
+            var store = new PairedStore(FilePath);
+            Assert.Throws<InvalidOperationException>(() => store.Remove("tok"));
+            Assert.True(store.IsBroken);
+            Assert.Equal("{ this is not json ", File.ReadAllText(FilePath));
+        }
+
+        [Fact]
+        public void Failed_Write_Changes_Nothing_In_Memory_Or_On_Disk()
+        {
+            // Transactional (round-3 P4): the in-memory list only advances after a
+            // successful persist, so a failing disk never creates a phantom pairing.
+            var store = new PairedStore(FilePath);
+            store.Add("tok-a", "First");
+            // Make the directory read-only-ish: replace the target path's parent
+            // with a FILE so the temp write cannot land.
+            var dirFile = Path.Combine(Path.GetTempPath(), "zephyr-store-block-" + Guid.NewGuid().ToString("N"));
+            File.WriteAllText(dirFile, "not a dir");
+            var blocked = new PairedStore(Path.Combine(dirFile, "paired.json"));
+            Assert.Throws<InvalidOperationException>(() => blocked.Add("tok-b", "Second"));
+            Assert.False(blocked.IsPaired("tok-b"));
+            Assert.Equal(0, blocked.Count);
+            File.Delete(dirFile);
+        }
+
+        [Fact]
         public void Old_String_Array_Still_Reads_As_Paired()
         {
             File.WriteAllText(FilePath, "[\"tok-a\",\"tok-b\"]");

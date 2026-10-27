@@ -49,6 +49,19 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void Renewal_Never_Revives_An_Expired_Code()
+        {
+            // Round-3 P6: a code that already expired (UI stall, sleep/wake) must
+            // not be promoted into the 30s grace slot by the renewal.
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            var first = gate.NewCode();
+            now += TimeSpan.FromMinutes(11); // past the 10-minute lifetime
+            gate.NewCode();                  // the stall ends, renewal re-mints
+            Assert.Equal(PairOutcome.BadCode, gate.TryPair(first, 1, () => "t", out _));
+        }
+
+        [Fact]
         public void Previous_Code_Dies_After_The_Grace()
         {
             var now = DateTime.UtcNow;
