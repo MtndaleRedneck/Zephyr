@@ -69,11 +69,11 @@ class MediaControlsService : Service() {
         val cb = object : MediaSession.Callback() {
             override fun onPlay() { run { SelectedPlayback(store).togglePause() } }
             override fun onPause() { run { SelectedPlayback(store).togglePause() } }
-            override fun onRewind() { jump(store, -store.skipSecondarySec) }
+            // Teardown C6: the SAME chosen (primary) interval both ways, matching the labels.
+            override fun onRewind() { jump(store, -store.skipMainSec) }
             override fun onFastForward() { jump(store, store.skipMainSec) }
-            // The system media surface renders its two extra slots from these actions;
-            // they fire the two chosen skip intervals (main forward, secondary back).
-            override fun onSkipToPrevious() { jump(store, -store.skipSecondarySec) }
+            // The system media surface renders its two extra slots from these actions.
+            override fun onSkipToPrevious() { jump(store, -store.skipMainSec) }
             override fun onSkipToNext() { jump(store, store.skipMainSec) }
             // No onSeekTo and no ACTION_SEEK_TO: the bar shows the place but can't be dragged.
         }
@@ -206,6 +206,8 @@ class MediaControlsService : Service() {
     // media-session notification: it renders as the media card, not a normal shade
     // row, and media-session notifications are exempt from the Android 13
     // notification permission, so it never prompts.
+    private fun skipLabel(secs: Int) = if (secs % 60 == 0) "${secs / 60}m" else "${secs}s"
+
     private fun postMediaNotification(playing: Boolean, timeSec: Long, lengthSec: Long, title: String?) {
         val nm = getSystemService(NotificationManager::class.java)
         if (nm.getNotificationChannel(CHANNEL_ID) == null) {
@@ -229,14 +231,14 @@ class MediaControlsService : Service() {
             .setContentText("${fmtClockSec(timeSec)} of ${fmtClockSec(lengthSec)}")
             .setContentIntent(openApp)
             .setOngoing(playing)
-            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_rew), "Back 30s", actionIntent(ACTION_MEDIA_REWIND)).build())
+            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_rew), "Back " + skipLabel(Store(this).skipMainSec), actionIntent(ACTION_MEDIA_REWIND)).build())
             .addAction(
                 if (playing)
                     Notification.Action.Builder(icon(android.R.drawable.ic_media_pause), "Pause", actionIntent(ACTION_MEDIA_PLAY_PAUSE)).build()
                 else
                     Notification.Action.Builder(icon(android.R.drawable.ic_media_play), "Play", actionIntent(ACTION_MEDIA_PLAY_PAUSE)).build(),
             )
-            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_ff), "Forward 30s", actionIntent(ACTION_MEDIA_FAST_FORWARD)).build())
+            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_ff), "Forward " + skipLabel(Store(this).skipMainSec), actionIntent(ACTION_MEDIA_FAST_FORWARD)).build())
             .setStyle(Notification.MediaStyle().setMediaSession(s.sessionToken).setShowActionsInCompactView(0, 1, 2))
             .build()
         if (android.os.Build.VERSION.SDK_INT >= 29) {

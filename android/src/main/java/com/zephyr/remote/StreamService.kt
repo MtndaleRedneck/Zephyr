@@ -100,6 +100,7 @@ class StreamService : Service() {
         server?.stop()
         runCatching { wifiLock?.release() }
         runCatching { wakeLock?.release() }
+        StreamServer.cleanCache(this) // cached movie copies never outlive the service (C12)
         super.onDestroy()
     }
 

@@ -183,6 +183,20 @@ object Updater {
 
     fun toHex(b: ByteArray) = b.joinToString("") { "%02x".format(it) }
 
+    /** SHA-256 of a file on disk - the cached-APK identity check (teardown 9a). */
+    fun sha256(f: File): String {
+        val md = MessageDigest.getInstance("SHA-256")
+        f.inputStream().use { ins -> val buf = ByteArray(32 * 1024); var n = ins.read(buf); while (n >= 0) { md.update(buf, 0, n); n = ins.read(buf) } }
+        return toHex(md.digest())
+    }
+
+    /** A cached APK is only reusable for the offer it was downloaded FOR: same size and,
+     *  when published, the same digest (teardown 9a - a stale file must never install). */
+    fun cachedMatchesOffer(f: File, info: UpdateInfo): Boolean {
+        if (!f.exists() || f.length() != info.size) return false
+        return info.sha256 == null || try { sha256(f) == info.sha256 } catch (e: Exception) { false }
+    }
+
     /** Confirms the file is this app, newer, and signed with the same key as the installed copy. Throws [Failure]. */
     fun verify(ctx: Context, f: File) {
         try { verifyInner(ctx, f) }

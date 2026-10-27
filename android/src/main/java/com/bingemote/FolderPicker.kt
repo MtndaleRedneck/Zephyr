@@ -31,7 +31,10 @@ import kotlinx.coroutines.withContext
 @Composable
 fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (String) -> Unit, onCancel: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var path by remember { mutableStateOf(remote.store.moviesPath.trim()) }
+    // With Zephyr PC selected this picker browses the PLAYER (teardown C7): the VLC
+    // folder setting stays untouched.
+    val viaZephyr = remote.store.selectedSource == Source.ZEPHYR
+    var path by remember { mutableStateOf(if (viaZephyr) "" else remote.store.moviesPath.trim()) }
     var dirs by remember { mutableStateOf<List<BrowseItem>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -62,6 +65,24 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
         loading = true
         error = null
         scope.launch {
+            if (viaZephyr) {
+                try {
+                    val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
+                    val names = withContext(Dispatchers.IO) {
+                        com.zephyr.remote.ZephyrClient.libraryBrowse(zHost, remote.store.zephyrPort, remote.store.zephyrToken, dir)
+                    }
+                    dirs = names.filter { it.dir }.map { BrowseItem(name = it.name, isDir = true, path = childPath(dir, it.name), uri = "", sizeBytes = 0L) }
+                    viaHelper = false
+                    path = dir
+                    loading = false
+                    if (restore != null) listState.scrollToItem(restore.first, restore.second)
+                    else listState.scrollToItem(0)
+                } catch (e: Exception) {
+                    loading = false
+                    error = "Couldn't open that folder. Check Zephyr Player is open on the PC."
+                }
+                return@launch
+            }
             // The PC app first: it answers with VLC closed. Too old or unreachable: VLC.
             if (remote.store.helperToken.isNotBlank()) {
                 try {
@@ -171,7 +192,13 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
                     scope.launch {
                         // Save on the PC so Movies works with VLC closed; only then close.
                         val saved = withContext(Dispatchers.IO) {
-                            if (remote.store.helperToken.isBlank()) false
+                            if (viaZephyr) {
+                                try {
+                                    val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
+                                    com.zephyr.remote.ZephyrClient.setLibraryFolder(zHost, remote.store.zephyrPort, remote.store.zephyrToken, path)
+                                    true
+                                } catch (e: Exception) { false }
+                            } else if (remote.store.helperToken.isBlank()) false
                             else try {
                                 HelperClient.setMoviesFolder(remote.store.host, remote.store.helperPort, remote.store.helperToken, path)
                                 true

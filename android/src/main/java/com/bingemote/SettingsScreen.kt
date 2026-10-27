@@ -66,7 +66,11 @@ fun SettingsScreen(
         FolderPickerScreen(
             remote,
             pickerListState,
-            onPick = { store.moviesPath = it; pickingMovies = false },
+            onPick = {
+            // The Zephyr picker already saved on the player; moviesPath is VLC's setting.
+            if (store.selectedSource != Source.ZEPHYR) store.moviesPath = it
+            pickingMovies = false
+        },
             onCancel = { pickingMovies = false },
         )
         return
@@ -78,6 +82,15 @@ fun SettingsScreen(
             HeaderIconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
             Spacer(Modifier.width(12.dp))
             Text("Settings", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        }
+        if (store.secureStoreBroken) {
+            Spacer(Modifier.height(10.dp))
+            Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
+                Text(
+                    "Your saved sign-ins couldn't be opened this time (secure storage problem). Nothing was deleted. Close and reopen the app; if it keeps happening, pair again below.",
+                    color = ErrorRed, fontSize = 13.sp, lineHeight = 18.sp,
+                )
+            }
         }
         Spacer(Modifier.height(18.dp))
         BackHandler { onBack() }
@@ -110,12 +123,28 @@ fun SettingsScreen(
                 }
             }
             // Read-only: Browse PC folders is the only way to change it, so a typo can't break the Movies tab.
+            // With Zephyr selected the row is the PLAYER's library folder (teardown C7), read live.
+            val zephyrSelected = store.selectedSource == Source.ZEPHYR
+            var zephyrFolderRow by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(zephyrSelected) {
+                if (zephyrSelected && store.zephyrToken.isNotBlank()) {
+                    zephyrFolderRow = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            com.zephyr.remote.ZephyrClient.libraryFolder(
+                                store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrToken)
+                        } catch (e: Exception) { null }
+                    }
+                }
+            }
+            val folderRowText = if (zephyrSelected)
+                (zephyrFolderRow ?: "").ifBlank { "Not set yet. Tap Browse PC folders." }
+            else store.moviesPath.ifBlank { "Not set yet. Tap Browse PC folders." }
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 15.dp),
             ) {
                 Text(
-                    store.moviesPath.ifBlank { "Not set yet. Tap Browse PC folders." },
-                    color = if (store.moviesPath.isBlank()) Muted else TextC,
+                    folderRowText,
+                    color = if (folderRowText.startsWith("Not set")) Muted else TextC,
                     fontSize = 14.sp,
                 )
             }

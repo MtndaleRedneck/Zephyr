@@ -18,13 +18,23 @@ class Store(context: Context) {
         prefs.edit().remove("seekOnTop").remove("autoReconnect").apply()
     }
 
-    private val secrets = EncryptedSharedPreferences.create(
-        context,
-        "secrets",
-        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val secrets = try {
+        EncryptedSharedPreferences.create(
+            context,
+            "secrets",
+            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    } catch (e: Exception) {
+        InMemoryPrefs()
+    }
+
+    /** True when the Keystore-backed store could not open this launch (teardown C11).
+     *  NOTHING is ever auto-deleted: the encrypted file and the master key stay exactly
+     *  as they are, the app keeps working on an in-memory stand-in, and recovery is a
+     *  plain error + re-pair, by hand, never a wipe. */
+    val secureStoreBroken: Boolean get() = secrets is InMemoryPrefs
 
     var pcName: String
         get() = prefs.getString("pcName", "") ?: ""
@@ -64,6 +74,11 @@ class Store(context: Context) {
     var haptics: Boolean
         get() = prefs.getBoolean("haptics", true)
         set(v) = prefs.edit().putBoolean("haptics", v).apply()
+
+    /** Last automatic update check (manual checks always run; teardown 9c throttle). */
+    var lastUpdateCheckAt: Long
+        get() = prefs.getLong("lastUpdateCheckAt", 0L)
+        set(v) = prefs.edit().putLong("lastUpdateCheckAt", v).apply()
 
     /** Play/pause/skip + position on the lock screen while a movie plays. Off by default. */
     var lockScreenControls: Boolean
@@ -166,3 +181,41 @@ private fun normalizeWinPath(p: String): String =
 
 /** Every install opens on Home (teardown A1); pairing starts from Settings, never forced. */
 internal fun initialScreenForConfiguredInstall(configured: Boolean): String = "main"
+
+
+/** Read/write stand-in while the real encrypted store can't open: values live only
+ *  for this process and are NEVER written to disk (no plaintext secrets, no deletes). */
+private class InMemoryPrefs : android.content.SharedPreferences {
+    private val map = HashMap<String, Any?>()
+    override fun getAll(): MutableMap<String, *> = HashMap(map)
+    override fun getString(key: String?, defValue: String?): String? = map[key] as? String ?: defValue
+    override fun getStringSet(key: String?, defValues: MutableSet<String>?): MutableSet<String>? = defValues
+    override fun getInt(key: String?, defValue: Int): Int = map[key] as? Int ?: defValue
+    override fun getLong(key: String?, defValue: Long): Long = map[key] as? Long ?: defValue
+    override fun getFloat(key: String?, defValue: Float): Float = map[key] as? Float ?: defValue
+    override fun getBoolean(key: String?, defValue: Boolean): Boolean = map[key] as? Boolean ?: defValue
+    override fun contains(key: String?): Boolean = map.containsKey(key)
+    override fun edit(): android.content.SharedPreferences.Editor = Editor()
+    override fun registerOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+    override fun unregisterOnSharedPreferenceChangeListener(listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener?) {}
+    private inner class Editor : android.content.SharedPreferences.Editor {
+        private val writes = HashMap<String, Any?>()
+        private val removals = HashSet<String>()
+        private var clear = false
+        override fun putString(key: String?, value: String?) = apply { key?.let { writes[it] = value; removals.remove(it) } }
+        override fun putStringSet(key: String?, values: MutableSet<String>?) = apply { key?.let { writes[it] = values } }
+        override fun putInt(key: String?, value: Int) = apply { key?.let { writes[it] = value; removals.remove(it) } }
+        override fun putLong(key: String?, value: Long) = apply { key?.let { writes[it] = value; removals.remove(it) } }
+        override fun putFloat(key: String?, value: Float) = apply { key?.let { writes[it] = value } }
+        override fun putBoolean(key: String?, value: Boolean) = apply { key?.let { writes[it] = value; removals.remove(it) } }
+        override fun remove(key: String?) = apply { key?.let { removals.add(it); writes.remove(it) } }
+        override fun clear() = apply { clear = true }
+        override fun commit(): Boolean { applyWrites(); return true }
+        override fun apply() { applyWrites() }
+        private fun applyWrites() {
+            if (clear) map.clear()
+            for (r in removals) map.remove(r)
+            for ((k, v) in writes) map[k] = v
+        }
+    }
+}
