@@ -183,9 +183,10 @@ namespace ZephyrPlayer
                 control: new MainWindowPlaybackControl(_player, player),
                 settings: settings);
             _server.Start();
-            // "Find my PC" on the phone: own discovery port (8490) plus a
-            // best-effort answer on the helper's 8489 for phones still on 1.1.0.
-            // A failed own-port bind surfaces in the UI instead of vanishing.
+            // "Find my PC" on the phone: the player's OWN discovery port (8490)
+            // only. 8489 is never bound - the BingeMote helper keeps it
+            // unconditionally, in both start orders. A failed own-port bind
+            // surfaces in the UI instead of vanishing.
             try { _discovery = new DiscoveryResponder(_server.Port); ConnectionState.DiscoveryOff = false; }
             catch (Exception) { _discovery = null; ConnectionState.DiscoveryOff = true; }
             // Public-Wi-Fi NOTICE (owner-settled: notice only, no Windows-setting

@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
@@ -9,14 +8,29 @@ using Xunit;
 
 namespace ZephyrPlayer.Tests
 {
-    /// "Find my PC" 1.2.0: the player owns UDP 8490 (the helper keeps 8489) and
-    /// answers 8489 only best-effort for phones still on 1.1.0. The coexistence
-    /// test now binds the fake helper EXACTLY like the real one (no ReuseAddress)
-    /// and runs in both start orders (teardown pairing finding B).
+    /// "Find my PC" 1.2.0: the player answers on its OWN port (8490) and never
+    /// binds 8489. The BingeMote helper binds 8489 without address reuse
+    /// (BingeMote helper/HttpServer.cs:497), so on Windows ANY socket we bound
+    /// there could make the helper's bind fail depending on start order. The
+    /// tests below bind a fake helper with the REAL helper's bind shape in both
+    /// start orders and prove the helper always keeps its port (teardown
+    /// pairing finding B; settled requirement: BingeMote keeps 8489
+    /// unconditionally, Zephyr Player gets its own dedicated port).
+    ///
+    /// Verified phone behavior (android sources): the Zephyr phone accepts only
+    /// ZEPHYR_PLAYER_HERE_V1 replies (ZephyrClient.REPLY_MAGIC); the BingeMote
+    /// phone accepts only BINGEMOTE_HERE_V1 (HelperClient.REPLY_MAGIC).
+    /// Consequence for phones still on 1.1.0 (8489-only scans): they cannot
+    /// auto-discover a 1.2.0 player. Their saved PC address + pairing token
+    /// keep working (Store.zephyrHost/zephyrToken persist; the player's
+    /// paired.json migrates), and the 1.1.0 setup screen's manual address
+    /// entry covers a changed PC address or a fresh pair until the phone
+    /// updates to 1.2.0. That sequencing consequence is called out in
+    /// docs/protocol.md and the release notes.
     public class DiscoveryTests
     {
         /// Helper-style responder with the REAL helper's bind shape:
-        /// `new UdpClient(8489)` - no address reuse (helper/HttpServer.cs:497).
+        /// `new UdpClient(8489)` - no ReuseAddress (helper/HttpServer.cs:497).
         private sealed class FakeHelper : IDisposable
         {
             private readonly UdpClient _udp;
@@ -55,57 +69,57 @@ namespace ZephyrPlayer.Tests
         [Fact]
         public async Task Answers_On_Own_Port()
         {
-            using var responder = new DiscoveryResponder(47823, "TestPC", answerLegacyPort: false);
+            using var responder = new DiscoveryResponder(47823, "TestPC");
             Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8490));
         }
 
         [Fact]
-        public async Task Answers_Legacy_Port_When_Free()
+        public async Task Never_Answers_On_The_Helpers_Port()
         {
-            // No helper running: old phones (1.1.0, 8489-only) still find the player.
-            using var responder = new DiscoveryResponder(47823, "TestPC");
-            Assert.True(responder.AnswersLegacyPort);
-            Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8489));
+            // The never-bind guarantee as a regression pin: with ONLY the player
+            // running, 8489 stays silent. (Old phones then rely on their saved
+            // address or manual entry until they update - see class comment.)
+            if (!OperatingSystem.IsWindows()) return;
+            using var player = new DiscoveryResponder(47823, "TestPC");
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AskOne(8489, timeoutMs: 800));
+        }
+
+        [Fact]
+        public async Task Player_First_Helper_Still_Binds_And_Answers()
+        {
+            // The settled coexistence outcome: starting the player FIRST must not
+            // disturb the helper's exclusive 8489 bind - the helper's phone keeps
+            // working no matter what order the apps start in.
+            if (!OperatingSystem.IsWindows()) return;
+            using var player = new DiscoveryResponder(47823, "TestPC");
+            using var helper = new FakeHelper(); // would throw if the player held 8489
+            Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8490));
+            Assert.Equal("BINGEMOTE_HERE_V1|HelperPC|8488", await AskOne(8489));
         }
 
         [Fact]
         public async Task Helper_First_Player_Still_Answers_On_Own_Port()
         {
-            // The real-helper bind shape holds 8489 exclusively; the player's own
-            // port must still answer. Windows semantics - meaningful on the runner.
+            // Other order: the helper holds 8489; the player's own port answers.
             if (!OperatingSystem.IsWindows()) return;
             using var helper = new FakeHelper();
             using var player = new DiscoveryResponder(47823, "TestPC");
-            Assert.False(player.AnswersLegacyPort); // helper holds it; that's fine now
             Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8490));
-        }
-
-        [Fact]
-        public async Task Player_First_Owns_Legacy_Port_And_Answers_It()
-        {
-            // Player first: it answers 8489 itself so old phones still find it,
-            // and the helper's exclusive bind then fails BY DESIGN (one owner
-            // per port; the own port keeps serving new phones regardless).
-            // Start order decides who holds 8489; both orders keep discovery up.
-            if (!OperatingSystem.IsWindows()) return;
-            using var player = new DiscoveryResponder(47823, "TestPC");
-            Assert.True(player.AnswersLegacyPort);
-            Assert.ThrowsAny<SocketException>(() => new FakeHelper());
-            Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8490));
-            Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8489));
+            Assert.Equal("BINGEMOTE_HERE_V1|HelperPC|8488", await AskOne(8489));
         }
 
         [Fact]
         public async Task IgnoresOtherTraffic()
         {
-            using var responder = new DiscoveryResponder(47823, "TestPC", answerLegacyPort: false);
+            using var responder = new DiscoveryResponder(47823, "TestPC");
             using var asker = new UdpClient();
             var noise = Encoding.UTF8.GetBytes("BINGEMOTE_HERE_V1|not-a-question|1");
             await asker.SendAsync(noise, noise.Length, new IPEndPoint(IPAddress.Loopback, 8490));
-            // No reply may arrive: bound the wait with a token (async receives
-            // ignore ReceiveTimeout) and require it to time out.
-            using var rc = new CancellationTokenSource(700);
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await asker.ReceiveAsync(rc.Token).AsTask());
+            var question = Encoding.UTF8.GetBytes("BINGEMOTE_DISCOVER_V1");
+            await asker.SendAsync(question, question.Length, new IPEndPoint(IPAddress.Loopback, 8490));
+            using var rc = new CancellationTokenSource(3000);
+            var reply = await asker.ReceiveAsync(rc.Token).AsTask();
+            Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", Encoding.UTF8.GetString(reply.Buffer));
         }
     }
 }
