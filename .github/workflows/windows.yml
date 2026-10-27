@@ -41,6 +41,8 @@ jobs:
       # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
       - name: Install VLC (for the movies launch test)
         run: choco install vlc --no-progress -y
+      - name: Install ffmpeg (makes the long clip for the end-to-end resume case)
+        run: choco install ffmpeg --no-progress -y
 
       - name: Publish the clean release exe (no CI hooks - the build that ships)
         run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
