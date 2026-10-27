@@ -11,7 +11,17 @@ $tmp = "$env:RUNNER_TEMP\vlc-proof"; New-Item -ItemType Directory -Force $tmp | 
 # audio-only input in status.json (CI-observed; addsubtitle probe also came
 # back streamless), so the sub-file proof needs actual video.
 choco install ffmpeg --no-progress -y | Out-Null
-& "C:\ProgramData\chocolatey\bin\ffmpeg.exe" -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p "$tmp\clip.mp4" 2>$null
+# Resolve ffmpeg honestly: the choco shim path is not guaranteed (transient
+# shim/install failures previously hard-failed here). PATH first, then the
+# shim, then the package tree; a real miss throws instead of a wrong-path error.
+$ffmpeg = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
+if (-not $ffmpeg -and (Test-Path 'C:\ProgramData\chocolatey\bin\ffmpeg.exe')) { $ffmpeg = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe' }
+if (-not $ffmpeg) {
+    $ffhit = Get-ChildItem 'C:\ProgramData\chocolatey\lib' -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($ffhit) { $ffmpeg = $ffhit.FullName }
+}
+if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
+& $ffmpeg -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p "$tmp\clip.mp4" 2>$null
 Set-Content "$tmp\clip.srt" "1`r`n00:00:00,000 --> 00:00:04,000`r`nZephyr subtitle proof`r`n"
 
 $srvLog = "$tmp\server.log"
