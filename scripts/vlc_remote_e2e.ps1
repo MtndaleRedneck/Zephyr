@@ -173,6 +173,46 @@ if ($fwExit -ne 0) { throw "install-firewall failed with exit $fwExit" }
 if (-not ($aclOut | Select-String ':8492/')) { throw "URL ACL for port 8492 missing after setup" }
 Assert-HelperFirewallRules $exe
 
+# --- Part 1b: an old install's rules + ACL + marker are MIGRATED, not trusted ---------
+# Round-7 blocker 1: a name-only check (or a marker an older build wrote) kept the
+# round-6 exe-scoped TCP rule and a broad Everyone ACL forever. Plant exactly that old
+# state, rerun the elevated setup (what the explained first-run elevation launches),
+# and require the current shape plus the 1.x helper rule gone. The stale-marker half of
+# the gate (a bare-timestamp firewall.ok must not count) is reviewed in source: the
+# app side is FirewallMarkerCurrent + the shape check, and the dialog cannot be driven
+# headless here.
+Write-Host "== firewall migration from the old shape =="
+netsh advfirewall firewall delete rule name="Zephyr VLC Remote" | Out-Null
+netsh http delete urlacl url=http://+:8492/ | Out-Null
+# The round-6 shape: exe-scoped TCP, no LocalSubnet scoping.
+netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=TCP localport=8492 program="$exe" profile=private | Out-Null
+# The 1.x helper rule and the 1.x broad (Everyone) listen grant.
+netsh advfirewall firewall add rule name="Zephyr VLC Remote Helper" dir=in action=allow protocol=TCP localport=8492 profile=private | Out-Null
+netsh http add urlacl url=http://+:8492/ sddl="D:(A;;GX;;;WD)" | Out-Null
+New-Item -ItemType Directory -Force $data0 | Out-Null
+Set-Content (Join-Path $data0 'firewall.ok') (Get-Date).ToUniversalTime().ToString("o")
+$fwm = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
+Assert ($fwm.ExitCode -eq 0) "elevated setup migrates the old shape (exit $($fwm.ExitCode))"
+Assert-HelperFirewallRules $exe
+$legacy = netsh advfirewall firewall show rule name="Zephyr VLC Remote Helper" 2>$null | Out-String
+Assert ($legacy -notmatch 'Zephyr VLC Remote Helper') "migration removes the 1.x helper rule"
+
+# --- Part 1c: a FOREIGN port reservation is a conflict, never an overwrite -------------
+# Another app or another Windows user's reservation on 8492 is not ours: setup must stop
+# with the conflict exit and leave it in place (round-7 N4 + multi-user rule).
+Write-Host "== foreign URL ACL conflict =="
+netsh http delete urlacl url=http://+:8492/ | Out-Null
+netsh http add urlacl url=http://+:8492/ sddl="D:(A;;GX;;;SY)" | Out-Null
+$fwf = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
+Assert ($fwf.ExitCode -eq 4) "a foreign reservation stops setup with the conflict exit (got $($fwf.ExitCode))"
+$foreignAcl = netsh http show urlacl | Out-String
+Assert ($foreignAcl -match 'S-1-5-18|\(A;;GX;;;SY\)') "the foreign reservation is left untouched"
+netsh http delete urlacl url=http://+:8492/ | Out-Null
+# Restore the good state for the rest of the suite.
+$fw2 = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
+Assert ($fw2.ExitCode -eq 0) "setup succeeds again once the foreign reservation is gone (exit $($fw2.ExitCode))"
+Assert-HelperFirewallRules $exe
+
 # --- Part 2: run the helper and drive its HTTP API over loopback ---
 Write-Host "== helper runtime =="
 $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'

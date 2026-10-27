@@ -165,4 +165,38 @@ public class AdoptGrantTests
         Assert.False(r.Served);
         Assert.False(phone.AdoptSpent);
     }
+
+    [Fact]
+    public void SpendPersistFailureRestoresTheServedRecord()
+    {
+        var (phone, saves) = FreshPhone();
+        var t0 = DateTime.UtcNow;
+        AdoptGrant.Serve(phone, () => "pw-1", "req-1", t0, () => saves.Add(true));
+        // The retry window expires without an ack; the spend's persist then fails. Memory
+        // must keep the SERVED record - the disk still holds it, and "never served" in
+        // memory would hand the password out again under a fresh grant (round-7 N2).
+        Assert.Throws<InvalidOperationException>(() =>
+            AdoptGrant.Serve(phone, () => "pw-1", "req-2", t0.AddMinutes(10),
+                () => throw new InvalidOperationException("disk full")));
+        Assert.False(phone.AdoptSpent);
+        Assert.Equal("req-1", phone.AdoptRequestId);
+        Assert.Equal(t0, phone.AdoptServedAtUtc);
+    }
+
+    [Fact]
+    public void AckPersistFailureRestoresAllThreeValues()
+    {
+        var (phone, saves) = FreshPhone();
+        var t0 = DateTime.UtcNow;
+        AdoptGrant.Serve(phone, () => "pw-1", "req-1", t0, () => saves.Add(true));
+        Assert.Throws<InvalidOperationException>(() =>
+            AdoptGrant.Ack(phone, "req-1", () => throw new InvalidOperationException("disk full")));
+        Assert.False(phone.AdoptSpent);
+        Assert.Equal("req-1", phone.AdoptRequestId);
+        Assert.Equal(t0, phone.AdoptServedAtUtc);
+        // The grant is still replayable (memory == disk): a retry inside the window replays.
+        var replay = AdoptGrant.Serve(phone, () => "pw-1", "req-1", t0.AddMinutes(1), () => saves.Add(true));
+        Assert.True(replay.Served);
+        Assert.True(replay.Replayed);
+    }
 }

@@ -41,16 +41,21 @@ internal static class AdoptGrant
                 if (withinWindow)
                     return new Result { Conflict = true }; // another fetch attempt must wait for the window
                 // Window expired without an ack: the grant is spent. A failed persist
-                // rolls the in-memory marker back - no phantom spend (round-6).
+                // rolls the in-memory marker back to EXACTLY the prior state - the disk
+                // still holds the served record, so memory must match it or the next
+                // fetch would serve the password again under a fresh grant (round-7 N2).
+                var priorSpent = phone.AdoptSpent;
+                var priorRequestId = phone.AdoptRequestId;
+                var priorServedAt = phone.AdoptServedAtUtc;
                 phone.AdoptSpent = true;
                 phone.AdoptRequestId = null;
                 phone.AdoptServedAtUtc = null;
                 try { persist(); }
                 catch
                 {
-                    phone.AdoptSpent = false;
-                    phone.AdoptRequestId = null;
-                    phone.AdoptServedAtUtc = null;
+                    phone.AdoptSpent = priorSpent;
+                    phone.AdoptRequestId = priorRequestId;
+                    phone.AdoptServedAtUtc = priorServedAt;
                     throw;
                 }
                 return new Result { AlreadySpent = true };
@@ -80,15 +85,20 @@ internal static class AdoptGrant
             if (phone.AdoptSpent) return new Result { Acked = true, AlreadySpent = true }; // idempotent ack
             if (phone.AdoptRequestId == null || phone.AdoptRequestId != requestId)
                 return new Result(); // nothing to ack
+            // Same rule as Serve: a failed persist restores ALL THREE prior values,
+            // or memory and disk disagree about whether the grant was served (round-7 N2).
+            var priorSpent = phone.AdoptSpent;
+            var priorRequestId = phone.AdoptRequestId;
+            var priorServedAt = phone.AdoptServedAtUtc;
             phone.AdoptSpent = true;
             phone.AdoptRequestId = null;
             phone.AdoptServedAtUtc = null;
             try { persist(); }
             catch
             {
-                phone.AdoptSpent = false;
-                phone.AdoptRequestId = requestId;
-                phone.AdoptServedAtUtc = null;
+                phone.AdoptSpent = priorSpent;
+                phone.AdoptRequestId = priorRequestId;
+                phone.AdoptServedAtUtc = priorServedAt;
                 throw;
             }
             return new Result { Acked = true };

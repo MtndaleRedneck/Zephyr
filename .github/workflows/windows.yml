@@ -62,6 +62,10 @@ jobs:
           dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window.png"
           & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-pairing-expired.png"
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "pairing-expired"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
 
       - name: Upload the window shot
         uses: actions/upload-artifact@v4
@@ -338,6 +342,32 @@ jobs:
           $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'upgrade installer timed out' }
           if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "upgrade installer exit $($up.ExitCode)" }
+          # Round-7 B7-1: the upgraded app's first launch re-asks the one-time permission
+          # because the 1.1.0 rules are the OLD shape (a name-only check would keep them
+          # forever). The installer already relaunched the app onto that explained-
+          # elevation dialog; the dialog cannot be clicked headless, so the elevated half
+          # it leads to is run directly (the runner is admin - exactly what clicking
+          # Continue reaches).
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $sidUp = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $fwUp = Start-Process $installed -ArgumentList "--install-firewall `"$sidUp`"" -Wait -PassThru
+          if ($fwUp.ExitCode -ne 0) { throw "post-upgrade firewall migration exit $($fwUp.ExitCode)" }
+          # The migration must leave the CURRENT shape, not 1.1.0's: TCP System + 47823 +
+          # LocalSubnet, UDP exe + 8490 + LocalSubnet, and no Everyone listen grant.
+          $tcpUp = netsh advfirewall firewall show rule name="Zephyr Player" verbose | Out-String
+          if ($tcpUp -notmatch 'LocalPort:\s*47823' -or $tcpUp -notmatch 'Program:\s*System' -or $tcpUp -notmatch 'Local subnet|LocalSubnet|localsubnet') { Write-Output $tcpUp; throw 'upgrade migration: TCP rule is not the current shape' }
+          $udpUp = netsh advfirewall firewall show rule name="Zephyr Player Discovery" verbose | Out-String
+          if ($udpUp -notmatch 'LocalPort:\s*8490' -or $udpUp -notmatch [regex]::Escape($installed) -or $udpUp -notmatch 'Local subnet|LocalSubnet|localsubnet') { Write-Output $udpUp; throw 'upgrade migration: UDP rule is not the current shape (8490, exe, LocalSubnet)' }
+          $aclBlock = ((netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
+          if (-not $aclBlock) { throw 'upgrade migration: no listen permission for 47823' }
+          if ($aclBlock -match 'WD\)') { Write-Output $aclBlock; throw 'upgrade migration: the 1.1.0 Everyone grant survived' }
+          # The leftover 1.1.0 HKLM uninstall entry must be gone (it pointed at this
+          # install and claimed the 1.1.x version - the only shape the app removes).
+          foreach ($k in 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1') {
+            if (Test-Path $k) { throw "leftover 1.1.0 HKLM uninstall entry survived the migration: $k" }
+          }
+          Start-Process $installed
           Start-Sleep -Seconds 8
           $running = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
           if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'upgraded app did not relaunch from the installed path' }

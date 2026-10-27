@@ -5,23 +5,51 @@ namespace ZephyrVlcRemote;
 /// <summary>
 /// The one-time firewall step. Windows needs admin rights to add a firewall rule and the
 /// listen permission, so the helper restarts itself once with the UAC prompt, adds a
-/// Private-networks-only rule, checks both are really there, and leaves a marker so it
-/// never asks again.
+/// Private-networks-only rule, checks both are really there, and leaves a versioned
+/// marker so it never asks again. The marker is VERSIONED: when the required rule or
+/// ACL shape changes (the round-7 http.sys shape vs the old exe-scoped shape), an
+/// existing install verifies the ACTUAL shape once and re-runs this setup if anything
+/// is old, instead of trusting a marker an older build wrote.
 /// </summary>
 internal static class FirewallSetup
 {
+    /// <summary>First line of the firewall.ok marker. Bump when the required shape changes.</summary>
+    internal const string MarkerVersion = "v2";
+
+    /// <summary>Who the port's URL reservation belongs to.</summary>
+    internal enum AclOwnership { None, Ours, Legacy, Foreign }
+
     /// <summary>Runs inside the elevated copy. Returns the process exit code.
     /// [userSid] is the UNelevated user's SID: the listen permission is scoped to that
     /// account, not everyone. [userDataDir] is that user's data folder, so the markers
     /// land where the user's copy reads them even when another admin approved the UAC.
-    /// Both fall back to this process's own identity/folder for direct runs.</summary>
+    /// Both fall back to this process's own identity/folder for direct runs.
+    /// Exit 4 means the port is reserved by another app or another Windows user; their
+    /// reservation is NEVER overwritten - the caller explains the conflict instead.</summary>
     public static int RunElevated(string? userSid, string? userDataDir)
     {
         try
         {
-            var sid = userSid ?? System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value;
+            // Validate the passed SID before it goes anywhere near an SDDL string; a
+            // missing or malformed value falls back to this process's own identity.
+            string? sid = null;
+            if (!string.IsNullOrWhiteSpace(userSid))
+            {
+                try { sid = new System.Security.Principal.SecurityIdentifier(userSid).Value; }
+                catch { sid = null; }
+            }
+            sid ??= System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value;
+            if (sid == null)
+            {
+                Console.Error.WriteLine("The listen permission needs a Windows account to scope to; none was available.");
+                return 3;
+            }
             var dataDir = userDataDir ?? Program.DataDir;
             Run("netsh", $"advfirewall firewall delete rule name=\"{Program.LegacyFirewallRule}\""); // 1.x installs
+            // Re-add our own rules from scratch: by name they are ours, whatever shape an
+            // older build gave them (a 1.x exe-scoped TCP rule included). BingeMote's
+            // rules (8488/8489) and any other app's rules are never named here.
+            Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
             AddRule("TCP", Program.HttpPort);
             AddRule("UDP", Program.DiscoveryPort);
             // VLC's web remote needs inbound too: one Private-networks-only rule for vlc.exe.
@@ -43,21 +71,33 @@ internal static class FirewallSetup
             // all programs) are listed for the helper log. Zephyr VLC Remote only adds its own
             // Private-only rule above.
             try { File.WriteAllText(VlcInventoryPath(dataDir), InventoryVlcRules()); } catch { }
-            // Let the helper (a normal, non-admin app) listen on its port. Scoped to the
-            // installing user's SID - after the System-attributed TCP rule this ACL is the
-            // thing that limits who may take the port at all.
-            Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
-            var acl = Run("netsh", "http add urlacl url=http://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
-            if (acl != 0 || !UrlAclExists())
+            // The listen permission: replace only what is ours (already correct, or the
+            // broad Everyone grant a 1.x build wrote). A reservation belonging to another
+            // app or another Windows user is NEVER overwritten - that is their port.
+            switch (ClassifyUrlAcl(sid))
             {
-                Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
-                Console.Error.WriteLine("The listen permission could not be added.");
-                return 3;
+                case AclOwnership.Ours:
+                    break; // already exactly right
+                case AclOwnership.None:
+                case AclOwnership.Legacy:
+                    Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
+                    var acl = Run("netsh", "http add urlacl url=http://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
+                    if (acl != 0 || !UrlAclExists())
+                    {
+                        Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
+                        Console.Error.WriteLine("The listen permission could not be added.");
+                        return 3;
+                    }
+                    break;
+                case AclOwnership.Foreign:
+                    Program.Log("firewall setup: port " + Program.HttpPort + " is reserved by another app or Windows user; left untouched.");
+                    Console.Error.WriteLine("The network port Zephyr VLC Remote needs is reserved for another app or another Windows user on this PC.");
+                    return 4;
             }
             // Verify the reservation really names the intended user, not just the port:
             // a stale or differently-scoped reservation is the exact thing that leaves
             // the System-attributed TCP rule guarded by the wrong account.
-            if (sid != null && !UrlAclNamesUser(sid))
+            if (!UrlAclNamesUser(sid))
             {
                 Program.Log("firewall setup: the listen permission on " + Program.HttpPort +
                     " does not name SID " + sid + " after setup. Actual reservation: " + UrlAclBlock());
@@ -94,8 +134,14 @@ internal static class FirewallSetup
             "Zephyr VLC Remote needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. " +
             "It adds three firewall rules for home (Private) networks only - one for the phone connection, one for phone discovery, and one that opens VLC's own remote on Private networks - plus the listen permission for the phone connection.",
             "Continue");
-        if (!ok) return false;
+        if (!ok)
+        {
+            NoteDialog.Show(null, "No problem - setup will be offered again next time you open Zephyr VLC Remote.");
+            return false;
+        }
 
+        int? exitCode = null;
+        var conflict = false;
         try
         {
             var exe = Environment.ProcessPath!;
@@ -108,19 +154,125 @@ internal static class FirewallSetup
                 WindowStyle = ProcessWindowStyle.Hidden,
             };
             var p = Process.Start(psi);
-            if (p == null || !p.WaitForExit(60_000) || p.ExitCode != 0 || !RuleExists() || !UrlAclExists())
+            if (p == null) throw new InvalidOperationException("The elevated setup did not start.");
+            if (!p.WaitForExit(60_000)) throw new InvalidOperationException("Setup timed out.");
+            exitCode = p.ExitCode;
+            conflict = exitCode == 4;
+            if (exitCode != 0 || !RuleExists() || !UrlAclExists())
                 throw new InvalidOperationException("Setup could not be verified.");
             return true;
         }
         catch
         {
-            // The user said no at the UAC prompt, or setup failed. Without the rule and
-            // listen permission the helper cannot accept connections, so it closes and
-            // offers again next launch - no second, misleading error box after this one.
-            NoteDialog.Show(null,
-                "No firewall rule was added, so the phone cannot reach this PC yet. Zephyr VLC Remote will now close and offer to set up again next time you open it.");
+            if (conflict)
+                NoteDialog.Show(null,
+                    "Something else on this PC has already reserved the network port Zephyr VLC Remote needs (" + Program.HttpPort + "), and it is not one of ours, so setup stopped without changing it. Zephyr VLC Remote will close now; freeing that port needs whoever manages this PC.");
+            else
+                // The user said no at the UAC prompt, or setup failed partway. Say what is
+                // true in every case: setup did not finish (rules may or may not exist).
+                NoteDialog.Show(null,
+                    "Setup did not finish, so the phone cannot reach this PC yet. Zephyr VLC Remote will now close and offer to set up again next time you open it.");
             return false;
         }
+    }
+
+    /// <summary>True when BOTH helper rules exist AND carry the current shape: TCP
+    /// program=System + LocalSubnet + Private (http.sys owns the listener in the kernel,
+    /// so an exe-scoped TCP rule would never match), UDP exe-scoped + LocalSubnet +
+    /// Private (the discovery socket lives in this process). Name-only checks pass on
+    /// the old 1.x shape, which is exactly the upgrade bug this guards against.</summary>
+    public static bool RulesHaveCurrentShape()
+    {
+        return RuleBlockMatches("TCP", Program.HttpPort, "System")
+            && RuleBlockMatches("UDP", Program.DiscoveryPort, Environment.ProcessPath ?? "");
+    }
+
+    private static bool RuleBlockMatches(string protocol, int port, string program)
+    {
+        var psi = new ProcessStartInfo("netsh", $"advfirewall firewall show rule name=\"{Program.FirewallRule}\" verbose")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var p = Process.Start(psi)!;
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        foreach (var block in output.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.None))
+        {
+            if (!block.Contains("Rule Name:")) continue;
+            if (!FieldIs(block, "Protocol", protocol)) continue;
+            if (!FieldIs(block, "LocalPort", port.ToString())) continue;
+            if (!FieldIs(block, "Program", program)) continue;
+            if (!FieldIs(block, "Direction", "In")) continue;
+            if (!FieldIs(block, "Enabled", "Yes")) continue;
+            var profiles = Field(block, "Profiles");
+            if (profiles == null || profiles.Contains("Any") || profiles.Contains("Public")
+                || profiles.Contains("Domain") || !profiles.Contains("Private")) continue;
+            var remote = Field(block, "RemoteIP");
+            if (remote == null || !(remote.Contains("Local subnet") || remote.Contains("LocalSubnet") || remote.Contains("localsubnet"))) continue;
+            return true;
+        }
+        return false;
+    }
+
+    private static string? Field(string block, string name)
+    {
+        foreach (var line in block.Split('\n'))
+        {
+            var t = line.Trim();
+            if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase)) return t.Substring(name.Length + 1).Trim();
+        }
+        return null;
+    }
+
+    private static bool FieldIs(string block, string name, string value) =>
+        string.Equals(Field(block, name), value, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>True when the port's reservation names the CURRENT user (read-only check
+    /// the unelevated copy can run: netsh http show urlacl needs no admin).</summary>
+    public static bool UrlAclNamesCurrentUser()
+    {
+        var sid = System.Security.Principal.WindowsIdentity.GetCurrent().User?.Value;
+        return sid != null && UrlAclNamesUser(sid);
+    }
+
+    /// <summary>Who the port's URL reservation belongs to: us (an exact per-user grant
+    /// for [sid]), a legacy broad grant our 1.x builds wrote (Everyone, nothing else),
+    /// nobody, or something else - another app or another Windows user, which must
+    /// never be overwritten. Both sides are compared through parsed security
+    /// descriptors: netsh normalizes well-known accounts to SDDL aliases when STORING
+    /// (RID-500 admin comes back "LA", Everyone "WD"), so substring checks mislead.</summary>
+    internal static AclOwnership ClassifyUrlAcl(string? sid)
+    {
+        var block = UrlAclBlock();
+        var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
+        if (!m.Success) return AclOwnership.None;
+        string normalized;
+        try
+        {
+            normalized = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
+                .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+        }
+        catch { return AclOwnership.Foreign; }
+        if (sid != null)
+        {
+            try
+            {
+                var ours = new System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;" + sid + ")")
+                    .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+                if (normalized == ours) return AclOwnership.Ours;
+            }
+            catch { }
+        }
+        try
+        {
+            var legacy = new System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;WD)")
+                .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+            if (normalized == legacy) return AclOwnership.Legacy;
+        }
+        catch { }
+        return AclOwnership.Foreign;
     }
 
     private static string VlcInventoryPath(string? dataDir = null) =>
@@ -180,13 +332,26 @@ internal static class FirewallSetup
         if (code != 0) throw new InvalidOperationException($"netsh add rule exited {code}");
     }
 
-    /// <summary>Remove what setup added: both helper rules and the listen permission.
-    /// Runs elevated at uninstall (or from a future in-app cleanup). The vlc.exe rule is
-    /// deliberately left: it may be shared, and only the ownership marker proves it ours.</summary>
-    public static int RemoveElevated()
+    /// <summary>Remove what setup added: both helper rules and, when it is ours, the
+    /// listen permission. Runs elevated at uninstall. [userSid] is the UNINSTALLING
+    /// user's SID (the unelevated uninstaller passes it): the ACL is deleted only when
+    /// it names that user or is the broad 1.x Everyone grant - another user's or
+    /// another app's reservation stays. The vlc.exe rule is deliberately left: it may
+    /// be shared, and only the ownership marker proves it ours.</summary>
+    public static int RemoveElevated(string? userSid)
     {
         Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
-        Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
+        string? sid = null;
+        if (!string.IsNullOrWhiteSpace(userSid))
+        {
+            try { sid = new System.Security.Principal.SecurityIdentifier(userSid).Value; }
+            catch { sid = null; }
+        }
+        var owner = ClassifyUrlAcl(sid);
+        if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
+            Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
+        else if (owner == AclOwnership.Foreign)
+            Console.Error.WriteLine("The listen permission on " + Program.HttpPort + " belongs to another app or Windows user; left in place.");
         return 0;
     }
 
@@ -209,7 +374,7 @@ internal static class FirewallSetup
     /// RID-500 admin comes back as "LA", Everyone as "WD"), so a substring match on the
     /// raw SID misses correct reservations; both sides are compared through a parsed
     /// security descriptor instead.</summary>
-    private static bool UrlAclNamesUser(string sid)
+    internal static bool UrlAclNamesUser(string sid)
     {
         var block = UrlAclBlock();
         var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");

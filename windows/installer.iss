@@ -61,6 +61,32 @@ begin
   Result := True;
 end;
 
+
+function GetUninstallUserSid: String;
+var
+  TmpFile, S: String;
+  ResultCode, P, I: Integer;
+begin
+  Result := '';
+  TmpFile := ExpandConstant('{tmp}\zeph-uninst-sid.txt');
+  Exec('cmd.exe', '/c whoami /user /fo csv /nh > "' + TmpFile + '"', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode);
+  if LoadStringFromFile(TmpFile, S) then
+  begin
+    P := Pos('S-1-5-', S);
+    if P > 0 then
+    begin
+      Result := Copy(S, P, Length(S));
+      for I := 1 to Length(Result) do
+        if (Result[I] = '"') or (Result[I] = ',') or (Result[I] = ' ') or (Result[I] = #13) or (Result[I] = #10) then
+        begin
+          SetLength(Result, I - 1);
+          Break;
+        end;
+    end;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -73,8 +99,11 @@ begin
     // behind. This needs one admin prompt; on a decline the leftover is a LocalSubnet,
     // Private-only rule on an unused port plus the user's own URL ACL. Decline-safe:
     // a cancelled prompt (or any failure) skips cleanup and the uninstall still
-    // completes.
-    if not ShellExec('runas', ExpandConstant('{app}\ZephyrPlayer.exe'), '--remove-firewall', '',
+    // completes. The uninstalling user's SID is passed so the ACL is removed only when
+    // it names that user (or is the published 1.1.0 Everyone grant) - another user's
+    // or another app's reservation is never touched.
+    if not ShellExec('runas', ExpandConstant('{app}\ZephyrPlayer.exe'),
+      '--remove-firewall "' + GetUninstallUserSid + '"', '',
       SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       Log('firewall cleanup was declined or failed to start; rules left in place');
   end;

@@ -100,11 +100,12 @@ object HelperClient {
      * routes with a JSON body carrying a readable "detail" - show THAT, never a guess.
      * Only a bare 404 (no helper JSON) means the route is missing: the PC is too old.
      */
-    private fun failure(c: HttpURLConnection): Exception {
+    private fun failure(c: HttpURLConnection, alreadyRead: String? = null): Exception {
         val code = c.responseCode
         // Read the error body ONCE (a second read always comes back empty, which used to
-        // swallow the detail on 401/403).
-        val text = try {
+        // swallow the detail on 401/403). Callers that already consumed it (postForBody)
+        // hand the text in - re-reading the stream would lose every detail (round-7 S7-1).
+        val text = alreadyRead ?: try {
             c.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
         } catch (e: Exception) { "" }
         val json = try { JSONObject(text) } catch (e: Exception) { null }
@@ -184,7 +185,7 @@ object HelperClient {
                 ?.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) } ?: ""
             when (c.responseCode) {
                 in 200..299 -> return text
-                else -> throw failure(c)
+                else -> throw failure(c, text)
             }
         } catch (e: BadToken) { throw e }
         catch (e: Unreachable) { throw e }

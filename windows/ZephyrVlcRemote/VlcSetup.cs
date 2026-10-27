@@ -10,13 +10,18 @@ namespace ZephyrVlcRemote;
 
 internal static class VlcSetup
 {
+    /// <summary>Test seam: the real vlcrc lives in the user's profile; tests redirect it
+    /// so a suite run can never touch a real VLC configuration (round-7 N8).</summary>
+    internal static string? VlcDirOverride;
+    private static string VlcDir => VlcDirOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc");
+
     public static string WriteVlcrc(string password)
     {
         // Round-5: the generated password is 96 bits; refuse to arm the LAN-facing web
         // remote with anything weak (12+ chars).
         if (password.Length < 12 || password.Length > 200 || password.Contains('\r') || password.Contains('\n'))
             return JsonSerializer.Serialize(new { ok = false, reason = "bad password" });
-        var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc");
+        var dir = VlcDir;
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "vlcrc");
         var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : new List<string>();
@@ -160,7 +165,7 @@ internal static class VlcSetup
     {
         try
         {
-            var path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc", "vlcrc");
+            var path = Path.Combine(VlcDir, "vlcrc");
             if (!File.Exists(path)) return null;
             return FindValue(File.ReadAllLines(path).ToList(), key);
         }

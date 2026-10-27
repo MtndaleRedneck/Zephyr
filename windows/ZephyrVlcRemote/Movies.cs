@@ -135,7 +135,9 @@ internal static class Movies
         }
         catch (Exception ex)
         {
-            return Error(500, "launch failed", ex.Message);
+            // The detail is UI on the phone: plain words, never a raw exception message.
+            Program.Log("VLC could not be started: " + ex.Message);
+            return Error(500, "launch failed", "VLC could not be started on this PC.");
         }
         ResumeTracker.NoteLaunch(httpPort, httpPassword);
         Program.Log("Started VLC with: " + file);

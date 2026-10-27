@@ -121,7 +121,9 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                     withContext(Dispatchers.Main) { onBack() }
                 }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { error = e.message ?: "The PC could not start the movie." }
+                // Only HelperClient.Unreachable carries phone-safe wording; a raw
+                // exception message (e.g. a JSON parse error) is never shown (round-7 S6-2).
+                withContext(Dispatchers.Main) { error = e.message?.takeIf { e is HelperClient.Unreachable } ?: "The PC could not start the movie." }
             } finally { starting = false }
         }
     }

@@ -6,7 +6,10 @@
         Background="Black" MouseMove="OnMouseMove">
     <!-- Every floating control lives inside VideoView.Content
          (WPF airspace), not over the VideoView. -->
-    <libvlc:VideoView x:Name="Video">
+    <!-- Black surface before the first frame: the VideoView default is the light
+         system control color, which flashed light-gray on every playback start
+         (round-7 S7-4). -->
+    <libvlc:VideoView x:Name="Video" Background="Black">
         <libvlc:VideoView.Content>
             <Grid x:Name="Overlay" Background="Transparent" MouseMove="OnMouseMove">
                 <Border x:Name="ControlBar" x:FieldModifier="public"
