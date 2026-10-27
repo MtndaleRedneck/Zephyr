@@ -200,6 +200,10 @@ function Measure-Video($path) {
 }
 function Measure-Bar($path) {
     if (-not (Test-Path $path)) { return @(0, 0) }
+    # Golden-threshold calibration (run 40492866626): the positive control - a KNOWN
+    # bar composited from the suite's own render at capture scale - scores golden=4,
+    # seekRun=86%. The bar gate is golden>=2 (half the control) + seekRun>=40; a
+    # post-autohide frame scores golden=0. The control gate matches (>=2 / >=40).
     # The bar body occupies roughly the bottom third (about y 0.64-0.95 in an 800x500
     # capture; the golden ElapsedText ~0.67, the seek track ~0.72). A 0.75+ band missed
     # BOTH signatures (round-7 review C). 0.55 keeps full margin while the seek-run's
@@ -538,7 +542,7 @@ if (Test-Path $ctrlRender) {
     $base.Dispose()
     $mCtrl = Measure-Bar "$env:RUNNER_TEMP/pc-bar-positivecontrol.png"
     Write-Host "bar metric positive control: golden=$($mCtrl[0]) seekRun=$($mCtrl[1])%"
-    if (-not ($mCtrl[0] -ge 5 -and $mCtrl[1] -ge 40)) { throw "bar metric positive control FAILED: a known bar render scored golden=$($mCtrl[0]) seekRun=$($mCtrl[1])% - the metric is blind, no bar verdict is meaningful" }
+    if (-not ($mCtrl[0] -ge 2 -and $mCtrl[1] -ge 40)) { throw "bar metric positive control FAILED: a known bar render scored golden=$($mCtrl[0]) seekRun=$($mCtrl[1])% - the metric is blind, no bar verdict is meaningful" }
 } else { Write-Host "::warning::control-bar render missing - positive control skipped" }
 Remove-Item "$env:RUNNER_TEMP/pc-bar-phonestart.png" -ErrorAction SilentlyContinue
 Remove-Item "$env:RUNNER_TEMP/pc-bar-poll.png" -ErrorAction SilentlyContinue
@@ -554,7 +558,7 @@ foreach ($i in 1..40) {
             $m = Measure-Bar "$env:RUNNER_TEMP/pc-bar-poll.png"
             $barStartGolden = $m[0]; $barStartSeek = $m[1]
             Write-Host "phone-start poll ${i}: video=$vidStart golden=$barStartGolden seekRun=$barStartSeek%"
-            if ($vidStart -ge 3000 -and $barStartGolden -ge 5 -and $barStartSeek -ge 40) {
+            if ($vidStart -ge 3000 -and $barStartGolden -ge 2 -and $barStartSeek -ge 40) {
                 # The FIRST frame that has real video AND the bar is the proof; later
                 # polls must not overwrite it with a post-autohide frame (round-7 C).
                 Copy-Item "$env:RUNNER_TEMP/pc-bar-poll.png" "$env:RUNNER_TEMP/pc-bar-phonestart.png" -Force
@@ -596,10 +600,10 @@ $mAuto        = Measure-Bar "$env:RUNNER_TEMP/pc-bar-autohide.png"
 $mPaused      = Measure-Bar "$env:RUNNER_TEMP/pc-bar-paused.png"
 $vidParkedPx  = Measure-Video "$env:RUNNER_TEMP/pc-bar-parked.png"
 $mParked      = Measure-Bar "$env:RUNNER_TEMP/pc-bar-parked.png"
-$barOnStart  = ($mStart[0]  -ge 5 -and $mStart[1]  -ge 40)
-$barOnAuto   = ($mAuto[0]   -ge 5 -and $mAuto[1]   -ge 40)
-$barOnPaused = ($mPaused[0] -ge 5 -and $mPaused[1] -ge 40)
-$barOnParked = ($mParked[0] -ge 5 -and $mParked[1] -ge 40)
+$barOnStart  = ($mStart[0]  -ge 2 -and $mStart[1]  -ge 40)
+$barOnAuto   = ($mAuto[0]   -ge 2 -and $mAuto[1]   -ge 40)
+$barOnPaused = ($mPaused[0] -ge 2 -and $mPaused[1] -ge 40)
+$barOnParked = ($mParked[0] -ge 2 -and $mParked[1] -ge 40)
 $vidOkAuto   = ($vidAutoPx   -ge 3000)
 $vidOkParked = ($vidParkedPx -ge 3000)
 

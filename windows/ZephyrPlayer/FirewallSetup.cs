@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -35,20 +37,19 @@ namespace ZephyrPlayer
         /// <summary>Who the port's URL reservation belongs to.</summary>
         internal enum AclOwnership { None, Ours, Legacy, Foreign }
 
+        // The marker is per-MACHINE (Local, not Roaming): a Roaming marker would follow
+        // the user to another PC and vouch for rules that do not exist there (round-8).
         private static string MarkerPath => Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "ZephyrPlayer", "firewall.ok");
 
-        /// <summary>True when setup verifiably matches the current shape: either a
-        /// current-version marker (fast path - no netsh on every launch, round-7 N7-2)
-        /// or the ACTUAL rules + ACL checked live, which also stamps the marker.</summary>
+        /// <summary>True only when the ACTUAL rules + ACL check live, right now. There is
+        /// no marker fast path: a rule deleted or changed after the stamp - or a marker
+        /// left behind by an older install - must never vouch for the shape (round-8).
+        /// The COM read is cheap and needs no admin. The marker is still stamped (the
+        /// upgrade smoke asserts it) but nothing trusts it.</summary>
         public static bool SetupIsCurrent()
         {
-            try
-            {
-                if (File.ReadAllText(MarkerPath).StartsWith(MarkerVersion + "\n")) return true;
-            }
-            catch { }
             if (!RulesHaveCurrentShape() || !UrlAclNamesCurrentUser()) return false;
             StampMarker();
             return true;
@@ -66,54 +67,81 @@ namespace ZephyrPlayer
 
         public static bool RulesExist()
         {
-            var tcp = Run("netsh", $"advfirewall firewall show rule name=\"{TcpRuleName}\"");
-            if (tcp.ExitCode != 0 || !tcp.Output.Contains(TcpRuleName)) return false;
-            var udp = Run("netsh", $"advfirewall firewall show rule name=\"{UdpRuleName}\"");
-            return udp.ExitCode == 0 && udp.Output.Contains(UdpRuleName);
+            var rules = ReadRulesByName(TcpRuleName, UdpRuleName);
+            return rules != null
+                && rules.Any(r => string.Equals(r.Name, TcpRuleName, StringComparison.OrdinalIgnoreCase))
+                && rules.Any(r => string.Equals(r.Name, UdpRuleName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>One firewall rule's shape, read through the Windows Firewall COM API
+        /// (HNetCfg.FwPolicy2). Rule DATA is language-independent - unlike netsh's
+        /// display text, which is localized and made the old text parse re-ask for setup
+        /// on every launch on a non-English PC (round-8 N-1).</summary>
+        internal sealed record RuleShape(string Name, int Protocol, string LocalPorts, int Direction,
+            bool Enabled, int Profiles, string RemoteAddresses, string ApplicationName);
+
+        /// <summary>All rules carrying any of [names], via the firewall COM API. Null
+        /// when the API itself failed (treated as "not current" - setup is re-offered).</summary>
+        internal static List<RuleShape>? ReadRulesByName(params string[] names)
+        {
+            try
+            {
+                var policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
+                if (policyType == null) return null;
+                dynamic policy = Activator.CreateInstance(policyType)!;
+                var list = new List<RuleShape>();
+                foreach (dynamic r in policy.Rules)
+                {
+                    string name;
+                    try { name = (string)r.Name; } catch { continue; }
+                    if (!names.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase))) continue;
+                    list.Add(new RuleShape(
+                        name,
+                        (int)r.Protocol,
+                        (string)(r.LocalPorts ?? "") ?? "",
+                        (int)r.Direction,
+                        (bool)r.Enabled,
+                        (int)r.Profiles,
+                        (string)(r.RemoteAddresses ?? "") ?? "",
+                        (string)(r.ApplicationName ?? "") ?? ""));
+                }
+                return list;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>One rule carries the required shape: direction In, enabled, Private
+        /// ONLY (any Domain/Public bit fails), LocalSubnet ONLY ("*" fails), the exact
+        /// port, and the exact program (System for the http.sys TCP rule, this exe for UDP).</summary>
+        internal static bool RuleMatches(RuleShape r, int protocol, int port, string program)
+        {
+            if (r.Protocol != protocol) return false;
+            if (r.Direction != 1 || !r.Enabled) return false; // NET_FW_RULE_DIR_IN
+            if (r.Profiles != 2) return false;                // NET_FW_PROFILE2_PRIVATE only
+            if (!string.Equals(r.RemoteAddresses.Trim(), "LocalSubnet", StringComparison.OrdinalIgnoreCase)) return false;
+            if (!r.LocalPorts.Split(',').Any(t => t.Trim() == port.ToString())) return false;
+            return string.Equals(r.ApplicationName.Trim(), program, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>Both rules exist AND carry the current shape (round-7 B7-1): TCP
         /// program=System + LocalSubnet + Private on 47823, UDP exe-scoped + LocalSubnet
-        /// + Private on 8490. The 1.1.0 rules share the names but not the shape.</summary>
+        /// + Private on 8490. EVERY rule under each name must match (round-8 N-3: a
+        /// stale broader rule beside a correct one still fails). The 1.1.0 rules share
+        /// the names but not the shape.</summary>
         public static bool RulesHaveCurrentShape()
         {
-            return RuleBlockMatches(TcpRuleName, "TCP", PlaybackServer.DefaultPort, "System")
-                && RuleBlockMatches(UdpRuleName, "UDP", DiscoveryResponder.OwnPort, Environment.ProcessPath ?? "");
+            return RulesHaveCurrentShape(ReadRulesByName(TcpRuleName, UdpRuleName), Environment.ProcessPath ?? "");
         }
 
-        private static bool RuleBlockMatches(string ruleName, string protocol, int port, string program)
+        internal static bool RulesHaveCurrentShape(List<RuleShape>? rules, string exePath)
         {
-            var output = Run("netsh", $"advfirewall firewall show rule name=\"{ruleName}\" verbose").Output;
-            foreach (var block in output.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.None))
-            {
-                if (!block.Contains("Rule Name:")) continue;
-                if (!FieldIs(block, "Protocol", protocol)) continue;
-                if (!FieldIs(block, "LocalPort", port.ToString())) continue;
-                if (!FieldIs(block, "Program", program)) continue;
-                if (!FieldIs(block, "Direction", "In")) continue;
-                if (!FieldIs(block, "Enabled", "Yes")) continue;
-                var profiles = Field(block, "Profiles");
-                if (profiles == null || profiles.Contains("Any") || profiles.Contains("Public")
-                    || profiles.Contains("Domain") || !profiles.Contains("Private")) continue;
-                var remote = Field(block, "RemoteIP");
-                if (remote == null || !(remote.Contains("Local subnet") || remote.Contains("LocalSubnet") || remote.Contains("localsubnet"))) continue;
-                return true;
-            }
-            return false;
+            if (rules == null) return false;
+            var tcp = rules.Where(r => string.Equals(r.Name, TcpRuleName, StringComparison.OrdinalIgnoreCase)).ToList();
+            var udp = rules.Where(r => string.Equals(r.Name, UdpRuleName, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (tcp.Count == 0 || udp.Count == 0) return false;
+            return tcp.All(r => RuleMatches(r, 6, PlaybackServer.DefaultPort, "System"))
+                && udp.All(r => RuleMatches(r, 17, DiscoveryResponder.OwnPort, exePath));
         }
-
-        private static string? Field(string block, string name)
-        {
-            foreach (var line in block.Split('\n'))
-            {
-                var t = line.Trim();
-                if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase)) return t.Substring(name.Length + 1).Trim();
-            }
-            return null;
-        }
-
-        private static bool FieldIs(string block, string name, string value) =>
-            string.Equals(Field(block, name), value, StringComparison.OrdinalIgnoreCase);
 
         public static bool UrlAclExists()
         {
@@ -246,9 +274,11 @@ namespace ZephyrPlayer
                     var version = key.GetValue("DisplayVersion") as string ?? "";
                     var location = (key.GetValue("InstallLocation") as string ?? "").Trim().Trim('"').TrimEnd('\\');
                     var uninstall = key.GetValue("UninstallString") as string ?? "";
+                    // Exact folder, never a prefix ("Zephyr Player 2" must not match), and
+                    // a SEMANTIC 1.1.x version ("1.10" is not 1.1) - round-8 N-12.
                     var namesUs = (location.Length > 0 && string.Equals(location, appDir, StringComparison.OrdinalIgnoreCase))
-                        || uninstall.IndexOf(appDir, StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (version.StartsWith("1.1") && namesUs)
+                        || SameFolder(UninstallDir(uninstall), appDir);
+                    if (IsVersion11(version) && namesUs)
                     {
                         Microsoft.Win32.Registry.LocalMachine.DeleteSubKeyTree(path, throwOnMissingSubKey: false);
                         Console.Error.WriteLine("Removed the leftover 1.1 uninstall entry (pointed at this install).");
@@ -257,6 +287,21 @@ namespace ZephyrPlayer
             }
             catch { }
         }
+
+        private static bool IsVersion11(string v)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(v.Trim(), @"^(\d+)\.(\d+)(\.\d+)*$");
+            return m.Success && m.Groups[1].Value == "1" && m.Groups[2].Value == "1";
+        }
+
+        private static string UninstallDir(string uninstallString)
+        {
+            var u = uninstallString.Trim().Trim('"');
+            try { return (Path.GetDirectoryName(u) ?? "").TrimEnd('\\'); } catch { return ""; }
+        }
+
+        private static bool SameFolder(string a, string b) =>
+            a.Length > 0 && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
 
         /// <summary>Remove what setup added (uninstall): both rules and, when it is
         /// ours, the listen permission. [userSid] is the UNINSTALLING user's SID (the
@@ -272,6 +317,14 @@ namespace ZephyrPlayer
             {
                 try { sid = new System.Security.Principal.SecurityIdentifier(userSid).Value; }
                 catch { sid = null; }
+            }
+            if (sid == null)
+            {
+                // whoami gave the uninstaller nothing: without the user's SID our
+                // per-user grant cannot be told from another user's, so the reservation
+                // STAYS (round-8 N-11: never misclassify an empty SID as a foreign owner).
+                Console.Error.WriteLine("The uninstalling user's account could not be determined, so the listen permission on " + PlaybackServer.DefaultPort + " was left in place.");
+                return 0;
             }
             var owner = ClassifyUrlAcl(sid);
             if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
@@ -381,6 +434,9 @@ namespace ZephyrPlayer
                 var hover = primary
                     ? new SolidColorBrush(Color.FromRgb(0xCC, 0x77, 0x00))
                     : new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x3B));
+                var pressed = primary
+                    ? new SolidColorBrush(Color.FromRgb(0xA6, 0x63, 0x00))
+                    : new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x4A));
                 var b = new Button
                 {
                     Content = label,
@@ -388,20 +444,26 @@ namespace ZephyrPlayer
                     Padding = new Thickness(16, 6, 16, 6),
                     Background = back,
                     Foreground = primary ? bg : fg,
-                    BorderThickness = new Thickness(0),
+                    BorderThickness = new Thickness(1),
+                    BorderBrush = Brushes.Transparent,
                     // A real template: the stock one paints the light-blue classic hover
                     // chrome and the dotted focus box over the dark look (round-7 S7-2).
-                    Template = DarkButtonTemplate(hover),
+                    // Keyboard focus instead gets a thin brand-colored ring, hover a
+                    // lighter fill, press a darker one (round-8 N-7).
+                    Template = DarkButtonTemplate(hover, pressed, new SolidColorBrush(Brand.Orange)),
                     FocusVisualStyle = null,
                 };
                 return b;
             }
             var ok = MakeBtn(confirmLabel, true);
+            ok.IsDefault = true;   // Enter confirms
+            ok.IsCancel = cancelLabel == null;   // a note's single OK also takes Esc
             ok.Click += (_, _) => { onConfirm(); dlg.DialogResult = true; dlg.Close(); };
             buttons.Children.Add(ok);
             if (cancelLabel != null)
             {
                 var cancel = MakeBtn(cancelLabel, false);
+                cancel.IsCancel = true;   // Esc cancels
                 cancel.Click += (_, _) => { dlg.DialogResult = false; dlg.Close(); };
                 buttons.Children.Add(cancel);
             }
@@ -413,12 +475,15 @@ namespace ZephyrPlayer
         }
 
         /// <summary>A minimal dark button chrome: rounded fill bound to the button's own
-        /// Background (slightly lighter on hover), centered text, no light system chrome.</summary>
-        private static ControlTemplate DarkButtonTemplate(Brush hoverBackground)
+        /// Background (lighter on hover, darker on press), centered text, a thin ring
+        /// when keyboard-focused, no light system chrome.</summary>
+        private static ControlTemplate DarkButtonTemplate(Brush hoverBackground, Brush pressedBackground, Brush focusRing)
         {
             var template = new ControlTemplate(typeof(Button));
             var border = new FrameworkElementFactory(typeof(Border));
             border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
+            border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
+            border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
             border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
             border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
             var text = new FrameworkElementFactory(typeof(TextBlock));
@@ -431,6 +496,12 @@ namespace ZephyrPlayer
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
             hover.Setters.Add(new Setter(Control.BackgroundProperty, hoverBackground));
             template.Triggers.Add(hover);
+            var press = new Trigger { Property = Button.IsPressedProperty, Value = true };
+            press.Setters.Add(new Setter(Control.BackgroundProperty, pressedBackground));
+            template.Triggers.Add(press);
+            var focus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
+            focus.Setters.Add(new Setter(Control.BorderBrushProperty, focusRing));
+            template.Triggers.Add(focus);
             return template;
         }
 

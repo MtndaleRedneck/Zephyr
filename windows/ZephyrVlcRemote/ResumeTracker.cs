@@ -24,14 +24,21 @@ internal static class ResumeTracker
     private static string? _currentFile;
     private static bool _dirty;
     private static bool _saveSuppressed;
+    // Keys cleared during a read-only window: a later successful disk read must NOT
+    // resurrect them (round-8 N-6).
+    private static readonly HashSet<string> ClearedWhileSuppressed = new(StringComparer.OrdinalIgnoreCase);
+    private static int _generation; // stale retry loops (or tests resetting state) stop here
 
     // Settled windows: under a minute watched is not worth asking about; the last couple
     // of minutes counts as finished.
     internal const long MinAskSec = 60;
     internal const long TailSec = 120;
 
+    // Test-only seam: points the store at a temp folder.
+    internal static string? StoreDirOverride;
+
     private static string StorePath =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Zephyr VLC Remote", "resume-places.json");
+        Path.Combine(StoreDirOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Zephyr VLC Remote"), "resume-places.json");
 
     /// <summary>The saved place worth asking about, or null (barely started / nearly done / never seen).</summary>
     public static (long position, long length)? Ask(string file)
@@ -46,7 +53,14 @@ internal static class ResumeTracker
 
     public static void Clear(string file)
     {
-        lock (Gate) { if (ByFile.Remove(file)) _dirty = true; SaveLocked(); }
+        lock (Gate)
+        {
+            if (ByFile.Remove(file)) _dirty = true;
+            // Tombstone even when memory held nothing: the unreadable DISK copy may
+            // still hold this file, and a retry merge must not bring it back.
+            if (_saveSuppressed) { ClearedWhileSuppressed.Add(file); _dirty = true; }
+            SaveLocked();
+        }
     }
 
     /// <summary>A phone-launched play hands the web-remote password over; remember it and
@@ -78,24 +92,18 @@ internal static class ResumeTracker
             lock (Gate) _saveSuppressed = true;
             Program.Log("Saved playback places could not be read (" + ex.GetType().Name
                 + "); the file is left untouched and no resume data will be written over it. Trying again shortly.");
+            var generation = _generation;
             Task.Run(async () =>
             {
                 for (var attempt = 0; attempt < 2; attempt++)
                 {
                     await Task.Delay(TimeSpan.FromSeconds(attempt == 0 ? 15 : 60));
-                    try
+                    lock (Gate) { if (_generation != generation) return; } // state was reset
+                    if (TryReadOnce())
                     {
-                        var map = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(StorePath));
-                        if (map == null) continue;
-                        lock (Gate)
-                        {
-                            foreach (var kv in map) ByFile[kv.Key] = kv.Value;
-                            _saveSuppressed = false;
-                        }
                         Program.Log("Saved playback places read successfully on retry.");
                         return;
                     }
-                    catch { }
                 }
                 Program.Log("Saved playback places are still unreadable; staying read-only until the helper is reopened.");
             });
@@ -106,6 +114,52 @@ internal static class ResumeTracker
             lock (Gate) _password ??= pw;
             EnsurePoller();
         }
+    }
+
+    /// <summary>One disk read + merge; true when the file read and parsed.</summary>
+    private static bool TryReadOnce()
+    {
+        try
+        {
+            var map = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(StorePath));
+            if (map == null) return false;
+            lock (Gate) { MergeDiskLocked(map); }
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // ----- test seams (InternalsVisibleTo) -----
+    internal static bool SaveSuppressedForTests { get { lock (Gate) return _saveSuppressed; } }
+    internal static bool RetryNowForTests() => TryReadOnce();
+    internal static void RecordForTests(string file, double position, double length)
+    {
+        lock (Gate) { ByFile[file] = new Entry { Position = position, Length = length }; _dirty = true; }
+    }
+    internal static void ResetForTests(string storeDir)
+    {
+        lock (Gate)
+        {
+            ByFile.Clear(); ClearedWhileSuppressed.Clear();
+            _saveSuppressed = false; _dirty = false; _currentFile = null;
+            _generation++;
+            StoreDirOverride = storeDir;
+        }
+    }
+
+    /// <summary>Merge a successfully-read disk copy into memory (round-8 N-6): disk only
+    /// FILLS GAPS. A position recorded in memory during the read-only window is newer
+    /// and stays; a key cleared in that window is tombstoned and must not come back.
+    /// Anything memory-only or tombstoned is then persisted, lifting read-only.</summary>
+    private static void MergeDiskLocked(Dictionary<string, Entry> map)
+    {
+        foreach (var kv in map)
+            if (!ByFile.ContainsKey(kv.Key) && !ClearedWhileSuppressed.Contains(kv.Key))
+                ByFile[kv.Key] = kv.Value;
+        if (ClearedWhileSuppressed.Count > 0) _dirty = true;
+        ClearedWhileSuppressed.Clear();
+        _saveSuppressed = false;
+        if (_dirty) SaveLocked();
     }
 
     private static void EnsurePoller()

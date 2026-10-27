@@ -158,7 +158,9 @@ internal static class FirewallSetup
             if (!p.WaitForExit(60_000)) throw new InvalidOperationException("Setup timed out.");
             exitCode = p.ExitCode;
             conflict = exitCode == 4;
-            if (exitCode != 0 || !RuleExists() || !UrlAclExists())
+            // Verify the ACTUAL shape and ACL owner, not name/port existence: a rule
+            // the migration failed to rewrite must not pass here (round-8).
+            if (exitCode != 0 || !RulesHaveCurrentShape() || !UrlAclNamesCurrentUser())
                 throw new InvalidOperationException("Setup could not be verified.");
             return true;
         }
@@ -176,58 +178,83 @@ internal static class FirewallSetup
         }
     }
 
+    /// <summary>One firewall rule's shape, read through the Windows Firewall COM API
+    /// (HNetCfg.FwPolicy2). Rule DATA is language-independent - unlike netsh's display
+    /// text, which is localized and made the old text parse re-ask for setup on every
+    /// launch on a non-English PC (round-8 N-1).</summary>
+    internal sealed record RuleShape(string Name, int Protocol, string LocalPorts, int Direction,
+        bool Enabled, int Profiles, string RemoteAddresses, string ApplicationName);
+
+    /// <summary>All rules carrying any of [names], via the firewall COM API. Null when
+    /// the API itself failed (treated as "not current" - setup is re-offered, never skipped).</summary>
+    internal static List<RuleShape>? ReadRulesByName(params string[] names)
+    {
+        try
+        {
+            var policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
+            if (policyType == null) return null;
+            dynamic policy = Activator.CreateInstance(policyType)!;
+            var list = new List<RuleShape>();
+            foreach (dynamic r in policy.Rules)
+            {
+                string name;
+                try { name = (string)r.Name; } catch { continue; }
+                if (!names.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase))) continue;
+                list.Add(new RuleShape(
+                    name,
+                    (int)r.Protocol,
+                    (string)(r.LocalPorts ?? "") ?? "",
+                    (int)r.Direction,
+                    (bool)r.Enabled,
+                    (int)r.Profiles,
+                    (string)(r.RemoteAddresses ?? "") ?? "",
+                    (string)(r.ApplicationName ?? "") ?? ""));
+            }
+            return list;
+        }
+        catch (Exception ex)
+        {
+            Program.Log("firewall shape check: the Windows Firewall API could not be read (" + ex.GetType().Name + "); treating setup as not done.");
+            return null;
+        }
+    }
+
+    /// <summary>One rule carries the required shape: direction In, enabled, Private
+    /// ONLY (any Domain/Public bit fails), LocalSubnet ONLY ("*" fails), the exact
+    /// port, and the exact program (System for the http.sys TCP rule, this exe for UDP).</summary>
+    internal static bool RuleMatches(RuleShape r, int protocol, int port, string program)
+    {
+        if (r.Protocol != protocol) return false;
+        if (r.Direction != 1 || !r.Enabled) return false; // NET_FW_RULE_DIR_IN
+        if (r.Profiles != 2) return false;                // NET_FW_PROFILE2_PRIVATE only
+        if (!string.Equals(r.RemoteAddresses.Trim(), "LocalSubnet", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!r.LocalPorts.Split(',').Any(t => t.Trim() == port.ToString())) return false;
+        return string.Equals(r.ApplicationName.Trim(), program, StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>True when BOTH helper rules exist AND carry the current shape: TCP
     /// program=System + LocalSubnet + Private (http.sys owns the listener in the kernel,
     /// so an exe-scoped TCP rule would never match), UDP exe-scoped + LocalSubnet +
-    /// Private (the discovery socket lives in this process). Name-only checks pass on
-    /// the old 1.x shape, which is exactly the upgrade bug this guards against.</summary>
+    /// Private (the discovery socket lives in this process). EVERY rule under our name
+    /// must match (round-8 N-3: a stale broader rule beside a correct one still fails)
+    /// and the legacy 1.x rule must be entirely gone. Name-only checks pass on the old
+    /// 1.x shape, which is exactly the upgrade bug this guards against.</summary>
     public static bool RulesHaveCurrentShape()
     {
-        return RuleBlockMatches("TCP", Program.HttpPort, "System")
-            && RuleBlockMatches("UDP", Program.DiscoveryPort, Environment.ProcessPath ?? "");
+        return RulesHaveCurrentShape(ReadRulesByName(Program.FirewallRule, Program.LegacyFirewallRule), Environment.ProcessPath ?? "");
     }
 
-    private static bool RuleBlockMatches(string protocol, int port, string program)
+    internal static bool RulesHaveCurrentShape(List<RuleShape>? rules, string exePath)
     {
-        var psi = new ProcessStartInfo("netsh", $"advfirewall firewall show rule name=\"{Program.FirewallRule}\" verbose")
-        {
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        using var p = Process.Start(psi)!;
-        var output = p.StandardOutput.ReadToEnd();
-        p.WaitForExit();
-        foreach (var block in output.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.None))
-        {
-            if (!block.Contains("Rule Name:")) continue;
-            if (!FieldIs(block, "Protocol", protocol)) continue;
-            if (!FieldIs(block, "LocalPort", port.ToString())) continue;
-            if (!FieldIs(block, "Program", program)) continue;
-            if (!FieldIs(block, "Direction", "In")) continue;
-            if (!FieldIs(block, "Enabled", "Yes")) continue;
-            var profiles = Field(block, "Profiles");
-            if (profiles == null || profiles.Contains("Any") || profiles.Contains("Public")
-                || profiles.Contains("Domain") || !profiles.Contains("Private")) continue;
-            var remote = Field(block, "RemoteIP");
-            if (remote == null || !(remote.Contains("Local subnet") || remote.Contains("LocalSubnet") || remote.Contains("localsubnet"))) continue;
-            return true;
-        }
-        return false;
+        if (rules == null) return false;
+        if (rules.Any(r => string.Equals(r.Name, Program.LegacyFirewallRule, StringComparison.OrdinalIgnoreCase))) return false;
+        var ours = rules.Where(r => string.Equals(r.Name, Program.FirewallRule, StringComparison.OrdinalIgnoreCase)).ToList();
+        var tcp = ours.Where(r => r.Protocol == 6).ToList();
+        var udp = ours.Where(r => r.Protocol == 17).ToList();
+        if (tcp.Count == 0 || udp.Count == 0 || tcp.Count + udp.Count != ours.Count) return false;
+        return tcp.All(r => RuleMatches(r, 6, Program.HttpPort, "System"))
+            && udp.All(r => RuleMatches(r, 17, Program.DiscoveryPort, exePath));
     }
-
-    private static string? Field(string block, string name)
-    {
-        foreach (var line in block.Split('\n'))
-        {
-            var t = line.Trim();
-            if (t.StartsWith(name + ":", StringComparison.OrdinalIgnoreCase)) return t.Substring(name.Length + 1).Trim();
-        }
-        return null;
-    }
-
-    private static bool FieldIs(string block, string name, string value) =>
-        string.Equals(Field(block, name), value, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>True when the port's reservation names the CURRENT user (read-only check
     /// the unelevated copy can run: netsh http show urlacl needs no admin).</summary>
@@ -347,6 +374,14 @@ internal static class FirewallSetup
             try { sid = new System.Security.Principal.SecurityIdentifier(userSid).Value; }
             catch { sid = null; }
         }
+        if (sid == null)
+        {
+            // whoami gave the uninstaller nothing: without the user's SID our per-user
+            // grant cannot be told from another user's, so the reservation STAYS
+            // (round-8 N-11: never misclassify an empty SID as a foreign owner).
+            Console.Error.WriteLine("The uninstalling user's account could not be determined, so the listen permission on " + Program.HttpPort + " was left in place.");
+            return 0;
+        }
         var owner = ClassifyUrlAcl(sid);
         if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
             Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
@@ -408,23 +443,20 @@ internal static class FirewallSetup
 
     internal static bool RuleExists()
     {
-        var psi = new ProcessStartInfo("netsh", $"advfirewall firewall show rule name=\"{Program.FirewallRule}\"")
-        {
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        using var p = Process.Start(psi)!;
-        var output = p.StandardOutput.ReadToEnd();
-        p.WaitForExit();
-        return output.Contains(Program.FirewallRule) && !output.Contains("No rules match");
+        var rules = ReadRulesByName(Program.FirewallRule);
+        return rules != null && rules.Count > 0;
     }
 
     private static int Run(string file, string args)
     {
-        var psi = new ProcessStartInfo(file, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true };
+        var psi = new ProcessStartInfo(file, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         using var p = Process.Start(psi)!;
+        // Drain both streams: an unread redirected pipe can fill and block the child
+        // (and therefore WaitForExit) forever (round-8 N-13).
+        var stdout = p.StandardOutput.ReadToEndAsync();
+        var stderr = p.StandardError.ReadToEndAsync();
         p.WaitForExit();
+        Task.WaitAll(stdout, stderr);
         return p.ExitCode;
     }
 }

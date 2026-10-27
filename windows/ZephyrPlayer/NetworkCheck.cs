@@ -46,9 +46,8 @@ namespace ZephyrPlayer
                     return null;
                 }
                 var output = p.StandardOutput.ReadToEnd().Trim();
-                var parts = output.Split('|');
-                if (parts.Length != 3 || !int.TryParse(parts[2], out var idx)) return null;
-                return new NetProfile { Name = parts[0], Category = parts[1], InterfaceIndex = idx };
+                var outputLine = output;
+                return ParseProfileLine(outputLine);
             }
             catch { return null; }
         }
@@ -83,6 +82,15 @@ namespace ZephyrPlayer
                 lock (Gate) _queued = false;
                 CheckNow(show);
             });
+        }
+
+        /// <summary>Parse "name|category|index" - from the RIGHT: a Wi-Fi name may
+        /// itself contain '|' (round-8 N-9). Null when the shape is not what we asked for.</summary>
+        internal static NetProfile? ParseProfileLine(string output)
+        {
+            var parts = output.Trim().Split('|');
+            if (parts.Length < 3 || !int.TryParse(parts[^1], out var idx)) return null;
+            return new NetProfile { Name = string.Join('|', parts[..^2]), Category = parts[^2], InterfaceIndex = idx };
         }
     }
 }

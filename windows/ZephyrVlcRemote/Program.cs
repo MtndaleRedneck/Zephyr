@@ -71,14 +71,6 @@ internal static class Program
     internal static string ConfigPath => Path.Combine(DataDir, "config.json");
     private static string FirewallMarker => Path.Combine(DataDir, "firewall.ok");
 
-    /// <summary>The marker counts only when it names the CURRENT required shape version;
-    /// anything older triggers the shape check (and one explained elevation if wrong).</summary>
-    private static bool FirewallMarkerCurrent()
-    {
-        try { return File.ReadAllText(FirewallMarker).StartsWith(FirewallSetup.MarkerVersion + "\n"); }
-        catch { return false; }
-    }
-
     private static void StampFirewallMarker()
     {
         try { File.WriteAllText(FirewallMarker, FirewallSetup.MarkerVersion + "\n" + DateTime.UtcNow.ToString("O")); } catch { }
@@ -187,6 +179,13 @@ internal static class Program
             var shotPath = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT")
                 ?? Path.Combine(DataDir, "window.png");
 #if PAIR_CODE_HOOK
+        if (args.Contains("--firewall-shape-ok"))
+            // CI only: the e2e plants old-shaped rules and asserts this says "not current"
+            // before migration and "current" after - the unelevated detection, headless.
+            return FirewallSetup.RulesHaveCurrentShape() ? 0 : 1;
+
+#endif
+#if PAIR_CODE_HOOK
             // CI only: render specific window states for pixel review.
             var shotMode = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE");
             if (shotMode == "pairing-expired")
@@ -209,7 +208,7 @@ internal static class Program
             {
                 // The fail-closed screen: saved pairings unreadable, no reset advice.
                 Program.StoreBroken = true;
-                Program.StoreBrokenReason = "could not be read (Windows reported IOException)";
+                Program.StoreBrokenReason = "could not be read";
                 shot.RunStatusTickForShot();
             }
 #endif
@@ -325,34 +324,38 @@ internal static class Program
         RegisterAutostart();
         try { RegisterApplicationRestart("/restarted", 0); } catch { } // crash or hang: Windows relaunches us
 
-        if (!FirewallMarkerCurrent())
+    {
+        // The live check runs on EVERY start (COM read, no admin): a versioned marker
+        // must never vouch for rules deleted or changed after it was written, and a
+        // marker file can even be copied between machines (round-8). The marker is
+        // still stamped (the upgrade smoke asserts it) but nothing trusts it.
+        if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
         {
-            // The elevated step adds the rules and listen permission; the UNELEVATED
-            // copy verifies them and writes its own marker, so the marker always lands
-            // in the user's profile even when another admin approved the UAC prompt.
-            // The marker is VERSIONED and the verification checks the ACTUAL shape:
-            // a marker or same-named rules written by an older build (exe-scoped TCP,
-            // broad ACL) do not count - one explained elevation migrates them.
+            StampFirewallMarker();
+        }
+        else
+        {
+            // Watchdog launch: never pop the admin prompt every 5 minutes - stay quiet
+            // until he opens the app himself and finishes the one-time setup.
+            if (ensureRunning) { Log("Watchdog start skipped: firewall setup not done yet."); return 0; }
+            // Any decline or failure: one dark note was already shown. Leave cleanly
+            // (even if a leftover listen permission would let us bind) and offer the
+            // setup again on the next launch.
+            if (!FirewallSetup.ExplainAndRelaunch()) return 0;
             if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
-            {
                 StampFirewallMarker();
-            }
             else
             {
-                // Watchdog launch: never pop the admin prompt every 5 minutes - stay quiet
-                // until he opens the app himself and finishes the one-time setup.
-                if (ensureRunning) { Log("Watchdog start skipped: firewall setup not done yet."); return 0; }
-                // Any decline or failure: one dark note was already shown. Leave cleanly
-                // (even if a leftover listen permission would let us bind) and offer the
-                // setup again on the next launch.
-                if (!FirewallSetup.ExplainAndRelaunch()) return 0;
-                if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
-                    StampFirewallMarker();
-                else return 0;
+                // The elevation reported success but the re-check disagrees: say so in
+                // plain words instead of vanishing silently (round-8 N-2).
+                NoteDialog.Show(null,
+                    "Setup did not finish, so the phone cannot reach this PC yet. Zephyr VLC Remote will now close and offer to set up again next time you open it.");
+                return 0;
             }
-            // Surface the vlc.exe rule inventory the elevated step saved (report only).
-            FirewallSetup.LogVlcRuleInventory();
         }
+        // Surface the vlc.exe rule inventory the elevated step saved (report only).
+        FirewallSetup.LogVlcRuleInventory();
+    }
 
         // Resume places: load the saved ones and watch VLC while it runs. This must run
         // on EVERY start, not only the first (round-5 B4): inside the firewall block it
@@ -587,7 +590,8 @@ internal static class Program
         catch (Exception ex)
         {
             StoreBroken = true;
-            StoreBrokenReason = "could not be read (Windows reported " + ex.GetType().Name + ")";
+            // Plain words on screen; the exception type stays in the log (round-8 N-8).
+            StoreBrokenReason = ex is System.Text.Json.JsonException ? "is damaged" : "could not be read";
             lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
             Log("Saved pairing data could not be read (" + ex.GetType().Name + "). The file is left untouched; pairing and saving are off. Reopen Zephyr VLC Remote to try again.");
         }

@@ -120,10 +120,17 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                     remote.retry()
                     withContext(Dispatchers.Main) { onBack() }
                 }
+            } catch (e: HelperClient.BadToken) {
+                // A revoked pairing is never "the movie failed": route to pair-again and
+                // say so (round-8 N-5).
+                withContext(Dispatchers.Main) {
+                    remote.onHelperBadToken()
+                    error = e.message ?: "The PC rejected the pairing token."
+                }
             } catch (e: Exception) {
-                // Only HelperClient.Unreachable carries phone-safe wording; a raw
-                // exception message (e.g. a JSON parse error) is never shown (round-7 S6-2).
-                withContext(Dispatchers.Main) { error = e.message?.takeIf { e is HelperClient.Unreachable } ?: "The PC could not start the movie." }
+                // Typed phone-safe wording (Unreachable, ConnectTimeout) passes through; a
+                // raw exception message (e.g. a JSON parse error) is never shown (round-7 S6-2).
+                withContext(Dispatchers.Main) { error = e.message?.takeIf { e is HelperClient.Unreachable || e is HelperClient.ConnectTimeout } ?: "The PC could not start the movie." }
             } finally { starting = false }
         }
     }
@@ -298,7 +305,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                     return@launch
                 }
                 loading = false
-                error = e.message?.takeIf { e is HelperClient.Unreachable } ?: "Couldn't open that folder on the PC."
+                error = e.message?.takeIf { e is HelperClient.Unreachable || e is HelperClient.ConnectTimeout || e is HelperClient.BadToken } ?: "Couldn't open that folder on the PC."
             }
         }
     }
