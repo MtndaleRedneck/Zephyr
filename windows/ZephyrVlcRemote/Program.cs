@@ -233,6 +233,25 @@ internal static class Program
                 shot.ShowTrayMenuForShot(shotPath);
                 return 0;
             }
+            else if (shotMode == "remove-paths")
+            {
+                // PRODUCTION path proof (round-10 regression: Build returned a disposed
+                // form and the real Ask crashed on Remove/Remove all). Runs the REAL
+                // ConfirmDialog.Ask: cancel must return false, confirm must return true.
+                const string text = "Remove Shot Phone? It stops controlling this PC through Zephyr VLC Remote right away. "
+                    + "You can pair the phone again any time with a new code.";
+                var cancelSays = AskWithAutoClick(text, "Remove", DialogResult.Cancel);
+                Console.Error.WriteLine("[remove-paths] cancel path returned " + cancelSays + " (want False)");
+                var confirmSays = AskWithAutoClick(text, "Remove", DialogResult.OK);
+                Console.Error.WriteLine("[remove-paths] confirm path returned " + confirmSays + " (want True)");
+                if (cancelSays || !confirmSays)
+                {
+                    Console.Error.WriteLine("[remove-paths] FAIL - production Ask returned the wrong answer");
+                    return 2;
+                }
+                Console.Error.WriteLine("[remove-paths] PASS - production Ask opens, cancel cancels, confirm confirms");
+                return 0;
+            }
 #endif
             shot.ShowOffscreenAndCapture(shotPath);
             return 0;
@@ -744,6 +763,39 @@ internal static class Program
                 bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
             }
             d.Close();
+        }
+
+        // Clicks the dialog button carrying the given DialogResult (the production
+        // Cancel/confirm buttons), recursing through the layout rows.
+        private static bool ClickDialogButton(Control root, DialogResult result)
+        {
+            foreach (Control c in root.Controls)
+            {
+                if (c is Button b && b.DialogResult == result) { b.PerformClick(); return true; }
+                if (ClickDialogButton(c, result)) return true;
+            }
+            return false;
+        }
+
+        // Runs the REAL ConfirmDialog.Ask while a timer clicks the requested button on
+        // the shown modal dialog. Throws if no modal button matched (a silent miss
+        // would read as a pass).
+        private static bool AskWithAutoClick(string text, string confirmLabel, DialogResult click)
+        {
+            using var timer = new System.Windows.Forms.Timer { Interval = 400 };
+            var clicked = false;
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                foreach (Form f in Application.OpenForms)
+                {
+                    if (f.Modal) { clicked = ClickDialogButton(f, click); break; }
+                }
+            };
+            timer.Start();
+            var answer = ConfirmDialog.Ask(null, text, confirmLabel);
+            if (!clicked) throw new InvalidOperationException("remove-paths: no modal dialog button matched " + click);
+            return answer;
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "PrintWindow")]
@@ -2381,8 +2433,7 @@ internal static class ConfirmDialog
         var card = HelperWindow.DarkCard;
         var fg = HelperWindow.DarkText;
         var muted = HelperWindow.DarkMuted;
-        var answer = false;
-        using var dlg = new Form
+        var dlg = new Form
         {
             AutoScaleMode = AutoScaleMode.Dpi,
             Text = "Zephyr VLC Remote",

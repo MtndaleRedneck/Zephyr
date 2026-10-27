@@ -61,27 +61,23 @@ jobs:
       - name: Render the helper window for layout review (CI only)
         run: |
           dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window.png"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-pairing-expired.png"
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "pairing-expired"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-pairing.png"
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "pairing"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-broken-store.png"
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "broken-store"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\dialog-remove.png"
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\dialog-remove-all.png"
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-all"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\tray-menu.png"
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "tray"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+          $shots = @(
+            @('window', 'window.png'),
+            @('pairing-expired', 'window-pairing-expired.png'),
+            @('pairing', 'window-pairing.png'),
+            @('broken-store', 'window-broken-store.png'),
+            @('remove', 'dialog-remove.png'),
+            @('remove-all', 'dialog-remove-all.png'),
+            @('tray', 'tray-menu.png')
+          )
+          foreach ($shot in $shots) {
+            $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\$($shot[1])"
+            $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = $shot[0]
+            & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+            if ($LASTEXITCODE -ne 0) { throw "helper window-shot $($shot[0]) exit $LASTEXITCODE" }
+            if (-not (Test-Path "windows/ZephyrVlcRemote/$($shot[1])")) { throw "helper window-shot $($shot[0]) wrote no PNG" }
+          }
+          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT, Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
 
       # Round-9 missing-captures: the Player permission dialogs with REAL interaction
       # state - hover/pressed from the real cursor parked over the primary button,
@@ -95,7 +91,18 @@ jobs:
             if (-not (Test-Path "windows/ZephyrPlayer/dialog-$m.png")) { throw "dialog-shot $m wrote no PNG" }
           }
 
+      # Round-10 regression proof: the REAL production remove-confirm entry point
+      # (ConfirmDialog.Ask) - cancel must cancel, confirm must confirm. Guards the
+      # disposed-Build crash class, not just the capture path.
+      - name: Production remove-dialog open/cancel/confirm proof (CI only)
+        run: |
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-paths"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          if ($LASTEXITCODE -ne 0) { throw "remove-dialog production paths exit $LASTEXITCODE" }
+          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+
       - name: Upload the window shot
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Zephyr-VLC-Remote-window
@@ -105,6 +112,7 @@ jobs:
             windows/ZephyrVlcRemote/tray-menu.png
             windows/ZephyrVlcRemote/window-diag.txt
             windows/ZephyrPlayer/dialog-*.png
+            windows/ZephyrPlayer/dialog-*.diag.txt
           if-no-files-found: warn
 
       # Round-9 R9-2 / round-10 B10-3: compile-out proof on the PRODUCTION artifact.
@@ -393,7 +401,7 @@ jobs:
           # live check BEFORE any migration runs.
           $hooked = "windows/capture-out/ZephyrPlayer.exe"
           if (-not (Test-Path $hooked)) { throw "hooked capture exe missing: $hooked" }
-          $rej = Start-Process $hooked -ArgumentList '--firewall-shape-ok' -Wait -PassThru
+          $rej = Start-Process $hooked -ArgumentList '--firewall-shape-ok', ('"' + $installed + '"') -Wait -PassThru
           if ($rej.ExitCode -ne 1) { throw "Player unelevated check did not REJECT the 1.1.0 shape (exit $($rej.ExitCode))" }
           # Exact 1.1.0-era files (schema from the 1.1.0 source): legacy settings
           # keys and the old paired.json string-array shape with a phone token.
@@ -428,7 +436,7 @@ jobs:
           $sidUp = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           $fwUp = Start-Process $installed -ArgumentList "--install-firewall `"$sidUp`"" -Wait -PassThru
           if ($fwUp.ExitCode -ne 0) { throw "post-upgrade firewall migration exit $($fwUp.ExitCode)" }
-          $acc = Start-Process $hooked -ArgumentList '--firewall-shape-ok' -Wait -PassThru
+          $acc = Start-Process $hooked -ArgumentList '--firewall-shape-ok', ('"' + $installed + '"') -Wait -PassThru
           if ($acc.ExitCode -ne 0) { throw "Player unelevated check did not ACCEPT the migrated shape (exit $($acc.ExitCode))" }
           # The migration must leave the CURRENT shape, not 1.1.0's: TCP System + 47823 +
           # LocalSubnet, UDP exe + 8490 + LocalSubnet, and no Everyone listen grant.
@@ -615,7 +623,7 @@ jobs:
           $exe6 = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           $fw6 = Start-Process $exe6 -ArgumentList "--install-firewall `"$sid6`"" -Wait -PassThru
           if ($fw6.ExitCode -ne 0) { throw "T6 setup exit $($fw6.ExitCode)" }
-          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP\uninstall-t6a.log" -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6 uninstaller timed out' }
           Start-Sleep -Seconds 3
           $left = (netsh http show urlacl url=http://+:47823/) 2>&1 | Out-String
@@ -629,21 +637,107 @@ jobs:
           if (-not $ip.WaitForExit(150000)) { throw 'T6b fresh installer timed out' }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
+          # The leg must ESTABLISH our rules before it can prove they survive: a fresh
+          # silent install only shows the permission dialog (never clicked headless),
+          # so without this setup pass there are no rules to keep (gate 40508776538:
+          # the rules check fired on absence, not deletion).
+          $sidB = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $exeB = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          $fwB = Start-Process $exeB -ArgumentList "--install-firewall `"$sidB`"" -Wait -PassThru
+          if ($fwB.ExitCode -ne 0) { throw "T6b setup exit $($fwB.ExitCode)" }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
           $aclPlanted = (netsh http show urlacl url=http://+:47823/) | Out-String
-          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP\uninstall-t6b.log" -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6b uninstaller timed out' }
           Start-Sleep -Seconds 3
           $aclB = (netsh http show urlacl url=http://+:47823/) | Out-String
           $normB = { param($t) ($t -replace '\s+', ' ').Trim() }
           if ((& $normB $aclB) -ne (& $normB $aclPlanted)) { Write-Output "--- planted ---`n$aclPlanted`n--- after ---`n$aclB"; throw 'T6b: the foreign reservation did not survive the fresh-install uninstall byte-identical' }
           $rulesB = netsh advfirewall firewall show rule name="Zephyr Player" | Out-String
-          if ($rulesB -notmatch 'Zephyr Player') { throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
+          if ($rulesB -notmatch 'Zephyr Player') { Write-Output $rulesB; Get-Content "$env:RUNNER_TEMP/uninstall-chain-smoke.log" -Tail 60 -ErrorAction SilentlyContinue; throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
           netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
           Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
+
+      - name: Legacy HKLM uninstall entry behavior proof (upgrade, setup declined)
+        if: always()
+        timeout-minutes: 8
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Round-10 N10-4: what does the leftover 1.1.0 HKLM uninstall entry ACTUALLY
+          # run after an upgrade where setup never completed (UAC declined/failed) -
+          # which exe, which log, and does a foreign reservation survive going through
+          # THAT entry. Empirical; nothing inferred from shared-folder assumptions.
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            $pu.WaitForExit(150000) | Out-Null
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          foreach ($k in 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1') {
+            Remove-Item $k -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/leg110" --clobber
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          $i1 = Start-Process "$env:RUNNER_TEMP/leg110/Zephyr-PC-1.1.0.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
+          if (-not $i1.WaitForExit(150000)) { throw 'legacy leg: 1.1.0 install timed out' }
+          if ($i1.ExitCode -ne 0) { throw "legacy leg: 1.1.0 install exit $($i1.ExitCode)" }
+          $uninsPath = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          $stamp110 = (Get-Item $uninsPath).LastWriteTimeUtc
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 1
+          # Upgrade; do NOT run setup - the UAC-declined/failed leg.
+          $i2 = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
+          if (-not $i2.WaitForExit(150000)) { throw 'legacy leg: upgrade install timed out' }
+          if ($i2.ExitCode -ne 0) { throw "legacy leg: upgrade install exit $($i2.ExitCode)" }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 1
+          # The HKLM entry must STILL exist: no elevated setup ran to clear it.
+          $entry = $null
+          foreach ($k in 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1') {
+            if (Test-Path $k) { $entry = Get-ItemProperty $k; break }
+          }
+          if (-not $entry) { throw 'legacy leg: expected the 1.1.0 HKLM uninstall entry to STILL EXIST after a setup-declined upgrade' }
+          $us = [string]$entry.UninstallString
+          Write-Output "legacy HKLM UninstallString: $us"
+          # Identity: the entry must target the shared unins000.exe, REWRITTEN by the
+          # upgrade (newer than the 1.1.0 install) - not 1.1.0's own engine.
+          $target = $us.Trim() -replace '^"', '' -replace '".*$', '' -replace '\s+/.*$', ''
+          if (-not (Test-Path $target)) { throw "legacy leg: entry target missing: $target" }
+          $stampNew = (Get-Item $target).LastWriteTimeUtc
+          Write-Output "unins000.exe stamps: after-1.1.0=$stamp110 entry-target=$stampNew"
+          if ($stampNew -le $stamp110) { throw "legacy leg: entry target predates the upgrade - it would run 1.1.0's OWN uninstaller engine" }
+          if ((Resolve-Path $target).Path -ne (Resolve-Path $uninsPath).Path) { throw "legacy leg: entry target is not the shared uninstaller: $target" }
+          # Behavior through THAT entry: plant a foreign reservation, invoke the path.
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
+          $legLog = "$env:RUNNER_TEMP/uninstall-legacy-entry.log"
+          $uu = Start-Process $target -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$legLog" -PassThru
+          if (-not $uu.WaitForExit(150000)) { Get-Content $legLog -Tail 60 -ErrorAction SilentlyContinue; throw 'legacy leg: entry uninstaller timed out' }
+          Start-Sleep -Seconds 3
+          $aclAfter = (netsh http show urlacl url=http://+:47823/) | Out-String
+          $norm = { param($t) ($t -replace '\s+', ' ').Trim() }
+          if ((& $norm $aclAfter) -ne (& $norm $aclBefore)) {
+            Write-Output "--- before ---`n$aclBefore`n--- after ---`n$aclAfter"
+            Get-Content $legLog -Tail 80 -ErrorAction SilentlyContinue
+            throw 'legacy leg: the foreign reservation did not survive the HKLM-entry uninstall byte-identical - the leftover entry IS a blind-delete path'
+          }
+          $legText = Get-Content $legLog -Raw -ErrorAction SilentlyContinue
+          if ($legText -match 'http delete urlacl') { Get-Content $legLog -Tail 80; throw 'legacy leg: the blind delete EXECUTED through the HKLM entry' }
+          foreach ($rid in 'delacl','delrule','deldiscrule') {
+            if ($legText -notmatch ('Skipping RunOnceId\s*"?' + $rid)) { Get-Content $legLog -Tail 80; throw "legacy leg: no 'Skipping RunOnceId $rid' through the HKLM entry - suppression did not engage on this path" }
+          }
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          Write-Output 'LEGACY HKLM ENTRY: targets the shared post-upgrade unins000.exe; the foreign reservation survived byte-identical and every blind legacy id was skipped through this path too.'
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -672,6 +766,11 @@ jobs:
             ${{ runner.temp }}/installer-upgrade-smoke.log
             ${{ runner.temp }}/uninstall-upgrade-smoke.log
             ${{ runner.temp }}/n10-acl-poll.log
+            ${{ runner.temp }}/uninstall-legacy-entry.log
+            ${{ runner.temp }}/chain-install-*.log
+            ${{ runner.temp }}/uninstall-chain-smoke.log
+            ${{ runner.temp }}/uninstall-t6a.log
+            ${{ runner.temp }}/uninstall-t6b.log
           if-no-files-found: warn
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

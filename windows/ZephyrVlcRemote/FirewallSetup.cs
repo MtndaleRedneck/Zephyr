@@ -326,11 +326,12 @@ internal static class FirewallSetup
                     uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
                         ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize,
                         out int needed, IntPtr.Zero);
-                    // No matching record: ERROR_FILE_NOT_FOUND per http.h (round-10
-                    // B10-1); 1168 (ERROR_NOT_FOUND) kept as the same "absent" meaning
-                    // on older http.sys. Both mean NOT RESERVED - unlike every other
-                    // error, which is unreadable, i.e. Foreign.
-                    if (rc == ErrorFileNotFound || rc == ErrorNotFound) return (false, null);
+                    // No matching record: ERROR_FILE_NOT_FOUND (2) per http.h
+                    // (round-10 B10-1). NO other code maps to absent: a made-up
+                    // "not found" would route an EXISTING reservation through the
+                    // None branch and its blind delete. Every other error is a
+                    // read error, i.e. Foreign. The live tests pin what absent
+                    // returns.
                     if (rc == ErrorInsufficientBuffer || rc == ErrorMoreData)
                     {
                         if (needed > outSize) { outSize = needed; continue; }
@@ -363,7 +364,6 @@ internal static class FirewallSetup
     private const int HttpServiceConfigQueryExact = 0;
     private const uint HttpInitializeConfig = 0x2;
     private const uint ErrorFileNotFound = 2;
-    private const uint ErrorNotFound = 1168;
     private const uint ErrorInsufficientBuffer = 122;
     private const uint ErrorMoreData = 234;
 
