@@ -1,0 +1,172 @@
+// Movies: let the phone browse the configured movies folder and start a movie even when
+// VLC is not running yet. Paths are jailed to the configured folder, and only common
+// video files can be launched.
+using System.Diagnostics;
+using System.IO;
+using System.Net;
+using System.Text.Json;
+
+namespace ZephyrVlcRemote;
+
+internal static class Movies
+{
+    private static readonly HashSet<string> VideoExt = new(StringComparer.OrdinalIgnoreCase)
+        { ".mkv", ".mp4", ".m4v", ".avi", ".mov", ".wmv", ".ts", ".mpg", ".mpeg", ".webm", ".flv", ".m2ts" };
+
+    // File Explorer's ordering: "Episode 2" before "Episode 10".
+    [System.Runtime.InteropServices.DllImport("shlwapi.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private static extern int StrCmpLogicalW(string a, string b);
+    private static readonly Comparer<string> Natural = Comparer<string>.Create(StrCmpLogicalW);
+
+    // "$RECYCLE.BIN" and "System Volume Information" are not movies folders.
+    private static bool VisibleDir(string d) =>
+        (new DirectoryInfo(d).Attributes & (FileAttributes.Hidden | FileAttributes.System)) == 0;
+
+    /// <summary>Resolve a folder-relative path, refusing anything outside the movies folder.</summary>
+    private static string? Jail(string root, string rel)
+    {
+        if (root.Length == 0) return null;
+        try
+        {
+            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var full = Path.GetFullPath(Path.Combine(fullRoot, rel.Replace('/', Path.DirectorySeparatorChar)));
+            if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) return null;
+            return full;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>List one level of the movies folder (folders first, then video files).</summary>
+    public static string List(string root, string rel)
+    {
+        if (root.Length == 0) return Error(400, "no movies folder", "Pick a movies folder first in the phone app's Settings.");
+        var dir = Jail(root, rel);
+        if (dir == null || !Directory.Exists(dir)) return Error(404, "not found", "That folder does not exist on the PC.");
+        var entries = new List<object>();
+        foreach (var d in Directory.GetDirectories(dir).Where(VisibleDir).OrderBy(d => Path.GetFileName(d), Natural))
+            entries.Add(new { name = Path.GetFileName(d), dir = true });
+        foreach (var f in Directory.GetFiles(dir).OrderBy(f => Path.GetFileName(f), Natural))
+            if (VideoExt.Contains(Path.GetExtension(f)))
+                entries.Add(new { name = Path.GetFileName(f), dir = false });
+        var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var atRoot = string.Equals(Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar,
+            fullRoot, StringComparison.OrdinalIgnoreCase);
+        return JsonSerializer.Serialize(new { path = rel, atRoot, entries });
+    }
+
+    /// <summary>List subfolders of any folder (drives when path is empty) so the phone can
+    /// pick the movies folder with VLC closed. Folder names only, never files, read-only.</summary>
+    public static string Browse(string path)
+    {
+        try
+        {
+            if (path.Length == 0)
+            {
+                var drives = new List<object>();
+                foreach (var d in DriveInfo.GetDrives())
+                    if (d.IsReady && (d.DriveType == DriveType.Fixed || d.DriveType == DriveType.Removable))
+                        drives.Add(new { name = d.Name, dir = true });
+                return JsonSerializer.Serialize(new { path = "", entries = drives });
+            }
+            // A bare drive letter ("C:") is drive-relative on Windows, not the root; mean the root.
+            if (path.Length == 2 && char.IsLetter(path[0]) && path[1] == ':') path += "\\";
+            // Local drives only (fixed or a removable USB stick), drive-rooted ("C:\..."):
+            // no UNC shares (a token holder must not reach the network) and no relative paths.
+            if (path.Length < 3 || !char.IsLetter(path[0]) || path[1] != ':' || (path[2] != '\\' && path[2] != '/'))
+                return Error(404, "not found", "That folder does not exist on the PC.");
+            var letter = char.ToUpperInvariant(path[0]);
+            var localDrive = false;
+            foreach (var d in DriveInfo.GetDrives())
+                if ((d.DriveType == DriveType.Fixed || d.DriveType == DriveType.Removable)
+                    && char.ToUpperInvariant(d.Name[0]) == letter) { localDrive = true; break; }
+            if (!localDrive) return Error(404, "not found", "That folder does not exist on the PC.");
+            var full = Path.GetFullPath(path);
+            if (!Directory.Exists(full)) return Error(404, "not found", "That folder does not exist on the PC.");
+            var entries = new List<object>();
+            foreach (var d in Directory.GetDirectories(full).Where(VisibleDir).OrderBy(d => Path.GetFileName(d), Natural))
+            {
+                var name = Path.GetFileName(d);
+                entries.Add(new { name = name.Length == 0 ? d : name, dir = true });
+            }
+            return JsonSerializer.Serialize(new { path = full, entries });
+        }
+        catch (UnauthorizedAccessException) { return Error(404, "not found", "Windows won't let Zephyr VLC Remote look in that folder."); }
+        catch (Exception) { return Error(404, "not found", "That folder does not exist on the PC."); }
+    }
+
+    /// <summary>Start VLC with the chosen file and the web interface the app expects.</summary>
+    public static string Play(string root, string rel, int httpPort, string httpPassword, bool fullscreen, IPAddress bindTo, bool? resume)
+    {
+        var file = Jail(root, rel);
+        if (file == null || !File.Exists(file)) return Error(404, "not found", "That file does not exist on the PC.");
+        if (!VideoExt.Contains(Path.GetExtension(file))) return Error(400, "not a video", "That file is not a video.");
+        var vlc = FindVlc();
+        if (vlc == null) return Error(404, "vlc not found", "VLC does not seem to be installed on this PC (looked in the usual places).");
+        // A saved place from last time: ask first (the phone shows Resume / Start over).
+        if (resume == null)
+        {
+            var ask = ResumeTracker.Ask(file);
+            if (ask != null)
+                return JsonSerializer.Serialize(new { ask = new { position = ask.Value.position, length = ask.Value.length } });
+        }
+        if (resume == false) ResumeTracker.Clear(file);
+        // ArgumentList, never string concatenation: a quote in the VLC password must not
+        // become extra VLC options.
+        var psi = new ProcessStartInfo { FileName = vlc, UseShellExecute = false };
+        psi.ArgumentList.Add(file);
+        psi.ArgumentList.Add("--extraintf=http");
+        psi.ArgumentList.Add("--http-host=" + BindAddress(bindTo));
+        psi.ArgumentList.Add("--http-port=" + httpPort);
+        psi.ArgumentList.Add("--http-password=" + httpPassword);
+        // A second tap hands the file to the running VLC instead of opening another one.
+        psi.ArgumentList.Add("--one-instance");
+        if (fullscreen) psi.ArgumentList.Add("--fullscreen");
+        // Phone-launched plays never get VLC's own "continue from last time?" prompt;
+        // the phone's Resume / Start over dialog is the one place that is decided.
+        psi.ArgumentList.Add("--qt-continue=0");
+        if (resume == true)
+        {
+            var ask = ResumeTracker.Ask(file);
+            if (ask != null) psi.ArgumentList.Add("--start-time=" + (int)ask.Value.position);
+        }
+        try
+        {
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            return Error(500, "launch failed", ex.Message);
+        }
+        ResumeTracker.NoteLaunch(httpPort, httpPassword);
+        Program.Log("Started VLC with: " + file);
+        return JsonSerializer.Serialize(new { ok = true });
+    }
+
+    /// <summary>VLC's web interface listens on every address, so a phone that reaches the PC
+    /// over a different address (VPN off/on, IPv6, a second adapter) still finds it. Guarded by
+    /// the interface password and the Private-networks-only firewall rule for vlc.exe.</summary>
+    private static string BindAddress(IPAddress addr) => "0.0.0.0";
+
+    /// <summary>Where is vlc.exe: Windows App Paths first, then the two usual install folders.</summary>
+    internal static string? FindVlc()
+    {
+        try
+        {
+            using var key = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(
+                @"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\vlc.exe");
+            var fromReg = key?.GetValue(null) as string;
+            if (fromReg != null && File.Exists(fromReg)) return fromReg;
+        }
+        catch { }
+        foreach (var p in new[]
+        {
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "VideoLAN", "VLC", "vlc.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "VideoLAN", "VLC", "vlc.exe"),
+        })
+            if (File.Exists(p)) return p;
+        return null;
+    }
+
+    private static string Error(int code, string error, string detail) =>
+        JsonSerializer.Serialize(new { code, error, detail });
+}
