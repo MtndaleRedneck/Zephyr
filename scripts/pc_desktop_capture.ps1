@@ -447,6 +447,12 @@ if ($hwBar -eq [System.IntPtr]::Zero) {
     DumpCrashLog "no player window after /control/play"
     throw "phone-start bar proof: no player window opened after /control/play"
 }
+# C-1 invariant: the player window opens at its default 1920x1080, which COVERS the
+# parked cursor at (5,5) - then a MouseMove storm over the repainting video would keep
+# the bar alive and the proof could never judge autohide. Fit it to 100,100 800x500
+# like the --play= sections, so (5,5) is provably outside it.
+[ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(0), 100, 100, 800, 500, 0) | Out-Null
+[ZWU32]::SetCursorPos(5, 5) | Out-Null
 # A 200 POST means the request was accepted, not that frames flow: poll for REAL video
 # pixels (the working --play= sections do the same) before judging the bar. The window
 # is RE-RESOLVED every poll: starting playback can recreate the OS window (a stale
