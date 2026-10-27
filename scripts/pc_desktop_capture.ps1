@@ -106,12 +106,76 @@ public static class ZWU32 {
     }
 }
 '@
+# Pixel metrics in managed code: GetPixel loops over a band are minutes-slow, and
+# brightness-only counts cannot tell the bar from video (the 67b6ee4 run counted
+# the test pattern's own rainbow strip as "bar"). These judge ACTUAL content:
+#  - BarMetrics: the bar's golden ElapsedText (#F0C23E) in the left of the band,
+#    and the seek track: a long contiguous run of near-gray bright pixels (the
+#    slider line). Video gradients are saturated, not near-gray; solid bars are
+#    narrower than 40% of the width.
+#  - VideoMetrics: SATURATED pixels (max-min channel > 60, max > 100). Black,
+#    white and gray transients (unrendered window) are not saturated.
+Add-Type -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
+public static class ZWPix {
+    public static int[] BarMetrics(string path, double y0frac) {
+        using (var bmp = new Bitmap(path)) {
+            int w = bmp.Width, h = bmp.Height;
+            int y0 = (int)(h * y0frac); int hh = h - y0;
+            var data = bmp.LockBits(new Rectangle(0, y0, w, hh), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            byte[] px = new byte[data.Stride * hh];
+            Marshal.Copy(data.Scan0, px, 0, px.Length);
+            bmp.UnlockBits(data);
+            int golden = 0, goldenBand = (int)(w * 0.12), bestRun = 0;
+            for (int y = 0; y < hh; y++) {
+                int run = 0;
+                for (int x = 0; x < w; x++) {
+                    int o = y * data.Stride + x * 4;
+                    int b = px[o], g = px[o + 1], r = px[o + 2];
+                    if (x < goldenBand && Math.Abs(r - 240) < 28 && Math.Abs(g - 194) < 28 && Math.Abs(b - 62) < 40) golden++;
+                    bool grayish = Math.Abs(r - g) < 20 && Math.Abs(g - b) < 20 && r > 120 && r < 235;
+                    if (grayish) { run++; if (run > bestRun) bestRun = run; } else run = 0;
+                }
+            }
+            return new int[] { golden, (int)(100.0 * bestRun / w) };
+        }
+    }
+    public static int VideoMetrics(string path, double y0frac, double y1frac) {
+        using (var bmp = new Bitmap(path)) {
+            int w = bmp.Width, h = bmp.Height;
+            int y0 = (int)(h * y0frac); int hh = (int)(h * y1frac) - y0;
+            var data = bmp.LockBits(new Rectangle(0, y0, w, hh), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            byte[] px = new byte[data.Stride * hh];
+            Marshal.Copy(data.Scan0, px, 0, px.Length);
+            bmp.UnlockBits(data);
+            int sat = 0;
+            for (int y = 0; y < hh; y += 2) {
+                for (int x = 0; x < w; x += 2) {
+                    int o = y * data.Stride + x * 4;
+                    int b = px[o], g = px[o + 1], r = px[o + 2];
+                    int mx = Math.Max(r, Math.Max(g, b)), mn = Math.Min(r, Math.Min(g, b));
+                    if (mx - mn > 60 && mx > 100) sat++;
+                }
+            }
+            return sat;
+        }
+    }
+}
+'@
 $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
 $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 
 function CaptureWindow($hWnd, $path) {
     # Crop to the app's own window rect: no runner chrome in UI evidence.
     if ($hWnd -eq [System.IntPtr]::Zero) { Write-Host "::error::no window handle for $path - capture skipped"; return "0 x 0" }
+    # CopyFromScreen grabs whatever is ON SCREEN in the rect: re-assert topmost
+    # immediately before the grab, or the runner console / taskbar (also topmost)
+    # lands in the evidence and covers the bar (67b6ee4 controls capture).
+    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, 0, 0, 0x13) | Out-Null  # TOPMOST|NOMOVE|NOSIZE|NOACTIVATE
+    Start-Sleep -Milliseconds 250
     # DWMWA_EXTENDED_FRAME_BOUNDS (9): the window's REAL visible bounds.
     # GetWindowRect includes the invisible drop-shadow ring; through that ring
     # the runner's console/taskbar pixels bleed into UI evidence.
@@ -448,30 +512,33 @@ if ($hwBar -eq [System.IntPtr]::Zero) {
     throw "phone-start bar proof: no player window opened after /control/play"
 }
 # C-1 invariant: the player window opens at its default 1920x1080, which COVERS the
-# parked cursor at (5,5) - then a MouseMove storm over the repainting video would keep
-# the bar alive and the proof could never judge autohide. Fit it to 100,100 800x500
-# like the --play= sections, so (5,5) is provably outside it.
-[ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(0), 100, 100, 800, 500, 0) | Out-Null
+# parked cursor at (5,5). Fit it to 100,100 800x500, so (5,5) is provably outside
+# it, and keep re-fitting inside the poll: playback start can recreate the window.
+[ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
 [ZWU32]::SetCursorPos(5, 5) | Out-Null
-# A 200 POST means the request was accepted, not that frames flow: poll for REAL video
-# pixels (the working --play= sections do the same) before judging the bar. The window
-# is RE-RESOLVED every poll: starting playback can recreate the OS window (a stale
-# handle previously zeroed every capture). A failed capture is skipped, never counted
-# from a stale file.
+# A 200 POST means the request was accepted, not that frames flow: poll for REAL
+# SATURATED video pixels AND the bar's actual signature together (a brightness
+# gate previously passed on an unrendered window). The window is RE-RESOLVED every
+# poll: starting playback can recreate the OS window (a stale handle previously
+# zeroed every capture). A failed capture is skipped, never counted from a stale
+# file.
 Remove-Item "$env:RUNNER_TEMP/pc-bar-phonestart.png" -ErrorAction SilentlyContinue
-$videoPx = 0
+$vidStart = 0; $barStartGolden = 0; $barStartSeek = 0; $gotStart = $false
 foreach ($i in 1..40) {
     $hwBar = Find-PlayerWindow $pBar.Id $hwHome
     if ($hwBar -ne [System.IntPtr]::Zero) {
+        [ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
         $sz = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
         if ($sz -ne "0 x 0") {
-            $videoPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.15 0.80
-            if ($videoPx -ge 2000) { break }
+            $vidStart = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.10, 0.70)
+            $m = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.75)
+            $barStartGolden = $m[0]; $barStartSeek = $m[1]
+            if ($vidStart -ge 30000 -and $barStartGolden -ge 5 -and $barStartSeek -ge 40) { $gotStart = $true; break }
         }
     }
     Start-Sleep -Milliseconds 500
 }
-if ($videoPx -lt 2000) { throw "phone-start bar proof captured no video in the player window ($videoPx px after ~20s) - playback did not start" }
+if (-not $gotStart) { throw "phone-start bar proof never captured video AND bar together (video=$vidStart golden=$barStartGolden seekRun=$barStartSeek% after ~20s)" }
 Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
 $szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
@@ -481,14 +548,30 @@ Start-Sleep -Milliseconds 700
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
 Start-Sleep -Seconds 5   # well past the idle timer: a paused movie never loses the bar
 $szBar3 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-paused.png"
+# Parked-cursor case: a cursor SITTING OVER the playing video must not pin the bar
+# (only real movement reveals it). Move onto the video, wait past the idle timer.
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+[ZWU32]::SetCursorPos(500, 350) | Out-Null   # window center: inside, over the video
+Start-Sleep -Seconds 5
+$szBar4 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-parked.png"
+[ZWU32]::SetCursorPos(5, 5) | Out-Null
 StopZephyr
-Write-Host "phone-start bar captures: $sz / $szBar2 / $szBar3"
-# C-1: bar-band pixel counts (bottom strip, like the windowed/fullscreen checks).
-# Judged honestly: the video keeps moving under the bar, so the verdict compares
-# lit pixels shown-vs-hidden and requires the paused bar to be lit again.
-$barPhoneStartPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.82 1.0
-$barAutoHidePx   = CountColored "$env:RUNNER_TEMP/pc-bar-autohide.png" 0.82 1.0
-$barPausedPx     = CountColored "$env:RUNNER_TEMP/pc-bar-paused.png" 0.82 1.0
+Write-Host "phone-start bar captures: $sz / $szBar2 / $szBar3 / $szBar4"
+# C-1 verdict from ACTUAL bar signatures, not brightness: the golden ElapsedText
+# plus the full-width seek track mark the bar; saturated pixels mark real video.
+$vidStartPx   = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.10, 0.70)
+$mStart       = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.75)
+$vidAutoPx    = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-autohide.png", 0.10, 0.70)
+$mAuto        = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-autohide.png", 0.75)
+$mPaused      = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-paused.png", 0.75)
+$vidParkedPx  = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-parked.png", 0.10, 0.70)
+$mParked      = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-parked.png", 0.75)
+$barOnStart  = ($mStart[0]  -ge 5 -and $mStart[1]  -ge 40)
+$barOnAuto   = ($mAuto[0]   -ge 5 -and $mAuto[1]   -ge 40)
+$barOnPaused = ($mPaused[0] -ge 5 -and $mPaused[1] -ge 40)
+$barOnParked = ($mParked[0] -ge 5 -and $mParked[1] -ge 40)
+$vidOkAuto   = ($vidAutoPx   -ge 30000)
+$vidOkParked = ($vidParkedPx -ge 30000)
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
 $p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
@@ -621,10 +704,12 @@ functional_seek: $(if ($fnSeek -gt 10) { "PROVEN (time-label diff=$fnSeek)" } el
 functional_fullscreen_click: $(if ($fnFs -eq 1) { 'PROVEN (DWM bounds = virtual screen)' } else { 'NOT PROVEN' })
 volume_audio_apply: UNVERIFIED (headless runner has no audio device; UI drag path only)
 controls_over_video_fullscreen: $(if ($vidFs -gt 500 -and $barFs -gt 60) { 'PROVEN' } else { 'NOT PROVEN - inspect images' })
-bar_phonestart_pixels: $barPhoneStartPx
-bar_autohide_pixels: $barAutoHidePx
-bar_paused_pixels: $barPausedPx
-phone_start_bar: $(if ($barPhoneStartPx -gt 60 -and $barPausedPx -gt 60 -and $barAutoHidePx -lt $barPausedPx) { 'PROVEN (shown on phone-start, fewer bar-band pixels after the idle timer, lit again while paused; cursor parked at 5,5 outside the 100,100 800x500 window)' } else { 'NOT PROVEN - inspect pc-bar-*.png' })
+bar_phonestart: video=$vidStartPx golden=$($mStart[0]) seekRun=$($mStart[1])% bar=$barOnStart
+bar_autohide: video=$vidAutoPx golden=$($mAuto[0]) seekRun=$($mAuto[1])% bar=$barOnAuto
+bar_paused: golden=$($mPaused[0]) seekRun=$($mPaused[1])% bar=$barOnPaused
+bar_parked_cursor_over_video: video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])% bar=$barOnParked
+phone_start_bar: $(if ($barOnStart -and $vidOkAuto -and -not $barOnAuto -and $barOnPaused) { 'PROVEN (bar signature present on phone-start over real video, gone after the idle timer while video kept playing, back while paused; judged on golden ElapsedText + seek-track signature, cursor parked outside the 100,100 800x500 window)' } else { 'NOT PROVEN - inspect pc-bar-*.png' })
+parked_cursor_autohide: $(if ($vidOkParked -and -not $barOnParked) { 'PROVEN (cursor moved onto the playing video, then left still: bar hid on the idle timer - only real movement reveals it)' } else { 'NOT PROVEN - inspect pc-bar-parked.png' })
 verdict: $(if ($incomplete) { 'CAPTURE INCOMPLETE - one or more windows never produced pixels; this step fails' } else { 'real desktop captured, app fitted to screen' })
 "@ | Set-Content $note
 
