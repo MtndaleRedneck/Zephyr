@@ -37,14 +37,14 @@ namespace ZephyrPlayer.Tests
         {
             File.WriteAllText(FilePath, "[\"tok-a\"]");
             var store = new PairedStore(FilePath);
-            store.Add("tok-b", "Ezzy's phone");
+            store.Add("tok-b", "Test phone");
             var entries = store.Entries();
             Assert.Equal(2, entries.Count);
-            Assert.Equal("Ezzy's phone", entries[1].Name);
+            Assert.Equal("Test phone", entries[1].Name);
             // The file moved to the entry shape; a FRESH store reads it back.
             var reread = new PairedStore(FilePath);
             Assert.True(reread.IsPaired("tok-a"));
-            Assert.Equal("Ezzy's phone", reread.Entries()[1].Name);
+            Assert.Equal("Test phone", reread.Entries()[1].Name);
         }
 
         [Fact]

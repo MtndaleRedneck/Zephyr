@@ -57,14 +57,32 @@ namespace ZephyrPlayer
             _store = store;
             _playLocal = playLocal;
             _openPairing = openPairing;
-            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(Refresh);
+            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
             Activated += (_, __) => RefreshStatus();
+            ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
+            Refresh();
+        }
+
+        private string _lastFolder = "";
+        private SettingsWindow? _settingsWin;
+
+        /// <summary>Bar/volume/skip changes live-apply elsewhere and must not rebuild the
+        /// library view. Only a library-folder change reloads - and reloads to the NEW
+        /// folder's root (review should-fix 7).</summary>
+        private void OnSettingsChanged()
+        {
+            var folder = _settings.LibraryFolder;
+            if (folder == _lastFolder) return;
+            _currentRel = "";
+            _backStack.Clear();
+            SearchBox.Text = "";
             Refresh();
         }
 
         public void Refresh()
         {
             var folder = _settings.LibraryFolder;
+            _lastFolder = folder;
             var hasFolder = folder.Length > 0 && Directory.Exists(folder);
             EmptyState.Visibility = hasFolder ? Visibility.Collapsed : Visibility.Visible;
             LibraryView.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
@@ -287,11 +305,14 @@ namespace ZephyrPlayer
             Refresh();
         }
 
+        /// <summary>One Settings window at a time, non-modal: an open Settings window
+        /// must not freeze playback controls (review should-fix 6).</summary>
         private void OnSettings(object sender, RoutedEventArgs e)
         {
-            var w = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
-            w.ShowDialog();
-            Refresh();
+            if (_settingsWin != null) { _settingsWin.Activate(); return; }
+            _settingsWin = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
+            _settingsWin.Closed += (_, __) => _settingsWin = null;
+            _settingsWin.Show();
         }
     }
 }

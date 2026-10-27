@@ -23,7 +23,7 @@ namespace ZephyrPlayer
         private PlayerSettings? _settings;
         private bool _reallyQuit;
         private bool _trayHintShown;
-        private string? _pendingPhoneName;
+        private volatile string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
         // unique AppUserModelID (taskbar pinning) and single-instance mutex name.
@@ -189,13 +189,15 @@ namespace ZephyrPlayer
             // surfaces in the UI instead of vanishing.
             try { _discovery = new DiscoveryResponder(_server.Port); ConnectionState.DiscoveryOff = false; }
             catch (Exception) { _discovery = null; ConnectionState.DiscoveryOff = true; }
+            ConnectionState.NotifyChanged();
             // Public-Wi-Fi NOTICE (owner-settled: notice only, no Windows-setting
             // changes): at launch and whenever the network changes.
-            NetworkCheck.CheckNow(_ => ConnectionState.PublicWifiName = _.Name);
+            NetworkCheck.CheckNow(_ => { ConnectionState.PublicWifiName = _.Name; ConnectionState.NotifyChanged(); });
             System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, __) =>
             {
                 ConnectionState.PublicWifiName = null;
-                NetworkCheck.QueueCheck(p => ConnectionState.PublicWifiName = p.Name);
+                ConnectionState.NotifyChanged();
+                NetworkCheck.QueueCheck(p => { ConnectionState.PublicWifiName = p.Name; ConnectionState.NotifyChanged(); });
             };
             // Auto-update check on launch. Missing releases and failures remain
             // distinct from a verified current published installer.
@@ -262,10 +264,18 @@ namespace ZephyrPlayer
             _pairing.Activate();
         }
 
-        /// <summary>Tray icon / relaunch restore: bring the resting screen back up.</summary>
+        /// <summary>Tray icon / relaunch restore: bring the app back up. A movie on
+        /// screen stays on top - never cover it with Home (review should-fix 5).</summary>
         private void RestoreApp()
         {
             if (_reallyQuit) return;
+            if (_player != null && (_player.IsVisible || _player.IsPlayingMedia))
+            {
+                _player.Show();
+                if (_player.WindowState == WindowState.Minimized) _player.WindowState = WindowState.Normal;
+                _player.Activate();
+                return;
+            }
             if (_home != null)
             {
                 _home.Show();

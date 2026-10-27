@@ -6,7 +6,7 @@
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
     <Window.Resources>
         <SolidColorBrush x:Key="CardBrush" Color="#26262D"/>
-        <SolidColorBrush x:Key="OrangeBrush" Color="#F97C02"/>
+        <SolidColorBrush x:Key="OrangeBrush" Color="#FF9500"/>
         <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/>
         <SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
         <Style x:Key="OrangeButton" TargetType="Button">
@@ -65,7 +65,6 @@
                         <TextBlock x:Name="ExpiresText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
                         <TextBlock Text="  ·  " Foreground="{StaticResource MutedBrush}" FontSize="12"/>
                         <Button Style="{StaticResource LinkButton}" Content="Cancel" FontSize="12" Click="OnCancelCode"/>
-                        <TextBlock Text="  ·  renews itself" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
                     </StackPanel>
                     <TextBlock x:Name="ThisPcText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"
                                HorizontalAlignment="Center" Margin="0,6,0,0"/>
