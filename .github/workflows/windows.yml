@@ -73,9 +73,14 @@ jobs:
           foreach ($shot in $shots) {
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\$($shot[1])"
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = $shot[0]
-            & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-            if ($LASTEXITCODE -ne 0) { throw "helper window-shot $($shot[0]) exit $LASTEXITCODE" }
-            if (-not (Test-Path "windows/ZephyrVlcRemote/$($shot[1])")) { throw "helper window-shot $($shot[0]) wrote no PNG" }
+            # pwsh does NOT wait for a GUI-subsystem exe started with &: the stale
+            # $LASTEXITCODE (publish's 0) read as success while the render was still
+            # mid-flight (gate 40511800617: window.png landed AFTER the check threw).
+            $hp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru
+            if ($hp.ExitCode -ne 0) { throw "helper window-shot $($shot[0]) exit $($hp.ExitCode)" }
+            $pngOk = $false
+            foreach ($try in 1..40) { if (Test-Path "windows/ZephyrVlcRemote/$($shot[1])") { $pngOk = $true; break }; Start-Sleep -Milliseconds 250 }
+            if (-not $pngOk) { Get-ChildItem windows/ZephyrVlcRemote -Filter *.png | Select-Object Name,Length; throw "helper window-shot $($shot[0]) wrote no PNG" }
           }
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT, Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
 
@@ -86,9 +91,13 @@ jobs:
         run: |
           dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrPlayer/shot
           foreach ($m in 'explain','hover','pressed','focus','note') {
-            & windows/ZephyrPlayer/shot/ZephyrPlayer.exe --dialog-shot $m "$PWD\windows\ZephyrPlayer\dialog-$m.png"
-            if ($LASTEXITCODE -ne 0) { throw "dialog-shot $m exit $LASTEXITCODE" }
-            if (-not (Test-Path "windows/ZephyrPlayer/dialog-$m.png")) { throw "dialog-shot $m wrote no PNG" }
+            # Same GUI-wait fix as the helper loop above; on failure the hook's own
+            # diag file names the exact step/exception.
+            $pp = Start-Process "$PWD\windows\ZephyrPlayer\shot\ZephyrPlayer.exe" -ArgumentList '--dialog-shot', $m, "$PWD\windows\ZephyrPlayer\dialog-$m.png" -Wait -PassThru
+            if ($pp.ExitCode -ne 0) { Get-Content "windows/ZephyrPlayer/dialog-$m.diag.txt" -ErrorAction SilentlyContinue; throw "dialog-shot $m exit $($pp.ExitCode)" }
+            $pngOk = $false
+            foreach ($try in 1..40) { if (Test-Path "windows/ZephyrPlayer/dialog-$m.png") { $pngOk = $true; break }; Start-Sleep -Milliseconds 250 }
+            if (-not $pngOk) { Get-Content "windows/ZephyrPlayer/dialog-$m.diag.txt" -ErrorAction SilentlyContinue; Get-ChildItem windows/ZephyrPlayer -Filter "dialog-*" | Select-Object Name,Length; throw "dialog-shot $m wrote no PNG" }
           }
 
       # Round-10 regression proof: the REAL production remove-confirm entry point
@@ -97,8 +106,8 @@ jobs:
       - name: Production remove-dialog open/cancel/confirm proof (CI only)
         run: |
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-paths"
-          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
-          if ($LASTEXITCODE -ne 0) { throw "remove-dialog production paths exit $LASTEXITCODE" }
+          $rp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru
+          if ($rp.ExitCode -ne 0) { throw "remove-dialog production paths exit $($rp.ExitCode)" }
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
 
       - name: Upload the window shot

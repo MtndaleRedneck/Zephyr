@@ -231,6 +231,12 @@ namespace ZephyrPlayer
                             LastReadFailed = true;
                             return (true, null);
                         }
+                        // No matching record: ERROR_FILE_NOT_FOUND (2) ONLY. Gate
+                        // 40511800617 proved the runner returns 2 for an absent
+                        // record (the live test logged "error 2" on the absent
+                        // plant). Every other nonzero code is a READ error, i.e.
+                        // foreign - never "no reservation" (round-9 N9-3, B10-1).
+                        if (rc == ErrorFileNotFound) return (false, null);
                         if (rc != 0)
                         {
                             LastReadFailed = true;
