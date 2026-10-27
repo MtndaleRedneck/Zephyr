@@ -670,6 +670,19 @@ try {
     New-Item -ItemType Directory -Force $dir2 | Out-Null
     Copy-Item $exe $dir2 -Force
     $exe2 = Join-Path $dir2 "ZephyrVlcRemote.exe"
+    # Why this rule swap exists: the startup firewall shape gate requires the UDP
+    # discovery rule to name the RUNNING exe path (round-5/7/8 design: the discovery
+    # socket lives in the process, and the product deliberately prompts instead of
+    # silently widening a rule). A real update never hits this: the self-updater runs
+    # the downloaded INSTALLER, which reinstalls over the SAME path, so the existing
+    # rule stays valid. Across-paths is only the hand-run copy case, where the explain
+    # prompt is the intended behavior - and it cannot be silent, it needs admin.
+    # What this leg still proves: the actual mutex/update takeover (the running copy
+    # quits, asserted below) and the taking-over copy serving the saved pairings.
+    # What it does NOT prove: the across-paths first-launch firewall prompt; that
+    # path is covered by the dialog renders and the Player explain-dialog legs.
+    netsh advfirewall firewall delete rule name="Zephyr VLC Remote" protocol=UDP localport=8491 | Out-Null
+    netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=UDP localport=8491 program="$exe2" profile=private remoteip=localsubnet | Out-Null
     $p2 = Start-Process $exe2 -PassThru
     $oldExited = $p.WaitForExit(25000)
     Assert $oldExited "running copy quits when a copy from another folder launches"
@@ -677,6 +690,9 @@ try {
     $r = Invoke-Helper '/ping' '{}' $token
     Assert ($r.code -eq 200) "taking-over copy serves the saved token"
     $p = $p2
+    # Later phases restart from the original path: point the discovery rule back.
+    netsh advfirewall firewall delete rule name="Zephyr VLC Remote" protocol=UDP localport=8491 | Out-Null
+    netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=UDP localport=8491 program="$exe" profile=private remoteip=localsubnet | Out-Null
 
     # Round-6: a failed config SAVE refuses the pair with 503 and does NOT spend the
     # code; once the file is writable again the SAME code pairs (real write/read proof).

@@ -25,11 +25,21 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(200, s.VolumeBoostMaxPct);
             Assert.Equal(10, s.PrimarySkipSeconds);
             Assert.Equal(30, s.SecondarySkipSeconds);
-            Assert.Equal("original", s.BarColorStyle);
+            Assert.Equal("orange", s.BarColorStyle); // unset default
             Assert.Equal("hollow", s.IconStyle);
             Assert.False(s.ShowSpeed);
             Assert.False(s.ShowSleepTimer);
             Assert.Equal(100, s.LastVolume);
+        }
+
+        [Fact]
+        public void Stored_Original_Choice_Survives_The_Default_Change()
+        {
+            // The default moved to orange, but an explicit earlier pick is a stored
+            // value, not a missing one: it must read back exactly as chosen.
+            File.WriteAllText(_path, "{\"BarColorStyle\":\"original\"}");
+            var s = new PlayerSettings(_path);
+            Assert.Equal("original", s.BarColorStyle);
         }
 
         [Fact]
@@ -76,7 +86,7 @@ namespace ZephyrPlayer.Tests
             s.PrimarySkipSeconds = 7;
             Assert.Equal(10, s.PrimarySkipSeconds);
             s.BarColorStyle = "purple";
-            Assert.Equal("original", s.BarColorStyle);
+            Assert.Equal("orange", s.BarColorStyle); // unset default
             s.IconStyle = "sparkly";
             Assert.Equal("hollow", s.IconStyle);
         }

@@ -65,6 +65,8 @@ namespace ZephyrPlayer.Tests
                 // Volume left, icons right: volume stack is column 0.
                 var volumeStack = (StackPanel)((Button)w.FindName("VolumeButton")!).Parent;
                 Assert.Equal(0, Grid.GetColumn(volumeStack));
+                // Unset default: the bar is orange when no style was ever picked.
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
             });
         }
 
