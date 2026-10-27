@@ -488,10 +488,12 @@ try {
     $clipFull = (Join-Path $movies 'clip.mkv')
     $resumeDir = Join-Path $env:APPDATA 'Zephyr VLC Remote'
     New-Item -ItemType Directory -Force $resumeDir | Out-Null
-    $resumeJson = '{"' + ($clipFull -replace '\\','\\') + '":{"Position":120.0,"Length":600.0}}'
-    Set-Content (Join-Path $resumeDir 'resume-places.json') $resumeJson -NoNewline
+    # Seed AFTER killing the old instance: its poller saves the in-memory places
+    # whenever VLC is down, which would clobber a seed written before the kill.
     Stop-Process -Id $p.Id -Force
     Start-Sleep -Seconds 1
+    $resumeJson = '{"' + ($clipFull -replace '\\','\\') + '":{"Position":120.0,"Length":600.0}}'
+    Set-Content (Join-Path $resumeDir 'resume-places.json') $resumeJson -NoNewline
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
     $p = Start-Process $exe -PassThru
     $up = $false
@@ -501,6 +503,7 @@ try {
     }
     if (-not $up) { throw "helper did not restart for the resume check" }
     $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
+    Write-Host "resume play answer: $($rResume.code) $($rResume.body)"
     Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
     Assert ($rResume.body -match '"position":120') "the saved place's position comes back"
     Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
