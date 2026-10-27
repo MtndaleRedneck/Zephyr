@@ -130,19 +130,27 @@ fun SettingsScreen(
             // With Zephyr selected the row is the PLAYER's library folder (teardown C7), read live.
             val zephyrSelected = store.selectedSource == Source.ZEPHYR
             var zephyrFolderRow by remember { mutableStateOf<String?>(null) }
+            var zephyrFolderFailed by remember { mutableStateOf(false) }
             LaunchedEffect(zephyrSelected) {
                 if (zephyrSelected && store.zephyrToken.isNotBlank()) {
-                    zephyrFolderRow = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val row = withContext(kotlinx.coroutines.Dispatchers.IO) {
                         try {
                             com.zephyr.remote.ZephyrClient.libraryFolder(
                                 store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrToken)
                         } catch (e: Exception) { null }
                     }
+                    // NEW-2: loading, unpaired and failed are different rows - a
+                    // null answer is the only failure, not the first frames.
+                    zephyrFolderFailed = row == null
+                    zephyrFolderRow = row
                 }
             }
-            val folderRowText = if (zephyrSelected)
-                zephyrFolderRow?.ifBlank { "Not set yet. Tap Browse PC folders." }
-                    ?: "Couldn't read it from the PC right now."
+            val folderRowText = if (zephyrSelected) when {
+                store.zephyrToken.isBlank() -> "Pair with the PC first."
+                zephyrFolderFailed -> "Couldn't read it from the PC right now."
+                zephyrFolderRow == null -> "Reading from the PC..."
+                else -> zephyrFolderRow!!.ifBlank { "Not set yet. Tap Browse PC folders." }
+            }
             else store.moviesPath.ifBlank { "Not set yet. Tap Browse PC folders." }
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 15.dp),

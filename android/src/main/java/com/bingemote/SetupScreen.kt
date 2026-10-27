@@ -237,7 +237,11 @@ fun SetupScreen(
                         "Get Zephyr VLC Remote PC",
                         color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) {
-                            uriHandler.openUri("https://github.com/MtndaleRedneck/Zephyr-Dev/releases")
+                            // The helper's OWN release page: the general releases list
+                            // also shows the old BingeMote recovery build, which is not
+                            // the helper. Ship order guarantees this tag exists before
+                            // the Android release that links to it.
+                            uriHandler.openUri("https://github.com/MtndaleRedneck/Zephyr-Dev/releases/tag/vlc-remote-v1.0.0")
                         },
                     )
                     Spacer(Modifier.height(10.dp))

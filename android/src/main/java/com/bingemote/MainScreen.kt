@@ -242,6 +242,16 @@ private fun HomeContent(
                     color = Color(0xFF3D2A12), fontSize = 13.sp,
                 )
             }
+            // S11b: the saved helper appeared at a NEW address. The helper token
+            // (and with it the VLC password) never follows a discovered host -
+            // re-pairing (fresh code from the helper window) is the safe path.
+            remote.helperMovedTo?.let { movedName ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Found Zephyr VLC Remote ($movedName) at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
+                    color = Color(0xFF3D2A12), fontSize = 13.sp,
+                )
+            }
             // One-time 1.1 -> 1.2 notice (round-3 A3): the PC helper changed.
             var showVlcRemoteNotice by remember { mutableStateOf(remote.store.vlcRemoteNoticePending) }
             if (!lost && showVlcRemoteNotice) {
