@@ -334,6 +334,32 @@ internal static class Program
                     "An older Zephyr VLC Remote is already running. Right-click its icon by the clock (click the ^ arrow if you don't see it) and choose Quit, then open this one again.");
                 return 0;
             }
+            // Do NOT kill a WORKING helper before this copy can serve (round-11 R11-1):
+            // the UDP discovery rule names the running copy's path, so a copy launched
+            // from another folder lands on the firewall setup prompt after the takeover -
+            // the old copy was already gone and nothing listened until the prompt was
+            // answered. Set up FIRST, while the old copy keeps serving; a declined or
+            // failed setup leaves it untouched. Same-path updates never get here: their
+            // rules already match and the check below passes at once.
+            FirewallSetup.LastReadFailed = false;
+            if (!(FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser()))
+            {
+                Log("Update launched from another folder needs its own firewall setup first - the running copy keeps serving meanwhile.");
+                if (FirewallSetup.LastReadFailed)
+                {
+                    // The firewall/ACL API could not be read at all: elevation cannot fix
+                    // that, so no setup prompt - one plain note and close (round-9 N9-8).
+                    NoteDialog.Show(null, "Windows Firewall settings could not be read on this PC. Zephyr VLC Remote cannot check its network permission and will close now; a restart of Windows usually fixes the read.");
+                    return 0;
+                }
+                if (!FirewallSetup.ExplainAndRelaunch()) return 0;
+                if (!(FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser()))
+                {
+                    NoteDialog.Show(null,
+                        "Setup did not finish, so the phone cannot reach this copy yet. The copy that was already running was left alone. Zephyr VLC Remote will offer to set up again next time you open it from here.");
+                    return 0;
+                }
+            }
             Log("Update launched while an older copy ran - asked it to quit, taking over.");
             oldQuit.Set();
             // The old copy exits and releases the mutex; take it over (give it a few seconds).

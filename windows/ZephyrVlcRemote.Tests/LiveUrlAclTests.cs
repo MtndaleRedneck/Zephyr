@@ -23,6 +23,7 @@ public class LiveUrlAclTests
             CreateNoWindow = true,
         })!;
         p.WaitForExit(15000);
+        Assert.True(p.ExitCode == 0, $"netsh {args} exited {p.ExitCode}: {p.StandardOutput.ReadToEnd()}{p.StandardError.ReadToEnd()}");
     }
 
     [Fact]
@@ -30,7 +31,16 @@ public class LiveUrlAclTests
     {
         Assert.True(new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator),
             "the live URL-ACL test needs elevation to plant reservations");
-        Netsh("http delete urlacl url=" + Url);
+        // Never delete someone else's reservation to make room: on a CI runner the
+        // port is free, but on a developer PC a real reservation could exist. REFUSE
+        // instead of cleaning foreign state (round-11).
+        var existing = Process.Start(new ProcessStartInfo("netsh", "http show urlacl")
+        {
+            RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true,
+        })!;
+        var shown = existing.StandardOutput.ReadToEnd();
+        existing.WaitForExit(15000);
+        Assert.False(shown.Contains(Url), $"a pre-existing reservation for {Url} was found - refusing to delete foreign state; free it by hand to run this test");
         FirewallSetup.LastReadFailed = false; // isolate from any earlier test's read failure
         try
         {

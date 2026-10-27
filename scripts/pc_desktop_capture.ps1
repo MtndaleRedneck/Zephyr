@@ -215,7 +215,13 @@ function Measure-Bar($path) {
         for ($x = 0; $x -lt $band.W; $x++) {
             $o = $y * $band.S + $x * 4
             $b = $band.B[$o]; $g = $band.B[$o + 1]; $r = $band.B[$o + 2]
-            if ($x -lt $goldenBand -and [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40) { $golden++ }
+            # ElapsedText signature: gold #F0C23E for an explicit "original" pick,
+            # brand orange #FF9500 for the default style. Counting only gold went
+            # blind the day the default became orange (b11db80 run: bar visible,
+            # seekRun 88%, golden 0).
+            $isGold = [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40
+            $isOrange = $r -gt 227 -and [math]::Abs($g - 149) -lt 28 -and $b -lt 40
+            if ($x -lt $goldenBand -and ($isGold -or $isOrange)) { $golden++ }
             if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 120 -and $r -lt 235) { $run++; if ($run -gt $bestRun) { $bestRun = $run } } else { $run = 0 }
         }
     }
@@ -543,6 +549,23 @@ if (Test-Path $ctrlRender) {
     $mCtrl = Measure-Bar "$env:RUNNER_TEMP/pc-bar-positivecontrol.png"
     Write-Host "bar metric positive control: golden=$($mCtrl[0]) seekRun=$($mCtrl[1])%"
     if (-not ($mCtrl[0] -ge 2 -and $mCtrl[1] -ge 40)) { throw "bar metric positive control FAILED: a known bar render scored golden=$($mCtrl[0]) seekRun=$($mCtrl[1])% - the metric is blind, no bar verdict is meaningful" }
+    # The default-style render must score too: a metric that only sees gold would
+    # pass this control and still be blind to what users actually get.
+    $ctrlOrange = "$env:RUNNER_TEMP/pc-controlbar-render-orange.png"
+    if (Test-Path $ctrlOrange) {
+        $baseO = [System.Drawing.Bitmap]::new(782, 489)
+        $gO = [System.Drawing.Graphics]::FromImage($baseO)
+        $gO.Clear([System.Drawing.Color]::FromArgb(27, 27, 30))
+        $renderO = [System.Drawing.Image]::FromFile($ctrlOrange)
+        $dhO = [int]($renderO.Height * $scale)
+        $gO.DrawImage($renderO, 0, 489 - $dhO - 10, 782, $dhO)
+        $gO.Dispose(); $renderO.Dispose()
+        $baseO.Save("$env:RUNNER_TEMP/pc-bar-positivecontrol-orange.png", [System.Drawing.Imaging.ImageFormat]::Png)
+        $baseO.Dispose()
+        $mCtrlO = Measure-Bar "$env:RUNNER_TEMP/pc-bar-positivecontrol-orange.png"
+        Write-Host "bar metric orange positive control: golden=$($mCtrlO[0]) seekRun=$($mCtrlO[1])%"
+        if (-not ($mCtrlO[0] -ge 2 -and $mCtrlO[1] -ge 40)) { throw "bar metric ORANGE positive control FAILED: the default-style render scored golden=$($mCtrlO[0]) seekRun=$($mCtrlO[1])% - the metric is blind to the default style" }
+    } else { Write-Host "::warning::orange control-bar render missing - orange positive control skipped" }
 } else { Write-Host "::warning::control-bar render missing - positive control skipped" }
 Remove-Item "$env:RUNNER_TEMP/pc-bar-phonestart.png" -ErrorAction SilentlyContinue
 Remove-Item "$env:RUNNER_TEMP/pc-bar-poll.png" -ErrorAction SilentlyContinue
