@@ -1,22 +1,23 @@
-# BingeMote Helper runtime tests on a real Windows machine (CI runner).
-# Exercises: the elevated firewall/URL-ACL setup, the pairing flow, token auth,
-# every input endpoint, the volume endpoints, and UDP discovery.
+# Zephyr VLC Remote helper runtime tests on a real Windows machine (CI runner).
+# Exercises: the elevated firewall/URL-ACL setup, the BingeMote pairing migration,
+# the pairing flow, token auth, every input endpoint, the volume endpoints, and UDP
+# discovery identity. Ports are Zephyr's own (8491/8492); BingeMote's are never touched.
 $ErrorActionPreference = 'Stop'
-$exe = "windows/out/ZephyrVlcRemote.exe"
+$exe = "windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"
 if (-not (Test-Path $exe)) { throw "helper exe missing at $exe" }
 
 # --- Part 0: the installer owns the firewall rule now: silent install, verify, silent uninstall ---
 Write-Host "== installer firewall setup =="
-$setup = Get-ChildItem "windows/Output/ZephyrVLCRemote-PC-*.exe" | Select-Object -First 1
+$setup = Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe" | Select-Object -First 1
 if (-not $setup) { throw "installer exe missing in helper/Output" }
 & $setup.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "silent install failed with exit $LASTEXITCODE" }
 $rule = netsh advfirewall firewall show rule name="Zephyr VLC Remote"
-if (-not ($rule | Select-String 'BingeMote')) { throw "installer did not add the BingeMote firewall rule" }
+if (-not ($rule | Select-String 'Zephyr VLC Remote')) { throw "installer did not add the Zephyr VLC Remote firewall rule" }
 $acl = netsh http show urlacl
 if (-not ($acl | Select-String ':8492/')) { throw "installer did not add the listen permission" }
 Write-Host "ok: installer added the firewall rule and listen permission"
-$unins = Join-Path $env:LOCALAPPDATA 'Programs\BingeMote\unins000.exe'
+$unins = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\unins000.exe'
 & $unins /VERYSILENT /NORESTART | Out-Null
 Start-Sleep -Seconds 3
 try { $rule = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String } catch { $rule = '' }
@@ -57,6 +58,51 @@ try {
     }
     if (-not $up) { throw "helper did not start listening on 8492" }
     Write-Host "helper is listening"
+
+    # --- Part 2a: BingeMote migration on a real old config (settled: no forced re-pair) ---
+    Write-Host "== BingeMote pairing migration =="
+    Stop-Process -Id $p.Id -Force
+    Start-Sleep -Seconds 1
+    $legacyDir = Join-Path $env:LOCALAPPDATA 'BingeMote'
+    $ownDir = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote'
+    New-Item -ItemType Directory -Force $legacyDir | Out-Null
+    $legacyCfg = Join-Path $legacyDir 'config.json'
+    $legacyText = '{"phones":[{"token":"' + ('a1' * 32) + '","name":"CI migration phone","adoptSpent":true}],"moviesFolder":null,"declinedNetworks":["CI-CafeWiFi"],"homeNetworks":["CI-HomeLAN"]}'
+    Set-Content $legacyCfg $legacyText -NoNewline
+    Remove-Item $ownDir -Recurse -Force -ErrorAction SilentlyContinue
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try {
+            $c = New-Object Net.Sockets.TcpClient
+            $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break
+        } catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not start on the migration run" }
+    $r = Invoke-Helper '/ping' '{}' ('a1' * 32)
+    Assert ($r.code -eq 200) "an imported BingeMote pairing serves immediately (no re-pair)"
+    Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the legacy config is byte-identical after the import"
+    $ownCfgText = Get-Content (Join-Path $ownDir 'config.json') -Raw
+    Assert ($ownCfgText -match 'CI migration phone') "the phone name carried over"
+    Assert ($ownCfgText -match 'CI-HomeLAN') "the home Wi-Fi choice carried over"
+    # A second run with an existing own config must NOT re-import or overwrite.
+    Stop-Process -Id $p.Id -Force
+    Start-Sleep -Seconds 1
+    Set-Content $legacyCfg ('{"phones":[{"token":"' + ('b2' * 32) + '","name":"should never import"}]}') -NoNewline
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try {
+            $c = New-Object Net.Sockets.TcpClient
+            $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break
+        } catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not restart for the no-reimport check" }
+    $r = Invoke-Helper '/ping' '{}' ('a1' * 32)
+    Assert ($r.code -eq 200) "the migrated phone still works on the next launch"
+    $r = Invoke-Helper '/ping' '{}' ('b2' * 32)
+    Assert ($r.code -eq 401) "a later legacy change never re-imports"
+    Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
     function Invoke-Helper($path, $body, $token) {
         $headers = @{}
@@ -400,7 +446,8 @@ try {
     $ep = New-Object Net.IPEndPoint([Net.IPAddress]::Any, 0)
     $reply = [Text.Encoding]::UTF8.GetString($udp.Receive([ref]$ep))
     $udp.Close()
-    Assert ($reply -like 'BINGEMOTE_HERE_V1|*') "discovery reply: $reply"
+    Assert ($reply -like 'ZEPHYR_VLC_REMOTE_HERE_V1|*') "discovery reply carries the Zephyr VLC Remote identity: $reply"
+    Assert ($reply -like '*|8492') "discovery reply advertises HTTP port 8492: $reply"
 
     # A copy launched from a different folder (an "installed" copy vs a Downloads copy)
     # takes over: the running copy quits, the new one serves the same token.

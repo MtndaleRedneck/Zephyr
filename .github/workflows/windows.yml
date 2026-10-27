@@ -25,6 +25,47 @@ permissions:
   contents: read
 
 jobs:
+  vlc-remote-e2e:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Publish helper exe (with the CI-only pairing hook)
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:DefineConstants=TRACE%3BPAIR_CODE_HOOK" -o windows/ZephyrVlcRemote/out
+
+      # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
+      - name: Install VLC (for the movies launch test)
+        run: choco install vlc --no-progress -y
+
+      - name: Build the installer from the test build (for the install/uninstall test)
+        run: |
+          choco install innosetup --no-progress -y
+          $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/ZephyrVlcRemote/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Render the helper window for layout review (CI only)
+        run: |
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:DefineConstants=TRACE%3BWINDOW_SHOT_HOOK" -o windows/ZephyrVlcRemote/shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window.png"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+
+      - name: Upload the window shot
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zephyr-VLC-Remote-window
+          path: |
+            windows/ZephyrVlcRemote/window*.png
+            windows/ZephyrVlcRemote/window-diag.txt
+          if-no-files-found: warn
+
+      - name: Helper runtime tests (migration, pairing, endpoints, discovery identity, firewall)
+        run: pwsh -File scripts/vlc_remote_e2e.ps1
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
