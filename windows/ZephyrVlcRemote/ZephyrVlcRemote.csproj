@@ -12,6 +12,7 @@
     <Description>Zephyr VLC Remote for Windows: VLC control on this PC for the Zephyr Android app.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 </Project>

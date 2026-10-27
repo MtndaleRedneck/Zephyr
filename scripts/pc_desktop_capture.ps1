@@ -218,7 +218,7 @@ $srv = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER
 Start-Sleep -Seconds 2
 
 # 1) Home, full window fitted to the screen (no clipping, no terminal).
-$p = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+$p = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 $hw = Wait-MainWindow $p 15
 $alive = ($hw -ne [System.IntPtr]::Zero)
 Close-PairingWindow $p
@@ -241,7 +241,7 @@ $libJson = $libDir -replace '\\','\\'
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', '1', 'Process')
 $prevFx = [Environment]::GetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR','Process')
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $thumbDir, 'Process')
-$pH = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+$pH = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $prevFx, 'Process')
 $hwH = Wait-MainWindow $pH 15
 Close-PairingWindow $pH
@@ -255,7 +255,7 @@ StopZephyr
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 
 # 2) Settings over the app's own dark window (neutral backdrop), top + scrolled bottom.
-$p2 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--open-settings" -PassThru
+$p2 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-settings" -PassThru
 $null = Wait-MainWindow $p2 15
 # Process.MainWindowTitle names only the process's MAIN window; the settings
 # window is a second top-level window in the same process. Enumerate by title.
@@ -285,7 +285,7 @@ $sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-updates.png"
 StopZephyr
 
 # 2b) Pairing screen (1.2.0: the dedicated pairing window replaced the banner).
-$p2b = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--open-pairing" -PassThru
+$p2b = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-pairing" -PassThru
 $null = Wait-MainWindow $p2b 15
 $pw = [System.IntPtr]::Zero
 for ($i = 0; $i -lt 20 -and $pw -eq [System.IntPtr]::Zero; $i++) {
@@ -304,7 +304,7 @@ StopZephyr
 # primary screen (the notification area) while the app runs.
 $env:ZEPHYR_TRAY_DIAG = "$env:RUNNER_TEMP\pc-tray-diag.txt"
 Remove-Item $env:ZEPHYR_TRAY_DIAG -Force -ErrorAction SilentlyContinue
-$pIcon = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+$pIcon = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 Start-Sleep -Seconds 5
 # NEW-C2: the pixel crop alone cannot prove the icon - assert the app's own
 # IsCreated report too (hidden overflow looks identical to missing).
@@ -327,7 +327,7 @@ $ig.Dispose(); $ibmp.Dispose()
 Stop-Process -Id $pIcon.Id -Force -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Remove-Item Env:ZEPHYR_TRAY_DIAG -ErrorAction SilentlyContinue
-$p2c = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--tray-menu" -PassThru
+$p2c = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--tray-menu" -PassThru
 Start-Sleep -Seconds 4
 $tbmp = New-Object System.Drawing.Bitmap 360, 170
 $tg = [System.Drawing.Graphics]::FromImage($tbmp)
@@ -339,9 +339,13 @@ StopZephyr
 # 2d) PHONE-START BAR PROOF (Tab evidence ask): playback is started and paused over
 # real HTTP with the CI token - NO mouse events at all. The bar must show on start,
 # hide on its own ~3s timer while playing, and stay while paused.
-$pBar = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+# C-1: the cursor must NOT sit over the window - a stray mouse-move from the
+# window appearing under it would reveal the bar by itself. The window is sized
+# smaller than the screen and the cursor parked at (5,5), provably outside it.
+[ZWU32]::SetCursorPos(5, 5) | Out-Null
+$pBar = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 $hwBar = Wait-MainWindow $pBar 15
-FitWindow $hwBar
+[ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
 Start-Sleep -Seconds 1
 $hdr = @{ Authorization = "Bearer ci-capture-token" }
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') | Out-Null
@@ -358,9 +362,15 @@ Start-Sleep -Seconds 5   # well past the idle timer: a paused movie never loses 
 $szBar3 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-paused.png"
 StopZephyr
 Write-Host "phone-start bar captures: $szBar1 / $szBar2 / $szBar3"
+# C-1: bar-band pixel counts (bottom strip, like the windowed/fullscreen checks).
+# Judged honestly: the video keeps moving under the bar, so the verdict compares
+# lit pixels shown-vs-hidden and requires the paused bar to be lit again.
+$barPhoneStartPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.82 1.0
+$barAutoHidePx   = CountColored "$env:RUNNER_TEMP/pc-bar-autohide.png" 0.82 1.0
+$barPausedPx     = CountColored "$env:RUNNER_TEMP/pc-bar-paused.png" 0.82 1.0
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
-$p3 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
+$p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
 $hw3 = Wait-MainWindow $p3 15
 FitWindow $hw3
 WakeControls
@@ -449,7 +459,7 @@ if ([ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$r, 16) -eq 0) {
 StopZephyr
 
 # 4) Real video, real mouse event, controls shown - FULLSCREEN.
-$p4 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4","--fullscreen" -PassThru
+$p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4","--fullscreen" -PassThru
 $hw4 = Wait-MainWindow $p4 15
 # Fullscreen transition and floating VideoView overlay can lag HWND creation.
 # Position the already-fullscreen window on the captured monitor and wait for
@@ -490,6 +500,10 @@ functional_seek: $(if ($fnSeek -gt 10) { "PROVEN (time-label diff=$fnSeek)" } el
 functional_fullscreen_click: $(if ($fnFs -eq 1) { 'PROVEN (DWM bounds = virtual screen)' } else { 'NOT PROVEN' })
 volume_audio_apply: UNVERIFIED (headless runner has no audio device; UI drag path only)
 controls_over_video_fullscreen: $(if ($vidFs -gt 500 -and $barFs -gt 60) { 'PROVEN' } else { 'NOT PROVEN - inspect images' })
+bar_phonestart_pixels: $barPhoneStartPx
+bar_autohide_pixels: $barAutoHidePx
+bar_paused_pixels: $barPausedPx
+phone_start_bar: $(if ($barPhoneStartPx -gt 60 -and $barPausedPx -gt 60 -and $barAutoHidePx -lt $barPausedPx) { 'PROVEN (shown on phone-start, fewer bar-band pixels after the idle timer, lit again while paused; cursor parked at 5,5 outside the 100,100 800x500 window)' } else { 'NOT PROVEN - inspect pc-bar-*.png' })
 verdict: $(if ($incomplete) { 'CAPTURE INCOMPLETE - one or more windows never produced pixels; this step fails' } else { 'real desktop captured, app fitted to screen' })
 "@ | Set-Content $note
 

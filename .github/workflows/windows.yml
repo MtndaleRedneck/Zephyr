@@ -42,11 +42,17 @@ jobs:
       - name: Install VLC (for the movies launch test)
         run: choco install vlc --no-progress -y
 
-      - name: Build the installer from the test build (for the install/uninstall test)
+      - name: Publish the clean release exe (no CI hooks - the build that ships)
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
+
+      # The installer is built ONLY from the clean release build - the hooked test exe
+      # (out/) never reaches an artifact. The e2e proves the installed build ignores
+      # ZEPHYR_VLC_REMOTE_PAIR_CODE before any runtime test runs.
+      - name: Build the installer from the clean release build
         run: |
           choco install innosetup --no-progress -y
           $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/ZephyrVlcRemote/installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
       - name: Render the helper window for layout review (CI only)
@@ -94,6 +100,7 @@ jobs:
       - name: Zephyr VLC Remote test suite
         # Independent suites: a red in one never skips the other - both results are collected.
         if: always()
+        id: zvrtests
         timeout-minutes: 10
         run: >
           dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
@@ -126,7 +133,11 @@ jobs:
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
-      - name: Real-desktop capture of the actual exe (full window + chrome)
+      - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
+        if: always()
+        timeout-minutes: 8
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:DefineConstants=TRACE%3BCI_CAPTURE_HOOK" -o windows/capture-out
+      - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
         if: always()
         timeout-minutes: 6
         shell: pwsh
@@ -306,6 +317,7 @@ jobs:
             ${{ runner.temp }}/pc-playing-controls-window.png
             ${{ runner.temp }}/pc-playing-controls-fullscreen.png
             ${{ runner.temp }}/pc-smoke-*.png
+            ${{ runner.temp }}/pc-bar-*.png
             ${{ runner.temp }}/pc-desktop-note.txt
             ${{ runner.temp }}/installer-smoke.log
             ${{ runner.temp }}/installer-update-smoke.log
@@ -323,5 +335,6 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          Write-Host "TESTS OUTCOME: ${{ steps.tests.outcome }}"
+          Write-Host "PLAYER TESTS OUTCOME: ${{ steps.tests.outcome }}"
+          Write-Host "HELPER TESTS OUTCOME: ${{ steps.zvrtests.outcome }}"
           Write-Host "Evidence steps run unconditionally; a green job requires tests green too."

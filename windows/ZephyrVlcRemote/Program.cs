@@ -93,6 +93,10 @@ internal static class Program
     /// <summary>Guards Phones: the window mutates it on the UI thread while listener threads enumerate it.</summary>
     internal static readonly object PhonesLock = new();
     internal static PairedPhone[] PhonesSnapshot() { lock (PhonesLock) { return Phones.ToArray(); } }
+    /// <summary>An existing config file that could not be read. Fail closed (round-5 B3):
+    /// the file is PRESERVED, reads look unpaired, no pairing code is minted, and
+    /// SaveConfig refuses - a torn file is never replaced by a fresh empty one.</summary>
+    internal static bool StoreBroken;
     internal static int PhonesCount { get { lock (PhonesLock) { return Phones.Count; } } }
     /// <summary>The name typed for the phone that is about to pair; consumed by a successful pairing.</summary>
     internal static string? PendingPhoneName;
@@ -245,7 +249,7 @@ internal static class Program
             // new icon now instead of after a sign-out.
             try { SHChangeNotify(0x08000000 /* SHCNE_ASSOCCHANGED */, 0x3000 /* SHCNF_IDLIST|SHCNF_FLUSH */, IntPtr.Zero, IntPtr.Zero); } catch { }
             LastRunVersion = VersionText;
-            SaveConfig();
+            try { SaveConfig(); } catch (Exception ex) { Log("Could not save the version stamp: " + ex.Message); }
         }
         Log("Started. " + (!Paired ? "Not paired - showing a pairing code." : "Paired (" + PhonesCount + (PhonesCount == 1 ? " phone" : " phones") + ") - starting tucked in the tray."));
         RegisterAutostart();
@@ -268,10 +272,12 @@ internal static class Program
             }
             // Surface the vlc.exe rule inventory the elevated step saved (report only).
             FirewallSetup.LogVlcRuleInventory();
-
-        // Resume places: load the saved ones and watch VLC while it runs.
-        ResumeTracker.Start();
         }
+
+        // Resume places: load the saved ones and watch VLC while it runs. This must run
+        // on EVERY start, not only the first (round-5 B4): inside the firewall block it
+        // never ran again once the marker existed, and the next save wiped older places.
+        ResumeTracker.Start();
 
         // A live pairing code is a way in, so one exists only when this PC still needs
         // pairing. After pairing, a new code comes only from the window's Pair button.
@@ -285,7 +291,7 @@ internal static class Program
             PairCode = overrideCode;
             PairCodeExpires = DateTime.UtcNow + PairCodeLifetime;
         }
-        else if (!Paired)
+        else if (!Paired && !StoreBroken)
         {
             PendingPhoneName = null;
             PairCode = NewPairCode();
@@ -395,8 +401,9 @@ internal static class Program
             if (doc.RootElement.TryGetProperty("phones", out var ps))
                 foreach (var p in ps.EnumerateArray())
                 {
-                    var t = p.TryGetProperty("token", out var pt) ? pt.GetString() : null;
-                    if (t == null) continue;
+                    var traw = p.TryGetProperty("token", out var pt) ? pt.GetString() : null;
+                    var t = traw == null ? null : Dpapi.Unwrap(traw);
+                    if (t == null) { Log("One saved phone could not be decrypted and was skipped (the file is unchanged)."); continue; }
                     var n = p.TryGetProperty("name", out var pn) ? pn.GetString() : null;
                     var spent = p.TryGetProperty("adoptSpent", out var asp) && asp.GetBoolean();
                     string? adoptReq = p.TryGetProperty("adoptRequestId", out var ari) ? ari.GetString() : null;
@@ -410,13 +417,15 @@ internal static class Program
             if (Phones.Count == 0 && doc.RootElement.TryGetProperty("tokens", out var ts))
                 foreach (var t in ts.EnumerateArray())
                 {
-                    var v = t.GetString();
+                    var vraw = t.GetString();
+                    var v = vraw == null ? null : Dpapi.Unwrap(vraw);
                     if (v != null) Phones.Add(new PairedPhone { Token = v, Name = "Phone " + (Phones.Count + 1) });
                 }
             // 1.0/1.1 configs stored one token; keep that phone paired.
             if (Phones.Count == 0 && doc.RootElement.TryGetProperty("token", out var old))
             {
-                var v = old.GetString();
+                var vraw = old.GetString();
+                var v = vraw == null ? null : Dpapi.Unwrap(vraw);
                 if (v != null) Phones.Add(new PairedPhone { Token = v, Name = "Phone 1" });
             }
             if (doc.RootElement.TryGetProperty("declinedNetworks", out var dn))
@@ -433,10 +442,16 @@ internal static class Program
                 }
             MoviesFolder = doc.RootElement.TryGetProperty("moviesFolder", out var mf) ? mf.GetString() : null;
             LastRunVersion = doc.RootElement.TryGetProperty("lastRunVersion", out var lv) ? lv.GetString() : null;
-            _pendingVlcFromConfig = doc.RootElement.TryGetProperty("pendingVlcPassword", out var pvp) ? pvp.GetString() : null;
+            var pvRaw = doc.RootElement.TryGetProperty("pendingVlcPassword", out var pvp) ? pvp.GetString() : null;
+            _pendingVlcFromConfig = pvRaw == null ? null : Dpapi.Unwrap(pvRaw);
             }
         }
-        catch { lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null; }
+        catch (Exception ex)
+        {
+            StoreBroken = true;
+            lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
+            Log("Saved pairing data could not be read (" + ex.GetType().Name + "). The file is left untouched; pairing is refused until it is removed by hand.");
+        }
         // A vlcrc write that was waiting for VLC to close survives a helper restart:
         // complete it now when VLC is already closed, or re-arm the retry when it is not.
         var pendingVlc = _pendingVlcFromConfig;
@@ -446,19 +461,68 @@ internal static class Program
 
     private static string? _pendingVlcFromConfig;
 
+    /// <summary>One writer at a time: listener threads (pair, config, adopt, VLC setup)
+    /// and the window thread all land here.</summary>
+    private static readonly object ConfigSaveLock = new();
+
     internal static void SaveConfig()
     {
-        Directory.CreateDirectory(DataDir);
-        var json = JsonSerializer.Serialize(new
+        // Round-5 B3: a file we failed to READ is never overwritten - the pairings it
+        // holds are the only copy. Writes are atomic (temp file, then replace), so a
+        // crash or power cut mid-save can never tear the file either.
+        if (StoreBroken) throw new InvalidOperationException("Saved pairing data is unreadable; refusing to overwrite it.");
+        string json;
+        lock (PhonesLock)
         {
-            phones = PhonesSnapshot().Select(p => new { token = p.Token, name = p.Name, adoptSpent = p.AdoptSpent, adoptRequestId = p.AdoptRequestId, adoptServedAtUtc = p.AdoptServedAtUtc?.ToString("o") }).ToArray(),
-            pendingVlcPassword = VlcSetup.PendingValue,
-            moviesFolder = MoviesFolder,
-            declinedNetworks = DeclinedNetworks.ToArray(),
-            homeNetworks = HomeNetworks.ToArray(),
-            lastRunVersion = LastRunVersion,
-        });
-        File.WriteAllText(ConfigPath, json);
+            json = JsonSerializer.Serialize(new
+            {
+                phones = Phones.Select(p => new { token = Dpapi.Wrap(p.Token), name = p.Name, adoptSpent = p.AdoptSpent, adoptRequestId = p.AdoptRequestId, adoptServedAtUtc = p.AdoptServedAtUtc?.ToString("o") }).ToArray(),
+                pendingVlcPassword = VlcSetup.PendingValue is { } pv ? Dpapi.Wrap(pv) : null,
+                moviesFolder = MoviesFolder,
+                declinedNetworks = DeclinedNetworks.ToArray(),
+                homeNetworks = HomeNetworks.ToArray(),
+                lastRunVersion = LastRunVersion,
+            });
+        }
+        lock (ConfigSaveLock)
+        {
+            Directory.CreateDirectory(DataDir);
+            var tmp = ConfigPath + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(tmp, json);
+            try
+            {
+                if (File.Exists(ConfigPath)) File.Replace(tmp, ConfigPath, null);
+                else File.Move(tmp, ConfigPath);
+            }
+            catch
+            {
+                try { File.Delete(tmp); } catch { }
+                throw;
+            }
+        }
+    }
+
+    /// <summary>Non-critical saves (Wi-Fi choices, version stamp): never crash the flow,
+    /// always logged. Pairing and removal use SaveConfig directly so they can roll back.</summary>
+    internal static bool TrySaveConfig(string what)
+    {
+        try { SaveConfig(); return true; }
+        catch (Exception ex) { Log("Could not save " + what + ": " + ex.Message); return false; }
+    }
+
+    /// <summary>Transactional pairing (round-5 B3): the phone exists in memory only
+    /// after it exists on disk. A failed save rolls the in-memory add back, so a
+    /// refused write leaves no phantom pairing - and the caller keeps the code alive.</summary>
+    internal static void AddPhoneAndPersist(string token, string? name)
+    {
+        var phone = new PairedPhone { Token = token, Name = "" };
+        lock (PhonesLock)
+        {
+            phone.Name = string.IsNullOrWhiteSpace(name) ? "Phone " + (Phones.Count + 1) : name!.Trim();
+            Phones.Add(phone);
+        }
+        try { SaveConfig(); }
+        catch { lock (PhonesLock) { Phones.Remove(phone); } throw; }
     }
 
     internal static string MachineLabel() => Environment.MachineName;
@@ -671,14 +735,15 @@ internal sealed class HelperWindow : Form
         _pairHeader = Header("Pair new phone", margin, y); y += 20 + 12;
         _firstRun = new LinkLabel
         {
-            Text = "New here? Get the Zephyr VLC Remote app on your phone, then give the phone a name and tap Pair.",
+            Text = "New here? Get the Zephyr app on your phone, then give the phone a name and tap Pair.",
             Font = new Font("Segoe UI", 8f),
             AutoSize = true, Left = margin, Top = y,
             // Wrap inside the content width instead of running past the right margin.
             MaximumSize = new Size(contentW, 0),
             LinkColor = Orange, ActiveLinkColor = Orange, VisitedLinkColor = Orange,
         };
-        _firstRun.Links.Add(18, 13, "https://github.com/MtndaleRedneck/Zephyr-Dev");
+        // I3: the link covers "Zephyr app" and opens the release page, not the repo root.
+        _firstRun.Links.Add(18, 10, "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/latest");
         _firstRun.LinkClicked += (_, e) =>
         {
             try { Process.Start(new ProcessStartInfo((string)e.Link!.LinkData!) { UseShellExecute = true }); } catch { }
@@ -750,7 +815,7 @@ internal sealed class HelperWindow : Form
         y += 28 + 6;
         _codeNote = new Label
         {
-            Text = "Enter this code in the Zephyr VLC Remote app on your phone. Works once, for 10 minutes.",
+            Text = "Enter this code in the Zephyr app on your phone. Works once, for 10 minutes.",
             Font = new Font("Segoe UI", 8),
             AutoSize = false, Left = margin, Top = y, Width = contentW,
             Visible = false,
@@ -1046,7 +1111,7 @@ internal sealed class HelperWindow : Form
                     Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
                     if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
                         Program.HomeNetworks.Add(profile.Name);
-                    Program.SaveConfig();
+                    Program.TrySaveConfig("the Wi-Fi choice");
                     Program.Log("Network \"" + profile.Name + "\" marked Private from the window strip.");
                     _wifiProfile = null;
                     SetWifiStripVisible(false);
@@ -1165,7 +1230,7 @@ internal sealed class HelperWindow : Form
             _codeCaption.Visible = _code.Visible = _cancelPair.Visible = live;
             _codeNote.Visible = show;
             _codeNote.Text = live
-                ? "Enter this code in the Zephyr VLC Remote app on your phone. Works once, for 10 minutes."
+                ? "Enter this code in the Zephyr app on your phone. Works once, for 10 minutes."
                 : "Code expired. Tap Pair for a new one.";
             ApplyLayout();
         }
@@ -1254,10 +1319,20 @@ internal sealed class HelperWindow : Form
     private void RemovePhone(Program.PairedPhone ph)
     {
         if (!ConfirmDialog.Ask(this,
-                "Remove " + ph.Name + "? It stops controlling this PC right away. You can pair it again any time with a new code.",
+                "Remove " + ph.Name + "? It stops controlling this PC through Zephyr VLC Remote right away. " +
+                "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. " +
+                "You can pair the phone again any time with a new code.",
                 "Remove")) return;
         lock (Program.PhonesLock) { Program.Phones.Remove(ph); }
-        Program.SaveConfig();
+        try { Program.SaveConfig(); }
+        catch (Exception ex)
+        {
+            // Transactional (B3): a refused save rolls the removal back - no phantom.
+            lock (Program.PhonesLock) { Program.Phones.Add(ph); }
+            Program.Log("Phone removal could not be saved: " + ex.Message);
+            RefreshPhones();
+            return;
+        }
         Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
         RefreshPhones();
     }
@@ -1268,8 +1343,16 @@ internal sealed class HelperWindow : Form
         if (!ConfirmDialog.Ask(this,
                 "Remove all phones? Every phone stops controlling this PC right away. Pair them again with new codes.",
                 "Remove all")) return;
-        lock (Program.PhonesLock) { Program.Phones.Clear(); }
-        Program.SaveConfig();
+        Program.PairedPhone[] backup;
+        lock (Program.PhonesLock) { backup = Program.Phones.ToArray(); Program.Phones.Clear(); }
+        try { Program.SaveConfig(); }
+        catch (Exception ex)
+        {
+            lock (Program.PhonesLock) { Program.Phones.Clear(); Program.Phones.AddRange(backup); }
+            Program.Log("Removing all phones could not be saved: " + ex.Message);
+            RefreshPhones();
+            return;
+        }
         Program.Log("All phones removed.");
         RefreshPhones();
     }
@@ -1279,6 +1362,11 @@ internal sealed class HelperWindow : Form
     {
         var name = _nameBox.Text.Trim();
         if (name.Length == 0) return;
+        if (Program.StoreBroken)
+        {
+            Program.Log("Pairing refused: the saved pairing data on this PC could not be read (the file is preserved).");
+            return;
+        }
         Program.PendingPhoneName = name;
         Program.PairCode = Program.NewPairCode();
         Program.PairCodeExpires = DateTime.UtcNow + Program.PairCodeLifetime;
@@ -1323,16 +1411,8 @@ internal sealed class HelperWindow : Form
         Font = new Font("Segoe UI", 8.5f),
     };
 
-    internal static bool IsDarkMode()
-    {
-        try
-        {
-            using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
-            return ((int)(key?.GetValue("AppsUseLightTheme") ?? 1)) == 0;
-        }
-        catch { return true; }
-    }
+    // Dark only (settled look): the window never follows the Windows light theme.
+    internal static bool IsDarkMode() => true;
 
     private void ApplyTheme()
     {
@@ -1728,7 +1808,7 @@ internal sealed class HelperWindow : Form
                             Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
                             if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
                                 Program.HomeNetworks.Add(profile.Name);
-                            Program.SaveConfig();
+                            Program.TrySaveConfig("the Wi-Fi choice");
                             _wifiProfile = null;
                             SetWifiStripVisible(false);
                             Program.Log("Network \"" + profile.Name + "\" marked Private from the popup.");
@@ -1751,7 +1831,7 @@ internal sealed class HelperWindow : Form
                 Program.DeclinedNetworks.Add(profile.Name);
                 // Saying "Not now" on a network once marked home means it is not home after all.
                 Program.HomeNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                Program.SaveConfig();
+                Program.TrySaveConfig("the Wi-Fi choice");
                 Program.Log("Public-network popup declined for \"" + profile.Name + "\" - not asking again.");
                 break;
         }

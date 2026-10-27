@@ -50,6 +50,24 @@ internal sealed class HttpServer : IDisposable
                 return;
             }
 
+            // CSRF / DNS-rebinding guard (round-5): a browser page always sends Origin;
+            // the phone never does - refuse it outright. And the Host header must be an
+            // IP literal, localhost, or this machine's name, so a rebound DNS name (which
+            // would let a page READ a /pair answer) fails before any route runs.
+            if (req.Headers["Origin"] != null)
+            {
+                Reply(res, 403, "{\"error\":\"origin refused\"}");
+                return;
+            }
+            var hostName = (req.Headers["Host"] ?? "").Split(':')[0];
+            if (!(IPAddress.TryParse(hostName, out _)
+                  || hostName.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+                  || hostName.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase)))
+            {
+                Reply(res, 403, "{\"error\":\"bad host\"}");
+                return;
+            }
+
             var path = req.Url?.AbsolutePath?.TrimEnd('/') ?? "";
             switch (path)
             {
@@ -208,26 +226,29 @@ internal sealed class HttpServer : IDisposable
         if (Program.PairFailures >= Program.MaxPairFailures)
         {
             Program.Log("Pairing locked - too many wrong codes.");
-            Reply(res, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Restart Zephyr VLC Remote on the PC to try again.\"}");
+            Reply(res, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
             return;
         }
         // No code on screen: guesses here must not count toward the lock, or anyone on the
         // Wi-Fi could lock pairing while he is not even pairing.
         if (Program.PairCode == null)
         {
-            Reply(res, 403, "{\"error\":\"bad code\"}");
+            Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
             return;
         }
         var body = ReadBody(req);
         var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
-        var valid = Program.PairCode != null
-                    && DateTime.UtcNow <= Program.PairCodeExpires
-                    && ConstantTimeEq(code, Program.PairCode);
-        if (!valid)
+        // An expired code is not a wrong guess - say so without spending a try (round-5).
+        if (DateTime.UtcNow > Program.PairCodeExpires)
+        {
+            Reply(res, 410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
+            return;
+        }
+        if (!ConstantTimeEq(code, Program.PairCode))
         {
             Program.PairFailures++;
             Program.Log("Wrong pairing code entered (" + Program.PairFailures + " of " + Program.MaxPairFailures + ").");
-            Reply(res, 403, "{\"error\":\"bad code\"}");
+            Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"Wrong code. Check the code on the PC and try again.\"}");
             return;
         }
         if (Program.PhonesCount >= Program.MaxPhones)
@@ -240,14 +261,21 @@ internal sealed class HttpServer : IDisposable
         // The name typed in the window when Pair was tapped; a code from elsewhere pairs as "Phone N".
         var phoneName = Program.PendingPhoneName;
         Program.PendingPhoneName = null;
-        lock (Program.PhonesLock)
+        try
         {
-            if (string.IsNullOrWhiteSpace(phoneName)) phoneName = "Phone " + (Program.Phones.Count + 1);
-            Program.Phones.Add(new Program.PairedPhone { Token = token, Name = phoneName.Trim() });
+            Program.AddPhoneAndPersist(token, phoneName);
         }
+        catch (Exception ex)
+        {
+            // Transactional (round-5 B3): the save failed, so the in-memory add was rolled
+            // back and the code is NOT spent - he can try the same code again.
+            Program.Log("Pairing could not be saved: " + ex.Message);
+            Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"The pairing worked but could not be saved on the PC. Try the same code again in a moment.\"}");
+            return;
+        }
+        // Persisted: only now is the code spent.
         Program.PairCode = null;
         Program.PairFailures = 0;
-        Program.SaveConfig();
         Program.Log("Phone paired as \"" + phoneName + "\" (" + Program.PhonesCount + " total).");
         // Automatic-first VLC setup: the freshly paired phone gets the PC's password in the
         // code-gated pair response, so nobody types anything into VLC's settings.
@@ -271,8 +299,16 @@ internal sealed class HttpServer : IDisposable
             return;
         }
         var folder = JsonDocument.Parse(ReadBody(req)).RootElement.GetProperty("moviesFolder").GetString() ?? "";
+        var previous = Program.MoviesFolder;
         Program.MoviesFolder = folder.Trim();
-        Program.SaveConfig();
+        try { Program.SaveConfig(); }
+        catch (Exception ex)
+        {
+            Program.MoviesFolder = previous; // transactional: a refused write leaves no phantom
+            Program.Log("Movies folder could not be saved: " + ex.Message);
+            Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"That could not be saved on the PC. Try again in a moment.\"}");
+            return;
+        }
         Program.Log("Movies folder set from the phone: " + (Program.MoviesFolder.Length == 0 ? "(cleared)" : Program.MoviesFolder));
         Reply(res, 200, "{\"ok\":true}");
     }
@@ -368,6 +404,8 @@ internal sealed class HttpServer : IDisposable
                 }
                 if (r.MessageType != WebSocketMessageType.Text) continue;
                 text.Append(Encoding.UTF8.GetString(buf, 0, r.Count));
+                // Same bound as ReadBody: a frame stream with no end flag must not grow forever.
+                if (text.Length > 64 * 1024) { Program.Log("Live mouse message too large - closing."); break; }
                 if (!r.EndOfMessage) continue;
                 lastFrameAt = DateTime.UtcNow;
                 // Removing a phone must stop its input right away, not when it happens to

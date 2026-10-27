@@ -19,6 +19,15 @@ internal static class SelfUpdate
     /// Slow connections may take as long as they need: only silence counts.</summary>
     public static async Task<string> Download(string version, string exeUrl, string? sha256, IProgress<int>? progress = null)
     {
+        // Round-5: no verified checksum, no execute - an undigested release asset is
+        // refused outright instead of being run unverified.
+        if (string.IsNullOrWhiteSpace(sha256))
+            throw new InvalidOperationException("The release has no SHA-256 digest; the download was not started.");
+        return await DownloadCore(version, exeUrl, sha256, progress);
+    }
+
+    private static async Task<string> DownloadCore(string version, string exeUrl, string? sha256, IProgress<int>? progress = null)
+    {
         using var stall = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var current = exeUrl;
         for (var hops = 0; ; hops++)
@@ -39,7 +48,10 @@ internal static class SelfUpdate
                 continue;
             }
             resp.EnsureSuccessStatusCode();
-            var dest = Path.Combine(Path.GetTempPath(), "Zephyr-VLC-Remote-PC-" + version + ".exe");
+            // Fresh random folder: a predictable %TEMP% name can be pre-planted.
+            var dest = Path.Combine(Path.GetTempPath(), "zvr-update-" + Guid.NewGuid().ToString("N"),
+                "Zephyr-VLC-Remote-PC-" + version + ".exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             var total = resp.Content.Headers.ContentLength ?? -1;
             await using (var fs = File.Create(dest))
             {

@@ -170,7 +170,8 @@ namespace ZephyrPlayer
         /// top level has none (series libraries). Bounded: at most 3 levels down and
         /// 40 VIDEO candidates examined, ordinal order. Non-video files (.srt, .nfo,
         /// posters) are skipped for free - a folder full of them must not spend the
-        /// budget before the descent (round-3 P8). Enumeration is lazy, so a large
+        /// budget before the descent (round-3 P8). The per-folder OrderBy below
+        /// materializes one directory's listing; the 40-folder budget still bounds
         /// directory never gets fully listed before the cap applies.</summary>
         private static string? PeekFirstVideo(string dir)
         {

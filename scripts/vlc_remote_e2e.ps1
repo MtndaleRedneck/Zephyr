@@ -23,25 +23,52 @@ function Invoke-HelperGet($path, $token) {
 }
 
 
-# --- Part 0: the installer owns the firewall rule now: silent install, verify, silent uninstall ---
-Write-Host "== installer firewall setup =="
+# --- Part 0: per-user install of the CLEAN build; firewall is the app's explained
+# first-run elevation; the shipped exe must ignore the CI pairing hook. ---
+Write-Host "== per-user install + clean-build hook proof =="
 $setup = Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe" | Select-Object -First 1
 if (-not $setup) { throw "installer exe missing in helper/Output" }
 & $setup.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "silent install failed with exit $LASTEXITCODE" }
-$rule = netsh advfirewall firewall show rule name="Zephyr VLC Remote"
-if (-not ($rule | Select-String 'Zephyr VLC Remote')) { throw "installer did not add the Zephyr VLC Remote firewall rule" }
-$acl = netsh http show urlacl
-if (-not ($acl | Select-String ':8492/')) { throw "installer did not add the listen permission" }
-Write-Host "ok: installer added the firewall rule and listen permission"
+$installed = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\ZephyrVlcRemote.exe'
+Assert (Test-Path $installed) "per-user silent install lands in the installing user's profile"
+# The installer no longer touches the firewall (it runs unelevated by design): the
+# app's explained first-run elevation owns the rules.
+$rule0 = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String
+Assert ($rule0 -notmatch 'Zephyr VLC Remote') "unelevated installer adds no firewall rule (the app's explained elevation owns it)"
+# The elevated setup, run from the installed exe (CI runners are already admin).
+$fw0 = Start-Process $installed -ArgumentList '--install-firewall' -Wait -PassThru
+Assert ($fw0.ExitCode -eq 0) "installed exe's elevated firewall setup succeeds"
+$ruleV = netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Out-String
+Assert ($ruleV -match 'Zephyr VLC Remote') "elevated setup adds the firewall rule"
+Assert ($ruleV -match 'Program') "the firewall rule is program-scoped, not port-only"
+$acl0 = netsh http show urlacl | Out-String
+Assert ($acl0 -match ':8492/') "elevated setup adds the listen permission"
+# Negative hook proof on the SHIPPED build: it was published without PAIR_CODE_HOOK,
+# so ZEPHYR_VLC_REMOTE_PAIR_CODE must NOT produce a working pairing.
+$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+Remove-Item (Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote') -Recurse -Force -ErrorAction SilentlyContinue
+$pClean = Start-Process $installed -PassThru
+$up = $false
+foreach ($i in 1..40) {
+    try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+    catch { Start-Sleep -Milliseconds 500 }
+}
+if (-not $up) { throw "installed clean helper did not start listening" }
+$rClean = Invoke-Helper '/pair' '{"code":"424242"}' $null
+Assert ($rClean.code -ne 200) "the shipped build ignores the CI pairing hook (got $($rClean.code))"
+Stop-Process -Id $pClean.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+# Silent uninstall: app files go away; any leftover rules are program-scoped to the
+# now-deleted exe (inert) and are removed here to keep later phases clean.
 $unins = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\unins000.exe'
 & $unins /VERYSILENT /NORESTART | Out-Null
 Start-Sleep -Seconds 3
-try { $rule = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String } catch { $rule = '' }
-if ($rule -match 'Zephyr VLC Remote') { throw "uninstaller left the firewall rule behind" }
-try { $acl = netsh http show urlacl 2>$null | Out-String } catch { $acl = '' }
-if ($acl -match ':8492/') { throw "uninstaller left the listen permission behind" }
-Write-Host "ok: uninstaller removed the firewall rule and listen permission"
+Assert (-not (Test-Path $installed)) "uninstaller removes the installed exe"
+netsh advfirewall firewall delete rule name="Zephyr VLC Remote" | Out-Null
+netsh advfirewall firewall delete rule name="Zephyr VLC Remote VLC" | Out-Null
+netsh http delete urlacl url=http://+:8492/ | Out-Null
+Write-Host "ok: per-user install, clean-build hook proof, uninstall"
 
 # A silent install now reopens the app on purpose (an update must come back up for him),
 # and the silent uninstall can miss that brand-new process. Nothing from the
@@ -127,6 +154,13 @@ try {
 
     $r = Invoke-Helper '/pair' '{"code":"000000"}' $null
     Assert ($r.code -eq 403) "pair with wrong code is 403"
+    Assert ($r.body -match 'detail') "wrong code answers with a written-for-him detail"
+
+    # CSRF / DNS-rebinding guards (round-5): browsers send Origin; rebound names fail Host.
+    $rOrigin = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/pair' -Method Post -Body '{"code":"424242"}' -Headers @{ Origin = 'http://evil.example' } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    Assert ([int]$rOrigin.StatusCode -eq 403) "a browser-style Origin header is refused"
+    $rHost = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/ping' -Headers @{ Host = 'evil.example.com'; 'X-Zephyr-VLC-Remote-Token' = ('a1' * 32) } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    Assert ([int]$rHost.StatusCode -eq 403) "a rebound DNS name in Host is refused"
 
     $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
     Write-Host "right-code pair -> $($r.code): $($r.body)"
@@ -442,6 +476,29 @@ try {
     Assert $vlcUp "VLC is running after play"
     Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
 
+    # B4: a saved place must SURVIVE a helper restart - the /movies/play answer asks
+    # Resume / Start over instead of wiping older places.
+    $clipFull = (Join-Path $movies 'clip.mkv')
+    $resumeDir = Join-Path $env:APPDATA 'Zephyr VLC Remote'
+    New-Item -ItemType Directory -Force $resumeDir | Out-Null
+    $resumeJson = '{"' + ($clipFull -replace '\','\') + '":{"Position":120.0,"Length":600.0}}'
+    Set-Content (Join-Path $resumeDir 'resume-places.json') $resumeJson -NoNewline
+    Stop-Process -Id $p.Id -Force
+    Start-Sleep -Seconds 1
+    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not restart for the resume check" }
+    $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
+    Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
+    Assert ($rResume.body -match '"position":120') "the saved place's position comes back"
+    Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
+    Remove-Item (Join-Path $resumeDir 'resume-places.json') -Force -ErrorAction SilentlyContinue
+
     # UDP discovery answers the app's broadcast.
     Write-Host "== UDP discovery =="
     $udp = New-Object Net.Sockets.UdpClient
@@ -457,6 +514,63 @@ try {
     # A copy launched from a different folder (an "installed" copy vs a Downloads copy)
     # takes over: the running copy quits, the new one serves the same token.
     Write-Host "== update takeover across paths =="
+    # Round-5 pairing guards: lockout after 5 wrong codes, and a guess while no code
+    # is showing must NOT count. Fresh restart resets the in-memory counter.
+    Write-Host "== pairing lockout =="
+    Stop-Process -Id $p.Id -Force
+    Start-Sleep -Seconds 1
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not restart for the lockout check" }
+    foreach ($n in 1..5) {
+        $rWrong = Invoke-Helper '/pair' '{"code":"999999"}' $null
+        Assert ($rWrong.code -eq 403) "wrong code $n of 5 is 403"
+    }
+    $rLocked = Invoke-Helper '/pair' '{"code":"999999"}' $null
+    Assert ($rLocked.code -eq 429) "the 6th wrong code is 429 (locked)"
+    $rLockedRight = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    Assert ($rLockedRight.code -eq 429) "even the right code is 429 while locked"
+    Assert ($rLocked.body -match 'Pair again') "the lockout text says press Pair again, not restart"
+
+    # Round-5 B3: a corrupt config fails CLOSED - file preserved, no code minted,
+    # pairing refused, nothing overwritten.
+    Write-Host "== corrupt config fails closed =="
+    Stop-Process -Id $p.Id -Force
+    Start-Sleep -Seconds 1
+    $ownDir2 = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote'
+    New-Item -ItemType Directory -Force $ownDir2 | Out-Null
+    $corruptPath = Join-Path $ownDir2 'config.json'
+    Set-Content $corruptPath '{"phones":[{"token":"incomplete' -NoNewline
+    $before = Get-Content $corruptPath -Raw
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not start on the corrupt-config run" }
+    $rCorrupt = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    Assert ($rCorrupt.code -ne 200) "a broken store refuses pairing (got $($rCorrupt.code))"
+    Assert ((Get-Content $corruptPath -Raw) -eq $before) "the unreadable config is preserved byte-for-byte"
+    Stop-Process -Id $p.Id -Force
+    Start-Sleep -Seconds 1
+    Remove-Item $ownDir2 -Recurse -Force -ErrorAction SilentlyContinue
+    # Restore a good paired state for the takeover phase.
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not restart for the takeover phase" }
+    $rPair2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    Assert ($rPair2.code -eq 200) "re-pair after the corrupt-config phase"
+    $token = ($rPair2.body | ConvertFrom-Json).token
+
     $dir2 = Join-Path $env:TEMP "zvr-e2e-takeover"
     New-Item -ItemType Directory -Force $dir2 | Out-Null
     Copy-Item $exe $dir2 -Force
