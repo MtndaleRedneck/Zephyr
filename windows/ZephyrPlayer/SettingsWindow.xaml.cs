@@ -203,7 +203,7 @@ namespace ZephyrPlayer
 
         private void OnFeedback(object sender, RoutedEventArgs e)
         {
-            var w = new FeedbackWindow { Owner = this };
+            var w = new FeedbackWindow(_store.Count) { Owner = this };
             w.ShowDialog();
         }
     }

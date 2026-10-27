@@ -47,7 +47,7 @@ namespace ZephyrPlayer
             spu = _player.Spu,
             // The phone's subtitle sheet needs the track LIST, not just the
             // current id (teardown C2): id + name per track.
-            spuTracks = (_player.SpuDescription ?? Array.Empty<TrackDescription>())
+            spuTracks = (_player.SpuDescription ?? Array.Empty<LibVLCSharp.Shared.Structures.TrackDescription>())
                 .Select(t => new { id = t.Id, name = t.Name }).ToArray(),
             fullscreen = _window.IsFullscreen,
             update_available = UpdateState.AvailableVersion,

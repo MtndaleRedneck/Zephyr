@@ -14,63 +14,59 @@ namespace ZephyrPlayer.Tests
     /// offscreen (RenderTargetBitmap) and checked at the pixel level. WPF needs
     /// an STA thread; the runner has no display, but software rendering is fine.
     /// </summary>
-    public class PairBannerRenderTests
+    public class PairingWindowRenderTests
     {
         [Fact]
-        public void PairBanner_RendersOffscreen()
+        public void PairingWindow_RendersOffscreen()
         {
             string? error = null;
             var t = new Thread(() =>
             {
                 try
                 {
-                    Core.Initialize();
-                    var libvlc = new LibVLC();
-                    var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
-                    var w = new MainWindow(libvlc, player);
-                    w.ShowPairBanner("135792");
-                    Assert.Equal("1 3 5 7 9 2", w.PairCodeText.Text);
-                    // Render the banner Border itself: the full window contains the
-                    // libVLC VideoView, which can't composite offscreen and blanks
-                    // the whole bitmap (CI-observed: all-dark then all-black PNGs).
-                    // A measured/arranged plain Border renders in software fine.
-                    var banner = w.PairBanner;
-                    banner.Measure(new Size(1280, 720));
-                    banner.Arrange(new Rect(0, 0, banner.DesiredSize.Width, banner.DesiredSize.Height));
-                    var bw = (int)Math.Ceiling(banner.DesiredSize.Width);
-                    var bh = (int)Math.Ceiling(banner.DesiredSize.Height);
-                    var rtb = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
-                    rtb.Render(banner);
-                    // Evidence capture is best-effort: the pixel assert is the test,
-                    // the PNG only feeds the CI artifact for UI review.
+                    var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-pairui-" + Guid.NewGuid().ToString("N"));
+                    System.IO.Directory.CreateDirectory(dir);
+                    var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                    store.Add("tok-1", "My phone");
+                    var gate = new PairingGate();
+                    var w = new PairingWindow(gate, store, _ => { });
+                    // Loaded mints + shows a code; drive the lifecycle manually.
+                    w.Show(); w.Hide();
+                    w.RefreshPhones();
+                    var codePanel = (UIElement)w.FindName("CodePanel")!;
+                    var list = (ItemsControl)w.FindName("PhoneList")!;
+                    Assert.Equal(Visibility.Visible, codePanel.Visibility);
+                    Assert.Equal(1, list.Items.Count);
+                    // The big code text is 6 spaced digits.
+                    var codeText = ((TextBlock)w.FindName("PairCodeText")!).Text;
+                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2"
+                    // Render the window content offscreen as CI evidence.
+                    var root = (FrameworkElement)w.Content;
+                    root.Measure(new Size(560, 600));
+                    root.Arrange(new Rect(0, 0, 560, 600));
+                    root.UpdateLayout();
+                    var rtb = new RenderTargetBitmap(560, 600, 96, 96, PixelFormats.Pbgra32);
+                    rtb.Render(root);
                     try
                     {
                         var png = new PngBitmapEncoder();
                         png.Frames.Add(BitmapFrame.Create(rtb));
                         var outDir = Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath();
-                        using (var fs = System.IO.File.Create(System.IO.Path.Combine(outDir, "pair-banner-render.png")))
+                        using (var fs = System.IO.File.Create(System.IO.Path.Combine(outDir, "pc-pairing-render.png")))
                             png.Save(fs);
                     }
-                    catch (Exception ex) { Console.WriteLine("banner png capture failed: " + ex.Message); }
-                    // The banner's signature, not a single opaque pixel (the old
-                    // assert passed on a blank dark frame): the gold #F0C23E code
-                    // text and the white title must actually appear top-center.
-                    var wide = new byte[bw * bh * 4];
-                    rtb.CopyPixels(new Int32Rect(0, 0, bw, bh), wide, bw * 4, 0);
-                    int gold = 0, white = 0;
-                    for (var i = 0; i < wide.Length; i += 4)
+                    catch (Exception ex) { Console.WriteLine("pairing png capture failed: " + ex.Message); }
+                    // Pixel signature: the orange code digits must actually render.
+                    var px = new byte[560 * 600 * 4];
+                    rtb.CopyPixels(new Int32Rect(0, 0, 560, 600), px, 560 * 4, 0);
+                    var orange = 0;
+                    for (var i = 0; i < px.Length; i += 4)
                     {
-                        var b = wide[i]; var g = wide[i + 1]; var r = wide[i + 2];
-                        if (r > 200 && g > 150 && g < 230 && b < 110) gold++;
-                        if (r > 230 && g > 230 && b > 230) white++;
+                        var b = px[i]; var g = px[i + 1]; var r = px[i + 2];
+                        if (r > 200 && g > 90 && g < 160 && b < 60) orange++;
                     }
-                    Assert.True(gold > 100, $"gold code-text pixels {gold} - banner code not rendered");
-                    // Threshold encodes the settled design: "Pair with your phone" at default caption size (~69 pure-white px on the 96dpi runner render; 0-ish would mean not rendered).
-                    Assert.True(white > 40, $"white title pixels {white} - banner title not rendered");
+                    Assert.True(orange > 150, $"orange code pixels {orange} - pairing code not rendered");
                     w.Close();
-                    // Shut the dispatcher down on this STA thread: a live dispatcher at
-                    // thread exit lets a zombie wndproc race host teardown (CI-observed
-                    // NullReferenceException in HwndSubclass.SubclassWndProc).
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
                 catch (Exception e) { error = e.ToString(); }
@@ -78,7 +74,7 @@ namespace ZephyrPlayer.Tests
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
             t.Join(30000);
-                        if (error != null)
+            if (error != null)
             {
                 var f = System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");
                 try { System.IO.File.WriteAllText(f, error); } catch { }
@@ -108,7 +104,7 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
                     Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
                     Assert.Equal("0:00", ((TextBlock)w.FindName("ElapsedText")!).Text);
-                    Assert.Equal("of 0:00", ((TextBlock)w.FindName("TotalText")!).Text);
+                    Assert.Equal("0:00 total", ((TextBlock)w.FindName("TotalText")!).Text);
                     Assert.Equal("-0:00", ((TextBlock)w.FindName("RemainingText")!).Text);
                     foreach (var n in new[] { "VolumeButton", "PlayPauseButton", "SkipBackButton", "SkipForwardButton", "SecondarySkipBackButton", "SecondarySkipForwardButton", "CaptionsButton", "FullscreenButton", "SeekBar" })
                         Assert.Equal(Visibility.Visible, ((UIElement)w.FindName(n)!).Visibility);

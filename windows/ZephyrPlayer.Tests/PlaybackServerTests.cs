@@ -129,16 +129,21 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
-        public async Task Pair_FiveWrongCodes_LocksUntilRestart()
+        public async Task Pair_FiveWrongCodes_LocksForFiveMinutes()
         {
             var (server, _) = GateStart(out _, withPairing: true, out var code);
             using (server)
             {
                 for (var i = 0; i < PairingGate.MaxFailures; i++)
                     Assert.Equal(HttpStatusCode.Forbidden, (await Pair(Client(null), "000000")).StatusCode);
-                // Locked: even the RIGHT code now gets 429 until the player restarts.
+                // Locked: even the RIGHT code now gets 429 until the lock runs out
+                // (1.2.0: time-based - the phone says "try again in a few minutes",
+                // never "restart the PC").
                 Assert.Equal((HttpStatusCode)429, (await Pair(Client(null), "000000")).StatusCode);
                 Assert.Equal((HttpStatusCode)429, (await Pair(Client(null), code!)).StatusCode);
+                var body = await (await Pair(Client(null), code!)).Content.ReadAsStringAsync();
+                Assert.Contains("few minutes", body);
+                Assert.DoesNotContain("Restart", body);
             }
         }
 
@@ -170,14 +175,23 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
-        public async Task Pair_ExpiredCode_403()
+        public async Task Pair_ExpiredCode_410_DistinctFromWrongCode()
         {
+            // Settled distinction: an EXPIRED code tells the phone "use the new
+            // code on the PC screen"; a WRONG code stays 403 "bad code".
             var now = DateTime.UtcNow;
             var (server, _) = GateStart(out _, withPairing: true, out var code, clock: () => now);
             using (server)
             {
                 now += PairingGate.CodeLifetime + TimeSpan.FromMinutes(1);
-                Assert.Equal(HttpStatusCode.Forbidden, (await Pair(Client(null), code!)).StatusCode);
+                var resp = await Pair(Client(null), code!);
+                Assert.Equal((HttpStatusCode)410, resp.StatusCode);
+                Assert.Contains("code expired", await resp.Content.ReadAsStringAsync());
+                // A fresh code + one digit off is still a plain wrong code (403).
+                now += TimeSpan.FromMinutes(1);
+                var resp2 = await Pair(Client(null), "000000");
+                // No live code after the expiry consumed it: 403 "no code".
+                Assert.Equal(HttpStatusCode.Forbidden, resp2.StatusCode);
             }
         }
 
