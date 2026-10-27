@@ -32,6 +32,7 @@ using System.Runtime.InteropServices;
 public struct ZRECT { public int Left, Top, Right, Bottom; }
 public static class ZWU32 {
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+    [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out ZRECT r);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
@@ -292,6 +293,20 @@ Start-Sleep -Milliseconds 900
 $sz4b = CaptureWindow $pw "$env:RUNNER_TEMP/pc-desktop-pairing.png"
 StopZephyr
 
+# 2b+) Tray ICON proof (round-3 P1): the icon must really exist in the
+# notification area, not only its menu. Crop the bottom-right corner of the
+# primary screen (the notification area) while the app runs.
+$pIcon = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+Start-Sleep -Seconds 5
+$sw = [ZWU32]::GetSystemMetrics(0) # SM_CXSCREEN
+$sh = [ZWU32]::GetSystemMetrics(1) # SM_CYSCREEN
+if ($sw -le 0) { $sw = 1920 }; if ($sh -le 0) { $sh = 1080 }
+$ibmp = New-Object System.Drawing.Bitmap 460, 64
+$ig = [System.Drawing.Graphics]::FromImage($ibmp)
+$ig.CopyFromScreen(($sw - 460), ($sh - 64), 0, 0, $ibmp.Size)
+$ibmp.Save("$env:RUNNER_TEMP/pc-tray-icon.png")
+$ig.Dispose(); $ibmp.Dispose()
+
 # 2c) Tray menu, actual pixels: the CI-only --tray-menu arg pops the strip at a
 # fixed screen point; this grabs the region (dark-renderer proof).
 $p2c = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--tray-menu" -PassThru
@@ -301,6 +316,7 @@ $tg = [System.Drawing.Graphics]::FromImage($tbmp)
 $tg.CopyFromScreen(40, 40, 0, 0, $tbmp.Size)
 $tbmp.Save("$env:RUNNER_TEMP/pc-tray-menu.png")
 $tg.Dispose(); $tbmp.Dispose()
+Stop-Process -Id $pIcon.Id -Force -ErrorAction SilentlyContinue
 StopZephyr
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
