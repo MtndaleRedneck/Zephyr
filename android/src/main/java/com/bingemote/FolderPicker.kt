@@ -116,7 +116,8 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
     }
 
     LaunchedEffect(Unit) { load(path) }
-    BackHandler { onCancel() }
+    // Back goes UP inside folders first (both sources - S1); cancel only at the top.
+    BackHandler { if (path.isNotEmpty()) load(parentPath(path)) else onCancel() }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(
@@ -145,7 +146,7 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
                 error != null -> item { ListMessage(error!!, isError = true, actionLabel = "Try again", onAction = { load(path) }) }
                 dirs.isEmpty() && path.isEmpty() -> item { ListMessage("No folders here.") }
                 else -> {
-                    val rows = if (viaHelper && path.isNotEmpty())
+                    val rows = if (path.isNotEmpty())
                         listOf(BrowseItem(name = "..", isDir = true, path = parentPath(path), uri = "", sizeBytes = 0L)) + dirs
                         else dirs
                     items(rows.size, key = { it }) { i ->

@@ -30,11 +30,18 @@ object ZephyrClient {
     const val DISCOVERY_PORT = 8490
     const val LEGACY_DISCOVERY_PORT = 8489
     fun discoverPlayers(waitMs: Int = 1500, targets: List<java.net.InetAddress>? = null): List<com.bingemote.DiscoveredHelper> {
+        // Both generations are probed IN PARALLEL (S5): serial waits doubled
+        // Find-my-PC to 3s and re-find to 6s for no reason.
+        var legacy: List<com.bingemote.DiscoveredHelper> = emptyList()
+        var current: List<com.bingemote.DiscoveredHelper> = emptyList()
+        val t1 = kotlin.concurrent.thread { legacy = com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets, LEGACY_DISCOVERY_PORT) }
+        val t2 = kotlin.concurrent.thread { current = com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets, DISCOVERY_PORT) }
+        t1.join(); t2.join()
         val found = LinkedHashMap<String, com.bingemote.DiscoveredHelper>()
         // Legacy first, then current: if both generations somehow answer for one
         // host, the 1.2+ player wins.
-        for (h in com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets, LEGACY_DISCOVERY_PORT)) found[h.host] = h
-        for (h in com.bingemote.HelperClient.discoverRaw(REPLY_MAGIC, waitMs, targets, DISCOVERY_PORT)) found[h.host] = h
+        for (h in legacy) found[h.host] = h
+        for (h in current) found[h.host] = h
         return found.values.toList()
     }
 
@@ -169,8 +176,12 @@ object ZephyrClient {
         val arr = json.optJSONArray("spuTracks") ?: return emptyList()
         val out = ArrayList<com.bingemote.SubTrack>(arr.length())
         for (i in 0 until arr.length()) {
-            val t = arr.getJSONObject(i)
-            val id = t.getInt("id")
+            val t = arr.optJSONObject(i) ?: continue
+            // optInt + skip: one malformed track must not fail the whole poll and
+            // count as an outage (S13).
+            if (!t.has("id")) continue
+            val id = t.optInt("id", Int.MIN_VALUE)
+            if (id == Int.MIN_VALUE) continue
             out.add(com.bingemote.SubTrack(id, t.optString("name", "Track ${i + 1}"), id == current))
         }
         return out
