@@ -98,7 +98,7 @@ namespace ZephyrPlayer
             VersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
         }
 
-        private static string SkipLabel(int seconds) => seconds >= 60 ? (seconds / 60) + "m" : seconds + "s";
+        private static string SkipLabel(int seconds) => PlayerSettings.FormatSkip(seconds);
 
         private static string Label(string v) => v switch
         {

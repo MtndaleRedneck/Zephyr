@@ -114,7 +114,7 @@ namespace ZephyrPlayer
                     var time = _player.Time;
                     SeekBar.Value = 1000.0 * time / length;
                     ElapsedText.Text = Format(time);
-                    TotalText.Text = "of " + Format(length);
+                    TotalText.Text = Format(length) + " total";
                     RemainingText.Text = "-" + Format(Math.Max(0, length - time));
                 }
             }
@@ -163,22 +163,26 @@ namespace ZephyrPlayer
 
         private void OnSkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(false, false), SkipForwardSpin, false);
 
-        private void OnSecondarySkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, true), SecondarySkipBackSpin, true);
+        private void OnSecondarySkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, true), null, true);
 
-        private void OnSecondarySkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, false), SecondarySkipForwardSpin, false);
+        private void OnSecondarySkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, false), null, false);
 
-        private void Skip(int deltaSeconds, RotateTransform spin, bool backward)
+        private void Skip(int deltaSeconds, RotateTransform? spin, bool backward)
         {
             if (_player.Length > 0)
                 _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
-            // Same language as the phone: one full ring turn per tap
-            // (forward clockwise, back counter-clockwise), then settle upright.
-            spin.Angle = 0;
-            var anim = new DoubleAnimation(backward ? -360 : 360, TimeSpan.FromMilliseconds(420))
+            // Same language as the phone: the PRIMARY rings do one full turn per
+            // tap (forward clockwise, back counter-clockwise), then settle
+            // upright. The secondary double-triangles just flash their labels.
+            if (spin != null)
             {
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
-            };
-            spin.BeginAnimation(RotateTransform.AngleProperty, anim);
+                spin.Angle = 0;
+                var anim = new DoubleAnimation(backward ? -360 : 360, TimeSpan.FromMilliseconds(420))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+                };
+                spin.BeginAnimation(RotateTransform.AngleProperty, anim);
+            }
             Flash();
         }
 
@@ -298,6 +302,11 @@ namespace ZephyrPlayer
         {
             WindowStyle = on ? WindowStyle.None : WindowStyle.SingleBorderWindow;
             WindowState = on ? WindowState.Maximized : WindowState.Normal;
+            // The bar must be reachable right after the chrome switch (reported
+            // missing-bar bug): show it once, then the idle timer owns hiding.
+            ControlBar.Opacity = 1;
+            _idleTimer.Stop();
+            _idleTimer.Start();
         }
 
         private void OnFullscreen(object sender, RoutedEventArgs e) => SetFullscreen(!IsFullscreen);
@@ -319,14 +328,13 @@ namespace ZephyrPlayer
             SkipForwardLabel.Foreground = label;
             SkipBackLabel.Text = _settings.PrimarySkipSeconds.ToString();
             SkipForwardLabel.Text = _settings.PrimarySkipSeconds.ToString();
-            SecondarySkipBackRing.Stroke = ring;
-            SecondarySkipForwardRing.Stroke = ring;
-            SecondarySkipBackArrow.Fill = ring;
-            SecondarySkipForwardArrow.Fill = ring;
+            SecondarySkipBackIcon.Fill = ring;
+            SecondarySkipForwardIcon.Fill = ring;
             SecondarySkipBackLabel.Foreground = label;
             SecondarySkipForwardLabel.Foreground = label;
-            SecondarySkipBackLabel.Text = _settings.SecondarySkipSeconds.ToString();
-            SecondarySkipForwardLabel.Text = _settings.SecondarySkipSeconds.ToString();
+            // Settled units: minutes read as minutes (60 -> "1m"), never raw seconds.
+            SecondarySkipBackLabel.Text = PlayerSettings.FormatSkip(_settings.SecondarySkipSeconds);
+            SecondarySkipForwardLabel.Text = PlayerSettings.FormatSkip(_settings.SecondarySkipSeconds);
 
             var hollow = _settings.IconStyle == "hollow";
             PlayRing.Stroke = hollow ? ring : Brushes.Transparent;
