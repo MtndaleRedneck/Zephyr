@@ -5,7 +5,6 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
-import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 
@@ -35,10 +34,10 @@ class HelperClientErrorDetailTest {
         enqueue(code, body)
         try {
             HelperClient.playMovie("127.0.0.1", port, "tok", "a/b.mp4", 8080, "pw", false)
-            fail("expected playMovie to fail with $code")
         } catch (e: HelperClient.Unreachable) {
             return e.message ?: ""
         }
+        throw AssertionError("expected playMovie to fail with $code")
     }
 
     @Test fun `a 400 refusal keeps the PCs detail`() {
