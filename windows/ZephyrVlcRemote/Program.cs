@@ -125,9 +125,23 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Visual styles + DPI awareness before ANY UI (the explained elevation and the
+        // listen-failure notices can run before the window exists).
+        ApplicationConfiguration.Initialize();
         if (args.Contains("--install-firewall"))
         {
-            return FirewallSetup.RunElevated(FirewallMarker);
+            // Optional args from the unelevated parent: the USER's SID and data folder,
+            // so the listen permission and the markers land with the user even when
+            // another admin's credentials approved the prompt.
+            var i = Array.IndexOf(args, "--install-firewall");
+            var sid = i + 1 < args.Length ? args[i + 1] : null;
+            var dir = i + 2 < args.Length ? args[i + 2] : null;
+            return FirewallSetup.RunElevated(sid, dir);
+        }
+        if (args.Contains("--remove-firewall"))
+        {
+            // Elevated cleanup at uninstall: our rules and our listen permission only.
+            return FirewallSetup.RemoveElevated();
         }
 
 #if WINDOW_SHOT_HOOK
@@ -137,7 +151,6 @@ internal static class Program
             Directory.CreateDirectory(DataDir);
             LoadConfig();
             lock (PhonesLock) { Phones.Clear(); }
-            ApplicationConfiguration.Initialize();
             using var shot = new HelperWindow(windowShot: true);
             var shotPath = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT")
                 ?? Path.Combine(DataDir, "window.png");
@@ -216,9 +229,8 @@ internal static class Program
             if (oldQuit == null)
             {
                 Log("An older copy (before 1.1.0) is running - asked him to quit it by hand.");
-                MessageBox.Show(
-                    "An older Zephyr VLC Remote is already running. Right-click its icon by the clock (click the ^ arrow if you don't see it) and choose Quit, then open this one again.",
-                    "Zephyr VLC Remote", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                NoteDialog.Show(null,
+                    "An older Zephyr VLC Remote is already running. Right-click its icon by the clock (click the ^ arrow if you don't see it) and choose Quit, then open this one again.");
                 return 0;
             }
             Log("Update launched while an older copy ran - asked it to quit, taking over.");
@@ -232,9 +244,8 @@ internal static class Program
             if (!tookOver)
             {
                 Log("The older copy did not exit in time - giving up.");
-                MessageBox.Show(
-                    "The older Zephyr VLC Remote is still closing. Open this one again in a few seconds.",
-                    "Zephyr VLC Remote", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                NoteDialog.Show(null,
+                    "The older Zephyr VLC Remote is still closing. Open this one again in a few seconds.");
                 return 0;
             }
         }
@@ -257,8 +268,9 @@ internal static class Program
 
         if (!File.Exists(FirewallMarker))
         {
-            // The Setup download adds the rule and listen permission during install; a
-            // first run of the plain exe adds them here with one admin prompt.
+            // The elevated step adds the rules and listen permission; the UNELEVATED
+            // copy verifies them and writes its own marker, so the marker always lands
+            // in the user's profile even when another admin approved the UAC prompt.
             if (FirewallSetup.RuleExists() && FirewallSetup.UrlAclExists())
             {
                 try { File.WriteAllText(FirewallMarker, DateTime.UtcNow.ToString("O")); } catch { }
@@ -268,7 +280,15 @@ internal static class Program
                 // Watchdog launch: never pop the admin prompt every 5 minutes - stay quiet
                 // until he opens the app himself and finishes the one-time setup.
                 if (ensureRunning) { Log("Watchdog start skipped: firewall setup not done yet."); return 0; }
-                FirewallSetup.ExplainAndRelaunch();
+                // Any decline or failure: one dark note was already shown. Leave cleanly
+                // (even if a leftover listen permission would let us bind) and offer the
+                // setup again on the next launch.
+                if (!FirewallSetup.ExplainAndRelaunch()) return 0;
+                if (FirewallSetup.RuleExists() && FirewallSetup.UrlAclExists())
+                {
+                    try { File.WriteAllText(FirewallMarker, DateTime.UtcNow.ToString("O")); } catch { }
+                }
+                else return 0;
             }
             // Surface the vlc.exe rule inventory the elevated step saved (report only).
             FirewallSetup.LogVlcRuleInventory();
@@ -290,6 +310,11 @@ internal static class Program
         {
             PairCode = overrideCode;
             PairCodeExpires = DateTime.UtcNow + PairCodeLifetime;
+#if PAIR_CODE_HOOK
+            // CI only: exercise the expiry path without waiting out the lifetime.
+            if (Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST") == "1")
+                PairCodeExpires = DateTime.UtcNow - TimeSpan.FromSeconds(1);
+#endif
         }
         else if (!Paired && !StoreBroken)
         {
@@ -306,13 +331,11 @@ internal static class Program
             Log("Could not start listening: " + ex.Message);
             // Watchdog: no pop-up loop, but not silence either - one quiet tray notice per sign-in.
             if (ensureRunning) { NotifyListenFailureOnce(); return 1; }
-            MessageBox.Show("Could not start listening for the phone. If Windows asked for administrator permission earlier, choose Yes - it is needed once to open the port.\n\n" + ex.Message,
-                "Zephyr VLC Remote", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            NoteDialog.Show(null, "Could not start listening for the phone. If Windows asked for administrator permission earlier, choose Yes - it is needed once to open the port.\n\n" + ex.Message);
             return 1;
         }
         RegisterWatchdog(); // only a working app gets the watchdog: no 5-minute relaunch loop after a failed setup
 
-        ApplicationConfiguration.Initialize();
         using var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
         using var quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName);
         var window = new HelperWindow();
@@ -440,7 +463,15 @@ internal static class Program
         try
         {
             if (!File.Exists(ConfigPath)) return;
-            using var doc = JsonDocument.Parse(File.ReadAllText(ConfigPath));
+            // A scanner or indexer can hold the file for a moment at sign-in: a transient
+            // read error is NOT a broken store. Retry a few times before failing closed.
+            string? text = null;
+            for (var attempt = 0; attempt < 4; attempt++)
+            {
+                try { text = File.ReadAllText(ConfigPath); break; }
+                catch (IOException) { if (attempt == 3) throw; Thread.Sleep(250); }
+            }
+            using var doc = JsonDocument.Parse(text!);
             // Fail closed on ANY unreadable record (round-5, Main's catch): a dropped
             // entry would be permanently lost on the NEXT save, so one undecryptable
             // token marks the whole store broken - the file is preserved byte-for-byte,
@@ -449,7 +480,7 @@ internal static class Program
             {
                 StoreBroken = true;
                 Log("A saved phone" + (unreadableName != null ? " (\"" + unreadableName + "\")" : "")
-                    + " could not be decrypted. The file is left untouched; pairing and saving are refused until it is removed by hand.");
+                    + " could not be decrypted. The file is left untouched; pairing and saving are refused until it is moved aside or renamed by hand.");
                 lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
                 return;
             }
@@ -474,14 +505,24 @@ internal static class Program
             MoviesFolder = doc.RootElement.TryGetProperty("moviesFolder", out var mf) ? mf.GetString() : null;
             LastRunVersion = doc.RootElement.TryGetProperty("lastRunVersion", out var lv) ? lv.GetString() : null;
             var pvRaw = doc.RootElement.TryGetProperty("pendingVlcPassword", out var pvp) ? pvp.GetString() : null;
-            _pendingVlcFromConfig = pvRaw == null ? null : Dpapi.Unwrap(pvRaw);
+            var pvUnwrapped = pvRaw == null ? null : Dpapi.Unwrap(pvRaw);
+            if (pvRaw != null && pvUnwrapped == null)
+            {
+                // Same fail-closed rule as a phone record: a dropped pending password
+                // would silently erase the waiting vlcrc write on the next save.
+                StoreBroken = true;
+                Log("The stored pending VLC password could not be decrypted. The file is left untouched; pairing and saving are refused until it is moved aside or renamed by hand.");
+                lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
+                return;
+            }
+            _pendingVlcFromConfig = pvUnwrapped;
             }
         }
         catch (Exception ex)
         {
             StoreBroken = true;
             lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
-            Log("Saved pairing data could not be read (" + ex.GetType().Name + "). The file is left untouched; pairing is refused until it is removed by hand.");
+            Log("Saved pairing data could not be read (" + ex.GetType().Name + "). The file is left untouched; pairing is refused until it is moved aside or renamed by hand.");
         }
         // A vlcrc write that was waiting for VLC to close survives a helper restart:
         // complete it now when VLC is already closed, or re-arm the retry when it is not.
@@ -493,8 +534,12 @@ internal static class Program
     private static string? _pendingVlcFromConfig;
 
     /// <summary>One writer at a time: listener threads (pair, config, adopt, VLC setup)
-    /// and the window thread all land here.</summary>
-    private static readonly object ConfigSaveLock = new();
+    /// and the window thread all land here. This is the OUTER transaction lock: the whole
+    /// read-modify-write (snapshot AND write) happens inside it, so two saves can never
+    /// finish out of order and a stale snapshot can never overwrite a newer one. Lock
+    /// order is ConfigSaveLock -> PhonesLock everywhere; nothing takes them the other way.
+    /// Callers that mutate + persist wrap the whole transaction in this lock too.</summary>
+    internal static readonly object ConfigSaveLock = new();
 
     internal static void SaveConfig()
     {
@@ -502,21 +547,21 @@ internal static class Program
         // holds are the only copy. Writes are atomic (temp file, then replace), so a
         // crash or power cut mid-save can never tear the file either.
         if (StoreBroken) throw new InvalidOperationException("Saved pairing data is unreadable; refusing to overwrite it.");
-        string json;
-        lock (PhonesLock)
-        {
-            json = JsonSerializer.Serialize(new
-            {
-                phones = Phones.Select(p => new { token = Dpapi.Wrap(p.Token), name = p.Name, adoptSpent = p.AdoptSpent, adoptRequestId = p.AdoptRequestId, adoptServedAtUtc = p.AdoptServedAtUtc?.ToString("o") }).ToArray(),
-                pendingVlcPassword = VlcSetup.PendingValue is { } pv ? Dpapi.Wrap(pv) : null,
-                moviesFolder = MoviesFolder,
-                declinedNetworks = DeclinedNetworks.ToArray(),
-                homeNetworks = HomeNetworks.ToArray(),
-                lastRunVersion = LastRunVersion,
-            });
-        }
         lock (ConfigSaveLock)
         {
+            string json;
+            lock (PhonesLock)
+            {
+                json = JsonSerializer.Serialize(new
+                {
+                    phones = Phones.Select(p => new { token = Dpapi.Wrap(p.Token), name = p.Name, adoptSpent = p.AdoptSpent, adoptRequestId = p.AdoptRequestId, adoptServedAtUtc = p.AdoptServedAtUtc?.ToString("o") }).ToArray(),
+                    pendingVlcPassword = VlcSetup.PendingValue is { } pv ? Dpapi.Wrap(pv) : null,
+                    moviesFolder = MoviesFolder,
+                    declinedNetworks = DeclinedNetworks.ToArray(),
+                    homeNetworks = HomeNetworks.ToArray(),
+                    lastRunVersion = LastRunVersion,
+                });
+            }
             Directory.CreateDirectory(DataDir);
             var tmp = ConfigPath + ".tmp-" + Guid.NewGuid().ToString("N");
             File.WriteAllText(tmp, json);
@@ -546,14 +591,20 @@ internal static class Program
     /// refused write leaves no phantom pairing - and the caller keeps the code alive.</summary>
     internal static void AddPhoneAndPersist(string token, string? name)
     {
-        var phone = new PairedPhone { Token = token, Name = "" };
-        lock (PhonesLock)
+        // Whole transaction under the OUTER save lock (round-6): mutate + persist +
+        // rollback are one serialized unit, so no concurrent save can persist a state
+        // that this path is about to roll back.
+        lock (ConfigSaveLock)
         {
-            phone.Name = string.IsNullOrWhiteSpace(name) ? "Phone " + (Phones.Count + 1) : name!.Trim();
-            Phones.Add(phone);
+            var phone = new PairedPhone { Token = token, Name = "" };
+            lock (PhonesLock)
+            {
+                phone.Name = string.IsNullOrWhiteSpace(name) ? "Phone " + (Phones.Count + 1) : name!.Trim();
+                Phones.Add(phone);
+            }
+            try { SaveConfig(); }
+            catch { lock (PhonesLock) { Phones.Remove(phone); } throw; }
         }
-        try { SaveConfig(); }
-        catch { lock (PhonesLock) { Phones.Remove(phone); } throw; }
     }
 
     internal static string MachineLabel() => Environment.MachineName;
@@ -693,13 +744,8 @@ internal sealed class HelperWindow : Form
     internal static readonly Color DarkCard2 = Color.FromArgb(46, 46, 54);
     internal static readonly Color DarkText = Color.FromArgb(235, 235, 240);
     internal static readonly Color DarkMuted = Color.FromArgb(150, 150, 160);
-    internal static readonly Color LightBg = Color.FromArgb(243, 243, 243);
-    internal static readonly Color LightCard = Color.White;
-    internal static readonly Color LightText = Color.FromArgb(26, 26, 26);
-    internal static readonly Color LightMuted = Color.FromArgb(110, 110, 110);
     // The subtle 1px edge on cards and the name box (Win11 settings-card look).
     internal static readonly Color DarkBorder = Color.FromArgb(56, 56, 64);
-    internal static readonly Color LightBorder = Color.FromArgb(222, 222, 226);
 
     private bool _allowShow;
     private bool _updateAnnounced;
@@ -817,7 +863,8 @@ internal sealed class HelperWindow : Form
         _pair = MakeButton("Pair", margin + contentW - 60, y, 60);
         _pair.Height = 32;
         _pair.Enabled = false;
-        StylePrimary(_pair);
+        StylePairEnabled();
+        _pair.EnabledChanged += (_, _) => StylePairEnabled();
         _pair.Click += (_, _) => StartPairing();
         _nameBox.TextChanged += (_, _) =>
         {
@@ -968,7 +1015,7 @@ internal sealed class HelperWindow : Form
         foreach (Control c in Controls) _baseTops[c] = c.Top;
         _baseHeight = y;
 
-        _menu = new ContextMenuStrip();
+        _menu = new ContextMenuStrip { Renderer = new DarkMenuRenderer() };
         _menu.Items.Add("Show Zephyr VLC Remote", null, (_, _) => ShowFromTray());
         _menu.Items.Add("Quit Zephyr VLC Remote", null, (_, _) => Program.QuitOnPurpose());
         _tray = new NotifyIcon
@@ -1254,8 +1301,24 @@ internal sealed class HelperWindow : Form
                 _codeCaption.Visible = _code.Visible = _cancelPair.Visible = false;
                 _codeNote.Visible = true;
                 _codeNote.Text = "The saved pairings on this PC could not be read. Pairing is off and nothing is being overwritten - the file is kept safe at "
-                    + Program.ConfigPath + ". To start fresh, delete that file yourself and reopen Zephyr VLC Remote.";
+                    + Program.ConfigPath + ". To start fresh, move that file aside (rename it) and reopen Zephyr VLC Remote.";
                 _pair.Enabled = false;
+                _nameBox.Enabled = false;
+                // The note is measured for its short default text; this longer message
+                // needs real room or it paints over the phone list. Grow the note and
+                // shift everything below it (the window grows with it).
+                var noteW = ClientSize.Width - 48;
+                var noteH = TextRenderer.MeasureText(_codeNote.Text, _codeNote.Font,
+                    new Size(noteW, 1000), TextFormatFlags.WordBreak).Height + 4;
+                if (noteH != _codeNote.Height)
+                {
+                    var delta = noteH - _codeNote.Height;
+                    var noteTop = _baseTops[_codeNote];
+                    _codeNote.Height = noteH;
+                    foreach (var c in _baseTops.Keys.ToList())
+                        if (_baseTops[c] > noteTop) _baseTops[c] += delta;
+                    _baseHeight += delta;
+                }
                 ApplyLayout();
             }
             return;
@@ -1303,12 +1366,11 @@ internal sealed class HelperWindow : Form
     /// settings-style card: name on the left, Remove inside at the right.</summary>
     private void RefreshPhones()
     {
-        var dark = IsDarkMode();
-        var card = dark ? DarkCard : LightCard;
-        var btnBg = dark ? DarkCard2 : LightBg;
-        var text = dark ? DarkText : LightText;
-        var muted = dark ? DarkMuted : LightMuted;
-        var border = dark ? DarkBorder : LightBorder;
+        var card = DarkCard;
+        var btnBg = DarkCard2;
+        var text = DarkText;
+        var muted = DarkMuted;
+        var border = DarkBorder;
         _phoneList.Controls.Clear();
         var rowWidth = Program.PhonesCount > 3 ? 442 - 17 : 442; // leave room for the scroll bar
         if (Program.PhonesCount == 0)
@@ -1374,16 +1436,19 @@ internal sealed class HelperWindow : Form
                 "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. " +
                 "You can pair the phone again any time with a new code.",
                 "Remove")) return;
-        lock (Program.PhonesLock) { Program.Phones.Remove(ph); }
-        try { Program.SaveConfig(); }
-        catch (Exception ex)
+        bool removedOk = false;
+        lock (Program.ConfigSaveLock)
         {
-            // Transactional (B3): a refused save rolls the removal back - no phantom.
-            lock (Program.PhonesLock) { Program.Phones.Add(ph); }
-            Program.Log("Phone removal could not be saved: " + ex.Message);
-            RefreshPhones();
-            return;
+            lock (Program.PhonesLock) { Program.Phones.Remove(ph); }
+            try { Program.SaveConfig(); removedOk = true; }
+            catch (Exception ex)
+            {
+                // Transactional (B3): a refused save rolls the removal back - no phantom.
+                lock (Program.PhonesLock) { Program.Phones.Add(ph); }
+                Program.Log("Phone removal could not be saved: " + ex.Message);
+            }
         }
+        if (!removedOk) { RefreshPhones(); return; }
         Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
         RefreshPhones();
     }
@@ -1392,18 +1457,23 @@ internal sealed class HelperWindow : Form
     {
         if (Program.PhonesCount == 0) return;
         if (!ConfirmDialog.Ask(this,
-                "Remove all phones? Every phone stops controlling this PC right away. Pair them again with new codes.",
+                "Remove all phones? Every phone stops controlling this PC through Zephyr VLC Remote right away. " +
+                "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. " +
+                "Pair them again with new codes.",
                 "Remove all")) return;
         Program.PairedPhone[] backup;
-        lock (Program.PhonesLock) { backup = Program.Phones.ToArray(); Program.Phones.Clear(); }
-        try { Program.SaveConfig(); }
-        catch (Exception ex)
+        bool clearedOk = false;
+        lock (Program.ConfigSaveLock)
         {
-            lock (Program.PhonesLock) { Program.Phones.Clear(); Program.Phones.AddRange(backup); }
-            Program.Log("Removing all phones could not be saved: " + ex.Message);
-            RefreshPhones();
-            return;
+            lock (Program.PhonesLock) { backup = Program.Phones.ToArray(); Program.Phones.Clear(); }
+            try { Program.SaveConfig(); clearedOk = true; }
+            catch (Exception ex)
+            {
+                lock (Program.PhonesLock) { Program.Phones.Clear(); Program.Phones.AddRange(backup); }
+                Program.Log("Removing all phones could not be saved: " + ex.Message);
+            }
         }
+        if (!clearedOk) { RefreshPhones(); return; }
         Program.Log("All phones removed.");
         RefreshPhones();
     }
@@ -1462,19 +1532,15 @@ internal sealed class HelperWindow : Form
         Font = new Font("Segoe UI", 8.5f),
     };
 
-    // Dark only (settled look): the window never follows the Windows light theme.
-    internal static bool IsDarkMode() => true;
-
     private void ApplyTheme()
     {
-        var dark = IsDarkMode();
-        var bg = dark ? DarkBg : LightBg;
-        var card = dark ? DarkCard : LightCard;
-        var btnBg = dark ? DarkCard : LightCard;
-        var cardBtn = dark ? DarkCard2 : LightBg;
-        var text = dark ? DarkText : LightText;
-        var muted = dark ? DarkMuted : LightMuted;
-        var border = dark ? DarkBorder : LightBorder;
+        var bg = DarkBg;
+        var card = DarkCard;
+        var btnBg = DarkCard;
+        var cardBtn = DarkCard2;
+        var text = DarkText;
+        var muted = DarkMuted;
+        var border = DarkBorder;
         BackColor = bg;
         ForeColor = text;
         _pairHeader.ForeColor = text;
@@ -1518,18 +1584,28 @@ internal sealed class HelperWindow : Form
             b.ForeColor = text;
             b.FlatAppearance.BorderSize = 0;
         }
-        StylePrimary(_pair);
+        StylePairEnabled();
         if (_manualDownload) StylePrimary(_checkUpdates); else { _checkUpdates.BackColor = cardBtn; _checkUpdates.ForeColor = text; }
         RefreshPhones();
         Invalidate(true); // rounded corners blend into the new background
         ApplyTitleBarTheme();
     }
 
+    /// <summary>Dark title bar for the standalone dialogs (Wi-Fi popup, confirm, note).</summary>
+    internal static void ApplyDarkTitleBar(Form f)
+    {
+        f.HandleCreated += (_, _) =>
+        {
+            var dark = 1;
+            try { DwmSetWindowAttribute(f.Handle, 20, ref dark, 4); } catch { /* older Windows */ }
+        };
+    }
+
     /// <summary>The window's title bar follows the Windows dark/light setting (immersive dark mode).</summary>
     internal void ApplyTitleBarTheme()
     {
         if (!IsHandleCreated) return;
-        var dark = IsDarkMode() ? 1 : 0;
+        var dark = 1;
         try { DwmSetWindowAttribute(Handle, 20, ref dark, 4); } catch { /* older Windows */ }
     }
 
@@ -1638,6 +1714,31 @@ internal sealed class HelperWindow : Form
     /// slight hover and pressed tone, centered text. Disabled keeps the button's normal
     /// text color: WinForms draws disabled text in GrayText, which vanishes on dark cards
     /// and on orange.</summary>
+    /// <summary>The tray menu follows the dark window instead of Windows' light popup.</summary>
+    private sealed class DarkMenuRenderer : ToolStripProfessionalRenderer
+    {
+        internal DarkMenuRenderer() : base(new DarkMenuColors()) { }
+        protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+        {
+            e.TextColor = e.Item.Enabled ? DarkText : DarkMuted;
+            base.OnRenderItemText(e);
+        }
+        private sealed class DarkMenuColors : ProfessionalColorTable
+        {
+            public override Color ToolStripDropDownBackground => DarkCard;
+            public override Color MenuBorder => DarkBorder;
+            public override Color MenuItemBorder => DarkBorder;
+            public override Color MenuItemSelected => DarkCard2;
+            public override Color MenuItemSelectedGradientBegin => DarkCard2;
+            public override Color MenuItemSelectedGradientEnd => DarkCard2;
+            public override Color MenuItemPressedGradientBegin => DarkCard2;
+            public override Color MenuItemPressedGradientEnd => DarkCard2;
+            public override Color ImageMarginGradientBegin => DarkCard;
+            public override Color ImageMarginGradientMiddle => DarkCard;
+            public override Color ImageMarginGradientEnd => DarkCard;
+        }
+    }
+
     internal sealed class ReadableButton : Button
     {
         private int _radius = 4;
@@ -1690,6 +1791,19 @@ internal sealed class HelperWindow : Form
     }
 
     /// <summary>The one orange button: the window's primary action.</summary>
+    /// <summary>Disabled Pair reads as off: neutral grey fill, muted label - never a
+    /// muddy half-orange that still looks tappable (broken store / pairing states).</summary>
+    private void StylePairEnabled()
+    {
+        if (_pair.Enabled) StylePrimary(_pair);
+        else
+        {
+            _pair.BackColor = Color.FromArgb(58, 58, 64);
+            _pair.ForeColor = DarkMuted;
+            _pair.Invalidate();
+        }
+    }
+
     internal static void StylePrimary(Button b)
     {
         b.BackColor = Orange;
@@ -1986,11 +2100,11 @@ internal sealed class WifiDialog : Form
     public WifiDialog(NetProfile profile)
     {
         AutoScaleMode = AutoScaleMode.Dpi;
-        var dark = HelperWindow.IsDarkMode();
-        var bg = dark ? HelperWindow.DarkBg : HelperWindow.LightBg;
-        var card = dark ? HelperWindow.DarkCard : HelperWindow.LightCard;
-        var text = dark ? HelperWindow.DarkText : HelperWindow.LightText;
-        var muted = dark ? HelperWindow.DarkMuted : HelperWindow.LightMuted;
+        var bg = HelperWindow.DarkBg;
+        var card = HelperWindow.DarkCard;
+        var text = HelperWindow.DarkText;
+        var muted = HelperWindow.DarkMuted;
+        HelperWindow.ApplyDarkTitleBar(this);
 
         Text = "Zephyr VLC Remote";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -2042,13 +2156,12 @@ internal sealed class WifiDialog : Form
 /// <summary>A small themed box whose confirm button says what it does (MessageBox can't relabel).</summary>
 internal static class ConfirmDialog
 {
-    public static bool Ask(IWin32Window owner, string text, string confirmLabel)
+    public static bool Ask(IWin32Window? owner, string text, string confirmLabel)
     {
-        var dark = HelperWindow.IsDarkMode();
-        var bg = dark ? HelperWindow.DarkBg : HelperWindow.LightBg;
-        var card = dark ? HelperWindow.DarkCard : HelperWindow.LightCard;
-        var fg = dark ? HelperWindow.DarkText : HelperWindow.LightText;
-        var muted = dark ? HelperWindow.DarkMuted : HelperWindow.LightMuted;
+        var bg = HelperWindow.DarkBg;
+        var card = HelperWindow.DarkCard;
+        var fg = HelperWindow.DarkText;
+        var muted = HelperWindow.DarkMuted;
         var answer = false;
         using var dlg = new Form
         {
@@ -2056,9 +2169,10 @@ internal static class ConfirmDialog
             Text = "Zephyr VLC Remote",
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false, MinimizeBox = false,
-            StartPosition = FormStartPosition.CenterParent,
+            StartPosition = owner == null ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent,
             BackColor = bg, ForeColor = fg,
         };
+        HelperWindow.ApplyDarkTitleBar(dlg);
         const int clientW = 440;
         var m = DialogLook.Margin;
         var body = DialogLook.Text(text, new Font("Segoe UI", 9.5f), fg, m, m, clientW - 2 * m);
@@ -2083,22 +2197,22 @@ internal static class ConfirmDialog
 /// <summary>A one-button themed note (the Wi-Fi popup's success line).</summary>
 internal static class NoteDialog
 {
-    public static void Show(IWin32Window owner, string text)
+    public static void Show(IWin32Window? owner, string text)
     {
-        var dark = HelperWindow.IsDarkMode();
-        var bg = dark ? HelperWindow.DarkBg : HelperWindow.LightBg;
-        var card = dark ? HelperWindow.DarkCard : HelperWindow.LightCard;
-        var fg = dark ? HelperWindow.DarkText : HelperWindow.LightText;
-        var muted = dark ? HelperWindow.DarkMuted : HelperWindow.LightMuted;
+        var bg = HelperWindow.DarkBg;
+        var card = HelperWindow.DarkCard;
+        var fg = HelperWindow.DarkText;
+        var muted = HelperWindow.DarkMuted;
         using var dlg = new Form
         {
             AutoScaleMode = AutoScaleMode.Dpi,
             Text = "Zephyr VLC Remote",
             FormBorderStyle = FormBorderStyle.FixedDialog,
             MaximizeBox = false, MinimizeBox = false,
-            StartPosition = FormStartPosition.CenterParent,
+            StartPosition = owner == null ? FormStartPosition.CenterScreen : FormStartPosition.CenterParent,
             BackColor = bg, ForeColor = fg,
         };
+        HelperWindow.ApplyDarkTitleBar(dlg);
         const int clientW = 440;
         var m = DialogLook.Margin;
         var body = DialogLook.Text(text, new Font("Segoe UI", 9.5f), fg, m, m, clientW - 2 * m);
@@ -2206,15 +2320,14 @@ internal sealed class FeedbackDialog : Form
 
     private void ApplyTheme()
     {
-        var dark = HelperWindow.IsDarkMode();
-        var bg = dark ? HelperWindow.DarkBg : HelperWindow.LightBg;
-        var card = dark ? HelperWindow.DarkCard : HelperWindow.LightCard;
-        var cardBtn = dark ? HelperWindow.DarkCard2 : HelperWindow.LightBg;
-        var text = dark ? HelperWindow.DarkText : HelperWindow.LightText;
-        var muted = dark ? HelperWindow.DarkMuted : HelperWindow.LightMuted;
+        var bg = HelperWindow.DarkBg;
+        var card = HelperWindow.DarkCard;
+        var cardBtn = HelperWindow.DarkCard2;
+        var text = HelperWindow.DarkText;
+        var muted = HelperWindow.DarkMuted;
         BackColor = bg;
         ForeColor = text;
-        var border = dark ? HelperWindow.DarkBorder : HelperWindow.LightBorder;
+        var border = HelperWindow.DarkBorder;
         foreach (Control c in Controls) { c.ForeColor = text; }
         _messageFrame.BackColor = card;
         _messageFrame.BorderColor = border;
@@ -2222,8 +2335,8 @@ internal sealed class FeedbackDialog : Form
         _previewCard.BorderColor = border;
         _message.BackColor = card;
         _message.ForeColor = text;
-        _scroll.Track = dark ? Color.FromArgb(32, 34, 44) : Color.FromArgb(224, 224, 228);
-        _scroll.Thumb = dark ? Color.FromArgb(74, 80, 96) : Color.FromArgb(180, 180, 190);
+        _scroll.Track = Color.FromArgb(32, 34, 44);
+        _scroll.Thumb = Color.FromArgb(74, 80, 96);
         _scroll.Arrows = muted;
         _scroll.Card = card;
         _scroll.Invalidate();
@@ -2245,7 +2358,7 @@ internal sealed class FeedbackDialog : Form
     private void TitleBarTheme()
     {
         if (!IsHandleCreated) return;
-        var dark = HelperWindow.IsDarkMode() ? 1 : 0;
+        var dark = 1;
         try { DwmSetWindowAttribute(Handle, 20, ref dark, 4); } catch { }
     }
 

@@ -40,19 +40,34 @@ internal static class AdoptGrant
                     return new Result { Served = true, Replayed = true, Password = password() };
                 if (withinWindow)
                     return new Result { Conflict = true }; // another fetch attempt must wait for the window
-                // Window expired without an ack: the grant is spent.
+                // Window expired without an ack: the grant is spent. A failed persist
+                // rolls the in-memory marker back - no phantom spend (round-6).
                 phone.AdoptSpent = true;
                 phone.AdoptRequestId = null;
                 phone.AdoptServedAtUtc = null;
-                persist();
+                try { persist(); }
+                catch
+                {
+                    phone.AdoptSpent = false;
+                    phone.AdoptRequestId = null;
+                    phone.AdoptServedAtUtc = null;
+                    throw;
+                }
                 return new Result { AlreadySpent = true };
             }
             var pw = password();
             // Persist the marker BEFORE serving: a restart now replays/spends from the
-            // record instead of silently re-arming a fresh grant.
+            // record instead of silently re-arming a fresh grant. A failed persist rolls
+            // the in-memory marker back (round-6): no served grant exists only in memory.
             phone.AdoptRequestId = requestId;
             phone.AdoptServedAtUtc = nowUtc;
-            persist();
+            try { persist(); }
+            catch
+            {
+                phone.AdoptRequestId = null;
+                phone.AdoptServedAtUtc = null;
+                throw;
+            }
             return new Result { Served = true, Password = pw };
         }
     }
@@ -68,7 +83,14 @@ internal static class AdoptGrant
             phone.AdoptSpent = true;
             phone.AdoptRequestId = null;
             phone.AdoptServedAtUtc = null;
-            persist();
+            try { persist(); }
+            catch
+            {
+                phone.AdoptSpent = false;
+                phone.AdoptRequestId = requestId;
+                phone.AdoptServedAtUtc = null;
+                throw;
+            }
             return new Result { Acked = true };
         }
     }
