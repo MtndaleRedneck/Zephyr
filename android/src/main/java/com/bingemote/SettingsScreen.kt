@@ -235,7 +235,7 @@ fun SettingsScreen(
 
         SettingsSection("Phone can't connect?") {
             Text(
-                "Open BingeMote on the PC and tap \u201CThis is my home Wi-Fi\u201D.",
+                "Open Zephyr VLC Remote on the PC and tap \u201CThis is my home Wi-Fi\u201D.",
                 color = TextC, fontSize = 14.sp,
             )
         }

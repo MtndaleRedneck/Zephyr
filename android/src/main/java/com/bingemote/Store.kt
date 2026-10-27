@@ -62,6 +62,22 @@ class Store(context: Context) {
         get() = prefs.getInt("helperPort", 8492) // Zephyr VLC Remote default
         set(v) = prefs.edit().putInt("helperPort", v).apply()
 
+    /** One-time notice after a 1.1 -> 1.2 upgrade retargeted the helper: the PC
+     *  helper is now Zephyr VLC Remote. Dismissed forever on "Got it". */
+    var vlcRemoteNoticePending: Boolean
+        get() = prefs.getBoolean("vlcRemoteNoticePending", false)
+        set(v) = prefs.edit().putBoolean("vlcRemoteNoticePending", v).apply()
+
+    /** A 1.1 install saved the BingeMote helper port (8488). Zephyr VLC Remote
+     *  imports BingeMote's pairings on the PC, so keep the saved token and just
+     *  retarget the port; flag the one-time notice so the change is never silent
+     *  (round-3 A3). Returns true only on the upgrade path. */
+    fun migrateLegacyHelperPort(): Boolean {
+        if (prefs.getInt("helperPort", 8492) != 8488) return false
+        prefs.edit().putInt("helperPort", 8492).putBoolean("vlcRemoteNoticePending", true).apply()
+        return true
+    }
+
     /// Touchpad gain: 1.0 = raw finger movement. Range 0.5-2.0 in 0.1 steps (the steppers enforce it).
     var mouseSpeed: Float
         get() = prefs.getFloat("mouseSpeed", 1.0f)

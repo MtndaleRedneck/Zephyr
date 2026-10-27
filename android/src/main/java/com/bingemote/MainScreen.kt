@@ -229,7 +229,27 @@ private fun HomeContent(
                     Text("This phone isn't paired with the PC anymore - pair again.", color = Color(0xFF3D2A12), fontSize = 13.sp)
                 } else if (remote.helperNotice) {
                     Spacer(Modifier.height(6.dp))
-                    Text("BingeMote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = Color(0xFF3D2A12), fontSize = 13.sp)
+                    Text("Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = Color(0xFF3D2A12), fontSize = 13.sp)
+                }
+            }
+            // One-time 1.1 -> 1.2 notice (round-3 A3): the PC helper changed.
+            var showVlcRemoteNotice by remember { mutableStateOf(remote.store.vlcRemoteNoticePending) }
+            if (!lost && showVlcRemoteNotice) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        "New: Zephyr VLC Remote replaces BingeMote on the PC. Your pairings carry over - if mouse, keyboard or volume stop answering, open Setup and pair once more.",
+                        color = Color(0xFF3D2A12), fontSize = 13.sp, modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Got it",
+                        color = Orange, fontSize = 13.sp,
+                        modifier = Modifier.clickable {
+                            remote.store.vlcRemoteNoticePending = false
+                            showVlcRemoteNotice = false
+                        },
+                    )
                 }
             }
             // Screenshot-rig only: the proposed helper/unpaired note rendered inside the

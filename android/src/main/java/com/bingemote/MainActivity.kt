@@ -57,6 +57,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         store = Store(this)
+        // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
+        // Remote (port 8492) and flag the one-time "what changed" notice.
+        store.migrateLegacyHelperPort()
         // Screenshot rig: pick the cancel-circle treatment for the cancel captures.
         if (BuildConfig.DEBUG) intent.getStringExtra("cancelstyle")?.let { store.cancelStyle = it }
         if (BuildConfig.DEBUG) intent.getStringExtra("pickeruri")?.let { DebugRig.pickerInitialUri = android.net.Uri.parse(it) }
@@ -70,7 +73,7 @@ class MainActivity : ComponentActivity() {
             "cur-g" -> remote.debugForceStatus(unreachable = true, helperDown = true)
             "prop-g" -> remote.debugForceStatus(unreachable = true, helperDown = false)
             "cur-e" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = true) }
-            "prop-e" -> { remote.debugSeedStatus(); remote.mockHeroNote = "BingeMote on the PC isn't answering - open it to use mouse, keyboard and PC volume." }
+            "prop-e" -> { remote.debugSeedStatus(); remote.mockHeroNote = "Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume." }
             "prop-unpaired" -> { remote.debugSeedStatus(); remote.mockHeroNote = "This phone isn't paired with the PC anymore - pair again." }
             // Post-1.11.0 production states: the REAL shipped notice branches
             // (post-debounce helper notice / 401 pair-again), no mock slot.

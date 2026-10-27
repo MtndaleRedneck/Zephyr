@@ -447,7 +447,7 @@ if (lastX != 0f || lastY != 0f) fire { InputRouter.move(remote, lastX * remote.s
 
         if (!helperOk) {
             Text(
-                "Can't reach BingeMote on the PC.\nIs it open?",
+                "Can't reach Zephyr VLC Remote on the PC.\nIs it open?",
                 color = ErrorRed, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier
