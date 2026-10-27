@@ -187,19 +187,22 @@ class RemoteState(
                 lastTitle = title; lastLengthSec = length
                 pickedSubtitle = null
             }
-            failures = 0; unreachable = false; connecting = false
+            connecting = false
             // A good poll also clears "pair again" (N2): after a re-pair the hero must
             // not keep accusing the NEW pairing until an app restart.
-            unpaired = false; zephyrMovedTo = null
+            PairingStatePolicy.onSuccess().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+            zephyrMovedTo = null
             vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
         } catch (e: ZephyrClient.BadToken) {
             if (store.selectedSource != Source.ZEPHYR) return
             // The PC removed this phone's pairing - say "pair again", not "can't reach"
             // (N2: a 401 is NOT an outage, and must clear any outage already showing).
-            unpaired = true; connecting = false; unreachable = false; failures = 0
+            connecting = false
+            PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
         } catch (e: Exception) {
             if (store.selectedSource != Source.ZEPHYR) return
-            failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true
+            PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
+                .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
             connecting = false
             // A DHCP address change looks like an outage: re-find the player and keep
             // the saved pairing (teardown C3). The token is the PC's identity.
@@ -222,12 +225,12 @@ class RemoteState(
         zephyrRediscovering = true
         scope.launch(Dispatchers.IO) {
             try {
-                val found = ZephyrClient.discoverPlayers(3000)
                 // S11 (security): the saved bearer token is NEVER sent to a discovered
-                // host - a spoofed same-name answer proves nothing. The plan type has
-                // no token-carrying action at all (ZephyrRediscover.kt).
-                val plan = com.zephyr.remote.ZephyrRediscover.plan(
-                    store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrPcName, found)
+                // host - a spoofed same-name answer proves nothing. run() takes no
+                // token and no HTTP client at all (ZephyrRediscover.kt).
+                val plan = com.zephyr.remote.ZephyrRediscover.run(
+                    store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrPcName,
+                    discover = { ZephyrClient.discoverPlayers(3000) })
                 withContext(Dispatchers.Main) {
                     when (plan) {
                         is com.zephyr.remote.ZephyrRediscover.Plan.MovedNotice ->
@@ -369,19 +372,19 @@ class RemoteState(
         rediscovering = true
         scope.launch(Dispatchers.IO) {
             try {
-                // The saved address usually still answers (VLC was the one down):
-                // one quick ping first. Pairing-learned endpoint - the one place
-                // the token may go.
-                if (HelperClient.ping(store.host, store.helperPort, store.helperToken)) {
-                    withContext(Dispatchers.Main) { failures = 0 }
-                    return@launch
-                }
-                val found = HelperClient.discover(3000)
-                when (val plan = HelperRediscover.plan(store.host, store.helperPort, found)) {
+                // run() invokes the token-carrying ping ONLY against the saved,
+                // pairing-learned endpoint; a discovered host is never probed
+                // (S11b regression-tested at the HTTP level).
+                when (val plan = HelperRediscover.run(
+                    store.host, store.helperPort,
+                    pingSaved = { HelperClient.ping(store.host, store.helperPort, store.helperToken) },
+                    discover = { HelperClient.discover(3000) },
+                )) {
                     is HelperRediscover.Plan.MovedNotice -> withContext(Dispatchers.Main) {
                         helperMovedTo = plan.name.ifBlank { plan.host }
                     }
-                    else -> { /* saved endpoint seen or nothing: the poll recovers on its own */ }
+                    HelperRediscover.Plan.SavedEndpointSeen -> withContext(Dispatchers.Main) { failures = 0 }
+                    HelperRediscover.Plan.None -> { /* keep polling the saved endpoint */ }
                 }
             } finally {
                 rediscovering = false
@@ -425,9 +428,12 @@ class RemoteState(
                 try { c.block() }
                 catch (e: ZephyrClient.BadToken) {
                     // A revoked pairing is not a PC outage (N2): say "pair again".
-                    unpaired = true; unreachable = false; failures = 0
+                    PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
                 }
-                catch (_: Exception) { failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true }
+                catch (_: Exception) {
+                    PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
+                        .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+                }
             }
         }
     }
