@@ -85,14 +85,17 @@ end;
 function GetUninstallUserSid: String;
 var
   TmpFile, S: String;
+  Raw: AnsiString;
   ResultCode, P, I: Integer;
 begin
   Result := '';
   TmpFile := ExpandConstant('{tmp}\zeph-uninst-sid.txt');
   Exec('cmd.exe', '/c whoami /user /fo csv /nh > "' + TmpFile + '"', '', SW_HIDE,
     ewWaitUntilTerminated, ResultCode);
-  if LoadStringFromFile(TmpFile, S) then
+  // LoadStringFromFile takes AnsiString in Inno 6; whoami CSV output is ASCII.
+  if LoadStringFromFile(TmpFile, Raw) then
   begin
+    S := String(Raw);
     P := Pos('S-1-5-', S);
     if P > 0 then
     begin
