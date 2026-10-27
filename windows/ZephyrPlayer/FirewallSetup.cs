@@ -640,9 +640,11 @@ namespace ZephyrPlayer
                     // chrome and the dotted focus box over the dark look (round-7 S7-2).
                     // Keyboard focus instead gets a thin brand-colored ring, hover a
                     // lighter fill, press a darker one (round-8 N-7).
-                    // Round-10 N10-6: the focus ring must CONTRAST the fill - orange on
-                    // the orange primary is invisible, so the primary gets white.
-                    Template = DarkButtonTemplate(hover, pressed, primary ? Brushes.White : new SolidColorBrush(Brand.Orange)),
+                    // Round-11 (measured on real pixels): the ring is an OUTER 2px ring
+                    // with a gap against the dark dialog background - white on #1B1B1E is
+                    // 17.2:1 in every fill state, so both buttons get white. A 1px ring on
+                    // the fill itself anti-aliased into it: 1.03:1, invisible.
+                    Template = DarkButtonTemplate(hover, pressed),
                     FocusVisualStyle = null,
                 };
                 return b;
@@ -746,6 +748,30 @@ namespace ZephyrPlayer
                                 enc.Save(fs);
                                 exitCode = 0;
                                 Log("saved " + new FileInfo(path).Length + " bytes");
+                                // Real-window capture WITH the title bar: RenderTargetBitmap
+                                // draws only the client visual tree, so the shots above never
+                                // show the dialog's title bar (round-11). Capture the on-screen
+                                // window rectangle - what the user actually sees, chrome included.
+                                var hwnd = new System.Windows.Interop.WindowInteropHelper(dlg).Handle;
+                                RECT rc; GetWindowRect(hwnd, out rc);
+                                var wpx = rc.Right - rc.Left; var hpx = rc.Bottom - rc.Top;
+                                if (wpx <= 0 || hpx <= 0) throw new InvalidOperationException("window rect is empty");
+                                var screenDc = GetDC(IntPtr.Zero);
+                                var memDc = CreateCompatibleDC(screenDc);
+                                var hBmp = CreateCompatibleBitmap(screenDc, wpx, hpx);
+                                var oldBmp = SelectObject(memDc, hBmp);
+                                BitBlt(memDc, 0, 0, wpx, hpx, screenDc, rc.Left, rc.Top, 0x00CC0020); // SRCCOPY
+                                SelectObject(memDc, oldBmp);
+                                var src = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(
+                                    hBmp, IntPtr.Zero, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+                                var windowPath = System.IO.Path.Combine(
+                                    System.IO.Path.GetDirectoryName(path)!,
+                                    System.IO.Path.GetFileNameWithoutExtension(path) + "-window.png");
+                                var enc2 = new PngBitmapEncoder();
+                                enc2.Frames.Add(BitmapFrame.Create(src));
+                                using (var fs2 = File.Create(windowPath)) enc2.Save(fs2);
+                                DeleteObject(hBmp); DeleteDC(memDc); ReleaseDC(IntPtr.Zero, screenDc);
+                                Log("window capture saved " + new FileInfo(windowPath).Length + " bytes");
                             }
                             catch (Exception capEx)
                             {
@@ -800,14 +826,34 @@ namespace ZephyrPlayer
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         private static extern void mouse_event(uint flags, int dx, int dy, int data, IntPtr extra);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hWnd);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int nWidth, int nHeight);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr hgdiobj);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int nXDest, int nYDest, int nWidth, int nHeight, IntPtr hdcSrc, int nXSrc, int nYSrc, int dwRop);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
 #endif
 
         /// <summary>A minimal dark button chrome: rounded fill bound to the button's own
         /// Background (lighter on hover, darker on press), centered text, a thin ring
         /// when keyboard-focused, no light system chrome.</summary>
-        private static ControlTemplate DarkButtonTemplate(Brush hoverBackground, Brush pressedBackground, Brush focusRing)
+        private static ControlTemplate DarkButtonTemplate(Brush hoverBackground, Brush pressedBackground)
         {
             var template = new ControlTemplate(typeof(Button));
+            // Round-11: the focus ring wraps the chrome - 2px with a 2px gap, painting
+            // against the dark dialog background instead of the button fill.
+            var ring = new FrameworkElementFactory(typeof(Border));
+            ring.Name = "Ring";
+            ring.SetValue(Border.BorderThicknessProperty, new Thickness(2));
+            ring.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
+            ring.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            ring.SetValue(Border.PaddingProperty, new Thickness(2));
             var border = new FrameworkElementFactory(typeof(Border));
             // Round-9 N9-7: the state setters must TARGET the named border. Setters on
             // the button itself lose to the button's LOCAL Background/BorderBrush
@@ -820,20 +866,25 @@ namespace ZephyrPlayer
             border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
             border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
             var text = new FrameworkElementFactory(typeof(TextBlock));
+            text.Name = "Label";
             text.SetValue(TextBlock.TextProperty, new TemplateBindingExtension(ContentControl.ContentProperty));
             text.SetValue(TextBlock.ForegroundProperty, new TemplateBindingExtension(Control.ForegroundProperty));
             text.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             text.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
             border.AppendChild(text);
-            template.VisualTree = border;
+            ring.AppendChild(border);
+            template.VisualTree = ring;
             var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
             hover.Setters.Add(new Setter(Border.BackgroundProperty, hoverBackground, "Chrome"));
             template.Triggers.Add(hover);
             var press = new Trigger { Property = Button.IsPressedProperty, Value = true };
             press.Setters.Add(new Setter(Border.BackgroundProperty, pressedBackground, "Chrome"));
+            // Dark text on the pressed fill measured 3.61:1; white measures 4.77:1
+            // (round-11). Hover keeps the dark text (7.8:1 on its fill).
+            press.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.White, "Label"));
             template.Triggers.Add(press);
             var focus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
-            focus.Setters.Add(new Setter(Border.BorderBrushProperty, focusRing, "Chrome"));
+            focus.Setters.Add(new Setter(Border.BorderBrushProperty, Brushes.White, "Ring"));
             template.Triggers.Add(focus);
             return template;
         }

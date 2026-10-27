@@ -198,6 +198,7 @@ jobs:
           name: windows-test-diagnostics
           path: |
             windows/ZephyrPlayer.Tests/TestResults/
+            windows/ZephyrVlcRemote.Tests/TestResults/
             ${{ runner.temp }}/sta-error-*.txt
           if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
