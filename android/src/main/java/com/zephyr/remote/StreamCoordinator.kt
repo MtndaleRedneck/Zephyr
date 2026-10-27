@@ -26,6 +26,12 @@ object StreamCoordinator {
 
     class Bound(val server: StreamServer, val connection: ServiceConnection)
 
+    /** Which player the current phone stream was handed to, captured at play time.
+     *  The shutdown watchdog polls THIS target - never the mutable UI source
+     *  selection, so flipping sources mid-stream can't wrongly stop or strand it. */
+    enum class ServedTarget { ZEPHYR, VLC }
+    @Volatile var servedTarget: ServedTarget? = null
+
     suspend fun bind(context: Context): Bound = suspendCancellableCoroutine { cont ->
         val app = context.applicationContext
         val conn = object : ServiceConnection {

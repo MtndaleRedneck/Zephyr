@@ -96,35 +96,45 @@ class StreamService : Service() {
 
     /**
      * Auto-stop when the stream is genuinely done (teardown C1, settled):
-     *  - armed only after the FIRST served stream (never kills a fresh service mid-setup);
-     *  - an OPEN connection always means alive - a long pause holds its socket;
-     *  - stops only after 5 continuous minutes with no open connection AND the selected
-     *    Zephyr player confirmed Stopped/Ended (polled every 60s);
-     *  - playing, paused, unreachable or unknown player state all cancel the countdown;
-     *  - Wi-Fi loss alone never stops the service.
+     * the SAME 5-minute rule covers the Zephyr AND the VLC target. The watchdog
+     * polls the player the stream was actually handed to (StreamCoordinator.servedTarget,
+     * captured at play time) - never the mutable UI source selection, so flipping
+     * sources mid-stream can't wrongly stop or strand a stream. Decision logic lives
+     * in the pure-JVM StreamIdlePolicy (unit-tested): armed after the first served
+     * stream, an open connection is always life, playing/paused/unknown/unreachable
+     * all cancel, Wi-Fi loss alone never stops the service.
      */
     private fun startWatchdog(srv: StreamServer) {
         watchdogStop = false
         watchdog = Thread {
-            var stoppedStreak = 0
+            val policy = StreamIdlePolicy()
             while (!watchdogStop) {
                 try { Thread.sleep(60_000) } catch (e: InterruptedException) { break }
                 if (watchdogStop) break
-                if (!srv.servedAny) continue
-                if (srv.openStreams > 0) { stoppedStreak = 0; continue }
-                val store = com.bingemote.Store(this)
-                if (store.selectedSource != com.bingemote.Source.ZEPHYR || store.zephyrToken.isBlank()) {
-                    stoppedStreak = 0; continue // player state unknown: never auto-stop
-                }
-                val state = try {
-                    com.bingemote.SelectedPlayback(store).status().state
-                } catch (e: Exception) { stoppedStreak = 0; continue } // unreachable cancels
-                if (state.equals("stopped", true) || state.equals("ended", true)) {
-                    stoppedStreak++
-                    if (stoppedStreak >= 5) { stopSelf(); break }
-                } else stoppedStreak = 0
+                val state = try { servedTargetState() }
+                catch (e: Exception) { StreamIdlePolicy.PlayerState.UNKNOWN } // unreachable cancels
+                if (policy.tick(srv.servedAny, srv.openStreams, state)) { stopSelf(); break }
             }
         }.apply { isDaemon = true; name = "stream-watchdog"; start() }
+    }
+
+    /** Status of the player the stream was handed to (settled C1 covers both paths).
+     *  No handoff yet = UNKNOWN = never auto-stop. */
+    private fun servedTargetState(): StreamIdlePolicy.PlayerState {
+        val store = com.bingemote.Store(this)
+        return when (StreamCoordinator.servedTarget) {
+            StreamCoordinator.ServedTarget.ZEPHYR -> {
+                if (store.zephyrToken.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN
+                val j = ZephyrClient.controlStatus(
+                    store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrToken)
+                StreamIdlePolicy.mapState(j.optString("state", ""))
+            }
+            StreamCoordinator.ServedTarget.VLC -> {
+                if (store.vlcPassword.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN
+                StreamIdlePolicy.mapState(com.bingemote.Vlc.status(store.host, store.vlcPort, store.vlcPassword).state)
+            }
+            null -> StreamIdlePolicy.PlayerState.UNKNOWN
+        }
     }
 
     /** Android 15+: dataSync budget (6h/24h) exhausted. Stop serving cleanly. */
