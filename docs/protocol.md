@@ -42,13 +42,25 @@ an explicit choice.
 ## Discovery (player 1.2.0: own port)
 - "Find my PC": phone broadcasts BINGEMOTE_DISCOVER_V1 over UDP; the player
   answers on its OWN port 8490 with ZEPHYR_PLAYER_HERE_V1|name|47823.
-- The BingeMote helper keeps 8489; its exclusive bind can no longer take the
-  player's discovery down (and vice versa - the coexistence test binds the
-  fake helper without address reuse, in both start orders).
-- For phones still on 1.1.0 (8489-only scans), the player ALSO answers 8489
-  best-effort when that port is free; failure there is silent by design.
+- The player NEVER binds 8489. The BingeMote helper binds 8489 without address
+  reuse, so any socket of ours there could make the helper's bind fail
+  depending on start order. BingeMote keeps 8489 unconditionally, in both
+  start orders; the coexistence tests bind a real-shaped helper (no
+  ReuseAddress) both ways and assert exactly that.
+- Verified phone behavior (android sources): the Zephyr phone accepts only
+  ZEPHYR_PLAYER_HERE_V1 (ZephyrClient.REPLY_MAGIC); the BingeMote phone
+  accepts only BINGEMOTE_HERE_V1 (HelperClient.REPLY_MAGIC).
+- Consequence for phones still on 1.1.0 (8489-only scans): they cannot
+  auto-discover a 1.2.0 player. An already-paired phone keeps working via its
+  saved PC address + pairing token (Store.zephyrHost/zephyrToken persist on
+  the phone; the player's paired.json migrates - nothing forces re-pairing).
+  If the PC's address changed or the phone pairs fresh, the 1.1.0 setup
+  screen's manual address entry ("type the address below") works with the
+  "This PC: <ip>" shown on the player's Pairing screen. Updating the phone to
+  1.2.0 restores automatic discovery (8490). Update-sequencing guidance:
+  install the phone update; manual entry covers the gap until then.
 - A failed 8490 bind surfaces in the UI ("Find my PC is off"), never swallowed.
-- Windows firewall rules (installer): UDP 8490 + legacy UDP 8489, Private only.
+- Windows firewall rules (installer): UDP 8490 + TCP 47823, Private only.
 
 ## Streaming (NEW, phone -> Zephyr Player)
 - Zephyr Player opens playback with a URL the phone hands it:

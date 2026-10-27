@@ -37,9 +37,6 @@ Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr P
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr Player"" dir=in action=allow protocol=TCP localport=47823 profile=private"; Flags: runhidden waituntilterminated
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr Player Discovery"""; Flags: runhidden waituntilterminated
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr Player Discovery"" dir=in action=allow protocol=UDP localport=8490 profile=private"; Flags: runhidden waituntilterminated
-; Phones on 1.1.0 still scan the helper's 8489; the player answers it best-effort.
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr Player Discovery Legacy"""; Flags: runhidden waituntilterminated
-Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Zephyr Player Discovery Legacy"" dir=in action=allow protocol=UDP localport=8489 profile=private"; Flags: runhidden waituntilterminated
 Filename: "netsh"; Parameters: "http delete urlacl url=http://+:47823/"; Flags: runhidden waituntilterminated
 Filename: "netsh"; Parameters: "http add urlacl url=http://+:47823/ sddl=D:(A;;GX;;;WD)"; Flags: runhidden waituntilterminated
 Filename: "{app}\ZephyrPlayer.exe"; Description: "Open Zephyr Player"; Flags: nowait postinstall skipifsilent
