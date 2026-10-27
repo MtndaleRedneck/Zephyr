@@ -200,7 +200,11 @@ function Measure-Video($path) {
 }
 function Measure-Bar($path) {
     if (-not (Test-Path $path)) { return @(0, 0) }
-    $band = Load-Band $path 0.75 1.0
+    # The bar body occupies roughly the bottom third (about y 0.64-0.95 in an 800x500
+    # capture; the golden ElapsedText ~0.67, the seek track ~0.72). A 0.75+ band missed
+    # BOTH signatures (round-7 review C). 0.55 keeps full margin while the seek-run's
+    # near-gray requirement still rejects the test pattern's own content.
+    $band = Load-Band $path 0.55 1.0
     $golden = 0; $goldenBand = [int]($band.W * 0.12); $bestRun = 0
     for ($y = 0; $y -lt $band.H; $y += 2) {
         $run = 0
@@ -273,7 +277,9 @@ if (-not $ffmpeg) {
 }
 if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
-& $ffmpeg -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+# Long enough for every leg of the bar proof (a 30s clip ENDED mid-proof: the last
+# phonestart poll frame already showed the counter at 29s - round-7 review C).
+& $ffmpeg -y -f lavfi -i "testsrc=duration=120:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
 
 # Populated-grid evidence: distinct REAL bitmaps per tile, fed through the app's
 # ZEPHYR_THUMB_FIXTURE_DIR evidence seam. Whether THIS runner's shell can produce
@@ -514,23 +520,55 @@ if ($hwBar -eq [System.IntPtr]::Zero) {
 # poll: starting playback can recreate the OS window (a stale handle previously
 # zeroed every capture). A failed capture is skipped, never counted from a stale
 # file.
+# Positive control first: Measure-Bar must detect a KNOWN bar. CI's own control-bar
+# render (from the Player test suite, 1920 wide at 96 DPI) is composited at the bar's
+# real position over a black frame the size of the player capture; a metric that
+# cannot see a certain bar would otherwise report "no bar" for any reason (round-7 C).
+$ctrlRender = "$env:RUNNER_TEMP/pc-controlbar-render.png"
+if (Test-Path $ctrlRender) {
+    $base = [System.Drawing.Bitmap]::new(782, 489)
+    $gBase = [System.Drawing.Graphics]::FromImage($base)
+    $gBase.Clear([System.Drawing.Color]::FromArgb(27, 27, 30))
+    $render = [System.Drawing.Image]::FromFile($ctrlRender)
+    $scale = 782.0 / $render.Width
+    $dh = [int]($render.Height * $scale)
+    $gBase.DrawImage($render, 0, 489 - $dh - 10, 782, $dh)
+    $gBase.Dispose(); $render.Dispose()
+    $base.Save("$env:RUNNER_TEMP/pc-bar-positivecontrol.png", [System.Drawing.Imaging.ImageFormat]::Png)
+    $base.Dispose()
+    $mCtrl = Measure-Bar "$env:RUNNER_TEMP/pc-bar-positivecontrol.png"
+    Write-Host "bar metric positive control: golden=$($mCtrl[0]) seekRun=$($mCtrl[1])%"
+    if (-not ($mCtrl[0] -ge 5 -and $mCtrl[1] -ge 40)) { throw "bar metric positive control FAILED: a known bar render scored golden=$($mCtrl[0]) seekRun=$($mCtrl[1])% - the metric is blind, no bar verdict is meaningful" }
+} else { Write-Host "::warning::control-bar render missing - positive control skipped" }
 Remove-Item "$env:RUNNER_TEMP/pc-bar-phonestart.png" -ErrorAction SilentlyContinue
+Remove-Item "$env:RUNNER_TEMP/pc-bar-poll.png" -ErrorAction SilentlyContinue
 $vidStart = 0; $barStartGolden = 0; $barStartSeek = 0; $gotStart = $false
+$swStart = [System.Diagnostics.Stopwatch]::StartNew()
 foreach ($i in 1..40) {
     $hwBar = Find-PlayerWindow $pBar.Id $hwHome
     if ($hwBar -ne [System.IntPtr]::Zero) {
         [ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
-        $sz = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+        $sz = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-poll.png"
         if ($sz -ne "0 x 0") {
-            $vidStart = Measure-Video "$env:RUNNER_TEMP/pc-bar-phonestart.png"
-            $m = Measure-Bar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+            $vidStart = Measure-Video "$env:RUNNER_TEMP/pc-bar-poll.png"
+            $m = Measure-Bar "$env:RUNNER_TEMP/pc-bar-poll.png"
             $barStartGolden = $m[0]; $barStartSeek = $m[1]
-            if ($vidStart -ge 3000 -and $barStartGolden -ge 5 -and $barStartSeek -ge 40) { $gotStart = $true; break }
+            Write-Host "phone-start poll ${i}: video=$vidStart golden=$barStartGolden seekRun=$barStartSeek%"
+            if ($vidStart -ge 3000 -and $barStartGolden -ge 5 -and $barStartSeek -ge 40) {
+                # The FIRST frame that has real video AND the bar is the proof; later
+                # polls must not overwrite it with a post-autohide frame (round-7 C).
+                Copy-Item "$env:RUNNER_TEMP/pc-bar-poll.png" "$env:RUNNER_TEMP/pc-bar-phonestart.png" -Force
+                $gotStart = $true; break
+            }
         }
     }
     Start-Sleep -Milliseconds 500
 }
-if (-not $gotStart) { throw "phone-start bar proof never captured video AND bar together (video=$vidStart golden=$barStartGolden seekRun=$barStartSeek% after ~20s)" }
+if (-not $gotStart) {
+    # Keep the last frame for inspection - honestly the LAST poll, not a mislabeled proof.
+    if (Test-Path "$env:RUNNER_TEMP/pc-bar-poll.png") { Copy-Item "$env:RUNNER_TEMP/pc-bar-poll.png" "$env:RUNNER_TEMP/pc-bar-phonestart.png" -Force }
+    throw "phone-start bar proof never captured video AND bar together (video=$vidStart golden=$barStartGolden seekRun=$barStartSeek% after $([int]$swStart.Elapsed.TotalSeconds)s of polling)"
+}
 Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
 $szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
@@ -705,4 +743,10 @@ parked_cursor_autohide: $(if ($vidOkParked -and -not $barOnParked) { 'PROVEN (cu
 verdict: $(if ($incomplete) { 'CAPTURE INCOMPLETE - one or more windows never produced pixels; this step fails' } else { 'real desktop captured, app fitted to screen' })
 "@ | Set-Content $note
 
-if ($incomplete) { exit 1 }
+# C-1 legs are GATES, not notes: a failed autohide/paused/parked leg fails the step
+# (round-7 review C: NOT-PROVEN silently passed before).
+$barGateFailed = $false
+if (-not ($vidOkAuto -and -not $barOnAuto)) { Write-Host "::error::autohide leg failed (video=$vidAutoPx golden=$($mAuto[0]) seekRun=$($mAuto[1])%) - the bar must hide on the idle timer while video keeps playing"; $barGateFailed = $true }
+if (-not $barOnPaused) { Write-Host "::error::paused leg failed (golden=$($mPaused[0]) seekRun=$($mPaused[1])%) - a paused movie must keep the bar"; $barGateFailed = $true }
+if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cursor leg failed (video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])%) - a still cursor over the video must not pin the bar"; $barGateFailed = $true }
+if ($incomplete -or $barGateFailed) { exit 1 }

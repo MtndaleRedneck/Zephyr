@@ -65,6 +65,12 @@ jobs:
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-pairing-expired.png"
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "pairing-expired"
           & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-pairing.png"
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "pairing"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-broken-store.png"
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "broken-store"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
 
       - name: Upload the window shot
