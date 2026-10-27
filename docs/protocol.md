@@ -39,6 +39,17 @@ independent identities (separate port/mutex/install dir/firewall rules) - no
 stand-down, no takeover, no implicit pausing. Conflicts surface to the user as
 an explicit choice.
 
+## Discovery (player 1.2.0: own port)
+- "Find my PC": phone broadcasts BINGEMOTE_DISCOVER_V1 over UDP; the player
+  answers on its OWN port 8490 with ZEPHYR_PLAYER_HERE_V1|name|47823.
+- The BingeMote helper keeps 8489; its exclusive bind can no longer take the
+  player's discovery down (and vice versa - the coexistence test binds the
+  fake helper without address reuse, in both start orders).
+- For phones still on 1.1.0 (8489-only scans), the player ALSO answers 8489
+  best-effort when that port is free; failure there is silent by design.
+- A failed 8490 bind surfaces in the UI ("Find my PC is off"), never swallowed.
+- Windows firewall rules (installer): UDP 8490 + legacy UDP 8489, Private only.
+
 ## Streaming (NEW, phone -> Zephyr Player)
 - Zephyr Player opens playback with a URL the phone hands it:
   http://<phone-wifi-ip>:<port>/s/<sessionToken>/<id>
