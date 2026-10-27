@@ -59,12 +59,16 @@ class MediaControlsService : Service() {
     private var callback: MediaSession.Callback? = null
     private var pollJob: Job? = null
     private var failures = 0
+    // One Store for the service's life (teardown C10): a fresh Store per poll rebuilt the
+    // Keystore-backed encrypted prefs every 2 seconds.
+    private val cachedStore: Store by lazy { Store(this) }
+    @Volatile private var pollDelayMs = 2000L
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        val store = Store(this)
+        val store = cachedStore
         val s = MediaSession(this, "BingeMote")
         val cb = object : MediaSession.Callback() {
             override fun onPlay() { run { SelectedPlayback(store).togglePause() } }
@@ -120,7 +124,7 @@ class MediaControlsService : Service() {
             pollJob = scope.launch {
                 while (isActive) {
                     pollOnce()
-                    delay(2000)
+                    delay(pollDelayMs)
                 }
             }
         }
@@ -132,7 +136,7 @@ class MediaControlsService : Service() {
     private fun refreshNow() { refreshRequested = true }
 
     private suspend fun pollOnce() {
-        val store = Store(this)
+        val store = cachedStore
         if (!store.lockScreenControls || !mediaSourceConfigured(store)) { stopSelf(); return }
         if (refreshRequested) { refreshRequested = false } /* poll right away anyway */
         val st = try {
@@ -141,15 +145,18 @@ class MediaControlsService : Service() {
             // The one automatic heal: adopt the PC's current password once; never push ours.
             if (store.selectedSource == Source.VLC && VlcAuthRepair.tryHealOnce(store)) return // the next poll uses it
             failures++
-            if (failures >= 5) session?.isActive = false
+            // Unreachable PC: drop the controls and back OFF (30s), never a 2s hammer
+            // against a dead player for the whole setting-on session (teardown C10).
+            if (failures >= 5) { session?.isActive = false; pollDelayMs = 30_000L }
             return
         } catch (e: Exception) {
             failures++
             // VLC gone for good: drop the controls rather than pose over a dead player.
-            if (failures >= 5) session?.isActive = false
+            if (failures >= 5) { session?.isActive = false; pollDelayMs = 30_000L }
             return
         }
         failures = 0
+        pollDelayMs = 2000L
         val s = session ?: return
         val playing = st.playing
         lastPlaying = playing
@@ -241,10 +248,16 @@ class MediaControlsService : Service() {
             .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_ff), "Forward " + skipLabel(Store(this).skipMainSec), actionIntent(ACTION_MEDIA_FAST_FORWARD)).build())
             .setStyle(Notification.MediaStyle().setMediaSession(s.sessionToken).setShowActionsInCompactView(0, 1, 2))
             .build()
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
-        } else {
-            startForeground(NOTIF_ID, n)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
+            } else {
+                startForeground(NOTIF_ID, n)
+            }
+        } catch (e: Exception) {
+            // First startForeground from a background (sticky) restart throws on
+            // Android 12+ (teardown C10): stop cleanly instead of crashing.
+            stopSelf()
         }
     }
 

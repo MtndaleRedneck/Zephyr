@@ -59,6 +59,18 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
 
     var origin by remember { mutableStateOf(if (demoPhone && BuildConfig.DEBUG) Origin.PHONE else Origin.PC) }
     val context = LocalContext.current
+    // Asked ONCE at the first phone stream on Android 13+ so the stream service's
+    // Stop action shows (teardown C1); the flag lives in the store, never nags again.
+    val notifPermLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    fun askStreamNotifPermissionOnce() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return
+        if (remote.store.notifPermissionAsked) return
+        remote.store.notifPermissionAsked = true
+        if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.POST_NOTIFICATIONS)
+            != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            notifPermLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
     // Stack of (SAF folder document URI, display name) below the assigned tree root
     // (SAF has no parent lookup, so the stack is how "up" and the breadcrumb work).
     val phoneStack = remember { mutableStateListOf<Pair<Uri, String>>() }
@@ -194,7 +206,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 scope.launch { if (restore != null) listState.scrollToItem(restore.first, restore.second) else listState.scrollToItem(0) }
             } catch (e: Exception) {
                 loading = false
-                error = e.message ?: "Couldn't open that folder on the phone."
+                error = plainPlayerError(e, "Couldn't open that folder on the phone.")
             }
         }
     }
@@ -205,6 +217,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
      *  Sidecar subtitles ride as :input-slave options on the VLC route. */
     fun streamPlay(item: BrowseItem) {
         if (starting) return
+        askStreamNotifPermissionOnce()
         val toZephyr = remote.store.selectedSource == Source.ZEPHYR
         if (toZephyr && remote.store.zephyrToken.isBlank()) {
             error = "Not paired with the Zephyr Player yet."
@@ -223,7 +236,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 }
                 withContext(Dispatchers.Main) { onBack() }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { error = e.message ?: "Couldn't start the stream." }
+                withContext(Dispatchers.Main) { error = plainPlayerError(e, "Couldn't start the stream.") }
             } finally { starting = false }
         }
     }
@@ -308,7 +321,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 }, rel, atRootZ, restore)
             } catch (e: Exception) {
                 loading = false
-                error = e.message ?: "Couldn't open that folder on the Zephyr Player."
+                error = plainPlayerError(e, "Couldn't open that folder on the Zephyr Player.")
             }
         }
     }
@@ -328,7 +341,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 ZephyrClient.play(zHost, remote.store.zephyrPort, remote.store.zephyrToken, uri, emptyList())
                 withContext(Dispatchers.Main) { onBack() }
             } catch (e: Exception) {
-                withContext(Dispatchers.Main) { error = e.message ?: "Couldn't play that one." }
+                withContext(Dispatchers.Main) { error = plainPlayerError(e, "Couldn't play that one.") }
             } finally { starting = false }
         }
     }
@@ -594,3 +607,10 @@ fun prettyPath(path: String): String {
 }
 
 
+
+/** Teardown C5: raw "Player returned N" plumbing becomes one plain sentence;
+ *  already-plain messages (pairing errors, BadToken) pass through untouched. */
+internal fun plainPlayerError(e: Exception, fallback: String): String {
+    val m = e.message ?: return fallback
+    return if (m.startsWith("Player returned")) "Zephyr Player had a problem. Try again." else m
+}

@@ -121,9 +121,11 @@ fun SetupScreen(
         scope.launch {
             try {
                 val paired = withContext(Dispatchers.IO) { HelperClient.pair(target.host, target.port, code) }
+                // Token FIRST (fail-closed): a broken secure store throws before any
+                // visible state changes, so no half-saved pairing.
+                store.helperToken = paired.token
                 store.host = target.host
                 store.helperPort = target.port
-                store.helperToken = paired.token
                 store.pcName = paired.name.ifBlank { target.name }
                 remote.publishAddress(target.host, target.port, paired.token)
                 // Automatic-first: the PC generated the VLC password and handed it over with
@@ -137,6 +139,9 @@ fun SetupScreen(
                 pairing = false
                 say("", false)
                 step = 3
+            } catch (e: SecureStoreUnavailable) {
+                pairing = false
+                say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved - close and reopen the app, then pair again.", true)
             } catch (e: HelperClient.BadPairCode) {
                 pairing = false
                 say("That code didn't work. Get a fresh one: on your PC, open BingeMote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)
@@ -149,7 +154,8 @@ fun SetupScreen(
 
     fun startOver() {
         store.host = ""
-        store.helperToken = ""
+        // Broken secure store: nothing persisted anyway; the refusal is not an error here.
+        try { store.helperToken = "" } catch (e: SecureStoreUnavailable) { }
         store.pcName = ""
         remote.publishAddress("", HelperClient.DEFAULT_PORT, "")
         code = ""
@@ -162,7 +168,12 @@ fun SetupScreen(
     fun finish() {
         if (vlcPassword.isBlank()) { say("Enter the password you set in VLC's web interface.", true); return }
         if (store.helperToken.isBlank()) { say("Pair with your PC first.", true); return }
-        store.vlcPassword = vlcPassword
+        try {
+            store.vlcPassword = vlcPassword
+        } catch (e: SecureStoreUnavailable) {
+            say("Couldn't save the password (secure storage problem on this phone). Nothing was saved - close and reopen the app, then try again.", true)
+            return
+        }
         store.moviesPath = moviesPath.trim().ifBlank { store.moviesPath }
         testing = true
         say("", false)

@@ -36,6 +36,15 @@ class Store(context: Context) {
      *  plain error + re-pair, by hand, never a wipe. */
     val secureStoreBroken: Boolean get() = secrets is InMemoryPrefs
 
+    /** Fail-closed gate for every secret write: while the store is broken a write
+     *  THROWS instead of landing in memory and vanishing at restart (no fake-persisted
+     *  pairings). Reads still return "" so the app honestly shows unpaired. */
+    private val secretBox = FailClosedSecrets(
+        reader = { k -> secrets.getString(k, null) },
+        writer = { k, v -> val ed = secrets.edit(); if (v == null) ed.remove(k) else ed.putString(k, v); ed.apply() },
+        broken = secureStoreBroken,
+    )
+
     var pcName: String
         get() = prefs.getString("pcName", "") ?: ""
         set(v) = prefs.edit().putString("pcName", v).apply()
@@ -75,6 +84,12 @@ class Store(context: Context) {
         get() = prefs.getBoolean("haptics", true)
         set(v) = prefs.edit().putBoolean("haptics", v).apply()
 
+    /** Notification permission was already requested once (teardown C1: asked once at
+     *  the first phone stream on Android 13+, never nagged again). */
+    var notifPermissionAsked: Boolean
+        get() = prefs.getBoolean("notifPermissionAsked", false)
+        set(v) = prefs.edit().putBoolean("notifPermissionAsked", v).apply()
+
     /** Last automatic update check (manual checks always run; teardown 9c throttle). */
     var lastUpdateCheckAt: Long
         get() = prefs.getLong("lastUpdateCheckAt", 0L)
@@ -111,14 +126,14 @@ class Store(context: Context) {
         set(v) = prefs.edit().putString("skipped_update", v).apply()
 
     var vlcPassword: String
-        get() = secrets.getString("vlcPassword", "") ?: ""
-        set(v) = secrets.edit().putString("vlcPassword", v).apply()
+        get() = secretBox.read("vlcPassword")
+        set(v) = secretBox.write("vlcPassword", v)
 
     /** The in-flight adoption request id, kept until the PC acks so a crash mid-fetch
      *  replays the same id instead of burning the one-shot grant. */
     var vlcAdoptRequestId: String?
-        get() = secrets.getString("vlcAdoptRequestId", null)
-        set(v) = secrets.edit().putString("vlcAdoptRequestId", v).apply()
+        get() = secretBox.read("vlcAdoptRequestId").ifEmpty { null }
+        set(v) = secretBox.write("vlcAdoptRequestId", v)
 
     /** Assigned Android movies folder (persisted SAF tree URI) for the Movies screen's Phone origin. */
     var moviesPhoneTreeUri: String
@@ -144,13 +159,17 @@ class Store(context: Context) {
         get() {
             val plain = prefs.getString("zephyrToken", "") ?: ""
             if (plain.isNotEmpty()) {
-                secrets.edit().putString("zephyrToken", plain).apply()
-                prefs.edit().remove("zephyrToken").apply()
+                // Migration only when the encrypted store is healthy; while broken the
+                // plaintext value is honestly on disk, so it still reads, unmigrated.
+                if (!secureStoreBroken) {
+                    secretBox.write("zephyrToken", plain)
+                    prefs.edit().remove("zephyrToken").apply()
+                }
                 return plain
             }
-            return secrets.getString("zephyrToken", "") ?: ""
+            return secretBox.read("zephyrToken")
         }
-        set(v) = secrets.edit().putString("zephyrToken", v).apply()
+        set(v) = secretBox.write("zephyrToken", v)
 
     /** The phone's Connected Sources selection (protocol.md Source routing): which PC
      * target input frames go to. Default VLC = today's behavior; nothing re-routes
@@ -160,8 +179,8 @@ class Store(context: Context) {
         set(v) = prefs.edit().putString("selectedSource", if (v == Source.ZEPHYR) "zephyr" else "vlc").apply()
 
     var helperToken: String
-        get() = secrets.getString("helperToken", "") ?: ""
-        set(v) = secrets.edit().putString("helperToken", v).apply()
+        get() = secretBox.read("helperToken")
+        set(v) = secretBox.write("helperToken", v)
 
     val isConfigured: Boolean
         get() = setupDone && host.isNotBlank() && vlcPassword.isNotBlank()

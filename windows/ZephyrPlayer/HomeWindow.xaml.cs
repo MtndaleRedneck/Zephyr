@@ -166,6 +166,40 @@ namespace ZephyrPlayer
             LoadThumbnails(root, entries);
         }
 
+        /// <summary>First video inside a folder, descending into subfolders when the
+        /// top level has none (series libraries). Bounded: at most 3 levels down and
+        /// 40 directory entries examined, ordinal order, so a deep tree costs a few
+        /// quick enumerations and never walks the whole drive.</summary>
+        private static string? PeekFirstVideo(string dir)
+        {
+            var pending = new Queue<(string Path, int Depth)>();
+            pending.Enqueue((dir, 0));
+            var examined = 0;
+            while (pending.Count > 0)
+            {
+                var (d, depth) = pending.Dequeue();
+                string[] files, subs;
+                try
+                {
+                    files = Directory.GetFiles(d);
+                    subs = Directory.GetDirectories(d);
+                }
+                catch { continue; }
+                foreach (var f in files.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (++examined > 40) return null;
+                    if (LibraryIsVideo(f)) return f;
+                }
+                if (depth < 3)
+                    foreach (var sub in subs.OrderBy(x => x, StringComparer.OrdinalIgnoreCase))
+                    {
+                        if (++examined > 40) return null;
+                        pending.Enqueue((sub, depth + 1));
+                    }
+            }
+            return null;
+        }
+
         /// <summary>Real shell thumbnails, loaded off the UI thread; each tile
         /// fills in when its bitmap is ready. Folders peek the first video
         /// inside them (one level); files show their own frame.</summary>
@@ -208,10 +242,7 @@ namespace ZephyrPlayer
                             var full = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
                             if (entry.Dir)
                             {
-                                var firstVideo = Directory.GetFiles(full)
-                                    .Where(f => LibraryIsVideo(f))
-                                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                                    .FirstOrDefault();
+                                var firstVideo = PeekFirstVideo(full);
                                 if (firstVideo != null) img = ShellThumbs.Get(firstVideo, 192);
                             }
                             else

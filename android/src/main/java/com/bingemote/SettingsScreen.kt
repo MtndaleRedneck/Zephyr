@@ -87,7 +87,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(10.dp))
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
-                    "Your saved sign-ins couldn't be opened this time (secure storage problem). Nothing was deleted. Close and reopen the app; if it keeps happening, pair again below.",
+                    "Your saved sign-ins couldn't be opened this time (secure storage problem). Nothing was deleted. Close and reopen the app; new pairings can't be saved until this clears.",
                     color = ErrorRed, fontSize = 13.sp, lineHeight = 18.sp,
                 )
             }
