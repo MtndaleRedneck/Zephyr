@@ -302,8 +302,15 @@ StopZephyr
 # 2b+) Tray ICON proof (round-3 P1): the icon must really exist in the
 # notification area, not only its menu. Crop the bottom-right corner of the
 # primary screen (the notification area) while the app runs.
+$env:ZEPHYR_TRAY_DIAG = "$env:RUNNER_TEMP\pc-tray-diag.txt"
+Remove-Item $env:ZEPHYR_TRAY_DIAG -Force -ErrorAction SilentlyContinue
 $pIcon = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
 Start-Sleep -Seconds 5
+# NEW-C2: the pixel crop alone cannot prove the icon - assert the app's own
+# IsCreated report too (hidden overflow looks identical to missing).
+$diagText = if (Test-Path $env:ZEPHYR_TRAY_DIAG) { (Get-Content $env:ZEPHYR_TRAY_DIAG -Raw).Trim() } else { "diag file missing" }
+Write-Host "tray diag: $diagText"
+if ($diagText -ne 'IsCreated=True') { Write-Host "::error::tray icon IsCreated proof failed: $diagText" }
 $sw = [ZWU32]::GetSystemMetrics(0) # SM_CXSCREEN
 $sh = [ZWU32]::GetSystemMetrics(1) # SM_CYSCREEN
 if ($sw -le 0) { $sw = 1920 }; if ($sh -le 0) { $sh = 1080 }
@@ -315,6 +322,11 @@ $ig.Dispose(); $ibmp.Dispose()
 
 # 2c) Tray menu, actual pixels: the CI-only --tray-menu arg pops the strip at a
 # fixed screen point; this grabs the region (dark-renderer proof).
+# NEW-C1: the single-instance mutex makes a second process signal Restore and
+# exit before it builds a tray - stop the icon-proof process FIRST.
+Stop-Process -Id $pIcon.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+Remove-Item Env:ZEPHYR_TRAY_DIAG -ErrorAction SilentlyContinue
 $p2c = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--tray-menu" -PassThru
 Start-Sleep -Seconds 4
 $tbmp = New-Object System.Drawing.Bitmap 360, 170
@@ -322,7 +334,6 @@ $tg = [System.Drawing.Graphics]::FromImage($tbmp)
 $tg.CopyFromScreen(40, 40, 0, 0, $tbmp.Size)
 $tbmp.Save("$env:RUNNER_TEMP/pc-tray-menu.png")
 $tg.Dispose(); $tbmp.Dispose()
-Stop-Process -Id $pIcon.Id -Force -ErrorAction SilentlyContinue
 StopZephyr
 
 # 2d) PHONE-START BAR PROOF (Tab evidence ask): playback is started and paused over

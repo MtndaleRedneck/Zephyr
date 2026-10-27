@@ -87,7 +87,14 @@ namespace ZephyrPlayer
             var gen = Interlocked.Read(ref _generation);
             _jobs.Add(() =>
             {
-                if (gen != Interlocked.Read(ref _generation)) return; // caller gave up
+                if (gen != Interlocked.Read(ref _generation))
+                {
+                    // Stale after a timeout recovery: still release the caller -
+                    // otherwise it waits the full 30 s and spawns yet another
+                    // worker (round-4 NEW-P1).
+                    try { done.Set(); } catch { }
+                    return;
+                }
                 try { result = GetOnSta(path, size); } catch { } finally { try { done.Set(); } catch { } }
             });
             try
@@ -153,6 +160,23 @@ namespace ZephyrPlayer
                 };
                 var bytes = new byte[w * h * 4];
                 if (GetDIBits(hdc, hbitmap, 0, (uint)h, bytes, ref bmi, 0) == 0) return null;
+                // Round-4 NEW-P2: a 24-bit source, or a 32-bit one whose alpha
+                // byte was never written (some shell handlers leave it 0), would
+                // draw as fully transparent in Pbgra32. With no real alpha
+                // anywhere, force the bitmap opaque.
+                var anyAlpha = bm.bmBitsPixel == 32;
+                if (anyAlpha)
+                {
+                    anyAlpha = false;
+                    for (var i = 3; i < bytes.Length; i += 4)
+                    {
+                        if (bytes[i] != 0) { anyAlpha = true; break; }
+                    }
+                }
+                if (!anyAlpha)
+                {
+                    for (var i = 3; i < bytes.Length; i += 4) bytes[i] = 255;
+                }
                 var src = BitmapSource.Create(w, h, 96, 96,
                     System.Windows.Media.PixelFormats.Pbgra32, null, bytes, w * 4);
                 src.Freeze();

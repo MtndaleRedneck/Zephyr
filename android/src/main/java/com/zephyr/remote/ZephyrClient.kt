@@ -47,15 +47,30 @@ object ZephyrClient {
 
     /** POST /pair - trade the 6-digit code on the player screen for a pairing token.
      *  The one unauthenticated call; everything after rides on the returned token. */
+    /** A pairing refusal with a plain, screen-ready reason (NEW-A1): the PC's
+     *  own words when it sends them, one honest fallback per status when it does
+     *  not. Distinct from a network failure, which is NOT a pairing answer. */
+    class PairFailed(message: String) : java.io.IOException(message)
+
     fun pair(host: String, port: Int, code: String): String {
         val body = JSONObject().put("code", code).toString()
             .toRequestBody("application/json".toMediaType())
         val req = Request.Builder().url("http://$host:$port/pair").post(body).build()
         client.newCall(req).execute().use { resp ->
-            if (resp.code == 403) throw java.io.IOException("Wrong code - check the code on the player screen.")
-            if (resp.code == 429) throw java.io.IOException("Too many wrong codes. Wait a few minutes, then try the fresh code on the PC screen.")
-            if (resp.code == 409) throw java.io.IOException("This PC already has too many phones paired - remove one first.")
-            if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
+            if (!resp.isSuccessful) {
+                // The PC answers pairing refusals with {"error","detail"}: the
+                // detail is written for him, so show it instead of a bare code.
+                val raw = try { resp.body?.string().orEmpty() } catch (e: Exception) { "" }
+                val detail = try { JSONObject(raw).optString("detail") } catch (e: Exception) { "" }
+                val fallback = when (resp.code) {
+                    403 -> "Wrong code - check the code on the player screen."
+                    410 -> "That code expired - use the code showing on the PC screen now."
+                    429 -> "Too many wrong codes. Wait a few minutes, then try the fresh code on the PC screen."
+                    409 -> "This PC already has too many phones paired - remove one first."
+                    else -> "Player returned ${resp.code}"
+                }
+                throw PairFailed(if (detail.isNotBlank()) detail else fallback)
+            }
             return JSONObject(resp.body!!.string()).getString("token")
         }
     }
