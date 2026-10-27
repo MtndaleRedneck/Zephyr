@@ -169,6 +169,44 @@ if (-not $ffmpeg) {
 if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
 & $ffmpeg -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+
+# Populated-grid evidence: distinct REAL bitmaps per tile, fed through the app's
+# ZEPHYR_THUMB_FIXTURE_DIR evidence seam (the Server-SKU runner has no shell
+# video thumbnail extractor - the probe below documents that). Filenames match
+# the library entries below: "<entry name>.png".
+$thumbDir = Join-Path $env:RUNNER_TEMP 'thumb-fixture'
+New-Item -ItemType Directory -Force $thumbDir | Out-Null
+& $ffmpeg -y -f lavfi -i "testsrc=duration=1:size=256x256:rate=1" -frames:v 1 (Join-Path $thumbDir 'Kids.png') 2>$null
+& $ffmpeg -y -f lavfi -i "smptebars=duration=1:size=256x256:rate=1" -frames:v 1 (Join-Path $thumbDir 'Big Buck Bunny (clip).mp4.png') 2>$null
+& $ffmpeg -y -f lavfi -i "mandelbrot=size=256x256" -frames:v 1 (Join-Path $thumbDir 'Zephyr Demo Reel.mp4.png') 2>$null
+
+# Honest probe: does THIS runner's shell produce a real video thumbnail? Same
+# COM API the app uses (IShellItemImageFactory, THUMBNAILONLY). The result is
+# recorded in the capture notes so the seam's reason is verifiable, not asserted.
+$probe = Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class ThumbProbe {
+    [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c393c463"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItemImageFactory { void GetImage(SIZE size, int flags, out IntPtr phbm); }
+    [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx; public int cy; }
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
+    private static extern int SHCreateItemFromParsingName([MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItemImageFactory f);
+    public static string Probe(string path) {
+        try {
+            IShellItemImageFactory f;
+            var hr = SHCreateItemFromParsingName(path, IntPtr.Zero, new Guid("bcc18b79-ba16-442f-80c4-8a59c393c463"), out f);
+            if (hr != 0 || f == null) return "factory-unavailable hr=" + hr;
+            IntPtr h = IntPtr.Zero;
+            f.GetImage(new SIZE(), 0x08, out h); // THUMBNAILONLY
+            return h == IntPtr.Zero ? "null (no thumbnail handler on this runner)" : "bitmap-produced";
+        } catch (Exception ex) { return "error: " + ex.GetType().Name; }
+    }
+}
+"@ -PassThru
+$probeResult = [ThumbProbe]::Probe($mp4)
+Write-Output "SHELL_THUMB_PROBE: $probeResult"
+
 $srv = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER_TEMP","8901" -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 2
 
@@ -193,7 +231,10 @@ $cfgDir = Join-Path $env:APPDATA 'ZephyrPlayer'
 New-Item -ItemType Directory -Force $cfgDir | Out-Null
 $libJson = $libDir -replace '\\','\\'
 [IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$libJson`"}")
+$prevFx = [Environment]::GetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR','Process')
+[Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $thumbDir, 'Process')
 $pH = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+[Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $prevFx, 'Process')
 $hwH = Wait-MainWindow $pH 15
 Close-PairingWindow $pH
 if ($hwH -ne [System.IntPtr]::Zero) {
@@ -367,6 +408,8 @@ $incomplete = ($sz1 -eq '0 x 0') -or ($sz1b -eq '0 x 0') -or ($sz3 -eq '0 x 0') 
 @"
 exe_started_alive_after_10s: $alive
 virtual_screen: $($vs.Width)x$($vs.Height)
+shell_thumbnail_probe: $probeResult
+home_library_thumbnails: fixture bitmaps via ZEPHYR_THUMB_FIXTURE_DIR evidence seam (real PNG pixels through the same Peek/Thumb pipeline); the production path is the Windows shell thumbnail API, which the probe above reports for this runner
 window_sizes: home_empty=$sz1 home_library=$sz1b settings=$sz3 settings_bottom=$sz4 player_windowed=$sz5 player_fullscreen=$sz6
 framing: app-window crops only; no runner terminal/taskbar pixels
 video_pixels_windowed: $vidWin

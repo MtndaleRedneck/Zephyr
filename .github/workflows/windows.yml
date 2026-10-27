@@ -163,6 +163,75 @@ jobs:
             }
           }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+      - name: Published 1.1.0 -> new build upgrade smoke (real artifacts)
+        if: always()
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The remaining "nothing forces reinstall/re-pair" leg, proven with the
+          # REAL published artifact: install player-v1.1.0 from the release feed,
+          # run it, seed exact 1.1.0-format state (formats verified against the
+          # 1.1.0 source), upgrade with THIS build's installer, then prove the
+          # phone's old-format pairing token still authorizes a real control call.
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/old110" --clobber
+          $oldInstaller = "$env:RUNNER_TEMP/old110/Zephyr-PC-1.1.0.exe"
+          if (-not (Test-Path $oldInstaller)) { throw "published 1.1.0 installer missing after download" }
+          $oldLog = "$env:RUNNER_TEMP/installer-old110.log"
+          $op = Start-Process $oldInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$oldLog" -PassThru
+          if (-not $op.WaitForExit(150000)) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw 'published 1.1.0 installer timed out' }
+          if ($op.ExitCode -ne 0) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw "published 1.1.0 installer exit $($op.ExitCode)" }
+          $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $installed)) { throw "1.1.0 installed exe missing: $installed" }
+          # Let the real 1.1.0 app run once (its own startup path creates its config).
+          $alive = $false
+          for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive) { Start-Process $installed; for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) } }
+          if (-not $alive) { throw 'published 1.1.0 never stayed running after install' }
+          Write-Output 'published 1.1.0 installed and ran'
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          # Exact 1.1.0-era files (schema from the 1.1.0 source): legacy settings
+          # keys and the old paired.json string-array shape with a phone token.
+          $config = Join-Path $env:APPDATA 'ZephyrPlayer'
+          New-Item -ItemType Directory -Force $config | Out-Null
+          $settingsPath = Join-Path $config 'settings.json'
+          $pairingPath = Join-Path $config 'paired.json'
+          [IO.File]::WriteAllText($settingsPath, '{"SkipBackSeconds":15,"SkipForwardSeconds":60,"LastVolume":47}')
+          [IO.File]::WriteAllText($pairingPath, '["upgrade-smoke-token"]')
+          # Upgrade: THIS build's installer over the 1.1.0 install.
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          if (-not (Test-Path $newInstaller)) { throw "new-build installer missing: $newInstaller" }
+          $upLog = "$env:RUNNER_TEMP/installer-upgrade-smoke.log"
+          $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
+          if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'upgrade installer timed out' }
+          if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "upgrade installer exit $($up.ExitCode)" }
+          Start-Sleep -Seconds 8
+          $running = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
+          if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'upgraded app did not relaunch from the installed path' }
+          # Settings values must survive (1.2.0 may extend the file; values must not move).
+          $s = Get-Content $settingsPath -Raw | ConvertFrom-Json
+          if ($s.LastVolume -ne 47) { throw "upgrade lost LastVolume (got $($s.LastVolume))" }
+          $skipOk = ($s.SkipForwardSeconds -eq 60) -or ($s.SecondarySkipSeconds -eq 60)
+          if (-not $skipOk) { throw "upgrade lost the 60s skip setting" }
+          # The 1.1.0-format pairing token must still authorize a REAL control call.
+          $ok200 = $false
+          for ($i = 0; $i -lt 15 -and -not $ok200; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-smoke-token' } -TimeoutSec 3 -UseBasicParsing
+              $ok200 = ($r.StatusCode -eq 200)
+            } catch { Start-Sleep -Seconds 1 }
+          }
+          if (-not $ok200) { throw '1.1.0-format pairing token no longer authorizes /control/status after upgrade' }
+          $unauth = $false
+          try { Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -TimeoutSec 3 -UseBasicParsing | Out-Null } catch { $unauth = ($_.Exception.Response.StatusCode.value__ -eq 401) }
+          if (-not $unauth) { throw 'unauthenticated /control/status was not 401 after upgrade' }
+          Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - player-v1.1.0 installed from the release feed, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -182,6 +251,8 @@ jobs:
             ${{ runner.temp }}/pc-desktop-note.txt
             ${{ runner.temp }}/installer-smoke.log
             ${{ runner.temp }}/installer-update-smoke.log
+            ${{ runner.temp }}/installer-old110.log
+            ${{ runner.temp }}/installer-upgrade-smoke.log
           if-no-files-found: warn
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

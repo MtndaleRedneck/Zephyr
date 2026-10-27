@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace ZephyrPlayer
 {
@@ -153,6 +154,14 @@ namespace ZephyrPlayer
         private void LoadThumbnails(string root, List<Entry> entries)
         {
             if (!OperatingSystem.IsWindows()) return; // headless CI keeps placeholders
+            // CI evidence seam (never set in normal use): ZEPHYR_THUMB_FIXTURE_DIR points at a
+            // folder of "<entry name>.png" bitmaps. Windows Server runners ship no video
+            // thumbnail extractor (the shell call returns null - see the capture-notes probe),
+            // so the populated-grid composition (poster peek + film-strip frame around REAL
+            // bitmap pixels) cannot be pixel-proven through the shell there. With the seam,
+            // real bitmaps travel the exact Peek/Thumb pipeline the shell bitmaps would take.
+            // When unset, behavior is unchanged: shell thumbnails or drawn placeholders only.
+            var fixtureDir = Environment.GetEnvironmentVariable("ZEPHYR_THUMB_FIXTURE_DIR");
             var generation = ++_thumbGeneration;
             Task.Run(() =>
             {
@@ -162,18 +171,35 @@ namespace ZephyrPlayer
                     ImageSource? img = null;
                     try
                     {
-                        var full = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
-                        if (entry.Dir)
+                        if (fixtureDir != null)
                         {
-                            var firstVideo = Directory.GetFiles(full)
-                                .Where(f => LibraryIsVideo(f))
-                                .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
-                                .FirstOrDefault();
-                            if (firstVideo != null) img = ShellThumbs.Get(firstVideo, 192);
+                            var fx = Path.Combine(fixtureDir, entry.Name + ".png");
+                            if (File.Exists(fx))
+                            {
+                                var bmp = new BitmapImage();
+                                bmp.BeginInit();
+                                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                                bmp.UriSource = new Uri(fx);
+                                bmp.EndInit();
+                                bmp.Freeze();
+                                img = bmp;
+                            }
                         }
-                        else
+                        if (img == null)
                         {
-                            img = ShellThumbs.Get(full, 256);
+                            var full = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
+                            if (entry.Dir)
+                            {
+                                var firstVideo = Directory.GetFiles(full)
+                                    .Where(f => LibraryIsVideo(f))
+                                    .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
+                                    .FirstOrDefault();
+                                if (firstVideo != null) img = ShellThumbs.Get(firstVideo, 192);
+                            }
+                            else
+                            {
+                                img = ShellThumbs.Get(full, 256);
+                            }
                         }
                     }
                     catch { }
