@@ -397,10 +397,13 @@ internal static class Program
 
         // A live pairing code is a way in, so one exists only when this PC still needs
         // pairing. After pairing, a new code comes only from the window's Pair button.
+#if PAIR_CODE_HOOK
+        // CI only: a fixed pairing code for the e2e. The READ itself stays inside the
+        // define so shipped builds carry neither the call nor the literal (round-10
+        // B10-3); shipped builds never honor a fixed code.
         var overrideCode = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_PAIR_CODE");
-#if !PAIR_CODE_HOOK
-        // Shipped builds never honor a fixed code. CI defines PAIR_CODE_HOOK for its own copy.
-        overrideCode = null;
+#else
+        string? overrideCode = null;
 #endif
         if (overrideCode is { Length: 6 } && overrideCode.All(char.IsDigit))
         {

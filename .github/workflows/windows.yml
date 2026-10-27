@@ -57,21 +57,6 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
-      # Round-9 R9-2 follow-up: compile-out proof, not just convention - the SHIPPED
-      # binary must not contain the CI hook strings at all, and the hooked one must
-      # (proves the hooked exe really is the hooked build the e2e drives).
-      - name: Hook compile-out proof (shipped exe has no CI seams)
-        shell: pwsh
-        run: |
-          $clean = "windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe"
-          $hooked = "windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"
-          $cleanText = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($clean)) + [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($clean))
-          $hookedText = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($hooked)) + [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($hooked))
-          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
-            if ($cleanText.Contains($needle)) { throw "clean release exe contains CI hook string '$needle' - the seam is not compiled out" }
-            if (-not $hookedText.Contains($needle)) { throw "hooked exe is missing '$needle' - wrong build published to out/" }
-          }
-          Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
 
       - name: Render the helper window for layout review (CI only)
         run: |
@@ -121,6 +106,26 @@ jobs:
             windows/ZephyrVlcRemote/window-diag.txt
             windows/ZephyrPlayer/dialog-*.png
           if-no-files-found: warn
+
+      # Round-9 R9-2 / round-10 B10-3: compile-out proof on the PRODUCTION artifact.
+      # Byte-true scan: Latin1 maps bytes 1:1, so a UTF-16LE needle's byte pattern
+      # matches at any file offset (a whole-file UTF-16 decode is alignment-blind and
+      # misses literals at odd offsets). Runs AFTER the render/upload steps so a
+      # failure here can never skip evidence collection.
+      - name: Hook compile-out proof (shipped exe has no CI seams)
+        shell: pwsh
+        run: |
+          $latin = [Text.Encoding]::GetEncoding(28591)
+          $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe"))
+          $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"))
+          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
+            foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
+              $n = $latin.GetString($enc.GetBytes($needle))
+              if ($clean.Contains($n)) { throw "clean release exe contains CI hook string '$needle' ($($enc.EncodingName)) - the seam is not compiled out" }
+              if (-not $hooked.Contains($n)) { throw "hooked exe is missing '$needle' ($($enc.EncodingName)) - wrong build published to out/" }
+            }
+          }
+          Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
 
       - name: Helper runtime tests (migration, pairing, endpoints, discovery identity, firewall)
         run: pwsh -File scripts/vlc_remote_e2e.ps1
@@ -406,6 +411,12 @@ jobs:
           $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'upgrade installer timed out' }
           if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "upgrade installer exit $($up.ExitCode)" }
+          # RunOnceId suppression only works if the new install APPENDS to 1.1.0's
+          # uninstall log - require the install log to say so (round-10 check 1a).
+          if (-not (Select-String -Path $upLog -Pattern 'Will append to existing uninstall log' -Quiet)) {
+            Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue
+            throw 'N-10: the upgrade install did NOT append to the existing uninstall log - RunOnceId suppression cannot engage'
+          }
           # Round-7 B7-1: the upgraded app's first launch re-asks the one-time permission
           # because the 1.1.0 rules are the OLD shape (a name-only check would keep them
           # forever). The installer already relaunched the app onto that explained-
@@ -488,6 +499,15 @@ jobs:
               Start-Sleep -Milliseconds 400
             }
           } -ArgumentList $pollFile
+          # The poll only proves anything if it saw the reservation PRESENT before the
+          # uninstaller started (round-10): Start-Job spins up a fresh pwsh (1-2 s), so
+          # without this gate the risky window could pass before the first sample.
+          $seenPresent = $false
+          foreach ($w in 1..25) {
+            Start-Sleep -Milliseconds 400
+            if ((Test-Path $pollFile) -and (Select-String -Path $pollFile -Pattern 'PRESENT' -Quiet)) { $seenPresent = $true; break }
+          }
+          if (-not $seenPresent) { Stop-Job $poll; Remove-Job $poll; throw 'N-10 poll never saw the planted reservation PRESENT before the uninstall - poll harness broken' }
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$unLog" -PassThru
           if (-not $uu.WaitForExit(150000)) { Stop-Job $poll; Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue; throw 'post-upgrade uninstaller timed out' }
           Start-Sleep -Seconds 3
@@ -522,7 +542,7 @@ jobs:
           # Round-9 T2: suppression must be EXERCISED, not merely absent: the log must
           # record each legacy id being skipped in favor of our newer same-id entry.
           foreach ($rid in 'delacl','delrule','deldiscrule') {
-            if ($unLogText -notmatch "Skipping RunOnceId\s*\"?$rid") {
+            if ($unLogText -notmatch ('Skipping RunOnceId\s*"?' + $rid)) {
               Write-Output '--- uninstall log tail ---'
               Get-Content $unLog -Tail 80
               throw "N-10: uninstall log shows no 'Skipping RunOnceId $rid' - the shadow entries were never recorded or never matched"
@@ -552,12 +572,22 @@ jobs:
           gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/old110b" --clobber
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          $link = 0
           foreach ($inst in @("$env:RUNNER_TEMP/old100/Zephyr-PC-1.0.0.exe", "$env:RUNNER_TEMP/old110b/Zephyr-PC-1.1.0.exe", $newInstaller)) {
             if (-not (Test-Path $inst)) { throw "chain installer missing: $inst" }
-            $ip = Start-Process $inst -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
-            if (-not $ip.WaitForExit(150000)) { throw "chain installer timed out: $inst" }
-            if ($ip.ExitCode -ne 0) { throw "chain installer exit $($ip.ExitCode): $inst" }
+            # Each silent install auto-launches the player ([Run] skipifnotsilent is
+            # satisfied by silent); a running exe locks files for the next link and the
+            # suppressed file-in-use box aborts it (round-10 chain exit 5).
+            Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+            Start-Sleep -Seconds 1
+            $link++
+            $linkLog = "$env:RUNNER_TEMP/chain-install-$link.log"
+            $ip = Start-Process $inst -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$linkLog" -PassThru
+            if (-not $ip.WaitForExit(150000)) { Get-Content $linkLog -Tail 60 -ErrorAction SilentlyContinue; throw "chain installer timed out: $inst" }
+            if ($ip.ExitCode -ne 0) { Get-Content $linkLog -Tail 60 -ErrorAction SilentlyContinue; throw "chain installer exit $($ip.ExitCode): $inst" }
           }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 1
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
           $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
@@ -601,11 +631,13 @@ jobs:
           Start-Sleep -Seconds 2
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $aclPlanted = (netsh http show urlacl url=http://+:47823/) | Out-String
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6b uninstaller timed out' }
           Start-Sleep -Seconds 3
           $aclB = (netsh http show urlacl url=http://+:47823/) | Out-String
-          if ($aclB -notmatch 'SY\)') { Write-Output $aclB; throw 'T6b: the foreign reservation did not survive the fresh-install uninstall' }
+          $normB = { param($t) ($t -replace '\s+', ' ').Trim() }
+          if ((& $normB $aclB) -ne (& $normB $aclPlanted)) { Write-Output "--- planted ---`n$aclPlanted`n--- after ---`n$aclB"; throw 'T6b: the foreign reservation did not survive the fresh-install uninstall byte-identical' }
           $rulesB = netsh advfirewall firewall show rule name="Zephyr Player" | Out-String
           if ($rulesB -notmatch 'Zephyr Player') { throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
           netsh http delete urlacl url=http://+:47823/ | Out-Null

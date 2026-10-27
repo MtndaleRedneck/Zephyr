@@ -135,7 +135,7 @@ namespace ZephyrPlayer
             if (r.Direction != 1 || !r.Enabled) return false; // NET_FW_RULE_DIR_IN
             if (r.Profiles != 2) return false;                // NET_FW_PROFILE2_PRIVATE only
             if (!string.Equals(r.RemoteAddresses.Trim(), "LocalSubnet", StringComparison.OrdinalIgnoreCase)) return false;
-            if (!r.LocalPorts.Split(',').Any(t => t.Trim() == port.ToString())) return false;
+            if (!string.Equals(r.LocalPorts.Trim(), port.ToString(), StringComparison.Ordinal)) return false; // exactly our port - '47823,80' opens more than our shape (round-10 N10-5)
             return string.Equals(r.ApplicationName.Trim(), program, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -179,31 +179,77 @@ namespace ZephyrPlayer
         /// Foreign - we never delete what we cannot read.</summary>
         private static (bool Found, string? Sddl) QueryUrlAcl(string urlPrefix)
         {
-            var query = new HttpServiceConfigUrlAclQuery
+            // http.h lifecycle: HttpInitialize with HTTP_INITIALIZE_CONFIG is required
+            // before the query, HttpTerminate after.
+            uint initRc = HttpInitialize(new HttpApiVersion { Major = 1, Minor = 0 }, HttpInitializeConfig, IntPtr.Zero);
+            if (initRc != 0)
             {
-                KeyDesc = new HttpServiceConfigUrlAclKey { UrlPrefix = urlPrefix },
-            };
-            var outSize = System.Runtime.InteropServices.Marshal.SizeOf<HttpServiceConfigUrlAclSet>();
-            var buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+                LastReadFailed = true;
+                Console.Error.WriteLine("http.sys init failed, error " + initRc + " - treating the reservation as unreadable/foreign.");
+                return (true, null);
+            }
             try
             {
-                uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
-                    ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize, IntPtr.Zero);
-                if (rc == ErrorNotFound) return (false, null);
-                if (rc != 0) { LastReadFailed = true; return (true, null); }
-                var set = System.Runtime.InteropServices.Marshal.PtrToStructure<HttpServiceConfigUrlAclSet>(buf);
-                return (true, set.Param.StringSecurityDescriptor);
+                var query = new HttpServiceConfigUrlAclQuery
+                {
+                    QueryDesc = HttpServiceConfigQueryExact,
+                    KeyDesc = new HttpServiceConfigUrlAclKey { UrlPrefix = urlPrefix },
+                    Token = 0,
+                };
+                // The record's strings live inside the output buffer past the struct,
+                // so size for content: on ERROR_INSUFFICIENT_BUFFER/ERROR_MORE_DATA the
+                // API reports the needed size through pReturnLength (http.h). Any other
+                // error is a READ error - never "no reservation" (round-9 N9-3
+                // fail-closed, round-10 B10-1).
+                var outSize = 256;
+                for (var attempt = 0; attempt < 3; attempt++)
+                {
+                    var buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+                    try
+                    {
+                        uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
+                            ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize,
+                            out int needed, IntPtr.Zero);
+                        // No matching record: ERROR_FILE_NOT_FOUND per http.h (round-10
+                        // B10-1); 1168 (ERROR_NOT_FOUND) kept as the same "absent"
+                        // meaning on older http.sys. Both mean NOT RESERVED - unlike
+                        // every other error, which is unreadable, i.e. Foreign.
+                        if (rc == ErrorFileNotFound || rc == ErrorNotFound) return (false, null);
+                        if (rc == ErrorInsufficientBuffer || rc == ErrorMoreData)
+                        {
+                            if (needed > outSize) { outSize = needed; continue; }
+                            LastReadFailed = true;
+                            return (true, null);
+                        }
+                        if (rc != 0)
+                        {
+                            LastReadFailed = true;
+                            Console.Error.WriteLine("http.sys URL ACL query failed, error " + rc + " - treating the reservation as unreadable/foreign.");
+                            return (true, null);
+                        }
+                        var set = System.Runtime.InteropServices.Marshal.PtrToStructure<HttpServiceConfigUrlAclSet>(buf);
+                        return (true, set.Param.StringSecurityDescriptor);
+                    }
+                    finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+                }
+                LastReadFailed = true;
+                return (true, null);
             }
             catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or System.Runtime.InteropServices.MarshalDirectiveException)
             {
                 LastReadFailed = true;
                 return (true, null);
             }
-            finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+            finally { HttpTerminate(HttpInitializeConfig, IntPtr.Zero); }
         }
 
-        private const int HttpServiceConfigUrlAclQueryId = 2; // HttpServiceConfigUrlAclQuery
+        private const int HttpServiceConfigUrlAclQueryId = 2; // HttpServiceConfigUrlAclInfo
+        private const int HttpServiceConfigQueryExact = 0;
+        private const uint HttpInitializeConfig = 0x2;
+        private const uint ErrorFileNotFound = 2;
         private const uint ErrorNotFound = 1168;
+        private const uint ErrorInsufficientBuffer = 122;
+        private const uint ErrorMoreData = 234;
 
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         private struct HttpServiceConfigUrlAclKey
@@ -212,9 +258,11 @@ namespace ZephyrPlayer
             public string UrlPrefix;
         }
 
+        // http.h: { QueryDesc, KeyDesc, dwToken } - QueryDesc FIRST (round-10 B10-1).
         [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         private struct HttpServiceConfigUrlAclQuery
         {
+            public int QueryDesc;
             public HttpServiceConfigUrlAclKey KeyDesc;
             public int Token;
         }
@@ -235,7 +283,17 @@ namespace ZephyrPlayer
 
         [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
         private static extern uint HttpQueryServiceConfiguration(IntPtr serviceHandle, int configId,
-            ref HttpServiceConfigUrlAclQuery input, int inputLength, IntPtr output, int outputLength, IntPtr overlapped);
+            ref HttpServiceConfigUrlAclQuery input, int inputLength, IntPtr output, int outputLength,
+            out int returnLength, IntPtr overlapped);
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct HttpApiVersion { public ushort Major; public ushort Minor; }
+
+        [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
+        private static extern uint HttpInitialize(HttpApiVersion version, uint flags, IntPtr reserved);
+
+        [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
+        private static extern uint HttpTerminate(uint flags, IntPtr reserved);
 
         /// <summary>Pure classification of one reservation SDDL: us (an exact per-user
         /// grant for [sid]), a legacy broad grant the published 1.1.0 wrote (Everyone,
@@ -308,6 +366,10 @@ namespace ZephyrPlayer
                     return 3;
                 }
                 var exe = Environment.ProcessPath ?? "";
+                // Round-10 N10-4: clear the inherited 1.1.0 per-machine uninstall entry
+                // on every elevated run, success or failure (exact 1.1.x + folder match
+                // only). While it exists, Apps & Features can fire 1.1.0's blind delete.
+                try { RemoveLegacy110UninstallEntry(); } catch { }
                 // Classify the port reservation FIRST (round-9 N9-5): when it belongs to
                 // another app or another Windows user, setup stops BEFORE touching any
                 // machine-wide rule - rewriting the shared rules first would break the
@@ -563,7 +625,9 @@ namespace ZephyrPlayer
                     // chrome and the dotted focus box over the dark look (round-7 S7-2).
                     // Keyboard focus instead gets a thin brand-colored ring, hover a
                     // lighter fill, press a darker one (round-8 N-7).
-                    Template = DarkButtonTemplate(hover, pressed, new SolidColorBrush(Brand.Orange)),
+                    // Round-10 N10-6: the focus ring must CONTRAST the fill - orange on
+                    // the orange primary is invisible, so the primary gets white.
+                    Template = DarkButtonTemplate(hover, pressed, primary ? Brushes.White : new SolidColorBrush(Brand.Orange)),
                     FocusVisualStyle = null,
                 };
                 return b;

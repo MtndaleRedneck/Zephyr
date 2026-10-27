@@ -7,7 +7,7 @@
 ; the HttpListener server is attributed to the System binary (http.sys), so the rule
 ; shape and the per-user URL ACL must be owned by the app, not guessed at install time.
 ; Independent identity from BingeMote: own install dir, Run value, firewall rule names
-; and port (47823 vs the helper's 8488/8489). The BingeMote helper is never touched by
+; and port (47823 vs the helper's 8491/8492). The BingeMote helper is never touched by
 ; this installer.
 #ifndef MyAppVersion
   #define MyAppVersion "0.1.0"
@@ -43,7 +43,9 @@ Filename: "{app}\ZephyrPlayer.exe"; Flags: nowait skipifnotsilent runasoriginalu
 
 [UninstallRun]
 ; Round-8 N-10: the published 1.1.0 installer recorded blind [UninstallRun] steps with
-; exactly these RunOnceIds (delrule/deldiscrule/delacl) - "delacl" is a bare
+; exactly these RunOnceIds (delrule/deldiscrule/delacl). NEVER reuse these three ids for a real
+; command in any future script: the newest entry with a shared id is the ONLY one that runs,
+; so reusing an id would silently re-arm the inherited blind delete. "delacl" is a bare
 ; 'netsh http delete urlacl url=http://+:47823/' with no ownership check, and the
 ; same-AppId upgrade inherits those entries in the merged uninstall log. Per Inno's
 ; documented RunOnceId rule, when the log holds two entries with the same id only the

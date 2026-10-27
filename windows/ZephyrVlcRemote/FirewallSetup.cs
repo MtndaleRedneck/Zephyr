@@ -252,7 +252,7 @@ internal static class FirewallSetup
         if (r.Direction != 1 || !r.Enabled) return false; // NET_FW_RULE_DIR_IN
         if (r.Profiles != 2) return false;                // NET_FW_PROFILE2_PRIVATE only
         if (!string.Equals(r.RemoteAddresses.Trim(), "LocalSubnet", StringComparison.OrdinalIgnoreCase)) return false;
-        if (!r.LocalPorts.Split(',').Any(t => t.Trim() == port.ToString())) return false;
+        if (!string.Equals(r.LocalPorts.Trim(), port.ToString(), StringComparison.Ordinal)) return false; // exactly our port - '47823,80' opens more than our shape (round-10 N10-5)
         return string.Equals(r.ApplicationName.Trim(), program, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -295,36 +295,77 @@ internal static class FirewallSetup
     /// what we cannot read.</summary>
     private static (bool Found, string? Sddl) QueryUrlAcl(string urlPrefix)
     {
-        var query = new HttpServiceConfigUrlAclQuery
+        // http.h lifecycle: HttpInitialize with HTTP_INITIALIZE_CONFIG is required
+        // before the query, HttpTerminate after.
+        uint initRc = HttpInitialize(new HttpApiVersion { Major = 1, Minor = 0 }, HttpInitializeConfig, IntPtr.Zero);
+        if (initRc != 0)
         {
-            KeyDesc = new HttpServiceConfigUrlAclKey { UrlPrefix = urlPrefix },
-        };
-        var outSize = System.Runtime.InteropServices.Marshal.SizeOf<HttpServiceConfigUrlAclSet>();
-        var buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+            LastReadFailed = true;
+            Program.Log("http.sys init failed (win32 " + initRc + "); treating the reservation as unreadable/foreign.");
+            return (true, null);
+        }
         try
         {
-            uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
-                ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize, IntPtr.Zero);
-            if (rc == ErrorNotFound) return (false, null);
-            if (rc != 0)
+            var query = new HttpServiceConfigUrlAclQuery
             {
-                LastReadFailed = true;
-                Program.Log("urlacl query failed (win32 " + rc + "); treating the reservation as unreadable/foreign.");
-                return (true, null);
+                QueryDesc = HttpServiceConfigQueryExact,
+                KeyDesc = new HttpServiceConfigUrlAclKey { UrlPrefix = urlPrefix },
+                Token = 0,
+            };
+            // The record's strings live inside the output buffer past the struct, so
+            // size for content: on ERROR_INSUFFICIENT_BUFFER/ERROR_MORE_DATA the API
+            // reports the needed size through pReturnLength (http.h). Any other error
+            // is a READ error - never "no reservation" (round-9 N9-3 fail-closed,
+            // round-10 B10-1).
+            var outSize = 256;
+            for (var attempt = 0; attempt < 3; attempt++)
+            {
+                var buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+                try
+                {
+                    uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
+                        ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize,
+                        out int needed, IntPtr.Zero);
+                    // No matching record: ERROR_FILE_NOT_FOUND per http.h (round-10
+                    // B10-1); 1168 (ERROR_NOT_FOUND) kept as the same "absent" meaning
+                    // on older http.sys. Both mean NOT RESERVED - unlike every other
+                    // error, which is unreadable, i.e. Foreign.
+                    if (rc == ErrorFileNotFound || rc == ErrorNotFound) return (false, null);
+                    if (rc == ErrorInsufficientBuffer || rc == ErrorMoreData)
+                    {
+                        if (needed > outSize) { outSize = needed; continue; }
+                        LastReadFailed = true;
+                        return (true, null);
+                    }
+                    if (rc != 0)
+                    {
+                        LastReadFailed = true;
+                        Program.Log("urlacl query failed (win32 " + rc + "); treating the reservation as unreadable/foreign.");
+                        return (true, null);
+                    }
+                    var set = System.Runtime.InteropServices.Marshal.PtrToStructure<HttpServiceConfigUrlAclSet>(buf);
+                    return (true, set.Param.StringSecurityDescriptor);
+                }
+                finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
             }
-            var set = System.Runtime.InteropServices.Marshal.PtrToStructure<HttpServiceConfigUrlAclSet>(buf);
-            return (true, set.Param.StringSecurityDescriptor);
+            LastReadFailed = true;
+            return (true, null);
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or System.Runtime.InteropServices.MarshalDirectiveException)
         {
             LastReadFailed = true;
             return (true, null);
         }
-        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+        finally { HttpTerminate(HttpInitializeConfig, IntPtr.Zero); }
     }
 
-    private const int HttpServiceConfigUrlAclQueryId = 2; // HttpServiceConfigUrlAclQuery
+    private const int HttpServiceConfigUrlAclQueryId = 2; // HttpServiceConfigUrlAclInfo
+    private const int HttpServiceConfigQueryExact = 0;
+    private const uint HttpInitializeConfig = 0x2;
+    private const uint ErrorFileNotFound = 2;
     private const uint ErrorNotFound = 1168;
+    private const uint ErrorInsufficientBuffer = 122;
+    private const uint ErrorMoreData = 234;
 
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     private struct HttpServiceConfigUrlAclKey
@@ -336,6 +377,7 @@ internal static class FirewallSetup
     [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     private struct HttpServiceConfigUrlAclQuery
     {
+        public int QueryDesc;
         public HttpServiceConfigUrlAclKey KeyDesc;
         public int Token;
     }
@@ -356,7 +398,17 @@ internal static class FirewallSetup
 
     [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
     private static extern uint HttpQueryServiceConfiguration(IntPtr serviceHandle, int configId,
-        ref HttpServiceConfigUrlAclQuery input, int inputLength, IntPtr output, int outputLength, IntPtr overlapped);
+        ref HttpServiceConfigUrlAclQuery input, int inputLength, IntPtr output, int outputLength,
+        out int returnLength, IntPtr overlapped);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct HttpApiVersion { public ushort Major; public ushort Minor; }
+
+    [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
+    private static extern uint HttpInitialize(HttpApiVersion version, uint flags, IntPtr reserved);
+
+    [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
+    private static extern uint HttpTerminate(uint flags, IntPtr reserved);
 
     /// <summary>Pure classification of one reservation SDDL: us (an exact per-user grant
     /// for [sid]), a legacy broad grant our 1.x builds wrote (Everyone, nothing else),
