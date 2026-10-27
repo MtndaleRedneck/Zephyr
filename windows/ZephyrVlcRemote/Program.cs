@@ -1328,20 +1328,25 @@ internal sealed class HelperWindow : Form
             }
             return;
         }
-        if (Program.PairCode != null && DateTime.UtcNow > Program.PairCodeExpires)
+        // An expired code STAYS SET, only flagged: the phone must hear the truth -
+        // 410 "code expired", never a misleading "wrong code" (round-5). Nulling the
+        // code here raced the HTTP expiry check: a /pair landing after the sweep got
+        // 403 "no code showing" instead of 410 (first expired-code CI run).
+        var expiredNow = Program.PairCode != null && DateTime.UtcNow > Program.PairCodeExpires;
+        if (expiredNow && !_codeExpired)
         {
-            // Stop at expiry instead of rolling a new code forever: the typed name goes back
-            // into the box (Pair re-enables) and the note says what happened.
+            // The typed name goes back into the box (Pair re-enables) and the note says
+            // what happened; the code itself is unusable (410) but stays for the answer.
             var name = Program.PendingPhoneName;
-            Program.PairCode = null;
             Program.PendingPhoneName = null;
             if (!string.IsNullOrEmpty(name) && _nameBox.Text.Trim().Length == 0) _nameBox.Text = name;
             _codeExpired = true;
             Program.Log("Pairing code expired - showing \"Code expired\" until Pair is tapped again.");
         }
-        _code.Text = Program.PairCode ?? "------";
+        if (!expiredNow) _codeExpired = false;
+        _code.Text = expiredNow ? "------" : Program.PairCode ?? "------";
         // The block shows a live code (caption, code, Cancel, note) or the expired note alone.
-        var live = Program.PairCode != null;
+        var live = Program.PairCode != null && !expiredNow;
         var show = live || _codeExpired;
         if (show != _codeShown || live != _code.Visible)
         {
