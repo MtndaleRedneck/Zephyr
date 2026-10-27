@@ -78,6 +78,13 @@ namespace ZephyrPlayer
             public override System.Drawing.Color SeparatorLight => Border;
         }
 
+        /// <summary>CI-only (gated by ZEPHYR_CI_CAPTURE upstream): pop the tray menu at a
+        /// fixed screen point so captures pixel-prove the dark renderer.</summary>
+        public void ShowMenuForCapture()
+        {
+            _icon.ContextMenuStrip?.Show(new System.Drawing.Point(64, 64));
+        }
+
         /// <summary>One-time "still running here" hint the first time a close hides to the tray.</summary>
         public void ShowStillRunningHint()
         {

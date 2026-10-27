@@ -47,10 +47,20 @@ namespace ZephyrPlayer
                 _tick.Start();
             };
             ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
-            // Prefilled "My phone" behaves like a placeholder: focusing the box selects
-            // it so typing replaces it instead of appending (review should-fix 1).
-            PhoneNameBox.GotFocus += (_, __) => PhoneNameBox.SelectAll();
             Closed += (_, __) => _tick.Stop();
+        }
+
+        private void OnPhoneNameChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
+        {
+            PhoneNameHint.Visibility = PhoneNameBox.Text.Length == 0
+                ? System.Windows.Visibility.Visible : System.Windows.Visibility.Collapsed;
+            _pairStarted(PendingName());
+        }
+
+        private string PendingName()
+        {
+            var n = PhoneNameBox.Text.Trim();
+            return n.Length > 0 ? n : "My phone";
         }
 
         private void Mint()

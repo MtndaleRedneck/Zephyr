@@ -53,9 +53,16 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="PhoneNameBox" Grid.Column="0" Text="My phone" VerticalContentAlignment="Center"
-                             Background="#1B1B1E" Foreground="{StaticResource TextBrush}" BorderThickness="0"
-                             Padding="10,7" FontSize="13"/>
+                    <Grid Grid.Column="0">
+                        <TextBox x:Name="PhoneNameBox" VerticalContentAlignment="Center"
+                                 Background="#1B1B1E" Foreground="{StaticResource TextBrush}" BorderThickness="0"
+                                 Padding="10,7" FontSize="13" MaxLength="40"
+                                 TextChanged="OnPhoneNameChanged"/>
+                        <!-- Placeholder, not real text (review should-fix 1): an untouched
+                             box pairs as "My phone"; typing replaces it, no deleting first. -->
+                        <TextBlock x:Name="PhoneNameHint" Text="My phone" IsHitTestVisible="False"
+                                   Foreground="#6E6E76" VerticalAlignment="Center" Margin="11,0,0,0"/>
+                    </Grid>
                     <Button Grid.Column="1" Style="{StaticResource OrangeButton}" Content="Pair" Click="OnPair" Margin="12,0,0,0"/>
                 </Grid>
                 <StackPanel x:Name="CodePanel" Visibility="Collapsed" Margin="0,10,0,0">
