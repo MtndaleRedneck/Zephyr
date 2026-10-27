@@ -81,7 +81,11 @@ namespace ZephyrPlayer.Tests
             // address or manual entry until they update - see class comment.)
             if (!OperatingSystem.IsWindows()) return;
             using var player = new DiscoveryResponder(47823, "TestPC");
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => AskOne(8489, timeoutMs: 800));
+            string? reply = null;
+            try { reply = await AskOne(8489, timeoutMs: 800); }
+            catch (OperationCanceledException) { } // nobody there: receive timed out
+            catch (SocketException) { } // Windows loopback: ICMP port-unreachable surfaces as a reset
+            Assert.Null(reply); // whatever the transport does, nobody may ANSWER on the helper's port
         }
 
         [Fact]
