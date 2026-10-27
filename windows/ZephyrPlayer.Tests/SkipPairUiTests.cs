@@ -70,6 +70,9 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal(-60, settings.SkipDelta(true, true));
                     Assert.Equal(60, settings.SkipDelta(true, false));
                     Assert.Equal(10, settings.PrimarySkipSeconds);
+                    // The left-nav shows one section at a time; a collapsed card
+                    // measures 0 high and cannot be rendered. Open Skip first.
+                    ((Button)w.FindName("NavSkip")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Capture((FrameworkElement)w.FindName("SkipSettingsCard")!, 500, "pc-skip-settings-pairs.png");
                 }
                 finally { w.Close(); }
