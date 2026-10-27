@@ -56,6 +56,11 @@ Filename: "{app}\ZephyrVlcRemote.exe"; Flags: nowait skipifnotsilent runasorigin
 [UninstallRun]
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Zephyr VLC Remote Watchdog"" /F"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "delwatchdog"
 
+; Firewall note: the UDP discovery rule is program-scoped to {app}\ZephyrVlcRemote.exe
+; (inert once the exe is deleted, but removed anyway by the cleanup below). The vlc.exe
+; rule (program-scoped, Private-only, LocalSubnet) may be shared with a co-installed
+; BingeMote install and is deliberately left; the app's ownership marker next to its
+; data folder lets a future elevated step remove what it created.
 [Code]
 function InitializeSetup(): Boolean;
 var
@@ -96,8 +101,3 @@ begin
       Log('firewall cleanup was declined or failed to start; rules left in place');
   end;
 end;
-; Firewall note: the UDP discovery rule is program-scoped to {app}\ZephyrVlcRemote.exe
-; (inert once the exe is deleted, but removed anyway by the step above). The vlc.exe rule
-; (program-scoped, Private-only, LocalSubnet) may be shared with a co-installed BingeMote
-; install and is deliberately left; the app's ownership marker next to its data folder
-; lets a future elevated step remove what it created.
