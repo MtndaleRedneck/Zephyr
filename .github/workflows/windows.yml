@@ -106,7 +106,8 @@ jobs:
       - name: Production remove-dialog open/cancel/confirm proof (CI only)
         run: |
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-paths"
-          $rp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru
+          $rp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP\remove-paths.log"
+          Get-Content "$env:RUNNER_TEMP\remove-paths.log" -ErrorAction SilentlyContinue
           if ($rp.ExitCode -ne 0) { throw "remove-dialog production paths exit $($rp.ExitCode)" }
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
 
@@ -125,6 +126,9 @@ jobs:
           if-no-files-found: warn
 
       # Round-9 R9-2 / round-10 B10-3: compile-out proof on the PRODUCTION artifact.
+      - name: Helper runtime tests (migration, pairing, endpoints, discovery identity, firewall)
+        run: pwsh -File scripts/vlc_remote_e2e.ps1
+
       # Byte-true scan: Latin1 maps bytes 1:1, so a UTF-16LE needle's byte pattern
       # matches at any file offset (a whole-file UTF-16 decode is alignment-blind and
       # misses literals at odd offsets). Runs AFTER the render/upload steps so a
@@ -136,16 +140,19 @@ jobs:
           $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe"))
           $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"))
           foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
+            $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
               $n = $latin.GetString($enc.GetBytes($needle))
+              # Clean: the needle in ANY encoding fails (the seam must be fully out).
               if ($clean.Contains($n)) { throw "clean release exe contains CI hook string '$needle' ($($enc.EncodingName)) - the seam is not compiled out" }
-              if (-not $hooked.Contains($n)) { throw "hooked exe is missing '$needle' ($($enc.EncodingName)) - wrong build published to out/" }
+              # Hooked: presence in EITHER encoding is enough - managed literals are
+              # UTF-16, so demanding ASCII too failed a correct build (gate 40514926515).
+              if ($hooked.Contains($n)) { $hookedHas = $true }
             }
+            if (-not $hookedHas) { throw "hooked exe is missing '$needle' in any encoding - wrong build published to out/" }
           }
           Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
 
-      - name: Helper runtime tests (migration, pairing, endpoints, discovery identity, firewall)
-        run: pwsh -File scripts/vlc_remote_e2e.ps1
 
   windows:
     runs-on: windows-latest
