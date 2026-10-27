@@ -1,11 +1,12 @@
 <Window x:Class="ZephyrPlayer.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Zephyr Settings" Width="560" Height="720"
+        Title="Zephyr Settings" Width="680" Height="600"
         Background="#1B1B1E" Icon="/ZephyrPlayer;component/assets/icon.ico"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
     <Window.Resources>
         <SolidColorBrush x:Key="CardBrush" Color="#26262D"/>
+        <SolidColorBrush x:Key="NavSelectedBrush" Color="#2E2E36"/>
         <SolidColorBrush x:Key="OrangeBrush" Color="#F97C02"/>
         <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/>
         <SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
@@ -61,11 +62,6 @@
             <Setter Property="Padding" Value="16,12"/>
             <Setter Property="Margin" Value="0,0,0,12"/>
         </Style>
-        <Style x:Key="Heading" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{StaticResource OrangeBrush}"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Margin" Value="0,0,0,6"/>
-        </Style>
         <Style x:Key="Small" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
             <Setter Property="FontSize" Value="11"/>
@@ -89,85 +85,119 @@
             </Setter>
         </Style>
     </Window.Resources>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel Margin="20,16">
+    <Grid Margin="14,14">
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="178"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Movies folder" Style="{StaticResource Heading}"/>
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock x:Name="FolderText" Grid.Column="0" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                        <Button Grid.Column="1" Style="{StaticResource OrangeButton}" Content="Browse..." Click="OnBrowse" Margin="12,0,0,0"/>
-                    </Grid>
-                    <TextBlock Style="{StaticResource Small}" Margin="0,6,0,0" Text="Your designated folder. Home shows these movies when nothing is playing, and your phone browses the same folder."/>
-                </StackPanel>
-            </Border>
+        <!-- Left section list (approved Task-Manager-style nav): top group,
+             Feedback & bugs + Updates pinned at the bottom, version under it. -->
+        <Grid Grid.Column="0" Margin="0,0,14,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <StackPanel Grid.Row="0">
+                <Button x:Name="NavMovies" Tag="movies" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Movies folder" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+                <Button x:Name="NavVolume" Tag="volume" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE767;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Volume" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+                <Button x:Name="NavSkip" Tag="skip" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE892;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Skip buttons" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+                <Button x:Name="NavBar" Tag="bar" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE896;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Playback bar" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+                <Button x:Name="NavRemote" Tag="remote" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE8EA;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Android remote" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+            </StackPanel>
+            <StackPanel Grid.Row="1">
+                <Button x:Name="NavFeedback" Tag="feedback" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE939;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Feedback &amp; bugs" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+                <Button x:Name="NavUpdates" Tag="updates" Click="OnNav"><Button.Template><ControlTemplate TargetType="Button"><Grid><Border x:Name="Pill" Width="3" Height="18" CornerRadius="1.5" HorizontalAlignment="Left" VerticalAlignment="Center" Background="{StaticResource OrangeBrush}" Visibility="Collapsed"/><Border x:Name="Bg" CornerRadius="8" Padding="14,8" Background="Transparent"><StackPanel Orientation="Horizontal"><TextBlock Text="&#xE895;" FontFamily="Segoe MDL2 Assets" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="0,0,10,0"/><TextBlock Text="Updates" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center"/></StackPanel></Border></Grid></ControlTemplate></Button.Template></Button>
+                <TextBlock x:Name="NavVersionText" Text="v1.2" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="28,2,0,0"/>
+            </StackPanel>
+        </Grid>
 
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Volume" Style="{StaticResource Heading}"/>
-                    <TextBlock Style="{StaticResource Small}" Text="The bar slider always reads 0-100 and matches Windows volume. Boost is extra loudness the player adds on top."/>
-                    <TextBlock Text="Boost up to:" Foreground="{StaticResource TextBrush}" Margin="0,8,0,2"/>
-                    <WrapPanel x:Name="BoostPanel"/>
-                </StackPanel>
-            </Border>
+        <!-- Right content: one section at a time -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <TextBlock x:Name="SectionTitle" Grid.Row="0" Text="Movies folder" Foreground="{StaticResource TextBrush}"
+                       FontSize="17" FontWeight="SemiBold" Margin="2,2,0,12"/>
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <Grid>
+                    <!-- Movies folder -->
+                    <Border x:Name="SectionMovies" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="FolderText" Grid.Column="0" Foreground="{StaticResource TextBrush}" FontSize="13" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                <Button Grid.Column="1" Style="{StaticResource OrangeButton}" Content="Browse..." Click="OnBrowse" Margin="12,0,0,0"/>
+                            </Grid>
+                            <TextBlock Style="{StaticResource Small}" Margin="0,6,0,0" Text="Your designated folder. Home shows these movies when nothing is playing, and your phone browses the same folder."/>
+                        </StackPanel>
+                    </Border>
 
-            <Border x:Name="SkipSettingsCard" Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Skip buttons" Style="{StaticResource Heading}"/>
-                    <TextBlock Text="Primary skip buttons" Foreground="{StaticResource TextBrush}"/>
-                    <WrapPanel x:Name="PrimarySkipPanel"/>
-                    <TextBlock Text="Secondary skip buttons" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
-                    <WrapPanel x:Name="SecondarySkipPanel"/>
-                </StackPanel>
-            </Border>
+                    <!-- Volume -->
+                    <Border x:Name="SectionVolume" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Small}" Text="The bar slider always reads 0-100 and matches Windows volume. Boost is extra loudness the player adds on top."/>
+                            <TextBlock Text="Boost up to:" Foreground="{StaticResource TextBrush}" Margin="0,8,0,2"/>
+                            <WrapPanel x:Name="BoostPanel"/>
+                        </StackPanel>
+                    </Border>
 
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Playback bar" Style="{StaticResource Heading}"/>
-                    <TextBlock Text="Colors:" Foreground="{StaticResource TextBrush}"/>
-                    <WrapPanel x:Name="BarColorPanel"/>
-                    <TextBlock Text="Icons:" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
-                    <WrapPanel x:Name="IconStylePanel"/>
-                    <CheckBox x:Name="SpeedToggle" Content="Show playback-speed button (off by default)" Margin="0,10,0,0" Click="OnToggle"/>
-                    <CheckBox x:Name="SleepToggle" Content="Show sleep-timer button (off by default)" Click="OnToggle"/>
-                    <TextBlock Style="{StaticResource Small}" Margin="0,6,0,0" Text="Changes apply to the player right away, so you can see them live."/>
-                </StackPanel>
-            </Border>
+                    <!-- Skip buttons -->
+                    <Border x:Name="SkipSettingsCard" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="Primary skip buttons" Foreground="{StaticResource TextBrush}"/>
+                            <WrapPanel x:Name="PrimarySkipPanel"/>
+                            <TextBlock Text="Secondary skip buttons" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
+                            <WrapPanel x:Name="SecondarySkipPanel"/>
+                        </StackPanel>
+                    </Border>
 
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Android remote" Style="{StaticResource Heading}"/>
-                    <TextBlock x:Name="PairStatusText" Foreground="{StaticResource TextBrush}" FontSize="13"/>
-                    <Button x:Name="PairButton" Style="{StaticResource OrangeButton}" Content="Open pairing..." Click="OnPair" Margin="0,10,0,0" HorizontalAlignment="Left"/>
-                    <TextBlock Style="{StaticResource Small}" Margin="0,8,0,0" Text="The pairing screen shows a live code, this PC's address and your paired phones."/>
-                </StackPanel>
-            </Border>
+                    <!-- Playback bar -->
+                    <Border x:Name="SectionBar" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="Colors:" Foreground="{StaticResource TextBrush}"/>
+                            <WrapPanel x:Name="BarColorPanel"/>
+                            <TextBlock Text="Icons:" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
+                            <WrapPanel x:Name="IconStylePanel"/>
+                            <CheckBox x:Name="SpeedToggle" Content="Show playback-speed button (off by default)" Margin="0,10,0,0" Click="OnToggle"/>
+                            <CheckBox x:Name="SleepToggle" Content="Show sleep-timer button (off by default)" Click="OnToggle"/>
+                            <TextBlock Style="{StaticResource Small}" Margin="0,6,0,0" Text="Changes apply to the player right away, so you can see them live."/>
+                        </StackPanel>
+                    </Border>
 
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Feedback" Style="{StaticResource Heading}"/>
-                    <TextBlock Style="{StaticResource Small}" Text="Something off or missing?"/>
-                    <Button Style="{StaticResource OrangeButton}" Content="Send feedback" Click="OnFeedback" Margin="0,10,0,0" HorizontalAlignment="Left"/>
-                </StackPanel>
-            </Border>
+                    <!-- Android remote -->
+                    <Border x:Name="SectionRemote" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="PairStatusText" Foreground="{StaticResource TextBrush}" FontSize="13"/>
+                            <Button x:Name="PairButton" Style="{StaticResource OrangeButton}" Content="Open pairing..." Click="OnPair" Margin="0,10,0,0" HorizontalAlignment="Left"/>
+                            <TextBlock Style="{StaticResource Small}" Margin="0,8,0,0" Text="The pairing screen shows a live code, this PC's address and your paired phones."/>
+                        </StackPanel>
+                    </Border>
 
+                    <!-- Feedback & bugs -->
+                    <Border x:Name="SectionFeedback" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource Small}" Text="Something off or missing?"/>
+                            <Button Style="{StaticResource OrangeButton}" Content="Send feedback" Click="OnFeedback" Margin="0,10,0,0" HorizontalAlignment="Left"/>
+                        </StackPanel>
+                    </Border>
 
-            <Border Style="{StaticResource Card}">
-                <StackPanel>
-                    <TextBlock Text="Updates" Style="{StaticResource Heading}"/>
-                    <TextBlock x:Name="VersionText" Foreground="{StaticResource TextBrush}" FontSize="13"/>
-                    <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Small}" Margin="0,4,0,0"/>
-                    <Button Style="{StaticResource OrangeButton}" Content="Check now" Click="OnCheckUpdates" Margin="0,10,0,0" HorizontalAlignment="Left"/>
-                    <Button x:Name="InstallUpdateButton" Style="{StaticResource OrangeButton}" Content="Download and install update" Click="OnInstallUpdate" Margin="0,10,0,0" HorizontalAlignment="Left" Visibility="Collapsed"/>
-                    <TextBlock Style="{StaticResource Small}" Margin="0,8,0,0" Text="Zephyr also checks automatically every time it opens."/>
-                </StackPanel>
-            </Border>
-
-        </StackPanel>
-    </ScrollViewer>
+                    <!-- Updates (pinned last) -->
+                    <Border x:Name="SectionUpdates" Style="{StaticResource Card}" Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock x:Name="VersionText" Foreground="{StaticResource TextBrush}" FontSize="13"/>
+                            <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Small}" Margin="0,4,0,0"/>
+                            <Button Style="{StaticResource OrangeButton}" Content="Check now" Click="OnCheckUpdates" Margin="0,10,0,0" HorizontalAlignment="Left"/>
+                            <Button x:Name="InstallUpdateButton" Style="{StaticResource OrangeButton}" Content="Download and install update" Click="OnInstallUpdate" Margin="0,10,0,0" HorizontalAlignment="Left" Visibility="Collapsed"/>
+                            <TextBlock Style="{StaticResource Small}" Margin="0,8,0,0" Text="Zephyr also checks automatically every time it opens."/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
 </Window>
