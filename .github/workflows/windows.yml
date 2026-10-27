@@ -57,6 +57,22 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      # Round-9 R9-2 follow-up: compile-out proof, not just convention - the SHIPPED
+      # binary must not contain the CI hook strings at all, and the hooked one must
+      # (proves the hooked exe really is the hooked build the e2e drives).
+      - name: Hook compile-out proof (shipped exe has no CI seams)
+        shell: pwsh
+        run: |
+          $clean = "windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe"
+          $hooked = "windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"
+          $cleanText = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($clean)) + [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($clean))
+          $hookedText = [Text.Encoding]::Unicode.GetString([IO.File]::ReadAllBytes($hooked)) + [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($hooked))
+          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
+            if ($cleanText.Contains($needle)) { throw "clean release exe contains CI hook string '$needle' - the seam is not compiled out" }
+            if (-not $hookedText.Contains($needle)) { throw "hooked exe is missing '$needle' - wrong build published to out/" }
+          }
+          Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
+
       - name: Render the helper window for layout review (CI only)
         run: |
           dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
@@ -303,7 +319,7 @@ jobs:
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
       - name: Published 1.1.0 -> new build upgrade smoke (real artifacts)
         if: always()
-        timeout-minutes: 10
+        timeout-minutes: 12
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -315,6 +331,17 @@ jobs:
           # phone's old-format pairing token still authorizes a real control call.
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
+          # Round-9 T1: this leg must be a CLEAN 1.1.0 machine. The earlier continuity
+          # step installed THIS build into the same folder first, so 1.1.0 would append
+          # to a 1.2-born uninstall log - not the real upgrade path. Uninstall it and
+          # clear the folder so 1.1.0's own log is the only one.
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            if (-not $pu.WaitForExit(150000)) { throw 'pre-cleanup uninstaller timed out' }
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
           gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/old110" --clobber
           $oldInstaller = "$env:RUNNER_TEMP/old110/Zephyr-PC-1.1.0.exe"
           if (-not (Test-Path $oldInstaller)) { throw "published 1.1.0 installer missing after download" }
@@ -332,6 +359,13 @@ jobs:
           Write-Output 'published 1.1.0 installed and ran'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
+          # Round-9 N9-6: the Player's UNELEVATED old-shape rejection, headless on the
+          # hooked build (the shipped exe has no hook): 1.1.0's rules must fail the
+          # live check BEFORE any migration runs.
+          $hooked = "windows/capture-out/ZephyrPlayer.exe"
+          if (-not (Test-Path $hooked)) { throw "hooked capture exe missing: $hooked" }
+          $rej = Start-Process $hooked -ArgumentList '--firewall-shape-ok' -Wait -PassThru
+          if ($rej.ExitCode -ne 1) { throw "Player unelevated check did not REJECT the 1.1.0 shape (exit $($rej.ExitCode))" }
           # Exact 1.1.0-era files (schema from the 1.1.0 source): legacy settings
           # keys and the old paired.json string-array shape with a phone token.
           $config = Join-Path $env:APPDATA 'ZephyrPlayer'
@@ -359,6 +393,8 @@ jobs:
           $sidUp = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           $fwUp = Start-Process $installed -ArgumentList "--install-firewall `"$sidUp`"" -Wait -PassThru
           if ($fwUp.ExitCode -ne 0) { throw "post-upgrade firewall migration exit $($fwUp.ExitCode)" }
+          $acc = Start-Process $hooked -ArgumentList '--firewall-shape-ok' -Wait -PassThru
+          if ($acc.ExitCode -ne 0) { throw "Player unelevated check did not ACCEPT the migrated shape (exit $($acc.ExitCode))" }
           # The migration must leave the CURRENT shape, not 1.1.0's: TCP System + 47823 +
           # LocalSubnet, UDP exe + 8490 + LocalSubnet, and no Everyone listen grant.
           $tcpUp = netsh advfirewall firewall show rule name="Zephyr Player" verbose | Out-String
@@ -415,9 +451,29 @@ jobs:
           $unins = Join-Path (Split-Path $installed) 'unins000.exe'
           if (-not (Test-Path $unins)) { throw "uninstaller missing: $unins" }
           $unLog = "$env:RUNNER_TEMP/uninstall-upgrade-smoke.log"
+          # Round-9 T3: never-deleted proof, not just end state. Poll the reservation
+          # through the WHOLE uninstall; a single gap means it was deleted (and any
+          # later restore would not count as preservation).
+          $pollFile = "$env:RUNNER_TEMP/n10-acl-poll.log"
+          Remove-Item $pollFile -Force -ErrorAction SilentlyContinue
+          $poll = Start-Job -ScriptBlock {
+            param($f)
+            while ($true) {
+              $o = (netsh http show urlacl url=http://+:47823/) 2>&1 | Out-String
+              Add-Content $f ($(if ($o -match 'SDDL:') { 'PRESENT' } else { 'MISSING' }))
+              Start-Sleep -Milliseconds 400
+            }
+          } -ArgumentList $pollFile
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$unLog" -PassThru
-          if (-not $uu.WaitForExit(150000)) { Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue; throw 'post-upgrade uninstaller timed out' }
+          if (-not $uu.WaitForExit(150000)) { Stop-Job $poll; Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue; throw 'post-upgrade uninstaller timed out' }
           Start-Sleep -Seconds 3
+          Stop-Job $poll; Remove-Job $poll
+          if (Select-String -Path $pollFile -Pattern 'MISSING' -Quiet) {
+            Write-Output '--- poll gaps ---'; Get-Content $pollFile
+            throw 'N-10: the foreign 47823 reservation was momentarily DELETED during the uninstall (poll gap) - suppression failed'
+          }
+          $pollCount = (Get-Content $pollFile | Measure-Object -Line).Lines
+          if ($pollCount -lt 3) { throw "N-10 poll captured only $pollCount samples - the never-deleted proof is too thin" }
           $aclAfter = (netsh http show urlacl url=http://+:47823/) | Out-String
           if ($aclAfter -notmatch [regex]::Escape('http://+:47823/')) {
             Write-Output '--- uninstall log tail ---'
@@ -439,8 +495,100 @@ jobs:
             Get-Content $unLog -Tail 80
             throw 'N-10: the uninstall log shows the legacy blind urlacl delete EXECUTED - RunOnceId suppression failed'
           }
+          # Round-9 T2: suppression must be EXERCISED, not merely absent: the log must
+          # record each legacy id being skipped in favor of our newer same-id entry.
+          foreach ($rid in 'delacl','delrule','deldiscrule') {
+            if ($unLogText -notmatch "Skipping RunOnceId\s*\"?$rid") {
+              Write-Output '--- uninstall log tail ---'
+              Get-Content $unLog -Tail 80
+              throw "N-10: uninstall log shows no 'Skipping RunOnceId $rid' - the shadow entries were never recorded or never matched"
+            }
+          }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           Write-Output 'N-10 UNINSTALL: a foreign 47823 reservation survived the post-upgrade uninstall byte-identical (URL + SDDL + flags), and the log shows the legacy blind delete never ran.' 
+      - name: Legacy chain + fresh-install uninstall smokes (real artifacts)
+        if: always()
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Round-9 T5: the full published chain 1.0.0 -> 1.1.0 -> THIS build, then
+          # uninstall: no blind legacy step may fire at any depth of the appended log.
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            $pu.WaitForExit(150000) | Out-Null
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          gh release download player-v1.0.0 -p Zephyr-PC-1.0.0.exe --dir "$env:RUNNER_TEMP/old100" --clobber
+          gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/old110b" --clobber
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          foreach ($inst in @("$env:RUNNER_TEMP/old100/Zephyr-PC-1.0.0.exe", "$env:RUNNER_TEMP/old110b/Zephyr-PC-1.1.0.exe", $newInstaller)) {
+            if (-not (Test-Path $inst)) { throw "chain installer missing: $inst" }
+            $ip = Start-Process $inst -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
+            if (-not $ip.WaitForExit(150000)) { throw "chain installer timed out: $inst" }
+            if ($ip.ExitCode -ne 0) { throw "chain installer exit $($ip.ExitCode): $inst" }
+          }
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
+          $unins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (-not (Test-Path $unins)) { throw 'chain uninstaller missing' }
+          $unLog = "$env:RUNNER_TEMP/uninstall-chain-smoke.log"
+          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$unLog" -PassThru
+          if (-not $uu.WaitForExit(150000)) { Get-Content $unLog -Tail 60 -ErrorAction SilentlyContinue; throw 'chain uninstaller timed out' }
+          Start-Sleep -Seconds 3
+          $aclAfter = (netsh http show urlacl url=http://+:47823/) | Out-String
+          $norm = { param($t) ($t -replace '\s+', ' ').Trim() }
+          if ((& $norm $aclAfter) -ne (& $norm $aclBefore)) { Write-Output "--- before ---`n$aclBefore`n--- after ---`n$aclAfter"; throw 'T5: the foreign reservation did not survive the 1.0.0->1.1.0->new chain uninstall byte-identical' }
+          $chainLogText = Get-Content $unLog -Raw -ErrorAction SilentlyContinue
+          if ($chainLogText -match 'http delete urlacl') { Get-Content $unLog -Tail 80; throw 'T5: a blind legacy delete EXECUTED after the chain' }
+          Write-Output 'T5 CHAIN: 1.0.0 -> 1.1.0 -> new build; the foreign reservation survived the uninstall byte-identical and no blind step ran.'
+          # Round-9 T6a: FRESH new-build install, then uninstall - OUR per-user grant
+          # must be removed by the ownership-checked cleanup.
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          $ip = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
+          if (-not $ip.WaitForExit(150000)) { throw 'T6 fresh installer timed out' }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $sid6 = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $exe6 = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          $fw6 = Start-Process $exe6 -ArgumentList "--install-firewall `"$sid6`"" -Wait -PassThru
+          if ($fw6.ExitCode -ne 0) { throw "T6 setup exit $($fw6.ExitCode)" }
+          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+          if (-not $uu.WaitForExit(150000)) { throw 'T6 uninstaller timed out' }
+          Start-Sleep -Seconds 3
+          $left = (netsh http show urlacl url=http://+:47823/) 2>&1 | Out-String
+          if ($left -match 'SDDL:') { throw 'T6: our own 47823 reservation was LEFT behind by the fresh-install uninstall' }
+          Write-Output 'T6 FRESH: our own reservation was removed by the uninstall.'
+          # Round-9 T6b: fresh install with a FOREIGN reservation planted over ours:
+          # the uninstall must leave the reservation AND the rules untouched.
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          $ip = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
+          if (-not $ip.WaitForExit(150000)) { throw 'T6b fresh installer timed out' }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+          if (-not $uu.WaitForExit(150000)) { throw 'T6b uninstaller timed out' }
+          Start-Sleep -Seconds 3
+          $aclB = (netsh http show urlacl url=http://+:47823/) | Out-String
+          if ($aclB -notmatch 'SY\)') { Write-Output $aclB; throw 'T6b: the foreign reservation did not survive the fresh-install uninstall' }
+          $rulesB = netsh advfirewall firewall show rule name="Zephyr Player" | Out-String
+          if ($rulesB -notmatch 'Zephyr Player') { throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
+          netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
+          Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -466,6 +614,8 @@ jobs:
             ${{ runner.temp }}/installer-update-smoke.log
             ${{ runner.temp }}/installer-old110.log
             ${{ runner.temp }}/installer-upgrade-smoke.log
+            ${{ runner.temp }}/uninstall-upgrade-smoke.log
+            ${{ runner.temp }}/n10-acl-poll.log
           if-no-files-found: warn
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4

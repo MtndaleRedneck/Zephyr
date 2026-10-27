@@ -45,6 +45,17 @@ internal static class FirewallSetup
                 return 3;
             }
             var dataDir = userDataDir ?? Program.DataDir;
+            // Classify the port reservation FIRST (round-9 N9-5): when it belongs to
+            // another app or another Windows user, setup stops BEFORE touching any
+            // machine-wide rule - rewriting the shared rules first would break the
+            // other install even though setup then stopped with the conflict exit.
+            var aclOwner = ClassifyUrlAcl(sid);
+            if (aclOwner == AclOwnership.Foreign)
+            {
+                Program.Log("firewall setup: port " + Program.HttpPort + " is reserved by another app or Windows user; left untouched.");
+                Console.Error.WriteLine("The network port Zephyr VLC Remote needs is reserved for another app or another Windows user on this PC.");
+                return 4;
+            }
             Run("netsh", $"advfirewall firewall delete rule name=\"{Program.LegacyFirewallRule}\""); // 1.x installs
             // Re-add our own rules from scratch: by name they are ours, whatever shape an
             // older build gave them (a 1.x exe-scoped TCP rule included). BingeMote's
@@ -74,7 +85,7 @@ internal static class FirewallSetup
             // The listen permission: replace only what is ours (already correct, or the
             // broad Everyone grant a 1.x build wrote). A reservation belonging to another
             // app or another Windows user is NEVER overwritten - that is their port.
-            switch (ClassifyUrlAcl(sid))
+            switch (aclOwner)
             {
                 case AclOwnership.Ours:
                     break; // already exactly right
@@ -89,10 +100,6 @@ internal static class FirewallSetup
                         return 3;
                     }
                     break;
-                case AclOwnership.Foreign:
-                    Program.Log("firewall setup: port " + Program.HttpPort + " is reserved by another app or Windows user; left untouched.");
-                    Console.Error.WriteLine("The network port Zephyr VLC Remote needs is reserved for another app or another Windows user on this PC.");
-                    return 4;
             }
             // Verify the reservation really names the intended user, not just the port:
             // a stale or differently-scoped reservation is the exact thing that leaves
@@ -100,7 +107,7 @@ internal static class FirewallSetup
             if (!UrlAclNamesUser(sid))
             {
                 Program.Log("firewall setup: the listen permission on " + Program.HttpPort +
-                    " does not name SID " + sid + " after setup. Actual reservation: " + UrlAclBlock());
+                    " does not name SID " + sid + " after setup.");
                 Console.Error.WriteLine("The listen permission could not be verified.");
                 return 3;
             }
@@ -160,8 +167,16 @@ internal static class FirewallSetup
             conflict = exitCode == 4;
             // Verify the ACTUAL shape and ACL owner, not name/port existence: a rule
             // the migration failed to rewrite must not pass here (round-8).
-            if (exitCode != 0 || !RulesHaveCurrentShape() || !UrlAclNamesCurrentUser())
+            LastReadFailed = false;
+            var verified = RulesHaveCurrentShape() && UrlAclNamesCurrentUser();
+            if (exitCode != 0 || !verified)
+            {
+                if (LastReadFailed)
+                    // Elevation cannot fix an unreadable firewall/ACL API: say so, and
+                    // do NOT re-elevate or retry in a loop (round-9 N9-8).
+                    NoteDialog.Show(null, "Windows Firewall settings could not be read on this PC, so setup cannot check its own work. Zephyr VLC Remote will close now; a restart of Windows usually fixes the read.");
                 throw new InvalidOperationException("Setup could not be verified.");
+            }
             return true;
         }
         catch
@@ -169,9 +184,10 @@ internal static class FirewallSetup
             if (conflict)
                 NoteDialog.Show(null,
                     "Something else on this PC has already reserved the network port Zephyr VLC Remote needs (" + Program.HttpPort + "), and it is not one of ours, so setup stopped without changing it. Zephyr VLC Remote will close now; freeing that port needs whoever manages this PC.");
-            else
+            else if (!LastReadFailed)
                 // The user said no at the UAC prompt, or setup failed partway. Say what is
                 // true in every case: setup did not finish (rules may or may not exist).
+                // A read failure already said its own plainer note above (round-9 N9-8).
                 NoteDialog.Show(null,
                     "Setup did not finish, so the phone cannot reach this PC yet. Zephyr VLC Remote will now close and offer to set up again next time you open it.");
             return false;
@@ -183,7 +199,12 @@ internal static class FirewallSetup
     /// text, which is localized and made the old text parse re-ask for setup on every
     /// launch on a non-English PC (round-8 N-1).</summary>
     internal sealed record RuleShape(string Name, int Protocol, string LocalPorts, int Direction,
-        bool Enabled, int Profiles, string RemoteAddresses, string ApplicationName);
+        bool Enabled, int Profiles, string RemoteAddresses, string ApplicationName, int Action);
+
+    /// <summary>True when the last firewall/ACL READ failed at the API level (distinct
+    /// from "read fine, not ours"): the user gets a plain could-not-read note and setup
+    /// does NOT re-elevate, because admin cannot fix an unreadable API (round-9 N9-8).</summary>
+    internal static bool LastReadFailed;
 
     /// <summary>All rules carrying any of [names], via the firewall COM API. Null when
     /// the API itself failed (treated as "not current" - setup is re-offered, never skipped).</summary>
@@ -192,7 +213,7 @@ internal static class FirewallSetup
         try
         {
             var policyType = Type.GetTypeFromProgID("HNetCfg.FwPolicy2");
-            if (policyType == null) return null;
+            if (policyType == null) { LastReadFailed = true; return null; }
             dynamic policy = Activator.CreateInstance(policyType)!;
             var list = new List<RuleShape>();
             foreach (dynamic r in policy.Rules)
@@ -208,12 +229,14 @@ internal static class FirewallSetup
                     (bool)r.Enabled,
                     (int)r.Profiles,
                     (string)(r.RemoteAddresses ?? "") ?? "",
-                    (string)(r.ApplicationName ?? "") ?? ""));
+                    (string)(r.ApplicationName ?? "") ?? "",
+                    (int)r.Action));
             }
             return list;
         }
         catch (Exception ex)
         {
+            LastReadFailed = true;
             Program.Log("firewall shape check: the Windows Firewall API could not be read (" + ex.GetType().Name + "); treating setup as not done.");
             return null;
         }
@@ -225,6 +248,7 @@ internal static class FirewallSetup
     internal static bool RuleMatches(RuleShape r, int protocol, int port, string program)
     {
         if (r.Protocol != protocol) return false;
+        if (r.Action != 1) return false; // NET_FW_ACTION_ALLOW - a same-named BLOCK rule is not our shape (round-9 N9-4)
         if (r.Direction != 1 || !r.Enabled) return false; // NET_FW_RULE_DIR_IN
         if (r.Profiles != 2) return false;                // NET_FW_PROFILE2_PRIVATE only
         if (!string.Equals(r.RemoteAddresses.Trim(), "LocalSubnet", StringComparison.OrdinalIgnoreCase)) return false;
@@ -264,21 +288,89 @@ internal static class FirewallSetup
         return sid != null && UrlAclNamesUser(sid);
     }
 
-    /// <summary>Who the port's URL reservation belongs to: us (an exact per-user grant
+    /// <summary>The port's reservation record straight from http.sys (typed API, no
+    /// netsh display text - the "SDDL:" label is localized and a regex on it fails
+    /// OPEN; round-9 N9-3). Found=false: no reservation for the exact URL. Sddl null
+    /// on any read error: existing-but-unreadable, i.e. Foreign - we never delete
+    /// what we cannot read.</summary>
+    private static (bool Found, string? Sddl) QueryUrlAcl(string urlPrefix)
+    {
+        var query = new HttpServiceConfigUrlAclQuery
+        {
+            KeyDesc = new HttpServiceConfigUrlAclKey { UrlPrefix = urlPrefix },
+        };
+        var outSize = System.Runtime.InteropServices.Marshal.SizeOf<HttpServiceConfigUrlAclSet>();
+        var buf = System.Runtime.InteropServices.Marshal.AllocHGlobal(outSize);
+        try
+        {
+            uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
+                ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize, IntPtr.Zero);
+            if (rc == ErrorNotFound) return (false, null);
+            if (rc != 0)
+            {
+                LastReadFailed = true;
+                Program.Log("urlacl query failed (win32 " + rc + "); treating the reservation as unreadable/foreign.");
+                return (true, null);
+            }
+            var set = System.Runtime.InteropServices.Marshal.PtrToStructure<HttpServiceConfigUrlAclSet>(buf);
+            return (true, set.Param.StringSecurityDescriptor);
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or System.Runtime.InteropServices.MarshalDirectiveException)
+        {
+            LastReadFailed = true;
+            return (true, null);
+        }
+        finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buf); }
+    }
+
+    private const int HttpServiceConfigUrlAclQueryId = 2; // HttpServiceConfigUrlAclQuery
+    private const uint ErrorNotFound = 1168;
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct HttpServiceConfigUrlAclKey
+    {
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
+        public string UrlPrefix;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct HttpServiceConfigUrlAclQuery
+    {
+        public HttpServiceConfigUrlAclKey KeyDesc;
+        public int Token;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct HttpServiceConfigUrlAclParam
+    {
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)]
+        public string StringSecurityDescriptor;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    private struct HttpServiceConfigUrlAclSet
+    {
+        public HttpServiceConfigUrlAclKey KeyDesc;
+        public HttpServiceConfigUrlAclParam Param;
+    }
+
+    [System.Runtime.InteropServices.DllImport("httpapi.dll", ExactSpelling = true)]
+    private static extern uint HttpQueryServiceConfiguration(IntPtr serviceHandle, int configId,
+        ref HttpServiceConfigUrlAclQuery input, int inputLength, IntPtr output, int outputLength, IntPtr overlapped);
+
+    /// <summary>Pure classification of one reservation SDDL: us (an exact per-user grant
     /// for [sid]), a legacy broad grant our 1.x builds wrote (Everyone, nothing else),
     /// nobody, or something else - another app or another Windows user, which must
-    /// never be overwritten. Both sides are compared through parsed security
-    /// descriptors: netsh normalizes well-known accounts to SDDL aliases when STORING
-    /// (RID-500 admin comes back "LA", Everyone "WD"), so substring checks mislead.</summary>
-    internal static AclOwnership ClassifyUrlAcl(string? sid)
+    /// never be overwritten. EXACT whole-descriptor equality on both sides: a multi-ACE
+    /// descriptor that merely CONTAINS our user or an Everyone ACE is foreign (round-9
+    /// T4), and SDDL aliases (WD, LA, SY) normalize through the parser, never substrings.</summary>
+    internal static AclOwnership ClassifySddl(string? sddl, string? sid)
     {
-        var block = UrlAclBlock();
-        var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
-        if (!m.Success) return AclOwnership.None;
+        if (string.IsNullOrWhiteSpace(sddl)) return AclOwnership.Foreign;
         string normalized;
         try
         {
-            normalized = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
+            normalized = new System.Security.AccessControl.RawSecurityDescriptor(sddl)
                 .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
         }
         catch { return AclOwnership.Foreign; }
@@ -300,6 +392,17 @@ internal static class FirewallSetup
         }
         catch { }
         return AclOwnership.Foreign;
+    }
+
+    /// <summary>Classifies the port's LIVE reservation. A reservation that exists but
+    /// cannot be read or parsed is Foreign, never None (round-9 N9-3: the netsh-text
+    /// version returned None on an unparsed block and setup would have DELETED a
+    /// reservation it could not read).</summary>
+    internal static AclOwnership ClassifyUrlAcl(string? sid)
+    {
+        var (found, sddl) = QueryUrlAcl("http://+:" + Program.HttpPort + "/");
+        if (!found) return AclOwnership.None;
+        return ClassifySddl(sddl, sid);
     }
 
     private static string VlcInventoryPath(string? dataDir = null) =>
@@ -367,7 +470,6 @@ internal static class FirewallSetup
     /// be shared, and only the ownership marker proves it ours.</summary>
     public static int RemoveElevated(string? userSid)
     {
-        Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
         string? sid = null;
         if (!string.IsNullOrWhiteSpace(userSid))
         {
@@ -382,64 +484,35 @@ internal static class FirewallSetup
             Console.Error.WriteLine("The uninstalling user's account could not be determined, so the listen permission on " + Program.HttpPort + " was left in place.");
             return 0;
         }
+        // Classify the reservation BEFORE touching any rule (round-9 N9-5): when it is
+        // another app's or another Windows user's, their install likely owns the
+        // machine-wide rules too - deleting the rules out from under them would break
+        // their copy, so nothing is touched.
         var owner = ClassifyUrlAcl(sid);
+        if (owner == AclOwnership.Foreign)
+        {
+            Console.Error.WriteLine("The listen permission on " + Program.HttpPort + " belongs to another app or Windows user; the firewall rules were left in place too.");
+            return 0;
+        }
+        Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
         if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
             Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
-        else if (owner == AclOwnership.Foreign)
-            Console.Error.WriteLine("The listen permission on " + Program.HttpPort + " belongs to another app or Windows user; left in place.");
         return 0;
     }
 
     internal static bool UrlAclExists()
     {
-        var psi = new ProcessStartInfo("netsh", "http show urlacl")
-        {
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        using var p = Process.Start(psi)!;
-        var output = p.StandardOutput.ReadToEnd();
-        p.WaitForExit();
-        return output.Contains(":" + Program.HttpPort + "/");
+        return QueryUrlAcl("http://+:" + Program.HttpPort + "/").Found;
     }
 
-    /// <summary>True when the port's reservation SDDL names this SID. netsh normalizes
-    /// well-known accounts to SDDL aliases when STORING the reservation (the runner's
-    /// RID-500 admin comes back as "LA", Everyone as "WD"), so a substring match on the
-    /// raw SID misses correct reservations; both sides are compared through a parsed
-    /// security descriptor instead.</summary>
+    /// <summary>True when the port's reservation is EXACTLY a per-user grant for this
+    /// SID, via the typed query + normalized whole-descriptor equality. A substring is
+    /// never enough (round-9 T4: ...-1001 vs ...-10012, multi-ACE descriptors).</summary>
     internal static bool UrlAclNamesUser(string sid)
     {
-        var block = UrlAclBlock();
-        var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
-        if (!m.Success) return false;
-        try
-        {
-            var actual = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
-                .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
-            var expected = new System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;" + sid + ")")
-                .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
-            return actual == expected;
-        }
-        catch { return block.Contains(sid); }
+        return ClassifyUrlAcl(sid) == AclOwnership.Ours;
     }
 
-    private static string UrlAclBlock()
-    {
-        var psi = new ProcessStartInfo("netsh", "http show urlacl")
-        {
-            RedirectStandardOutput = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        using var p = Process.Start(psi)!;
-        var output = p.StandardOutput.ReadToEnd();
-        p.WaitForExit();
-        foreach (var block in output.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.None))
-            if (block.Contains(":" + Program.HttpPort + "/")) return block.Trim();
-        return "(no reservation for port " + Program.HttpPort + ")";
-    }
 
     internal static bool RuleExists()
     {
