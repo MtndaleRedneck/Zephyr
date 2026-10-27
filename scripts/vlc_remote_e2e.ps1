@@ -32,6 +32,12 @@ if (-not $setup) { throw "installer exe missing in helper/Output" }
 if ($LASTEXITCODE -ne 0) { throw "silent install failed with exit $LASTEXITCODE" }
 $installed = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\ZephyrVlcRemote.exe'
 Assert (Test-Path $installed) "per-user silent install lands in the installing user's profile"
+# The installer reopens the app after a silent install (for updates). On headless CI
+# that copy sits on the explained first-run elevation prompt holding the single-instance
+# mutex, so nothing else can bind 8492. Close it; the --install-firewall run below is
+# exactly what a real user reaches by clicking through that prompt.
+Start-Sleep -Seconds 2
+Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
 # The installer no longer touches the firewall (it runs unelevated by design): the
 # app's explained first-run elevation owns the rules.
 $rule0 = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String
@@ -48,6 +54,7 @@ Assert ($acl0 -match ':8492/') "elevated setup adds the listen permission"
 # so ZEPHYR_VLC_REMOTE_PAIR_CODE must NOT produce a working pairing.
 $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
 Remove-Item (Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote') -Recurse -Force -ErrorAction SilentlyContinue
+Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
 $pClean = Start-Process $installed -PassThru
 $up = $false
 foreach ($i in 1..40) {

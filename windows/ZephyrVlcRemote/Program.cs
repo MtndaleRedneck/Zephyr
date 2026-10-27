@@ -391,16 +391,14 @@ internal static class Program
     {
         phones = new List<PairedPhone>();
         unreadableName = null;
-        string? failName = null; bool failed = false;
-        bool Fail(string? name) { failName = name; failed = true; return false; }
         if (root.TryGetProperty("phones", out var ps))
             foreach (var p in ps.EnumerateArray())
             {
                 var traw = p.TryGetProperty("token", out var pt) ? pt.GetString() : null;
                 var n = p.TryGetProperty("name", out var pn) ? pn.GetString() : null;
-                if (traw == null) return Fail(n);
+                if (traw == null) { unreadableName = n; return false; }
                 var tok = Dpapi.Unwrap(traw);
-                if (tok == null) return Fail(n);
+                if (tok == null) { unreadableName = n; return false; }
                 var spent = p.TryGetProperty("adoptSpent", out var asp) && asp.GetBoolean();
                 string? adoptReq = p.TryGetProperty("adoptRequestId", out var ari) ? ari.GetString() : null;
                 DateTime? adoptAt = null;
@@ -414,9 +412,9 @@ internal static class Program
             foreach (var el in ts.EnumerateArray())
             {
                 var vraw = el.GetString();
-                if (vraw == null) return Fail(null);
+                if (vraw == null) return false;
                 var v = Dpapi.Unwrap(vraw);
-                if (v == null) return Fail(null);
+                if (v == null) return false;
                 phones.Add(new PairedPhone { Token = v, Name = "Phone " + (phones.Count + 1) });
             }
         // 1.0/1.1 configs stored one token; keep that phone paired.
@@ -426,12 +424,11 @@ internal static class Program
             if (vraw != null)
             {
                 var v = Dpapi.Unwrap(vraw);
-                if (v == null) return Fail(null);
+                if (v == null) return false;
                 phones.Add(new PairedPhone { Token = v, Name = "Phone 1" });
             }
         }
-        if (failed) unreadableName = failName;
-        return !failed;
+        return true;
     }
 
     internal static void LoadConfig()
