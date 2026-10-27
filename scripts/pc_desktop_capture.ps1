@@ -172,9 +172,11 @@ $mp4 = "$env:RUNNER_TEMP/clip.mp4"
 & $ffmpeg -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
 
 # Populated-grid evidence: distinct REAL bitmaps per tile, fed through the app's
-# ZEPHYR_THUMB_FIXTURE_DIR evidence seam (the Server-SKU runner has no shell
-# video thumbnail extractor - the probe below documents that). Filenames match
-# the library entries below: "<entry name>.png".
+# ZEPHYR_THUMB_FIXTURE_DIR evidence seam. Whether THIS runner's shell can produce
+# real video thumbnails is OPEN: the earlier probe passed a forward-slash path and
+# a zero size (E_INVALIDARG), so its "factory-unavailable" said nothing about
+# handler support. The fixed probe below reports each stage's own HRESULT.
+# Filenames match the library entries below: "<entry name>.png".
 $thumbDir = Join-Path $env:RUNNER_TEMP 'thumb-fixture'
 New-Item -ItemType Directory -Force $thumbDir | Out-Null
 & $ffmpeg -y -f lavfi -i "testsrc=duration=1:size=256x256:rate=1" -frames:v 1 (Join-Path $thumbDir 'Kids.png') 2>$null
@@ -190,22 +192,26 @@ using System.Runtime.InteropServices;
 public static class ThumbProbe {
     [ComImport, Guid("bcc18b79-ba16-442f-80c4-8a59c393c463"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IShellItemImageFactory { void GetImage(SIZE size, int flags, out IntPtr phbm); }
-    [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx; public int cy; }
     [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
     private static extern int SHCreateItemFromParsingName([MarshalAs(UnmanagedType.LPWStr)] string path, IntPtr pbc, [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItemImageFactory f);
+    [StructLayout(LayoutKind.Sequential)] private struct SIZE { public int cx; public int cy; public SIZE(int x, int y) { cx = x; cy = y; } }
     public static string Probe(string path) {
+        // Diagnosis after hr=-2147024809 (E_INVALIDARG): the probe used to pass a
+        // FORWARD-SLASH path and a ZERO size - both are argument errors, not proof
+        // of a missing shell handler. Report each stage's own HRESULT.
         try {
             IShellItemImageFactory f;
             var hr = SHCreateItemFromParsingName(path, IntPtr.Zero, new Guid("bcc18b79-ba16-442f-80c4-8a59c393c463"), out f);
-            if (hr != 0 || f == null) return "factory-unavailable hr=" + hr;
+            if (hr != 0 || f == null) return "factory-unavailable hr=" + hr + " path=" + path;
             IntPtr h = IntPtr.Zero;
-            f.GetImage(new SIZE(), 0x08, out h); // THUMBNAILONLY
+            try { f.GetImage(new SIZE(256, 256), 0x08, out h); } // THUMBNAILONLY
+            catch (Exception ex) { return "getimage-error: " + ex.GetType().Name; }
             return h == IntPtr.Zero ? "null (no thumbnail handler on this runner)" : "bitmap-produced";
         } catch (Exception ex) { return "error: " + ex.GetType().Name; }
     }
 }
 "@ -PassThru
-$probeResult = [ThumbProbe]::Probe($mp4)
+$probeResult = [ThumbProbe]::Probe((Join-Path $env:RUNNER_TEMP 'clip.mp4'))
 Write-Output "SHELL_THUMB_PROBE: $probeResult"
 
 $srv = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER_TEMP","8901" -PassThru -WindowStyle Hidden
@@ -318,6 +324,29 @@ $tbmp.Save("$env:RUNNER_TEMP/pc-tray-menu.png")
 $tg.Dispose(); $tbmp.Dispose()
 Stop-Process -Id $pIcon.Id -Force -ErrorAction SilentlyContinue
 StopZephyr
+
+# 2d) PHONE-START BAR PROOF (Tab evidence ask): playback is started and paused over
+# real HTTP with the CI token - NO mouse events at all. The bar must show on start,
+# hide on its own ~3s timer while playing, and stay while paused.
+$pBar = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
+$hwBar = Wait-MainWindow $pBar 15
+FitWindow $hwBar
+Start-Sleep -Seconds 1
+$hdr = @{ Authorization = "Bearer ci-capture-token" }
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') | Out-Null
+Start-Sleep -Seconds 2
+$szBar1 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
+$szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+# Paused keeps the bar: the phone's pause must reveal/hold controls without a mouse.
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+Start-Sleep -Milliseconds 700
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+Start-Sleep -Seconds 5   # well past the idle timer: a paused movie never loses the bar
+$szBar3 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-paused.png"
+StopZephyr
+Write-Host "phone-start bar captures: $szBar1 / $szBar2 / $szBar3"
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
 $p3 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru

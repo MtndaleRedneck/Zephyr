@@ -236,7 +236,11 @@ fun SettingsScreen(
 
         SettingsSection("Phone can't connect?") {
             Text(
-                "Open Zephyr VLC Remote on the PC and tap \u201CThis is my home Wi-Fi\u201D.",
+                // Per source (S3): the tip names the app you actually use.
+                if (store.selectedSource == Source.ZEPHYR)
+                    "Open Zephyr Player on the PC and check both are on the same Wi-Fi."
+                else
+                    "Open Zephyr VLC Remote on the PC and tap \u201CThis is my home Wi-Fi\u201D.",
                 color = TextC, fontSize = 14.sp,
             )
         }
@@ -291,7 +295,7 @@ fun SettingsScreen(
                                 result = "Version " + outcome.info.versionName + " is available."
                                 ManualUpdate.offer = outcome.info
                             }
-                            Updater.CheckOutcome.NoRelease -> result = "No published Android release available yet."
+                            Updater.CheckOutcome.NoRelease -> result = "No update is available right now."
                             Updater.CheckOutcome.UpToDate -> result = "You're up to date."
                             Updater.CheckOutcome.Unavailable -> result = "Couldn't check right now. Try again later."
                         }

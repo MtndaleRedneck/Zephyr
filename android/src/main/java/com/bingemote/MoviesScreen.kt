@@ -335,7 +335,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
                 if (zephyrFolder == null) zephyrFolder = ZephyrClient.libraryFolder(zHost, remote.store.zephyrPort, remote.store.zephyrToken)
                 val folder = zephyrFolder.orEmpty().trimEnd('\\')
-                if (folder.isBlank()) throw java.io.IOException("No movies folder picked on the Zephyr Player yet.")
+                if (folder.isBlank()) throw java.io.IOException("No movies folder picked on the PC yet - pick one in the player Settings.")
                 val abs = (folder + "\\" + rel).replace('\\', '/')
                 val uri = "file:///" + android.net.Uri.encode(abs, "/:")
                 ZephyrClient.play(zHost, remote.store.zephyrPort, remote.store.zephyrToken, uri, emptyList())
