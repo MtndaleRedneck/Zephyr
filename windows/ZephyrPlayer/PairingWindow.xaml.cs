@@ -9,7 +9,7 @@ namespace ZephyrPlayer
 {
     /// <summary>
     /// The pairing surface (owner-approved look): "Pair new phone" with a live
-    /// code + countdown that RENEWS ITSELF before expiry (today's code silently
+    /// code + countdown that renews before expiry (the pre-1.2 code silently
     /// dies after 10 minutes and Settings clobbers it), "This PC:" address for
     /// manual entry, the paired-phones list with Remove, and a status row for
     /// discovery / public-Wi-Fi findings. One instance, owned by App; the
@@ -22,8 +22,9 @@ namespace ZephyrPlayer
         private readonly PairedStore _store;
         private readonly Action<string> _pairStarted;
         private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromSeconds(1) };
+        private readonly Action _connChanged;
         private static readonly SolidColorBrush OkGreen = new(Color.FromRgb(0x4C, 0xAF, 0x50));
-        private static readonly SolidColorBrush WarnOrange = new(Color.FromRgb(0xFF, 0x95, 0x00));
+        private static readonly SolidColorBrush WarnOrange = new(Brand.Orange);
 
         /// <param name="pairStarted">Called with the phone name at every code mint;
         /// App attaches it to the token when that code pairs.</param>
@@ -38,16 +39,17 @@ namespace ZephyrPlayer
             _tick.Tick += (_, __) => TickCountdown();
             Loaded += (_, __) =>
             {
-                var ip = ConnectionState.PrimaryIPv4();
-                ThisPcText.Text = ip != null ? "This PC: " + ip : "This PC: address unavailable";
-                if (!_gate.HasActiveCode) Mint();
+                // Always a fresh code on open (review N2): no blank code with a running
+                // countdown, and closing cancels the code so none sits unseen (Closed below).
+                Mint();
                 ShowCode();
                 RefreshPhones();
                 RefreshStatus();
                 _tick.Start();
             };
-            ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
-            Closed += (_, __) => _tick.Stop();
+            _connChanged = () => Dispatcher.InvokeAsync(RefreshStatus);
+            ConnectionState.Changed += _connChanged;
+            Closed += (_, __) => { _tick.Stop(); _gate.CancelCode(); ConnectionState.Changed -= _connChanged; };
         }
 
         private void OnPhoneNameChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -77,7 +79,9 @@ namespace ZephyrPlayer
 
         private void OnPair(object sender, RoutedEventArgs e)
         {
-            Mint();
+            // Never quietly swap a code the phone may already be typing (name/Pair flow):
+            // mint only when no code is live; the name box edits the pending name live.
+            if (!_gate.HasActiveCode) Mint();
             ShowCode();
         }
 
@@ -92,7 +96,14 @@ namespace ZephyrPlayer
         {
             if (!_codeShowing) return; // cancelled / paired: stay in the name + Pair state
             var left = _gate.CodeTimeLeft;
-            if (left == null || left.Value <= TimeSpan.FromSeconds(2))
+            if (left == null)
+            {
+                // Spent by a successful pair or cancelled: never mint a hidden code (N4b).
+                _codeShowing = false;
+                CodePanel.Visibility = System.Windows.Visibility.Collapsed;
+                return;
+            }
+            if (left.Value <= TimeSpan.FromSeconds(2))
             {
                 // Renew just BEFORE the old one dies, so the phone never meets a dead code.
                 Mint();
@@ -129,6 +140,8 @@ namespace ZephyrPlayer
 
         private void RefreshStatus()
         {
+            var ip = ConnectionState.PrimaryIPv4();
+            ThisPcText.Text = ip != null ? "This PC: " + ip : "This PC: address unavailable";
             if (ConnectionState.DiscoveryOff)
             {
                 StatusDot.Fill = WarnOrange;

@@ -33,6 +33,7 @@ namespace ZephyrPlayer
             _settings = settings;
             _store = store;
             _openPairing = openPairing;
+            _store.Changed += OnStoreChanged;
             UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
             _updateStatusTimer.Tick += (_, __) =>
             {
@@ -44,7 +45,7 @@ namespace ZephyrPlayer
             };
             NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
             Loaded += (_, __) => _updateStatusTimer.Start();
-            Closed += (_, __) => _updateStatusTimer.Stop();
+            Closed += (_, __) => { _updateStatusTimer.Stop(); _store.Changed -= OnStoreChanged; };
             WireSections();
             Refresh();
         }
@@ -84,6 +85,8 @@ namespace ZephyrPlayer
             }
             SectionTitle.Text = _sections[key].Title;
         }
+
+        private void OnStoreChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(Refresh);
 
         private void Refresh()
         {

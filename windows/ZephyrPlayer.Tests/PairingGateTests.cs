@@ -37,6 +37,30 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void Renewal_Keeps_Previous_Code_Alive_For_A_Short_Grace()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            var first = gate.NewCode();
+            var second = gate.NewCode(); // the renewal re-mint
+            Assert.NotEqual(first, second);
+            // A code typed from just before the flip still pairs - no wrong-guess strike.
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(first, 1, () => "t", out _));
+        }
+
+        [Fact]
+        public void Previous_Code_Dies_After_The_Grace()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            var first = gate.NewCode();
+            gate.NewCode();
+            now += TimeSpan.FromSeconds(31);
+            Assert.Equal(PairOutcome.BadCode, gate.TryPair(first, 1, () => "t", out _));
+            Assert.False(gate.Locked); // one wrong guess counts, but a single one never locks
+        }
+
+        [Fact]
         public void Lock_Runs_Out_After_LockDuration()
         {
             var now = DateTime.UtcNow;

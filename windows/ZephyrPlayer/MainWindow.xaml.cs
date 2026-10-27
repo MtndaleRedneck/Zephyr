@@ -12,7 +12,7 @@ namespace ZephyrPlayer
     public partial class MainWindow : Window
     {
         private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
-        private static readonly SolidColorBrush Orange = new(Color.FromRgb(0xFF, 0x95, 0x00));
+        private static readonly SolidColorBrush Orange = new(Brand.Orange);
         private static readonly SolidColorBrush Gold = new(Color.FromRgb(0xF0, 0xC2, 0x3E));
         private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));
         private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x1B, 0x1B, 0x1E));
@@ -314,9 +314,10 @@ namespace ZephyrPlayer
 
         public bool IsFullscreen => WindowStyle == WindowStyle.None;
 
-        /// <summary>Media actively loaded (playing or paused) - tray/relaunch restore
-        /// surfaces this window instead of Home while a movie is in progress.</summary>
-        public bool IsPlayingMedia => _player.Media != null;
+        /// <summary>A movie actually in progress (playing or paused) - tray/relaunch
+        /// restore surfaces this window instead of Home. A stopped or ended player
+        /// restores Home, not a dead black frame.</summary>
+        public bool IsPlayingMedia => _player.State is VLCState.Playing or VLCState.Paused or VLCState.Buffering or VLCState.Opening;
 
         public void SetFullscreen(bool on)
         {
