@@ -338,6 +338,10 @@ internal static class FirewallSetup
                         LastReadFailed = true;
                         return (true, null);
                     }
+                    // No matching record: ERROR_FILE_NOT_FOUND (2) ONLY - proven
+                    // by gate 40511800617 (absent plant returned win32 2). Every
+                    // other nonzero code is a READ error, i.e. foreign (N9-3, B10-1).
+                    if (rc == ErrorFileNotFound) return (false, null);
                     if (rc != 0)
                     {
                         LastReadFailed = true;
