@@ -1,0 +1,121 @@
+using System;
+using System.Diagnostics;
+using System.Threading.Tasks;
+
+namespace ZephyrPlayer
+{
+    /// <summary>The network profile of the adapter the phone's traffic actually arrives on.</summary>
+    internal sealed class NetProfile
+    {
+        public string Name = "";
+        public string Category = "";
+        public int InterfaceIndex;
+    }
+
+    /// <summary>
+    /// Public-Wi-Fi detection, ported from the BingeMote helper's NetworkCheck.
+    /// The installer's firewall rules are Private-networks-only (the right
+    /// posture); when Windows thinks the Wi-Fi is "Public", the phone is
+    /// silently blocked. Zephyr Player surfaces that as a NOTICE ONLY (owner's
+    /// settled decision: no button that changes Windows settings).
+    /// </summary>
+    internal static class NetworkCheck
+    {
+        /// <summary>
+        /// The profile of the adapter that owns the default IPv4 route, so a VPN
+        /// or second adapter doesn't trip the warning. Null when it can't be
+        /// determined. Never throws.
+        /// </summary>
+        public static NetProfile? DefaultRouteProfile()
+        {
+            try
+            {
+                var psi = new ProcessStartInfo("powershell",
+                    "-NoProfile -NonInteractive -Command \"$i=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; $p=Get-NetConnectionProfile -InterfaceIndex $i -ErrorAction SilentlyContinue; if ($p) { \"$($p.Name)|$($p.NetworkCategory)|$($p.InterfaceIndex)\" }\"")
+                {
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                using var p = Process.Start(psi)!;
+                // Wait first, read after: reading before the timeout would hang
+                // forever on a stuck PowerShell.
+                if (!p.WaitForExit(15000))
+                {
+                    try { p.Kill(); } catch { }
+                    return null;
+                }
+                var output = p.StandardOutput.ReadToEnd().Trim();
+                var parts = output.Split('|');
+                if (parts.Length != 3 || !int.TryParse(parts[2], out var idx)) return null;
+                return new NetProfile { Name = parts[0], Category = parts[1], InterfaceIndex = idx };
+            }
+            catch { return null; }
+        }
+
+        /// <summary>Probe the active network; when it is Public, hand it to [show].
+        /// Runs on a background thread; [show] marshals. Never throws.</summary>
+        public static void CheckNow(Action<NetProfile> show)
+        {
+            Task.Run(() =>
+            {
+                NetProfile? p = null;
+                try { p = DefaultRouteProfile(); } catch { }
+                if (p == null || !p.Category.Equals("Public", StringComparison.OrdinalIgnoreCase)) return;
+                try { show(p); } catch { }
+            });
+        }
+
+        private static readonly object Gate = new();
+        private static bool _queued;
+
+        /// <summary>Network changes arrive in bursts; probe once, three seconds after the first of a burst.</summary>
+        public static void QueueCheck(Action<NetProfile> show)
+        {
+            lock (Gate)
+            {
+                if (_queued) return;
+                _queued = true;
+            }
+            Task.Run(async () =>
+            {
+                await Task.Delay(3000);
+                lock (Gate) _queued = false;
+                CheckNow(show);
+            });
+        }
+    }
+}
+
+namespace ZephyrPlayer
+{
+    /// <summary>Latest connection findings, surfaced on the Home status strip and
+    /// the Pairing screen's status row. Written once at launch and on network
+    /// changes; read on the UI thread.</summary>
+    internal static class ConnectionState
+    {
+        /// <summary>The own discovery port (8490) could not be bound.</summary>
+        public static volatile bool DiscoveryOff;
+
+        /// <summary>The Wi-Fi name when Windows treats it as Public (notice-only), else null.</summary>
+        public static volatile string? PublicWifiName;
+
+        /// <summary>This PC's primary LAN IPv4 (shown on the Pairing screen), else null.</summary>
+        public static string? PrimaryIPv4()
+        {
+            try
+            {
+                foreach (var a in System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName()))
+                    if (a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+                        && !System.Net.IPAddress.IsLoopback(a))
+                    {
+                        var b = a.GetAddressBytes();
+                        if (b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254))
+                            return a.ToString();
+                    }
+            }
+            catch { }
+            return null;
+        }
+    }
+}

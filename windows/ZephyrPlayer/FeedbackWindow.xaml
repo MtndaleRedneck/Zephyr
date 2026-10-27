@@ -45,7 +45,10 @@
             </StackPanel>
         </Border>
         <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right">
-            <Button Style="{StaticResource OrangeButton}" Content="Open feedback form" Click="OnForm" Margin="0,0,10,0"/>
+            <TextBlock x:Name="FormNote" Text="The feedback form is being linked - use the GitHub issue for now."
+                       Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center"
+                       Visibility="Collapsed" Margin="0,0,10,0"/>
+            <Button x:Name="FormButton" Style="{StaticResource OrangeButton}" Content="Open feedback form" Click="OnForm" Margin="0,0,10,0"/>
             <Button Style="{StaticResource OrangeButton}" Content="Open GitHub issue" Click="OnIssue"/>
         </StackPanel>
     </Grid>

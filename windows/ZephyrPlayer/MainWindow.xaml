@@ -9,14 +9,6 @@
     <libvlc:VideoView x:Name="Video">
         <libvlc:VideoView.Content>
             <Grid x:Name="Overlay" Background="Transparent" MouseMove="OnMouseMove">
-                <Border x:Name="PairBanner" x:FieldModifier="public" Visibility="Collapsed"
-                        VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,24,0,0"
-                        Background="#CC202124" CornerRadius="12" Padding="16,10">
-                    <StackPanel>
-                        <TextBlock Text="Pair with your phone" Foreground="White" HorizontalAlignment="Center"/>
-                        <TextBlock x:Name="PairCodeText" x:FieldModifier="public" Text="" Foreground="#F0C23E" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,4,0,0"/>
-                    </StackPanel>
-                </Border>
                 <Border x:Name="ControlBar" x:FieldModifier="public"
                         VerticalAlignment="Bottom" Margin="24"
                         Padding="16,10" CornerRadius="12"

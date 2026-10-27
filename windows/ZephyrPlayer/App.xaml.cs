@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using LibVLCSharp.Shared;
@@ -10,10 +11,19 @@ namespace ZephyrPlayer
         private PlaybackServer? _server;
         private DiscoveryResponder? _discovery;
         private System.Threading.Mutex? _singleInstance;
+        private EventWaitHandle? _restoreSignal;
+        private TrayService? _tray;
         private MainWindow? _player;
         private HomeWindow? _home;
+        private PairingWindow? _pairing;
         private LibVLC? _libvlc;
         private MediaPlayer? _mediaPlayer;
+        private PairingGate? _gate;
+        private PairedStore? _store;
+        private PlayerSettings? _settings;
+        private bool _reallyQuit;
+        private bool _trayHintShown;
+        private string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
         // unique AppUserModelID (taskbar pinning) and single-instance mutex name.
@@ -27,28 +37,59 @@ namespace ZephyrPlayer
             _singleInstance = new System.Threading.Mutex(true, "ZephyrPlayer", out bool createdNew);
             if (!createdNew)
             {
-                // Already running: hand off quietly instead of doubling the listener.
+                // Already running: wake the first instance's window (settled tray
+                // behavior: relaunching ALWAYS restores) and hand off quietly.
+                try
+                {
+                    if (EventWaitHandle.TryOpenExisting("ZephyrPlayer.Restore", out var signal))
+                        signal.Set();
+                }
+                catch { }
                 Shutdown();
                 return;
             }
+            // Windows never exit on their own anymore: closing hides to the tray,
+            // and only the tray's Quit (or the updater) shuts the app down.
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            _restoreSignal = new EventWaitHandle(false, EventResetMode.AutoReset, "ZephyrPlayer.Restore");
+            var restoreListener = new Thread(() =>
+            {
+                while (true)
+                {
+                    try { _restoreSignal.WaitOne(); }
+                    catch { return; }
+                    if (_reallyQuit) return;
+                    try { Dispatcher.InvokeAsync(RestoreApp); } catch { return; }
+                }
+            }) { IsBackground = true };
+            restoreListener.Start();
+
             Core.Initialize();
             var libvlc = new LibVLC();
             var player = new MediaPlayer(libvlc);
             var store = new PairedStore();
             var settings = new PlayerSettings();
             var gate = new PairingGate();
-
             _libvlc = libvlc;
             _mediaPlayer = player;
+            _store = store;
+            _settings = settings;
+            _gate = gate;
+
+            _tray = new TrayService();
+            _tray.OpenRequested += RestoreApp;
+            _tray.QuitRequested += QuitApp;
+
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
             _player.SleepFired += () =>
             {
                 _player.Hide();
-                if (_home != null) { _home.Show(); _home.Activate(); }
+                if (_home != null && !_reallyQuit) { _home.Show(); _home.Activate(); }
             };
             _player.Closing += (_, ev) =>
             {
+                if (_reallyQuit) return; // real shutdown: let the window die
                 // Player X never destroys the window: stop playback, hide it,
                 // and land back on Home, the app's resting screen.
                 ev.Cancel = true;
@@ -65,7 +106,20 @@ namespace ZephyrPlayer
                     _player!.Show();
                     _player!.PlayFromUrl(url, null, Array.Empty<string>());
                 },
-                newPairCode: () => gate.NewCode());
+                openPairing: ShowPairingWindow);
+            _home.Closing += (_, ev) =>
+            {
+                if (_reallyQuit) return; // real shutdown: let the window die
+                // Settled tray behavior: closing Home hides the app to the tray
+                // instead of exiting; the icon brings it back.
+                ev.Cancel = true;
+                _home.Hide();
+                if (!_trayHintShown)
+                {
+                    _trayHintShown = true;
+                    _tray.ShowStillRunningHint();
+                }
+            };
 
             // Pairing (protocol.md): the gate owns the code's lifetime, one-shot
             // spend, wrong-code lockout and the phone cap (helper pairing parity).
@@ -84,15 +138,18 @@ namespace ZephyrPlayer
                     var outcome = gate.TryPair(code, store.Count, () =>
                     {
                         var t = Guid.NewGuid().ToString("N");
-                        store.Add(t);
+                        // The name typed on the Pairing screen is attached to the
+                        // token the moment that code pairs.
+                        store.Add(t, _pendingPhoneName ?? "My phone");
+                        _pendingPhoneName = null;
                         return t;
                     }, out var token);
                     if (outcome == PairOutcome.Ok)
                     {
                         Current.Dispatcher.InvokeAsync(() =>
                         {
-                            _player?.HidePairBanner();
-                            _home?.HidePairBanner();
+                            _pairing?.OnPairSucceeded();
+                            _home?.Refresh();
                         });
                     }
                     return (outcome, token);
@@ -101,10 +158,19 @@ namespace ZephyrPlayer
                 control: new MainWindowPlaybackControl(_player, player),
                 settings: settings);
             _server.Start();
-            // "Find my PC" on the phone (same UDP broadcast as the helper, our
-            // own reply identity). Failure to bind only costs auto-discovery.
-            try { _discovery = new DiscoveryResponder(_server.Port); }
-            catch (Exception) { _discovery = null; }
+            // "Find my PC" on the phone: own discovery port (8490) plus a
+            // best-effort answer on the helper's 8489 for phones still on 1.1.0.
+            // A failed own-port bind surfaces in the UI instead of vanishing.
+            try { _discovery = new DiscoveryResponder(_server.Port); ConnectionState.DiscoveryOff = false; }
+            catch (Exception) { _discovery = null; ConnectionState.DiscoveryOff = true; }
+            // Public-Wi-Fi NOTICE (owner-settled: notice only, no Windows-setting
+            // changes): at launch and whenever the network changes.
+            NetworkCheck.CheckNow(_ => ConnectionState.PublicWifiName = _.Name);
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, __) =>
+            {
+                ConnectionState.PublicWifiName = null;
+                NetworkCheck.QueueCheck(p => ConnectionState.PublicWifiName = p.Name);
+            };
             // Auto-update check on launch. Missing releases and failures remain
             // distinct from a verified current published installer.
             _ = Task.Run(() =>
@@ -121,16 +187,20 @@ namespace ZephyrPlayer
                     UpdateState.Outcome = "failed: " + ex.GetType().Name;
                 }
             });
-            if (!store.HasAny) _home.ShowPairBanner(gate.NewCode());
+            if (!store.HasAny) ShowPairingWindow();
             _home.Show();
-            // CI evidence args (local only): --open-settings shows the settings
-            // modal over home; --play=<uri> starts local playback on the player.
+            // CI evidence args (local only): --open-settings / --open-pairing show
+            // those surfaces over home; --play=<uri> starts local playback.
             foreach (var arg in e.Args)
             {
                 if (arg == "--open-settings")
                 {
-                    var sw = new SettingsWindow(settings, store, () => gate.NewCode()) { Owner = _home };
+                    var sw = new SettingsWindow(settings, store, ShowPairingWindow) { Owner = _home };
                     sw.Show();
+                }
+                else if (arg == "--open-pairing")
+                {
+                    ShowPairingWindow();
                 }
                 else if (arg.StartsWith("--play=", StringComparison.Ordinal))
                 {
@@ -145,10 +215,52 @@ namespace ZephyrPlayer
 
         private void EnsurePlayer() { } // single player window for app lifetime (Closing is cancelled)
 
+        /// <summary>The one Pairing screen, shared by launch, Home and Settings:
+        /// every surface shows the SAME live gate.</summary>
+        public void ShowPairingWindow()
+        {
+            if (_pairing != null)
+            {
+                _pairing.Show();
+                _pairing.Activate();
+                return;
+            }
+            _pairing = new PairingWindow(_gate!, _store!, name => _pendingPhoneName = name)
+            {
+                Owner = _home,
+            };
+            _pairing.Closed += (_, __) => _pairing = null;
+            _pairing.Show();
+            _pairing.Activate();
+        }
+
+        /// <summary>Tray icon / relaunch restore: bring the resting screen back up.</summary>
+        private void RestoreApp()
+        {
+            if (_reallyQuit) return;
+            if (_home != null)
+            {
+                _home.Show();
+                _home.WindowState = WindowState.Normal;
+                _home.Activate();
+            }
+        }
+
+        private void QuitApp()
+        {
+            _reallyQuit = true;
+            try { _pairing?.Close(); } catch { }
+            try { _player?.Close(); } catch { }
+            try { _home?.Close(); } catch { }
+            Shutdown();
+        }
+
         protected override void OnExit(ExitEventArgs e)
         {
+            _tray?.Dispose();
             _discovery?.Dispose();
             _server?.Dispose();
+            _restoreSignal?.Dispose();
             base.OnExit(e);
         }
     }

@@ -150,19 +150,6 @@ namespace ZephyrPlayer
                 _player.Position = (float)(SeekBar.Value / 1000.0);
         }
 
-        /// <summary>Pairing scaffold UI (render approval pending like the rest of the
-        /// player chrome): show the active 6-digit code until a phone pairs.</summary>
-        public void ShowPairBanner(string code)
-        {
-            PairCodeText.Text = string.Join(" ", code.ToCharArray());
-            PairBanner.Visibility = Visibility.Visible;
-        }
-
-        public void HidePairBanner()
-        {
-            PairBanner.Visibility = Visibility.Collapsed;
-        }
-
         // ---------- play / pause / skips ----------
 
         private void OnPlayPause(object sender, RoutedEventArgs e)

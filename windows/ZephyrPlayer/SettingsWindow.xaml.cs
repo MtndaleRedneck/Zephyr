@@ -16,11 +16,11 @@ namespace ZephyrPlayer
     {
         private readonly PlayerSettings _settings;
         private readonly PairedStore _store;
-        private readonly Func<string> _newPairCode;
+        private readonly Action _openPairing;
         private (string Version, string ExeUrl, string? Sha256)? _updateOffer;
         private readonly System.Windows.Threading.DispatcherTimer _updateStatusTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
 
-        public SettingsWindow(PlayerSettings settings, PairedStore store, Func<string> newPairCode)
+        public SettingsWindow(PlayerSettings settings, PairedStore store, Action openPairing)
         {
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
@@ -28,8 +28,7 @@ namespace ZephyrPlayer
             MaxWidth = SystemParameters.WorkArea.Width;
             _settings = settings;
             _store = store;
-            _newPairCode = newPairCode;
-            VersionText.Text = "Zephyr Player " + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
+            _openPairing = openPairing;
             UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
             _updateStatusTimer.Tick += (_, __) =>
             {
@@ -57,6 +56,7 @@ namespace ZephyrPlayer
             PairStatusText.Text = _store.Count > 0
                 ? $"Paired with {_store.Count} phone{(_store.Count == 1 ? "" : "s")}."
                 : "Not paired yet.";
+            VersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
         }
 
         private static string SkipLabel(int seconds) => seconds >= 60 ? (seconds / 60) + "m" : seconds + "s";
@@ -101,8 +101,9 @@ namespace ZephyrPlayer
 
         private void OnPair(object sender, RoutedEventArgs e)
         {
-            var code = _newPairCode();
-            PairCodeText.Text = string.Join(" ", code.ToCharArray());
+            // One shared Pairing screen (the old button minted a code here that
+            // silently killed the code on Home - teardown pairing finding).
+            _openPairing();
         }
 
         private void OnCheckUpdates(object sender, RoutedEventArgs e)
