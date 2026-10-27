@@ -488,7 +488,7 @@ try {
     $clipFull = (Join-Path $movies 'clip.mkv')
     $resumeDir = Join-Path $env:APPDATA 'Zephyr VLC Remote'
     New-Item -ItemType Directory -Force $resumeDir | Out-Null
-    $resumeJson = '{"' + ($clipFull -replace '\','\') + '":{"Position":120.0,"Length":600.0}}'
+    $resumeJson = '{"' + ($clipFull -replace '\\','\\') + '":{"Position":120.0,"Length":600.0}}'
     Set-Content (Join-Path $resumeDir 'resume-places.json') $resumeJson -NoNewline
     Stop-Process -Id $p.Id -Force
     Start-Sleep -Seconds 1
