@@ -50,9 +50,22 @@ internal static class FirewallSetup
             var acl = Run("netsh", "http add urlacl url=http://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
             if (acl != 0 || !UrlAclExists())
             {
+                Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
                 Console.Error.WriteLine("The listen permission could not be added.");
                 return 3;
             }
+            // Verify the reservation really names the intended user, not just the port:
+            // a stale or differently-scoped reservation is the exact thing that leaves
+            // the System-attributed TCP rule guarded by the wrong account.
+            if (sid != null && !UrlAclNamesUser(sid))
+            {
+                Program.Log("firewall setup: the listen permission on " + Program.HttpPort +
+                    " does not name SID " + sid + " after setup. Actual reservation: " + UrlAclBlock());
+                Console.Error.WriteLine("The listen permission could not be verified.");
+                return 3;
+            }
+            Program.Log("firewall setup: rules added (TCP System/" + Program.HttpPort + ", UDP exe/" +
+                Program.DiscoveryPort + "), listen permission scoped to SID " + sid + ".");
             if (!RuleExists())
             {
                 Console.Error.WriteLine("The firewall rule could not be verified after adding it.");
@@ -189,6 +202,25 @@ internal static class FirewallSetup
         var output = p.StandardOutput.ReadToEnd();
         p.WaitForExit();
         return output.Contains(":" + Program.HttpPort + "/");
+    }
+
+    /// <summary>True when the port's reservation SDDL names this SID.</summary>
+    private static bool UrlAclNamesUser(string sid) => UrlAclBlock().Contains(sid);
+
+    private static string UrlAclBlock()
+    {
+        var psi = new ProcessStartInfo("netsh", "http show urlacl")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        using var p = Process.Start(psi)!;
+        var output = p.StandardOutput.ReadToEnd();
+        p.WaitForExit();
+        foreach (var block in output.Split(new[] { "\r\n\r\n", "\n\n" }, StringSplitOptions.None))
+            if (block.Contains(":" + Program.HttpPort + "/")) return block.Trim();
+        return "(no reservation for port " + Program.HttpPort + ")";
     }
 
     internal static bool RuleExists()

@@ -312,7 +312,8 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         error = null
         scope.launch {
             try {
-                val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
+                val zHost = remote.store.zephyrEndpoint
+                    ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
                 val (atRootZ, rows) = withContext(Dispatchers.IO) {
                     ZephyrClient.libraryList(zHost, remote.store.zephyrPort, remote.store.zephyrToken, rel)
                 }
@@ -333,7 +334,8 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         starting = true
         scope.launch(Dispatchers.IO) {
             try {
-                val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
+                val zHost = remote.store.zephyrEndpoint
+                    ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
                 if (zephyrFolder == null) zephyrFolder = ZephyrClient.libraryFolder(zHost, remote.store.zephyrPort, remote.store.zephyrToken)
                 val folder = zephyrFolder.orEmpty().trimEnd('\\')
                 if (folder.isBlank()) throw java.io.IOException("No movies folder picked on the PC yet - pick one in the player Settings.")

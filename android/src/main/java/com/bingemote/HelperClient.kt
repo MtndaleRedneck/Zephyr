@@ -102,22 +102,23 @@ object HelperClient {
      */
     private fun failure(c: HttpURLConnection): Exception {
         val code = c.responseCode
+        // Read the error body ONCE (a second read always comes back empty, which used to
+        // swallow the detail on 401/403).
+        val text = try {
+            c.errorStream?.use { it.readBytes().toString(Charsets.UTF_8) } ?: ""
+        } catch (e: Exception) { "" }
+        val json = try { JSONObject(text) } catch (e: Exception) { null }
         // The helper's IP guard also answers 403 ("not a private address") - that is a
         // network path problem, not a revoked pairing (I5). Only a token 401/403 with a
         // "bad token" body means pair again.
         if (code == 401 || code == 403) {
-            val err = try {
-                c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optString("error") }
-            } catch (e: Exception) { null }
+            val err = json?.optString("error")
             if (code == 401 || err == "bad token") return BadToken("The PC rejected the pairing token.")
         }
-        val detail = try {
-            c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optString("detail") }
-                ?.takeIf { it.isNotBlank() }
-        } catch (e: Exception) { null }
+        val detail = json?.optString("detail")?.takeIf { it.isNotBlank() }
         if (detail != null) return Unreachable(detail)
         if (code == 404) return Unreachable("Zephyr VLC Remote on the PC is too old for this app.")
-        return Unreachable("Zephyr VLC Remote on the PC answered with error $code.")
+        return Unreachable("The PC answered with an error ($code).")
     }
 
     /** Let OkHttp pool the socket (keep-alive); disconnect() forced a fresh TCP handshake on every
@@ -393,7 +394,7 @@ object HelperClient {
                 val detail = try {
                     c.errorStream?.use { JSONObject(it.readBytes().toString(Charsets.UTF_8)).optString("detail") }?.takeIf { it.isNotBlank() }
                 } catch (e: Exception) { null }
-                throw Unreachable(detail ?: "volume get failed (${c.responseCode})")
+                throw Unreachable(detail ?: "The PC could not report its volume (error ${c.responseCode}).")
             }
             val text = c.inputStream.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) }
             val o = JSONObject(text)

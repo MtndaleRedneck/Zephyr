@@ -67,7 +67,8 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
         scope.launch {
             if (viaZephyr) {
                 try {
-                    val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
+                    val zHost = remote.store.zephyrEndpoint
+                        ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
                     val names = withContext(Dispatchers.IO) {
                         com.zephyr.remote.ZephyrClient.libraryBrowse(zHost, remote.store.zephyrPort, remote.store.zephyrToken, dir)
                     }
@@ -195,7 +196,7 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
                         val saved = withContext(Dispatchers.IO) {
                             if (viaZephyr) {
                                 try {
-                                    val zHost = remote.store.zephyrHost.ifBlank { remote.store.host }
+                                    val zHost = remote.store.zephyrEndpoint ?: return@withContext false
                                     com.zephyr.remote.ZephyrClient.setLibraryFolder(zHost, remote.store.zephyrPort, remote.store.zephyrToken, path)
                                     true
                                 } catch (e: Exception) { false }

@@ -24,4 +24,10 @@
     <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.*" />
       <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
   </ItemGroup>
+
+  <!-- CI-only evidence hooks stay out of the shipped binary: passing -p:CaptureHook=true
+       APPENDS the constant instead of clobbering the project's DefineConstants (round-6 S6-7). -->
+  <PropertyGroup Condition="'$(CaptureHook)' == 'true'">
+    <DefineConstants>$(DefineConstants);CI_CAPTURE_HOOK;PAIR_CODE_HOOK;WINDOW_SHOT_HOOK</DefineConstants>
+  </PropertyGroup>
 </Project>

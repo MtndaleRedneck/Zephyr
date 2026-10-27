@@ -52,6 +52,20 @@ namespace ZephyrPlayer
             TaskScheduler.UnobservedTaskException += (_, ev) =>
                 LogCrash("task", ev.Exception.ToString());
             SetCurrentProcessExplicitAppUserModelID("Zephyr.Player");
+            // Elevated setup/teardown copies run no UI and exit (round-6 N-8). They
+            // must come BEFORE the single-instance mutex: the uninstaller re-elevates
+            // the cleanup while the running app still holds it, and the setup copy
+            // runs while the explaining parent is alive.
+            if (e.Args.Length >= 1 && e.Args[0] == "--install-firewall")
+            {
+                Shutdown(FirewallSetup.RunElevated(e.Args.Length > 1 ? e.Args[1] : null));
+                return;
+            }
+            if (e.Args.Length >= 1 && e.Args[0] == "--remove-firewall")
+            {
+                Shutdown(FirewallSetup.RemoveElevated());
+                return;
+            }
             _singleInstance = new System.Threading.Mutex(true, "ZephyrPlayer", out bool createdNew);
             if (!createdNew)
             {
@@ -202,6 +216,19 @@ namespace ZephyrPlayer
                 input: new SendInputSink(),
                 control: new MainWindowPlaybackControl(_player, player),
                 settings: settings);
+            // Firewall + listen permission (round-6 N-8): the per-user installer never
+            // adds them, so the FIRST run explains and asks Windows once. Declining
+            // closes the app cleanly (retry on next launch) instead of failing the
+            // listen with a misleading error.
+            if (!FirewallSetup.RulesExist() || !FirewallSetup.UrlAclExists())
+            {
+                if (!FirewallSetup.ExplainAndRelaunch())
+                {
+                    _reallyQuit = true;
+                    Shutdown();
+                    return;
+                }
+            }
             _server.Start();
             // "Find my PC" on the phone: the player's OWN discovery port (8490)
             // only. 8489 is never bound - the BingeMote helper keeps it
@@ -239,9 +266,12 @@ namespace ZephyrPlayer
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
             // otherwise): Home goes up first, then the pairing screen over it.
             if (!store.HasAny) ShowPairingWindow();
-            // CI evidence args: honored ONLY when the capture script opts in with
-            // ZEPHYR_CI_CAPTURE (review nit 3 - a release binary must not grow a
-            // second Settings window or autoplay from stray args).
+            // CI evidence args: COMPILED OUT of the shipped binary (round-6 S6-7/G6;
+            // review nit 3 - a release binary must not grow a second Settings window
+            // or autoplay from stray args). Only the dedicated capture build defines
+            // CI_CAPTURE_HOOK, and it additionally opts in per run with
+            // ZEPHYR_CI_CAPTURE.
+#if CI_CAPTURE_HOOK
             var ciCapture = Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null;
             foreach (var arg in ciCapture ? e.Args : Array.Empty<string>())
             {
@@ -267,6 +297,7 @@ namespace ZephyrPlayer
                     if (System.Array.Exists(e.Args, a => a == "--fullscreen")) _player.SetFullscreen(true);
                 }
             }
+#endif
         }
 
         private void EnsurePlayer() { } // single player window for app lifetime (Closing is cancelled)

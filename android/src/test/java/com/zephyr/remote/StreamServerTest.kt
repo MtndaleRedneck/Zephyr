@@ -1,6 +1,8 @@
 package com.zephyr.remote
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** Range math for the HTTP streaming server (pure part; socket/SAF paths are
@@ -30,4 +32,19 @@ class StreamServerTest {
 
     @Test fun midFileSeek() =
         assertEquals(Triple(206, 4_000_000L, 4_999_999L), resolve(10_000_000, 4_000_000L..4_999_999L))
+
+    // The REAL request-line gate (round-6): garbage is refused in handle() before any
+    // serving, which is what keeps servedAny false for invalid requests.
+    @Test fun invalidRequestLines_refusedBeforeServing() {
+        assertFalse(StreamServer.validRequestLine(""))
+        assertFalse(StreamServer.validRequestLine("GARBAGE"))
+        assertFalse(StreamServer.validRequestLine("GET"))
+        assertFalse(StreamServer.validRequestLine("POST /s/tok/0 HTTP/1.1"))
+        assertFalse(StreamServer.validRequestLine("PUT /s/tok/0"))
+    }
+
+    @Test fun validRequestLine_accepted() {
+        assertTrue(StreamServer.validRequestLine("GET /s/tok/0 HTTP/1.1"))
+        assertTrue(StreamServer.validRequestLine("GET /s/tok/0/sub/1 HTTP/1.1"))
+    }
 }

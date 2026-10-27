@@ -86,7 +86,14 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         const val MAX_CACHE_COPY_BYTES = 8L * 1024 * 1024 * 1024
         /** S9: refuse a cache copy the phone cannot hold (floor for system + VLC). */
         const val MIN_FREE_BYTES = 512L * 1024 * 1024
-        /** Drop every cached stream copy (called when the service stops). */
+        /** The request-line gate: anything that is not "GET <path> ..." is refused
+         *  before any serving happens - garbage must never flip servedAny. */
+        internal fun validRequestLine(line: String): Boolean {
+            val parts = line.split(" ")
+            return parts.size >= 2 && parts[0] == "GET"
+        }
+
+        /** The cache slot for one streamed URI (temp suffix while a copy is in flight). */
         private fun cacheFile(context: android.content.Context, uri: Uri, suffix: String): java.io.File {
             val hex = java.security.MessageDigest.getInstance("SHA-256")
                 .digest(uri.toString().toByteArray(Charsets.UTF_8))
@@ -94,6 +101,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
             return java.io.File(context.cacheDir, "stream-$hex$suffix")
         }
 
+        /** Drop every cached stream copy (called when the service stops). */
         fun cleanCache(context: android.content.Context) {
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-") }?.forEach { it.delete() }
         }
@@ -102,8 +110,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private fun handle(client: Socket) {
         val input = client.getInputStream().bufferedReader()
         val requestLine = input.readLine() ?: return
+        if (!validRequestLine(requestLine)) return
         val parts = requestLine.split(" ")
-        if (parts.size < 2 || parts[0] != "GET") return
         var range: LongRange? = null
         while (true) {
             val line = input.readLine() ?: return
@@ -149,23 +157,23 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     // second request waits, then serves the finished copy.
                     val lock = copyLocks.getOrPut(uri.toString()) { Object() }
                     synchronized(lock) {
-                    if (!cached.exists()) {
-                    val tmp = cacheFile(context, uri, ".part")
-                    try {
-                        CacheCopier.copy(
-                            open = { context.contentResolver.openInputStream(uri) },
-                            tmp = tmp, final = cached,
-                            freeSpace = { context.cacheDir.usableSpace },
-                            maxBytes = MAX_CACHE_COPY_BYTES, minFree = MIN_FREE_BYTES,
-                        )
-                    } catch (e: CacheCopier.NoSpace) {
-                        return reply(client, 507, ByteArray(0), "text/plain")
-                    } catch (e: CacheCopier.TooLarge) {
-                        return reply(client, 413, ByteArray(0), "text/plain")
-                    } catch (e: Exception) {
-                        return reply(client, 500, ByteArray(0), "text/plain")
-                    }
-                    }
+                        if (!cached.exists()) {
+                            val tmp = cacheFile(context, uri, ".part")
+                            try {
+                                CacheCopier.copy(
+                                    open = { context.contentResolver.openInputStream(uri) },
+                                    tmp = tmp, final = cached,
+                                    freeSpace = { context.cacheDir.usableSpace },
+                                    maxBytes = MAX_CACHE_COPY_BYTES, minFree = MIN_FREE_BYTES,
+                                )
+                            } catch (e: CacheCopier.NoSpace) {
+                                return reply(client, 507, ByteArray(0), "text/plain")
+                            } catch (e: CacheCopier.TooLarge) {
+                                return reply(client, 413, ByteArray(0), "text/plain")
+                            } catch (e: Exception) {
+                                return reply(client, 500, ByteArray(0), "text/plain")
+                            }
+                        }
                     }
                 }
                 // S-2: "served" means a valid /s/<token>/<id> request actually starting

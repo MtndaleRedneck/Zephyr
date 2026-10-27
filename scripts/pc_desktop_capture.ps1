@@ -20,8 +20,14 @@ function DumpCrashLog($why) {
     }
 }
 
-netsh advfirewall firewall add rule name="Zephyr Player" dir=in action=allow protocol=TCP localport=47823 profile=private | Out-Null
-netsh advfirewall firewall add rule name="Zephyr Player Discovery" dir=in action=allow protocol=UDP localport=8489 profile=private | Out-Null
+# Firewall + listen permission via the app's own setup step (round-6 N-8 shape:
+# TCP program=System/47823/Private/LocalSubnet, UDP exe/8490/Private/LocalSubnet,
+# URL ACL scoped to this user). The runner is elevated, so the same code the
+# explained first-run elevation takes runs headless. (The old inline rules used
+# the wrong discovery port and a program-less TCP rule that http.sys ignores.)
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$fw = Start-Process "windows/capture-out/ZephyrPlayer.exe" -ArgumentList '--install-firewall',$sid -PassThru -Wait -WindowStyle Hidden
+if ($fw.ExitCode -ne 0) { throw "capture firewall setup exit $($fw.ExitCode)" }
 
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 # Top-level types (a struct declared inside -MemberDefinition becomes nested
@@ -55,6 +61,18 @@ public static class ZWU32 {
             return true;
         }, IntPtr.Zero);
         return found;
+    }
+    public static System.Collections.Generic.List<IntPtr> FindAllByTitle(uint pid, string title) {
+        var list = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows((h, l) => {
+            GetWindowThreadProcessId(h, out uint wp);
+            if (wp != pid || !IsWindowVisible(h)) return true;
+            var sb = new System.Text.StringBuilder(256);
+            GetWindowTextW(h, sb, 256);
+            if (sb.ToString() == title) list.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        return list;
     }
     public static System.Collections.Generic.List<IntPtr> FindAllVisible(uint pid) {
         var list = new System.Collections.Generic.List<IntPtr>();
@@ -375,27 +393,42 @@ foreach ($i in 1..40) {
 if (-not $ctrlUp) { throw "control server did not come up for the phone-start bar proof" }
 $playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
 if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
-# Find the player window: any visible titled window of this process that is NOT the
-# home window (the pairing window was closed above).
+# Find the player window BY TITLE: Home and MainWindow are both titled "Zephyr
+# Player", the pairing window has its own title, and any transient dialog (which
+# once masqueraded as the player, then died mid-poll and left a stale handle) is
+# excluded by the title match. The player window is the "Zephyr Player" window
+# that is NOT the home window.
+function Find-PlayerWindow($procId, $homeHwnd) {
+    foreach ($h in [ZWU32]::FindAllByTitle($procId, 'Zephyr Player')) {
+        if ($h -ne $homeHwnd) { return $h }
+    }
+    return [System.IntPtr]::Zero
+}
 $hwBar = [System.IntPtr]::Zero
 foreach ($i in 1..40) {
-    foreach ($h in [ZWU32]::FindAllVisible($pBar.Id)) {
-        if ($h -ne $hwHome -and $h -ne $hwPair) { $hwBar = $h; break }
-    }
+    $hwBar = Find-PlayerWindow $pBar.Id $hwHome
     if ($hwBar -ne [System.IntPtr]::Zero) { break }
     Start-Sleep -Milliseconds 500
 }
 if ($hwBar -eq [System.IntPtr]::Zero) { throw "phone-start bar proof: no player window opened after /control/play" }
 # A 200 POST means the request was accepted, not that frames flow: poll for REAL video
-# pixels (the working --play= sections do the same) before judging the bar.
+# pixels (the working --play= sections do the same) before judging the bar. The window
+# is RE-RESOLVED every poll: starting playback can recreate the OS window (a stale
+# handle previously zeroed every capture). A failed capture is skipped, never counted
+# from a stale file.
+Remove-Item "$env:RUNNER_TEMP/pc-bar-phonestart.png" -ErrorAction SilentlyContinue
 $videoPx = 0
 foreach ($i in 1..40) {
-    CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png" | Out-Null
-    $videoPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.15 0.80
-    if ($videoPx -ge 2000) { break }
+    $hwBar = Find-PlayerWindow $pBar.Id $hwHome
+    if ($hwBar -ne [System.IntPtr]::Zero) {
+        $sz = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+        if ($sz -ne "0 x 0") {
+            $videoPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.15 0.80
+            if ($videoPx -ge 2000) { break }
+        }
+    }
     Start-Sleep -Milliseconds 500
 }
-$szBar1 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
 if ($videoPx -lt 2000) { throw "phone-start bar proof captured no video in the player window ($videoPx px after ~20s) - playback did not start" }
 Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
 $szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
