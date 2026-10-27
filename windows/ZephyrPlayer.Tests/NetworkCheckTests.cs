@@ -18,5 +18,23 @@ namespace ZephyrPlayer.Tests
             Assert.True(p!.InterfaceIndex >= 0);
             Assert.False(string.IsNullOrEmpty(p.Category));
         }
+        [Fact]
+        public void ProfileLineParsesFromTheRight()
+        {
+            // A Wi-Fi name may itself contain '|' (round-8 N-9): the last two fields are
+            // category and index, the name is everything before them.
+            var p = NetworkCheck.ParseProfileLine("My|Odd Wifi|Public|7");
+            Assert.NotNull(p);
+            Assert.Equal("My|Odd Wifi", p!.Name);
+            Assert.Equal("Public", p.Category);
+            Assert.Equal(7, p.InterfaceIndex);
+        }
+
+        [Fact]
+        public void ProfileLineRejectsWrongShape()
+        {
+            Assert.Null(NetworkCheck.ParseProfileLine("only|two"));
+            Assert.Null(NetworkCheck.ParseProfileLine("a|Private|notanumber"));
+        }
     }
 }

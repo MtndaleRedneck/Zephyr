@@ -191,8 +191,15 @@ netsh advfirewall firewall add rule name="Zephyr VLC Remote Helper" dir=in actio
 netsh http add urlacl url=http://+:8492/ sddl="D:(A;;GX;;;WD)" | Out-Null
 New-Item -ItemType Directory -Force $data0 | Out-Null
 Set-Content (Join-Path $data0 'firewall.ok') (Get-Date).ToUniversalTime().ToString("o")
+# The UNELEVATED detection itself (round-8 N-4): the hooked exe's --firewall-shape-ok
+# runs the same live shape read the app gates on - it must REJECT the planted old
+# shape, no dialog needed.
+$shapeBefore = Start-Process $exe -ArgumentList "--firewall-shape-ok" -Wait -PassThru
+Assert ($shapeBefore.ExitCode -eq 1) "the unelevated shape check rejects the planted old shape (exit $($shapeBefore.ExitCode))"
 $fwm = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
 Assert ($fwm.ExitCode -eq 0) "elevated setup migrates the old shape (exit $($fwm.ExitCode))"
+$shapeAfter = Start-Process $exe -ArgumentList "--firewall-shape-ok" -Wait -PassThru
+Assert ($shapeAfter.ExitCode -eq 0) "the unelevated shape check accepts the migrated shape (exit $($shapeAfter.ExitCode))"
 Assert-HelperFirewallRules $exe
 $legacy = netsh advfirewall firewall show rule name="Zephyr VLC Remote Helper" 2>$null | Out-String
 Assert ($legacy -notmatch 'Zephyr VLC Remote Helper') "migration removes the 1.x helper rule"

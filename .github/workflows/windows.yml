@@ -377,6 +377,13 @@ jobs:
           Start-Sleep -Seconds 8
           $running = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
           if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'upgraded app did not relaunch from the installed path' }
+          # The relaunched app's OWN live shape check must have passed: it stamps the
+          # per-machine v2 marker (Local, never Roaming) only when the real rules + ACL
+          # verify. "App is running" alone passes even with the elevation dialog up.
+          $marker = Join-Path $env:LOCALAPPDATA 'ZephyrPlayer\firewall.ok'
+          for ($i = 0; $i -lt 10 -and -not (Test-Path $marker); $i++) { Start-Sleep -Seconds 1 }
+          if (-not (Test-Path $marker)) { throw 'v2 firewall marker missing after the upgraded relaunch - the app live check did not pass' }
+          if ((Get-Content $marker -First 1) -ne 'v2') { throw "firewall marker is not v2: $(Get-Content $marker -First 1)" }
           # Settings values must survive (1.2.0 may extend the file; values must not move).
           $s = Get-Content $settingsPath -Raw | ConvertFrom-Json
           if ($s.LastVolume -ne 47) { throw "upgrade lost LastVolume (got $($s.LastVolume))" }
@@ -396,6 +403,28 @@ jobs:
           if (-not $unauth) { throw 'unauthenticated /control/status was not 401 after upgrade' }
           Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - player-v1.1.0 installed from the release feed, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          # Round-8 N-10: 1.2.0 installs into the same folder + AppId as 1.1.0, so the
+          # uninstall log may still hold 1.1.0's recorded [UninstallRun] steps - one was
+          # a BLIND "netsh http delete urlacl" with no ownership check. Plant a FOREIGN
+          # reservation on 47823, run the post-upgrade uninstaller, and require the
+          # reservation to survive; the log is printed either way for inspection.
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $unins = Join-Path (Split-Path $installed) 'unins000.exe'
+          if (-not (Test-Path $unins)) { throw "uninstaller missing: $unins" }
+          $unLog = "$env:RUNNER_TEMP/uninstall-upgrade-smoke.log"
+          $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$unLog" -PassThru
+          if (-not $uu.WaitForExit(150000)) { Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue; throw 'post-upgrade uninstaller timed out' }
+          Start-Sleep -Seconds 3
+          $afterUn = netsh http show urlacl | Out-String
+          if ($afterUn -notmatch ':47823/') {
+            Write-Output '--- uninstall log tail ---'
+            Get-Content $unLog -Tail 80 -ErrorAction SilentlyContinue
+            throw 'N-10: the foreign 47823 reservation was DELETED by the post-upgrade uninstall - 1.1.0-era blind [UninstallRun] steps fired'
+          }
+          netsh http delete urlacl url=http://+:47823/ | Out-Null
+          Write-Output 'N-10 UNINSTALL: a foreign 47823 reservation survived the post-upgrade uninstall.' 
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -394,6 +394,13 @@ class RemoteState(
         }
     }
 
+    /** A helper BadToken seen outside the command loop (e.g. starting a movie from the
+     *  Movies screen): the PC removed this phone's pairing - route to pair-again,
+     *  never to a generic failure (round-8 N-5). */
+    fun onHelperBadToken() {
+        PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+    }
+
     fun retry() {
         failures = 0
         connecting = true

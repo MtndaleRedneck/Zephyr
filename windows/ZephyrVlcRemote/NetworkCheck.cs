@@ -42,11 +42,18 @@ internal static class NetworkCheck
                 return null;
             }
             var output = p.StandardOutput.ReadToEnd().Trim();
-            var parts = output.Split('|');
-            if (parts.Length != 3 || !int.TryParse(parts[2], out var idx)) return null;
-            return new NetProfile { Name = parts[0], Category = parts[1], InterfaceIndex = idx };
+            return ParseProfileLine(output);
         }
         catch { return null; }
+    }
+
+    /// <summary>Parse "name|category|index" - from the RIGHT: a Wi-Fi name may itself
+    /// contain '|' (round-8 N-9). Null when the shape is not what we asked for.</summary>
+    internal static NetProfile? ParseProfileLine(string output)
+    {
+        var parts = output.Split('|');
+        if (parts.Length < 3 || !int.TryParse(parts[^1], out var idx)) return null;
+        return new NetProfile { Name = string.Join('|', parts[..^2]), Category = parts[^2], InterfaceIndex = idx };
     }
 
     /// <summary>
@@ -59,7 +66,11 @@ internal static class NetworkCheck
         {
             var p = DefaultRouteProfile();
             if (p == null || !p.Category.Equals("Public", StringComparison.OrdinalIgnoreCase)) return;
-            if (Program.DeclinedNetworks.Any(n => string.Equals(n, p.Name, StringComparison.OrdinalIgnoreCase))) return;
+            // Snapshot under the write lock: enumerating the live list here while the UI
+            // mutates it would throw "collection modified" and skip the popup (round-8 N-9).
+            string[] declined;
+            lock (Program.ConfigSaveLock) declined = Program.DeclinedNetworks.ToArray();
+            if (declined.Any(n => string.Equals(n, p.Name, StringComparison.OrdinalIgnoreCase))) return;
             show(p);
         });
     }
