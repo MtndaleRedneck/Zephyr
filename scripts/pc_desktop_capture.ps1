@@ -157,8 +157,18 @@ function WakeControls() {
 
 # Tiny known video fixture: moving test pattern, provable on-screen pixels.
 choco install ffmpeg --no-progress -y | Out-Null
+# Resolve ffmpeg honestly: the choco shim path is not guaranteed (transient
+# shim/install failures previously hard-failed here). PATH first, then the
+# shim, then the package tree; a real miss throws instead of a wrong-path error.
+$ffmpeg = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
+if (-not $ffmpeg -and (Test-Path 'C:\ProgramData\chocolatey\bin\ffmpeg.exe')) { $ffmpeg = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe' }
+if (-not $ffmpeg) {
+    $ffhit = Get-ChildItem 'C:\ProgramData\chocolatey\lib' -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($ffhit) { $ffmpeg = $ffhit.FullName }
+}
+if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
-& "C:\ProgramData\chocolatey\bin\ffmpeg.exe" -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+& $ffmpeg -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
 $srv = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER_TEMP","8901" -PassThru -WindowStyle Hidden
 Start-Sleep -Seconds 2
 
@@ -211,19 +221,6 @@ if ($sw -eq [System.IntPtr]::Zero) { Write-Host "::error::settings window handle
 Start-Sleep -Milliseconds 700
 $sz3 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings.png"
 # The pinned bottom of the nav (Feedback & Updates, with the version) is a
-# section SWITCH now, not a scroll: invoke the real "Updates" nav button
-# through UI Automation and capture that section as the bottom evidence.
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$settingsRoot = [System.Windows.Automation.AutomationElement]::FromHandle($sw)
-$updCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'NavUpdates')
-$upd = $settingsRoot.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $updCond)
-if ($upd -ne $null) {
-    $upd.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Start-Sleep -Milliseconds 700
-} else { Write-Host "::error::NavUpdates button not found via UIA" }
-$sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-updates.png"
-StopZephyr# The pinned bottom of the nav (Feedback & Updates, with the version) is a
 # section SWITCH now, not a scroll: invoke the real "Updates" nav button
 # through UI Automation and capture that section as the bottom evidence.
 Add-Type -AssemblyName UIAutomationClient
