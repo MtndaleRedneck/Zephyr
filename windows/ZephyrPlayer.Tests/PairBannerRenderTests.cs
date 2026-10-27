@@ -95,7 +95,12 @@ namespace ZephyrPlayer.Tests
                     Core.Initialize();
                     var libvlc = new LibVLC();
                     var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
-                    var w = new MainWindow(libvlc, player);
+                    // Explicit "original" pick: the shipping default is orange now, and this
+                    // render proof's pixel calibration below is gold. Keep the render check
+                    // independent of which style ships as the default.
+                    var settings = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-" + Guid.NewGuid().ToString("N") + ".json"));
+                    settings.BarColorStyle = "original";
+                    var w = new MainWindow(libvlc, player, settings, new VolumeService());
                     // Plain-element render only: the full window blanks offscreen
                     // (VideoView airspace, see PairBannerRenderTests).
                     var bar = w.ControlBar;
@@ -139,6 +144,40 @@ namespace ZephyrPlayer.Tests
                     Assert.True(gold > 30, $"gold elapsed-text pixels {gold} - control bar not rendered");
                     Assert.True(white > 30, $"white remaining-text pixels {white} - control bar not rendered");
                     w.Close();
+
+                    // The SHIPPING default (no pick stored): the bar must render with the
+                    // orange elapsed/total/remaining text. Same offscreen render, orange
+                    // pixel count - visual proof of the default, not just a brush assert.
+                    var settingsDefault = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-def-" + Guid.NewGuid().ToString("N") + ".json"));
+                    Assert.Equal("orange", settingsDefault.BarColorStyle); // unset default
+                    var w2 = new MainWindow(libvlc, player, settingsDefault, new VolumeService());
+                    var bar2 = w2.ControlBar;
+                    bar2.Opacity = 1;
+                    bar2.Measure(new Size(1920, 200));
+                    bar2.Arrange(new Rect(0, 0, bar2.DesiredSize.Width, bar2.DesiredSize.Height));
+                    var bw2 = (int)Math.Ceiling(bar2.DesiredSize.Width);
+                    var bh2 = (int)Math.Ceiling(bar2.DesiredSize.Height);
+                    var rtb2 = new RenderTargetBitmap(bw2, bh2, 96, 96, PixelFormats.Pbgra32);
+                    rtb2.Render(bar2);
+                    try
+                    {
+                        var png = new PngBitmapEncoder();
+                        png.Frames.Add(BitmapFrame.Create(rtb2));
+                        var outDir = Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath();
+                        using (var fs = System.IO.File.Create(System.IO.Path.Combine(outDir, "pc-controlbar-render-orange.png")))
+                            png.Save(fs);
+                    }
+                    catch (Exception ex) { Console.WriteLine("orange control bar png capture failed: " + ex.Message); }
+                    var wide2 = new byte[bw2 * bh2 * 4];
+                    rtb2.CopyPixels(new Int32Rect(0, 0, bw2, bh2), wide2, bw2 * 4, 0);
+                    int orangePx = 0;
+                    for (var i = 0; i < wide2.Length; i += 4)
+                    {
+                        var b = wide2[i]; var g = wide2[i + 1]; var r = wide2[i + 2];
+                        if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #FF9500
+                    }
+                    Assert.True(orangePx > 30, $"orange elapsed-text pixels {orangePx} - default control bar not rendered in the shipping style");
+                    w2.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
                 catch (Exception e) { error = e.ToString(); }

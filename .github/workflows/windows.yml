@@ -767,6 +767,7 @@ jobs:
             ${{ runner.temp }}/pc-tray-icon.png
             ${{ runner.temp }}/pc-tray-diag.txt
             ${{ runner.temp }}/pc-controlbar-render.png
+            ${{ runner.temp }}/pc-controlbar-render-orange.png
             ${{ runner.temp }}/pc-desktop.png
             ${{ runner.temp }}/pc-home-library.png
             ${{ runner.temp }}/pc-desktop-settings.png

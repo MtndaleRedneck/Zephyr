@@ -41,7 +41,11 @@ function Wait-HelperListening([int]$pidToServe, [string]$what) {
         } catch { }
         Start-Sleep -Milliseconds 500
     }
-    Get-Process | Where-Object { $_.ProcessName -like '*Zephyr*' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id)" }
+    Get-Process | Where-Object { $_.ProcessName -like '*Zephyr*' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) path=$($_.Path)" }
+    # Forensics: the shape gate compares the RUNNING copy's image path against the
+    # rule's stored program string. Dump both so a mismatch is visible, not guessed.
+    Write-Host "== firewall rule dump (Zephyr VLC Remote) =="
+    netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Select-String -Pattern 'Rule Name|Enabled|Direction|Profiles|Action|Protocol|LocalPort|RemoteIP|Program'
     $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
     if (Test-Path $logf) { Write-Host "== helper.log tail =="; Get-Content $logf -Tail 60 }
     throw $what
@@ -666,7 +670,11 @@ try {
     Assert ($rPair2.code -eq 200) "re-pair after the corrupt-config phase"
     $token = ($rPair2.body | ConvertFrom-Json).token
 
-    $dir2 = Join-Path $env:TEMP "zvr-e2e-takeover"
+    # RUNNER_TEMP, not TEMP: the runner's $env:TEMP is the 8.3 short form
+    # (C:\Users\RUNNER~1\...) and netsh SILENTLY refused to add a rule whose
+    # program path used it (diag/takeover-probe forensics: the swap's delete
+    # landed, the add produced no rule, and the gate then failed the temp copy).
+    $dir2 = Join-Path $env:RUNNER_TEMP "zvr-e2e-takeover"
     New-Item -ItemType Directory -Force $dir2 | Out-Null
     Copy-Item $exe $dir2 -Force
     $exe2 = Join-Path $dir2 "ZephyrVlcRemote.exe"
@@ -679,10 +687,20 @@ try {
     # prompt is the intended behavior - and it cannot be silent, it needs admin.
     # What this leg still proves: the actual mutex/update takeover (the running copy
     # quits, asserted below) and the taking-over copy serving the saved pairings.
-    # What it does NOT prove: the across-paths first-launch firewall prompt; that
-    # path is covered by the dialog renders and the Player explain-dialog legs.
-    netsh advfirewall firewall delete rule name="Zephyr VLC Remote" protocol=UDP localport=8491 | Out-Null
-    netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=UDP localport=8491 program="$exe2" profile=private remoteip=localsubnet | Out-Null
+    # What it does NOT prove: the across-paths first-launch firewall prompt - that
+    # behavior is untested (the dialog renders prove appearance only).
+    function Set-TakeoverUdpRule([string]$program) {
+        netsh advfirewall firewall delete rule name="Zephyr VLC Remote" protocol=UDP localport=8491 | Out-Null
+        $addOut = netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=UDP localport=8491 program="$program" profile=private remoteip=localsubnet 2>&1 | Out-String
+        if ($LASTEXITCODE -ne 0) { throw "netsh add UDP rule failed (exit $LASTEXITCODE): $addOut" }
+        $shown = netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Out-String
+        $udpBlock = ($shown -split "Rule Name:" | Where-Object { $_ -match "Protocol:\s+UDP" }) -join ""
+        if (-not ($udpBlock -match [regex]::Escape($program))) {
+            throw "UDP rule did not land for $program - actual rules:`n$shown"
+        }
+    }
+    Set-TakeoverUdpRule $exe2
+    Write-Host "takeover rule planted for: $exe2"
     $p2 = Start-Process $exe2 -PassThru
     $oldExited = $p.WaitForExit(25000)
     Assert $oldExited "running copy quits when a copy from another folder launches"
@@ -691,8 +709,7 @@ try {
     Assert ($r.code -eq 200) "taking-over copy serves the saved token"
     $p = $p2
     # Later phases restart from the original path: point the discovery rule back.
-    netsh advfirewall firewall delete rule name="Zephyr VLC Remote" protocol=UDP localport=8491 | Out-Null
-    netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=UDP localport=8491 program="$exe" profile=private remoteip=localsubnet | Out-Null
+    Set-TakeoverUdpRule $exe
 
     # Round-6: a failed config SAVE refuses the pair with 503 and does NOT spend the
     # code; once the file is writable again the SAME code pairs (real write/read proof).
