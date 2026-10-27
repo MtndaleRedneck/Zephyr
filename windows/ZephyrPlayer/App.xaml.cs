@@ -73,7 +73,10 @@ namespace ZephyrPlayer
             // (round-9 N9-6). An EARLY arg check, before the mutex and any UI.
             if (e.Args.Length >= 1 && e.Args[0] == "--firewall-shape-ok")
             {
-                Shutdown(FirewallSetup.RulesHaveCurrentShape() ? 0 : 1);
+                // The hooked exe runs from a capture folder; the UDP rule names the
+                // INSTALLED exe. The smoke passes that path as the second arg.
+                var expectedExe = e.Args.Length >= 2 ? e.Args[1] : (Environment.ProcessPath ?? "");
+                Shutdown(FirewallSetup.RulesHaveCurrentShapeFor(expectedExe) ? 0 : 1);
                 return;
             }
             // CI only: render a permission dialog with real interaction state to a PNG,

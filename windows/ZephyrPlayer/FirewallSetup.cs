@@ -149,6 +149,15 @@ namespace ZephyrPlayer
             return RulesHaveCurrentShape(ReadRulesByName(TcpRuleName, UdpRuleName), Environment.ProcessPath ?? "");
         }
 
+        /// <summary>CI hook entry: check the rules against an EXPLICIT expected exe
+        /// path. The hooked CI exe runs from a capture folder, so its own ProcessPath
+        /// is never the path the installed app's UDP rule names (round-10 gate
+        /// 40508776538: the unelevated check failed on its own path, not the shape).</summary>
+        internal static bool RulesHaveCurrentShapeFor(string exePath)
+        {
+            return RulesHaveCurrentShape(ReadRulesByName(TcpRuleName, UdpRuleName), exePath);
+        }
+
         internal static bool RulesHaveCurrentShape(List<RuleShape>? rules, string exePath)
         {
             if (rules == null) return false;
@@ -210,11 +219,12 @@ namespace ZephyrPlayer
                         uint rc = HttpQueryServiceConfiguration(IntPtr.Zero, HttpServiceConfigUrlAclQueryId,
                             ref query, System.Runtime.InteropServices.Marshal.SizeOf(query), buf, outSize,
                             out int needed, IntPtr.Zero);
-                        // No matching record: ERROR_FILE_NOT_FOUND per http.h (round-10
-                        // B10-1); 1168 (ERROR_NOT_FOUND) kept as the same "absent"
-                        // meaning on older http.sys. Both mean NOT RESERVED - unlike
-                        // every other error, which is unreadable, i.e. Foreign.
-                        if (rc == ErrorFileNotFound || rc == ErrorNotFound) return (false, null);
+                        // No matching record: ERROR_FILE_NOT_FOUND (2) per http.h
+                        // (round-10 B10-1). NO other code maps to absent: a made-up
+                        // "not found" would route an EXISTING reservation through the
+                        // None branch and its blind delete. Every other error is a
+                        // read error, i.e. Foreign. The live tests pin what absent
+                        // returns.
                         if (rc == ErrorInsufficientBuffer || rc == ErrorMoreData)
                         {
                             if (needed > outSize) { outSize = needed; continue; }
@@ -247,7 +257,6 @@ namespace ZephyrPlayer
         private const int HttpServiceConfigQueryExact = 0;
         private const uint HttpInitializeConfig = 0x2;
         private const uint ErrorFileNotFound = 2;
-        private const uint ErrorNotFound = 1168;
         private const uint ErrorInsufficientBuffer = 122;
         private const uint ErrorMoreData = 234;
 
@@ -659,55 +668,104 @@ namespace ZephyrPlayer
         // visual tree is rendered. Compiled out of shipped builds like the other hooks.
         internal static void RunDialogShot(string mode, string path)
         {
-            var note = mode == "note";
-            var dlg = DarkDialog(
-                note
-                    ? "Setup did not finish, so the phone cannot reach this PC yet. Zephyr Player will now close and offer to set up again next time you open it."
-                    : "One Windows permission, then setup is done. Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection.",
-                note ? "OK" : "Continue",
-                note ? null : "Cancel",
-                () => { });
-            dlg.Show();
-            dlg.Activate();
-            var ok = FirstButton(dlg);
-            var step = 0;
-            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-            timer.Tick += (_, _) =>
+            // Round-10 follow-up: the b452bbb gate ran this hook to exit 0 with no PNG
+            // because the capture's catch swallowed the failure. Every step now logs to
+            // stderr (lands in the job log) and a diag file next to the PNG, and any
+            // failure exits nonzero - a failed leg must fail the step.
+            var diagPath = System.IO.Path.ChangeExtension(path, ".diag.txt");
+            try { File.Delete(diagPath); } catch { }
+            void Log(string line)
             {
-                step++;
-                if (step == 1)
+                Console.Error.WriteLine("[dialog-shot] " + line);
+                try { File.AppendAllText(diagPath, $"[{DateTime.Now:HH:mm:ss.fff}] {line}\n"); } catch { }
+            }
+            var exitCode = 2;
+            try
+            {
+                Log($"start mode={mode} path={path}");
+                var note = mode == "note";
+                var dlg = DarkDialog(
+                    note
+                        ? "Setup did not finish, so the phone cannot reach this PC yet. Zephyr Player will now close and offer to set up again next time you open it."
+                        : "One Windows permission, then setup is done. Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection.",
+                    note ? "OK" : "Continue",
+                    note ? null : "Cancel",
+                    () => { });
+                dlg.Show();
+                dlg.Activate();
+                Log("dialog shown");
+                var ok = FirstButton(dlg);
+                Log(ok == null ? "primary button NOT found" : "primary button found");
+                var step = 0;
+                var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+                timer.Tick += (_, _) =>
                 {
-                    if (mode == "focus" && ok != null) { dlg.Activate(); ok.Focus(); }
-                    else if ((mode == "hover" || mode == "pressed") && ok != null)
-                    {
-                        var pt = ok.PointToScreen(new Point(ok.ActualWidth / 2, ok.ActualHeight / 2));
-                        SetCursorPos((int)Math.Round(pt.X), (int)Math.Round(pt.Y));
-                        if (mode == "pressed") mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); // LEFTDOWN, held
-                    }
-                }
-                else if (step >= 4)
-                {
-                    timer.Stop();
                     try
                     {
-                        var dpi = VisualTreeHelper.GetDpi(dlg);
-                        var rtb = new RenderTargetBitmap(
-                            Math.Max(1, (int)Math.Ceiling(dlg.ActualWidth * dpi.DpiScaleX)),
-                            Math.Max(1, (int)Math.Ceiling(dlg.ActualHeight * dpi.DpiScaleY)),
-                            dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
-                        rtb.Render(dlg);
-                        var enc = new PngBitmapEncoder();
-                        enc.Frames.Add(BitmapFrame.Create(rtb));
-                        using var fs = File.Create(path);
-                        enc.Save(fs);
+                        step++;
+                        Log("tick " + step);
+                        if (step == 1)
+                        {
+                            if (mode == "focus" && ok != null) { dlg.Activate(); ok.Focus(); Log("focus set"); }
+                            else if ((mode == "hover" || mode == "pressed") && ok != null)
+                            {
+                                var pt = ok.PointToScreen(new Point(ok.ActualWidth / 2, ok.ActualHeight / 2));
+                                SetCursorPos((int)Math.Round(pt.X), (int)Math.Round(pt.Y));
+                                if (mode == "pressed") mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); // LEFTDOWN, held
+                                Log("cursor parked over primary");
+                            }
+                        }
+                        else if (step >= 4)
+                        {
+                            timer.Stop();
+                            try
+                            {
+                                var dpi = VisualTreeHelper.GetDpi(dlg);
+                                var rtb = new RenderTargetBitmap(
+                                    Math.Max(1, (int)Math.Ceiling(dlg.ActualWidth * dpi.DpiScaleX)),
+                                    Math.Max(1, (int)Math.Ceiling(dlg.ActualHeight * dpi.DpiScaleY)),
+                                    dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
+                                rtb.Render(dlg);
+                                var enc = new PngBitmapEncoder();
+                                enc.Frames.Add(BitmapFrame.Create(rtb));
+                                using var fs = File.Create(path);
+                                enc.Save(fs);
+                                exitCode = 0;
+                                Log("saved " + new FileInfo(path).Length + " bytes");
+                            }
+                            catch (Exception capEx)
+                            {
+                                Log("capture FAILED: " + capEx);
+                            }
+                            if (mode == "pressed") mouse_event(0x0004, 0, 0, 0, IntPtr.Zero); // LEFTUP
+                            try { dlg.Close(); } catch { }
+                            Application.Current?.Shutdown(exitCode);
+                        }
                     }
-                    catch { }
-                    if (mode == "pressed") mouse_event(0x0004, 0, 0, 0, IntPtr.Zero); // LEFTUP
-                    dlg.Close();
-                    Application.Current?.Shutdown(0);
-                }
-            };
-            timer.Start();
+                    catch (Exception tickEx)
+                    {
+                        Log("tick FAILED: " + tickEx);
+                        try { timer.Stop(); } catch { }
+                        Application.Current?.Shutdown(2);
+                    }
+                };
+                timer.Start();
+                // Watchdog: if the dispatcher never runs the ticks, fail loudly instead
+                // of hanging the step.
+                var watchdog = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+                watchdog.Tick += (_, _) =>
+                {
+                    watchdog.Stop();
+                    Log("watchdog: capture never completed");
+                    Application.Current?.Shutdown(3);
+                };
+                watchdog.Start();
+            }
+            catch (Exception ex)
+            {
+                Log("fatal: " + ex);
+                Application.Current?.Shutdown(2);
+            }
         }
 
         private static Button? FirstButton(DependencyObject root)
