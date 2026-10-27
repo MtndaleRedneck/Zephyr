@@ -185,7 +185,7 @@ class RemoteState(
             failures = 0; unreachable = false; connecting = false
             // A good poll also clears "pair again" (N2): after a re-pair the hero must
             // not keep accusing the NEW pairing until an app restart.
-            unpaired = false
+            unpaired = false; zephyrMovedTo = null
             vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
         } catch (e: ZephyrClient.BadToken) {
             if (store.selectedSource != Source.ZEPHYR) return
@@ -203,6 +203,9 @@ class RemoteState(
     }
 
     @Volatile private var zephyrRediscovering = false
+    /** S11: set when the saved PC appears at a NEW address. The token never follows;
+     *  the hero offers the safe re-pair path instead. Cleared on a good poll. */
+    var zephyrMovedTo by mutableStateOf<String?>(null)
     private var zephyrLastRediscoverAt = 0L
     private fun zephyrRediscover() {
         if (zephyrRediscovering) return
@@ -215,28 +218,18 @@ class RemoteState(
         scope.launch(Dispatchers.IO) {
             try {
                 val found = ZephyrClient.discoverPlayers(3000)
-                // S11 (security): the saved bearer token must never leave for an
-                // unverified host - any device can answer a broadcast. Fail closed:
-                // only EXACTLY ONE candidate whose discovery name matches the saved PC
-                // name may be probed with the token; zero or several matches (or no
-                // saved name) means keep failing and let him recover in Settings.
-                // A name is not authentication - it only narrows which single host is
-                // allowed to see the token at all.
-                val savedName = store.zephyrPcName
-                if (savedName.isBlank()) return@launch
-                val candidates = found.filter { it.name.equals(savedName, ignoreCase = true) }
-                if (candidates.size != 1) return@launch
-                val candidate = candidates.single()
-                try {
-                    ZephyrClient.controlStatus(candidate.host, candidate.port, store.zephyrToken)
-                    withContext(Dispatchers.Main) {
-                        store.zephyrHost = candidate.host
-                        store.zephyrPort = candidate.port
-                        failures = 0; unreachable = false
+                // S11 (security): the saved bearer token is NEVER sent to a discovered
+                // host - a spoofed same-name answer proves nothing. The plan type has
+                // no token-carrying action at all (ZephyrRediscover.kt).
+                val plan = com.zephyr.remote.ZephyrRediscover.plan(
+                    store.zephyrHost.ifBlank { store.host }, store.zephyrPort, store.zephyrPcName, found)
+                withContext(Dispatchers.Main) {
+                    when (plan) {
+                        is com.zephyr.remote.ZephyrRediscover.Plan.MovedNotice ->
+                            zephyrMovedTo = plan.name // the hero says what to do; re-pair is the safe path
+                        else -> { /* saved endpoint seen or nothing: the poll recovers on its own */ }
                     }
-                } catch (e: ZephyrClient.BadToken) {
-                    withContext(Dispatchers.Main) { unpaired = true; unreachable = false; failures = 0 }
-                } catch (e: Exception) { /* not our player anymore */ }
+                }
             } finally {
                 zephyrRediscovering = false
             }

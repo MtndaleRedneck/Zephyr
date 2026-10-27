@@ -612,5 +612,15 @@ fun prettyPath(path: String): String {
  *  already-plain messages (pairing errors, BadToken) pass through untouched. */
 internal fun plainPlayerError(e: Exception, fallback: String): String {
     val m = e.message ?: return fallback
-    return if (m.startsWith("Player returned")) "Zephyr Player had a problem. Try again." else m
+    if (m.startsWith("Player returned")) return "Zephyr Player had a problem. Try again."
+    // Raw plumbing never reaches the screen (S2): socket text, timeouts and the
+    // stream server's "server not ready" each get one plain sentence.
+    if (m.contains("server not ready", true) || m.contains("no wi-fi", true) || m.contains("network is unreachable", true))
+        return "Your phone needs to be on Wi-Fi to play from it."
+    if (m.contains("failed to connect", true) || m.contains("connection refused", true)
+        || m.contains("connect timed out", true) || m.contains("timeout", true)
+        || m.contains("unable to resolve host", true))
+        return "Can't reach the PC. Check it's on and on the same Wi-Fi, then try again."
+    if (m.startsWith("{") || m.contains("Json", false) || m.contains("JSON")) return fallback
+    return m
 }

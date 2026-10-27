@@ -232,6 +232,16 @@ private fun HomeContent(
                     Text("Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = Color(0xFF3D2A12), fontSize = 13.sp)
                 }
             }
+            // S11: the saved PC appeared at a NEW address. The saved token never
+            // follows a discovered host - re-pairing (fresh code from the PC screen)
+            // is the only safe way to use the new address.
+            remote.zephyrMovedTo?.let { movedName ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Found $movedName at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
+                    color = Color(0xFF3D2A12), fontSize = 13.sp,
+                )
+            }
             // One-time 1.1 -> 1.2 notice (round-3 A3): the PC helper changed.
             var showVlcRemoteNotice by remember { mutableStateOf(remote.store.vlcRemoteNoticePending) }
             if (!lost && showVlcRemoteNotice) {

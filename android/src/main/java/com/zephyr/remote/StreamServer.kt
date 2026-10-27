@@ -78,9 +78,14 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     /** True once the first request was served: the shutdown watchdog arms only after this. */
     @Volatile var servedAny = false
 
+    /** S9: one in-flight cache copy per URI. */
+    private val copyLocks = java.util.concurrent.ConcurrentHashMap<String, Object>()
+
     companion object {
         /** Cap for one non-seekable file copied into cache (teardown C12). */
         const val MAX_CACHE_COPY_BYTES = 8L * 1024 * 1024 * 1024
+        /** S9: refuse a cache copy the phone cannot hold (floor for system + VLC). */
+        const val MIN_FREE_BYTES = 512L * 1024 * 1024
         /** Drop every cached stream copy (called when the service stops). */
         fun cleanCache(context: android.content.Context) {
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-") }?.forEach { it.delete() }
@@ -131,6 +136,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 // COMPLETE, so a cut-off copy is never reused; oversized copies are capped.
                 val cached = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}")
                 if (!cached.exists()) {
+                    // S9: one copy per URI at a time - two first requests for the same
+                    // non-seekable file must not write the same .part together. The
+                    // second request waits, then serves the finished copy.
+                    val lock = copyLocks.getOrPut(uri.toString()) { Object() }
+                    synchronized(lock) {
+                    if (!cached.exists()) {
+                    // S9: never start a copy the phone cannot hold.
+                    val free = context.cacheDir.usableSpace
+                    if (free < MIN_FREE_BYTES) return reply(client, 507, ByteArray(0), "text/plain")
                     val tmp = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}.part")
                     try {
                         val inp = context.contentResolver.openInputStream(uri)
@@ -148,6 +162,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     } catch (e: Exception) {
                         tmp.delete(); cached.delete()
                         return reply(client, 500, ByteArray(0), "text/plain")
+                    }
+                    }
                     }
                 }
                 return serveFile(client, cached, cached.length(), range)
