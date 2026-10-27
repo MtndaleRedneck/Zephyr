@@ -108,13 +108,15 @@ namespace ZephyrPlayer
             return style;
         }
 
-        /// <summary>CI-only: opens the real menu for a screenshot (the capture job
-        /// grabs the frame and exits). Never called in normal use.</summary>
+        /// <summary>CI-only: opens the real menu at the capture script's fixed screen
+        /// point (it grabs 40,40 + 360x170); the popup is topmost so it draws over any
+        /// window. Never called in normal use.</summary>
         public void ShowMenuForCapture()
         {
             var menu = _icon.ContextMenu;
             if (menu == null) return;
-            menu.Placement = PlacementMode.MousePoint;
+            menu.Placement = PlacementMode.AbsolutePoint;
+            menu.PlacementRectangle = new Rect(40, 40, 0, 0);
             menu.IsOpen = true;
         }
 
