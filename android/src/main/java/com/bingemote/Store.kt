@@ -8,26 +8,22 @@ import androidx.security.crypto.MasterKey
  * App settings in plain preferences; secrets (VLC password, helper token) in
  * Keystore-backed encrypted preferences, same pattern as Listen Later's CredStore.
  */
-class Store(context: Context) {
-
-    private val prefs = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
+/** The primary constructor doubles as a test seam: the real migration/settings
+ *  code runs over an in-memory config, so a 1.1-era saved state can be
+ *  exercised on the JVM without a Context. */
+class Store internal constructor(
+    private val prefs: android.content.SharedPreferences,
+    private val secrets: android.content.SharedPreferences,
+) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences("settings", Context.MODE_PRIVATE),
+        openSecrets(context),
+    )
 
     init {
         // 1.9 removals: the seek bar is always on top and reconnect is always on.
         // Drop the retired keys so no stale setting lingers on existing installs.
         prefs.edit().remove("seekOnTop").remove("autoReconnect").apply()
-    }
-
-    private val secrets = try {
-        EncryptedSharedPreferences.create(
-            context,
-            "secrets",
-            MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    } catch (e: Exception) {
-        InMemoryPrefs()
     }
 
     /** True when the Keystore-backed store could not open this launch (teardown C11).
@@ -205,6 +201,18 @@ class Store(context: Context) {
      *  finished setup. Home gates its pair card and command sends on this (teardown A1). */
     fun isPaired(source: Source): Boolean =
         if (source == Source.ZEPHYR) zephyrToken.isNotBlank() else isConfigured
+}
+
+private fun openSecrets(context: Context): android.content.SharedPreferences = try {
+    EncryptedSharedPreferences.create(
+        context,
+        "secrets",
+        MasterKey.Builder(context).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    )
+} catch (e: Exception) {
+    InMemoryPrefs()
 }
 
 enum class Source { VLC, ZEPHYR }

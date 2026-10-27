@@ -139,10 +139,10 @@ fun ZephyrSetupScreen(
                             }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
-                                // Keep ZephyrClient's plain code errors; raw network failures
-                                // become one plain sentence (teardown A3).
-                                val m = e.message ?: ""
-                                error = if (m.startsWith("Wrong code") || m.startsWith("Too many") || m.startsWith("This PC already")) m
+                                // Pairing refusals carry the PC's plain reason
+                                // (NEW-A1); raw network failures become one
+                                // plain sentence (teardown A3).
+                                error = if (e is ZephyrClient.PairFailed) (e.message ?: "Pairing failed - try again.")
                                     else "Can't reach Zephyr Player at $h. Check it's open and on the same Wi-Fi."
                             }
                         } finally { busy = false }

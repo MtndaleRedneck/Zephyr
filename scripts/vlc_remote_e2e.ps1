@@ -6,6 +6,23 @@ $ErrorActionPreference = 'Stop'
 $exe = "windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"
 if (-not (Test-Path $exe)) { throw "helper exe missing at $exe" }
 
+# Assertions are counted: a run that exercised nothing must FAIL, never pass.
+$script:assertCount = 0
+function Invoke-Helper($path, $body, $token) {
+    $headers = @{}
+    if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    return @{ code = [int]$r.StatusCode; body = $r.Content }
+}
+function Assert($cond, $msg) { $script:assertCount++; if (-not $cond) { throw "ASSERT FAILED: $msg" } ; Write-Host "ok ($script:assertCount): $msg" }
+function Invoke-HelperGet($path, $token) {
+    $headers = @{}
+    if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    return @{ code = [int]$r.StatusCode; body = $r.Content }
+}
+
+
 # --- Part 0: the installer owns the firewall rule now: silent install, verify, silent uninstall ---
 Write-Host "== installer firewall setup =="
 $setup = Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe" | Select-Object -First 1
@@ -21,7 +38,7 @@ $unins = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\unins000.exe'
 & $unins /VERYSILENT /NORESTART | Out-Null
 Start-Sleep -Seconds 3
 try { $rule = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String } catch { $rule = '' }
-if ($rule -match Zephyr VLC Remote) { throw "uninstaller left the firewall rule behind" }
+if ($rule -match 'Zephyr VLC Remote') { throw "uninstaller left the firewall rule behind" }
 try { $acl = netsh http show urlacl 2>$null | Out-String } catch { $acl = '' }
 if ($acl -match ':8492/') { throw "uninstaller left the listen permission behind" }
 Write-Host "ok: uninstaller removed the firewall rule and listen permission"
@@ -104,19 +121,6 @@ try {
     Assert ($r.code -eq 401) "a later legacy change never re-imports"
     Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
-    function Invoke-Helper($path, $body, $token) {
-        $headers = @{}
-        if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-        $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
-        return @{ code = [int]$r.StatusCode; body = $r.Content }
-    }
-    function Assert($cond, $msg) { if (-not $cond) { throw "ASSERT FAILED: $msg" } ; Write-Host "ok: $msg" }
-    function Invoke-HelperGet($path, $token) {
-        $headers = @{}
-        if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-        $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
-        return @{ code = [int]$r.StatusCode; body = $r.Content }
-    }
 
     $r = Invoke-Helper '/ping' '{}' $null
     Assert ($r.code -eq 401) "ping without token is 401"
@@ -471,7 +475,8 @@ try {
     Assert ($r.code -eq 200) "taking-over copy serves the saved token"
     $p = $p2
 
-    Write-Host "HELPER E2E PASSED"
+    if ($script:assertCount -lt 80) { throw "only $script:assertCount assertions ran - the harness did not exercise the full flow" }
+    Write-Host "HELPER E2E PASSED ($script:assertCount assertions)"
 } finally {
     if ($p -and -not $p.HasExited) { Stop-Process -Id $p.Id -Force }
     netsh advfirewall firewall delete rule name="Zephyr VLC Remote" | Out-Null

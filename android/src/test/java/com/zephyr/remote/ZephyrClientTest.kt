@@ -98,6 +98,37 @@ class ZephyrClientTest {
         server.takeRequest().let { assertEquals("/input/type", it.path); assertTrue(it.body.readUtf8().contains("hello")) }
     }
 
+    @Test fun `pair shows the PC's plain reason for a 503`() {
+        // NEW-A1: a broken PC store answers 503 with a detail written for him.
+        enqueue("{"error":"pairing paused","detail":"Pairing is paused on this PC right now - nothing was changed."}", 503)
+        try { ZephyrClient.pair(host, port, "123456"); throw AssertionError("expected throw") }
+        catch (e: ZephyrClient.PairFailed) { assertEquals("Pairing is paused on this PC right now - nothing was changed.", e.message) }
+    }
+
+    @Test fun `pair shows the PC's plain reason for an expired code`() {
+        enqueue("{"error":"code expired","detail":"That code expired. Use the code showing on the PC screen now."}", 410)
+        try { ZephyrClient.pair(host, port, "123456"); throw AssertionError("expected throw") }
+        catch (e: ZephyrClient.PairFailed) { assertEquals("That code expired. Use the code showing on the PC screen now.", e.message) }
+    }
+
+    @Test fun `pair distinguishes no code on screen from a wrong code`() {
+        enqueue("{"error":"no code","detail":"No code is showing on the PC. Open pairing on the PC first."}", 403)
+        try { ZephyrClient.pair(host, port, "123456"); throw AssertionError("expected throw") }
+        catch (e: ZephyrClient.PairFailed) { assertTrue(e.message!!.contains("No code is showing")) }
+        enqueue("{"error":"bad code","detail":"Wrong code - check the code on the PC screen."}", 403)
+        try { ZephyrClient.pair(host, port, "123456"); throw AssertionError("expected throw") }
+        catch (e: ZephyrClient.PairFailed) { assertTrue(e.message!!.contains("Wrong code")) }
+    }
+
+    @Test fun `pair falls back per status when the body has no detail`() {
+        enqueue("{}", 410)
+        try { ZephyrClient.pair(host, port, "123456"); throw AssertionError("expected throw") }
+        catch (e: ZephyrClient.PairFailed) { assertTrue(e.message!!.contains("expired")) }
+        enqueue("not json", 403)
+        try { ZephyrClient.pair(host, port, "123456"); throw AssertionError("expected throw") }
+        catch (e: ZephyrClient.PairFailed) { assertTrue(e.message!!.contains("Wrong code")) }
+    }
+
     @Test fun `401 surfaces as pair-again BadToken`() {
         enqueue("{\"error\":\"unauthorized\"}", 401)
         try { ZephyrClient.controlStatus(host, port, "bad"); throw AssertionError("expected throw") }

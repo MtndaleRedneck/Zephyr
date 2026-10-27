@@ -20,9 +20,26 @@ class StreamIdlePolicyTest {
         return stop
     }
 
-    @Test fun notArmedBeforeFirstServedStream() {
+    @Test fun neverServedWithNoConnectionStopsAfterFiveTicks() {
+        // L2: a failed handoff (never served a byte, nothing connected) must not
+        // hold the wake and Wi-Fi locks forever.
         val p = StreamIdlePolicy()
-        repeat(10) { assertFalse(p.tick(servedAny = false, openStreams = 0, playerState = STOPPED_OR_ENDED)) }
+        repeat(4) { assertFalse(p.tick(servedAny = false, openStreams = 0, playerState = STOPPED_OR_ENDED)) }
+        assertTrue(p.tick(servedAny = false, openStreams = 0, playerState = STOPPED_OR_ENDED))
+    }
+
+    @Test fun neverServedWithOpenConnectionStaysAlive() {
+        // An open connection is life even before the first byte is served.
+        val p = StreamIdlePolicy()
+        repeat(30) { assertFalse(p.tick(servedAny = false, openStreams = 1, playerState = UNKNOWN)) }
+    }
+
+    @Test fun neverServedStreakResetsWhenAConnectionOpens() {
+        val p = StreamIdlePolicy()
+        repeat(4) { assertFalse(p.tick(servedAny = false, openStreams = 0, playerState = UNKNOWN)) }
+        assertFalse(p.tick(servedAny = false, openStreams = 1, playerState = UNKNOWN)) // a connection opens
+        repeat(4) { assertFalse(p.tick(servedAny = false, openStreams = 0, playerState = UNKNOWN)) } // streak restarted
+        assertTrue(p.tick(servedAny = false, openStreams = 0, playerState = UNKNOWN))
     }
 
     @Test fun stopsAfterFiveContinuousStoppedMinutes() {

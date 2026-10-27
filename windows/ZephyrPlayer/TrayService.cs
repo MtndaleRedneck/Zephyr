@@ -45,6 +45,16 @@ namespace ZephyrPlayer
                 // keep the TaskbarIcon alive - its TaskbarCreated handler adds the
                 // icon once Explorer is up.
             }
+            // Round-4 NEW-C2: when CI asks (ZEPHYR_TRAY_DIAG=<path>), record
+            // whether the icon REALLY exists in the notification area - a corner
+            // pixel crop cannot tell a hidden-overflow icon from a missing one.
+            try
+            {
+                var diag = Environment.GetEnvironmentVariable("ZEPHYR_TRAY_DIAG");
+                if (!string.IsNullOrEmpty(diag))
+                    System.IO.File.WriteAllText(diag, "IsCreated=" + _icon.IsCreated);
+            }
+            catch { }
         }
 
         private ContextMenu BuildMenu()
@@ -71,6 +81,9 @@ namespace ZephyrPlayer
             border.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x3F, 0x3F, 0x46)));
             border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             border.SetValue(Border.PaddingProperty, new Thickness(4));
+            // Round-3 P9: room for the shadow inside the popup so it is not
+            // clipped flush at the edge.
+            border.SetValue(Border.MarginProperty, new Thickness(12));
             border.SetValue(Border.EffectProperty, new System.Windows.Media.Effects.DropShadowEffect
                 { BlurRadius = 16, ShadowDepth = 2, Opacity = 0.45, Color = Colors.Black });
             border.AppendChild(new FrameworkElementFactory(typeof(ItemsPresenter)));

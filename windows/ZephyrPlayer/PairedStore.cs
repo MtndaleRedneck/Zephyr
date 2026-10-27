@@ -109,9 +109,9 @@ namespace ZephyrPlayer
 
         private List<Entry> EntriesLocked() => _cache ??= Read();
 
-        /// <summary>Memory first (auth keeps working), then a best-effort atomic write:
-        /// temp file + replace, so a crash mid-write can never unpair every phone. A
-        /// failed write is logged-and-ignored, never a UI-thread exception.</summary>
+        /// <summary>Transactional: memory advances ONLY after the write lands. A
+        /// failed write throws a plain InvalidOperationException, so a phantom
+        /// pairing can never exist and no entry is half-saved.</summary>
         private void PersistLocked(List<Entry> entries)
         {
             if (_broken) throw new InvalidOperationException("paired store unreadable; refusing to overwrite it");
