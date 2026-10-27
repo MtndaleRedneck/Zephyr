@@ -346,11 +346,23 @@ StopZephyr
 $pBar = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 $hwBar = Wait-MainWindow $pBar 15
 [ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
-Start-Sleep -Seconds 1
 $hdr = @{ Authorization = "Bearer ci-capture-token" }
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') | Out-Null
+# The control server comes up after the window exists: wait for a real answer
+# instead of POSTing into a closed port and silently capturing the home window.
+$ctrlUp = $false
+foreach ($i in 1..40) {
+    try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 47823); $c.Close(); $ctrlUp = $true; break }
+    catch { Start-Sleep -Milliseconds 500 }
+}
+if (-not $ctrlUp) { throw "control server did not come up for the phone-start bar proof" }
+$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/control/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
+if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
 Start-Sleep -Seconds 2
 $szBar1 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+# Fail loudly when playback never started (home window captured) instead of
+# writing three identical NOT PROVEN captures.
+$videoPx = CountColored "$env:RUNNER_TEMP/pc-bar-phonestart.png" 0.15 0.80
+if ($videoPx -lt 2000) { throw "phone-start bar proof captured no video ($videoPx px) - playback did not start" }
 Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
 $szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
 Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null

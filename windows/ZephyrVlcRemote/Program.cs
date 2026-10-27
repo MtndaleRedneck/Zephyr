@@ -939,7 +939,7 @@ internal sealed class HelperWindow : Form
         };
         var wifiText = new Label
         {
-            Text = "Windows is treating this Wi-Fi as public, so it's blocking your phone.",
+            Text = "Windows marks this Wi-Fi as public, which can block your phone.",
             Font = new Font("Segoe UI", 9f),
             Left = 13, Top = 9, Width = contentW - 12 - 160 - 16, Height = 62 - 16,
         };
@@ -2004,7 +2004,7 @@ internal sealed class WifiDialog : Form
         var m = DialogLook.Margin;
         var contentW = clientW - 2 * m;
         var body = DialogLook.Text(
-            "Windows is treating this Wi-Fi (" + profile.Name + ") like a public hotspot, so your phone cannot reach this PC.\n\n" +
+            "Windows marks this Wi-Fi (" + profile.Name + ") as public, which can block your phone from reaching this PC.\n\n" +
             "If this is your home network, Zephyr VLC Remote can mark it as Private in Windows for you. This also lets Windows use its home-network settings on this Wi-Fi.\n\n" +
             "On a network you don't know (hotel, cafe), choose Not now.",
             new Font("Segoe UI", 9.5f), text, m, m, contentW);
