@@ -17,6 +17,18 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void Unreadable_File_Fails_Closed_And_Never_Gets_Overwritten()
+        {
+            File.WriteAllText(FilePath, "{ this is not json ");
+            var store = new PairedStore(FilePath);
+            Assert.False(store.IsPaired("anything"));   // reads look unpaired
+            Assert.True(store.IsBroken);
+            Assert.Throws<InvalidOperationException>(() => store.Add("tok", "phone"));
+            // The original file is untouched - pairing is never "fixed" by clobbering it.
+            Assert.Equal("{ this is not json ", File.ReadAllText(FilePath));
+        }
+
+        [Fact]
         public void Old_String_Array_Still_Reads_As_Paired()
         {
             File.WriteAllText(FilePath, "[\"tok-a\",\"tok-b\"]");

@@ -40,10 +40,13 @@ namespace ZephyrPlayer
         {
             var name = string.IsNullOrWhiteSpace(pcName) ? Environment.MachineName : pcName;
             _reply = Encoding.UTF8.GetBytes($"{ReplyMagic}|{name}|{httpPort}");
-            // The own port binds WITHOUT address reuse: if something else holds
-            // 8490 we want to know (the ctor throws, the UI shows "Find my PC
-            // is off") rather than silently sharing a port we own.
+            // The own port binds exclusively: if something else holds 8490 we want to
+            // know (the ctor throws, the UI shows "Find my PC is off") rather than
+            // silently sharing a port we own. ICMP "port unreachable" replies must not
+            // kill the listener either (SIO_UDP_CONNRESET off).
             var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            sock.ExclusiveAddressUse = true;
+            try { sock.IOControl(-1744830452 /* SIO_UDP_CONNRESET */, new byte[] { 0 }, null); } catch { /* non-Windows */ }
             sock.Bind(new IPEndPoint(IPAddress.Any, OwnPort));
             _listener = new UdpClient { Client = sock };
             _ = Task.Run(() => ReceiveLoop(_listener));

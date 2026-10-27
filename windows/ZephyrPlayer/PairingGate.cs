@@ -27,6 +27,12 @@ namespace ZephyrPlayer
         private readonly Func<DateTime> _now;
         private string? _code;
         private DateTime _expires = DateTime.MinValue;
+        // Renewal grace: when the on-screen code renews (or is re-minted), the code it
+        // replaced stays acceptable for 30s - a phone mid-type at the renewal boundary
+        // must not eat a wrong-code strike (review reconciliation).
+        private string? _prevCode;
+        private DateTime _prevExpires = DateTime.MinValue;
+        private static readonly TimeSpan PrevCodeGrace = TimeSpan.FromSeconds(30);
         private int _failures;
         private DateTime _lockedUntil = DateTime.MinValue;
 
@@ -37,6 +43,7 @@ namespace ZephyrPlayer
         {
             lock (_lock)
             {
+                if (_code != null) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }
                 _code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
                 _expires = _now() + CodeLifetime;
                 return _code;
@@ -46,7 +53,7 @@ namespace ZephyrPlayer
         /// <summary>The Pairing screen's Cancel link: take the code down without spending it.</summary>
         public void CancelCode()
         {
-            lock (_lock) { _code = null; _expires = DateTime.MinValue; }
+            lock (_lock) { _code = null; _expires = DateTime.MinValue; _prevCode = null; _prevExpires = DateTime.MinValue; }
         }
 
         /// <summary>After a successful pair the code is spent; the UI stops showing it.</summary>
@@ -92,9 +99,15 @@ namespace ZephyrPlayer
                     return PairOutcome.CodeExpired;
                 }
                 if (phoneCount >= MaxPhones) return PairOutcome.TooManyPhones;
-                var expected = System.Text.Encoding.UTF8.GetBytes(_code);
                 var given = System.Text.Encoding.UTF8.GetBytes(code);
-                if (given.Length != expected.Length || !CryptographicOperations.FixedTimeEquals(given, expected))
+                var expected = System.Text.Encoding.UTF8.GetBytes(_code);
+                var matches = given.Length == expected.Length && CryptographicOperations.FixedTimeEquals(given, expected);
+                if (!matches && _prevCode != null && _now() <= _prevExpires)
+                {
+                    var prev = System.Text.Encoding.UTF8.GetBytes(_prevCode);
+                    matches = given.Length == prev.Length && CryptographicOperations.FixedTimeEquals(given, prev);
+                }
+                if (!matches)
                 {
                     _failures++;
                     if (_failures >= MaxFailures) _lockedUntil = _now() + LockDuration;
@@ -103,6 +116,8 @@ namespace ZephyrPlayer
                 token = mint();
                 _code = null; // one-shot
                 _expires = DateTime.MinValue;
+                _prevCode = null;
+                _prevExpires = DateTime.MinValue;
                 _failures = 0;
                 return PairOutcome.Ok;
             }

@@ -67,7 +67,7 @@ namespace ZephyrPlayer
 
         private string FormUrl()
         {
-            var t = Clean(MessageBox.Text);
+            var t = Clean(MessageTextBox.Text);
             return BugFormUrl! + "?usp=pp_url"
                 + "&" + EntryMessage + "=" + Enc(t)
                 + "&" + EntrySentFrom + "=" + Enc("Windows PC")
@@ -78,7 +78,7 @@ namespace ZephyrPlayer
 
         private string IssueUrl()
         {
-            var t = Clean(MessageBox.Text);
+            var t = Clean(MessageTextBox.Text);
             var nl = t.IndexOf('\n');
             var title = "Feedback: " + (nl >= 0 ? t.Substring(0, nl) : t);
             if (title.Length > 67) title = title.Substring(0, 67);
@@ -90,7 +90,7 @@ namespace ZephyrPlayer
 
         private void OnTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e) => UpdatePreview();
 
-        private void UpdatePreview() => PreviewText.Text = Preview(MessageBox.Text);
+        private void UpdatePreview() => PreviewText.Text = Preview(MessageTextBox.Text);
 
         private void OnForm(object sender, RoutedEventArgs e) =>
             Process.Start(new ProcessStartInfo(FormUrl()) { UseShellExecute = true });

@@ -213,7 +213,10 @@ namespace ZephyrPlayer
             // bitmap pixels) cannot be pixel-proven through the shell there. With the seam,
             // real bitmaps travel the exact Peek/Thumb pipeline the shell bitmaps would take.
             // When unset, behavior is unchanged: shell thumbnails or drawn placeholders only.
-            var fixtureDir = Environment.GetEnvironmentVariable("ZEPHYR_THUMB_FIXTURE_DIR");
+            // Test seam: only with the capture switch, same as every other CI-only hook.
+            var fixtureDir = Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null
+                ? Environment.GetEnvironmentVariable("ZEPHYR_THUMB_FIXTURE_DIR")
+                : null;
             var generation = ++_thumbGeneration;
             Task.Run(() =>
             {

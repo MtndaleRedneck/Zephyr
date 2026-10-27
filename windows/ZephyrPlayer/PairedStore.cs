@@ -27,6 +27,17 @@ namespace ZephyrPlayer
         // auth path (IsPaired, every request) never races a UI write again, and a sharing
         // violation on the file can never turn into a spurious 401 (review should-fix 2).
         private List<Entry>? _cache;
+        /// <summary>The existing file could not be read at first load. Fail CLOSED:
+        /// writes refuse (never replace an unreadable store with a partial one - that
+        /// would silently unpair every phone in it).</summary>
+        private bool _broken;
+        /// <summary>The store file exists but could not be read: reads show unpaired and
+        /// writes refuse. Surfaced as a plain line on the Pairing screen (review N5).</summary>
+        public bool IsBroken { get { lock (_sync) return _broken; } }
+
+        /// <summary>Raised (under no lock guarantee) after a pairing is added or removed;
+        /// open Settings windows refresh their "Paired with N phones" line.</summary>
+        public event EventHandler? Changed;
 
         public PairedStore() { _path = DefaultPath; }
         internal PairedStore(string path) { _path = path; }
@@ -70,6 +81,7 @@ namespace ZephyrPlayer
                 entries.Add(new Entry(token, string.IsNullOrWhiteSpace(name) ? "My phone" : name.Trim()));
                 PersistLocked(entries);
             }
+            Changed?.Invoke(this, EventArgs.Empty);
         }
 
         /// <summary>Forget one phone (Pairing screen "Remove"). Its token stops
@@ -82,6 +94,7 @@ namespace ZephyrPlayer
                 entries.RemoveAll(e => FixedTime(e.Token, token));
                 PersistLocked(entries);
             }
+            Changed?.Invoke(this, EventArgs.Empty);
         }
 
         private List<Entry> EntriesLocked() => _cache ??= Read();
@@ -91,6 +104,7 @@ namespace ZephyrPlayer
         /// failed write is logged-and-ignored, never a UI-thread exception.</summary>
         private void PersistLocked(List<Entry> entries)
         {
+            if (_broken) throw new InvalidOperationException("paired store unreadable; refusing to overwrite it");
             try
             {
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
@@ -132,7 +146,7 @@ namespace ZephyrPlayer
                 }
                 return entries;
             }
-            catch { return new List<Entry>(); } // unreadable store = nothing paired, never fail-open
+            catch { _broken = true; return new List<Entry>(); } // unreadable store = nothing paired, never fail-open; writes refuse below
         }
 
     }
