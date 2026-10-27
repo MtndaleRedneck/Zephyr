@@ -219,14 +219,20 @@ namespace ZephyrPlayer
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
             // otherwise): Home goes up first, then the pairing screen over it.
             if (!store.HasAny) ShowPairingWindow();
-            // CI evidence args (local only): --open-settings / --open-pairing show
-            // those surfaces over home; --play=<uri> starts local playback.
-            foreach (var arg in e.Args)
+            // CI evidence args: honored ONLY when the capture script opts in with
+            // ZEPHYR_CI_CAPTURE (review nit 3 - a release binary must not grow a
+            // second Settings window or autoplay from stray args).
+            var ciCapture = Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null;
+            foreach (var arg in ciCapture ? e.Args : Array.Empty<string>())
             {
                 if (arg == "--open-settings")
                 {
                     var sw = new SettingsWindow(settings, store, ShowPairingWindow) { Owner = _home };
                     sw.Show();
+                }
+                else if (arg == "--tray-menu")
+                {
+                    _tray?.ShowMenuForCapture();
                 }
                 else if (arg == "--open-pairing")
                 {

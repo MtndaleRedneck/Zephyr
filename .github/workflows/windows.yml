@@ -240,6 +240,7 @@ jobs:
             ${{ runner.temp }}/pc-pairing-render.png
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
+            ${{ runner.temp }}/pc-tray-menu.png
             ${{ runner.temp }}/pc-controlbar-render.png
             ${{ runner.temp }}/pc-desktop.png
             ${{ runner.temp }}/pc-home-library.png

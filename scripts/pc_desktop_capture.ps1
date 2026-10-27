@@ -231,6 +231,7 @@ $cfgDir = Join-Path $env:APPDATA 'ZephyrPlayer'
 New-Item -ItemType Directory -Force $cfgDir | Out-Null
 $libJson = $libDir -replace '\\','\\'
 [IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$libJson`"}")
+[Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', '1', 'Process')
 $prevFx = [Environment]::GetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR','Process')
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $thumbDir, 'Process')
 $pH = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
@@ -289,6 +290,17 @@ if ($pw -eq [System.IntPtr]::Zero) { Write-Host "::error::pairing window handle 
 [ZWU32]::SetWindowPos($pw, [System.IntPtr]::new(-1), 40, 4, 560, 600, 0) | Out-Null
 Start-Sleep -Milliseconds 900
 $sz4b = CaptureWindow $pw "$env:RUNNER_TEMP/pc-desktop-pairing.png"
+StopZephyr
+
+# 2c) Tray menu, actual pixels: the CI-only --tray-menu arg pops the strip at a
+# fixed screen point; this grabs the region (dark-renderer proof).
+$p2c = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--tray-menu" -PassThru
+Start-Sleep -Seconds 4
+$tbmp = New-Object System.Drawing.Bitmap 360, 170
+$tg = [System.Drawing.Graphics]::FromImage($tbmp)
+$tg.CopyFromScreen(40, 40, 0, 0, $tbmp.Size)
+$tbmp.Save("$env:RUNNER_TEMP/pc-tray-menu.png")
+$tg.Dispose(); $tbmp.Dispose()
 StopZephyr
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.

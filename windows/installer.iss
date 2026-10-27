@@ -46,5 +46,4 @@ Filename: "{app}\ZephyrPlayer.exe"; Flags: nowait skipifnotsilent runasoriginalu
 [UninstallRun]
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr Player"""; Flags: runhidden waituntilterminated; RunOnceId: "delrule"
 Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr Player Discovery"""; Flags: runhidden waituntilterminated; RunOnceId: "deldiscrule"
-Filename: "netsh"; Parameters: "advfirewall firewall delete rule name=""Zephyr Player Discovery Legacy"""; Flags: runhidden waituntilterminated; RunOnceId: "dellegacydiscrule"
 Filename: "netsh"; Parameters: "http delete urlacl url=http://+:47823/"; Flags: runhidden waituntilterminated; RunOnceId: "delacl"

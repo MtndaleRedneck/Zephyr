@@ -126,13 +126,17 @@
                             </ItemsControl>
                         </StackPanel>
                     </Border>
-                    <Grid Grid.Column="3" Width="220" Margin="10,0,0,0" VerticalAlignment="Center">
-                        <TextBox x:Name="SearchBox" Background="{StaticResource CardBrush}" Foreground="{StaticResource TextBrush}"
-                                 BorderThickness="0" Padding="10,6" FontSize="13" VerticalContentAlignment="Center"
-                                 TextChanged="OnSearchChanged"/>
-                        <TextBlock x:Name="SearchHint" Text="Search Movies" Foreground="{StaticResource MutedBrush}" FontSize="13"
-                                   IsHitTestVisible="False" VerticalAlignment="Center" Margin="11,0,0,0"/>
-                    </Grid>
+                    <!-- Same 10px rounding as the address bar next to it (review nit 6). -->
+                    <Border Grid.Column="3" Width="220" Margin="10,0,0,0" VerticalAlignment="Center"
+                            Background="{StaticResource CardBrush}" CornerRadius="10">
+                        <Grid>
+                            <TextBox x:Name="SearchBox" Background="Transparent" Foreground="{StaticResource TextBrush}"
+                                     BorderThickness="0" Padding="10,6" FontSize="13" VerticalContentAlignment="Center"
+                                     TextChanged="OnSearchChanged"/>
+                            <TextBlock x:Name="SearchHint" Text="Search Movies" Foreground="{StaticResource MutedBrush}" FontSize="13"
+                                       IsHitTestVisible="False" VerticalAlignment="Center" Margin="11,0,0,0"/>
+                        </Grid>
+                    </Border>
                 </Grid>
 
                 <!-- Large-icons grid -->

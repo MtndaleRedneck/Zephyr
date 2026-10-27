@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Media.Imaging;
 
@@ -35,11 +36,37 @@ namespace ZephyrPlayer
         private const int SIIGBF_RESIZETOFIT = 0x00;
         private const int SIIGBF_THUMBNAILONLY = 0x08;
 
+        // Shell thumbnail handlers expect STA (review should-fix 10): every shell call
+        // runs on ONE dedicated STA worker fed by a queue, never a thread-pool MTA thread.
+        private static readonly System.Collections.Concurrent.BlockingCollection<Action> _jobs = new();
+        private static readonly Thread _worker;
+
+        static ShellThumbs()
+        {
+            _worker = new Thread(() =>
+            {
+                foreach (var job in _jobs.GetConsumingEnumerable()) { try { job(); } catch { } }
+            })
+            { IsBackground = true, Name = "ShellThumbs" };
+            _worker.SetApartmentState(ApartmentState.STA);
+            _worker.Start();
+        }
+
         /// <summary>The shell's real thumbnail for a file, or null (no thumbnail
-        /// handler / not Windows / any failure). Call off the UI thread.</summary>
+        /// handler / not Windows / any failure). Call off the UI thread; the call
+        /// blocks until the STA worker has produced (or failed) this bitmap.</summary>
         public static BitmapSource? Get(string path, int size)
         {
             if (!OperatingSystem.IsWindows()) return null;
+            var done = new System.Threading.ManualResetEventSlim(false);
+            BitmapSource? result = null;
+            _jobs.Add(() => { try { result = GetOnSta(path, size); } finally { done.Set(); } });
+            try { done.Wait(TimeSpan.FromSeconds(30)); } catch { return null; }
+            return result;
+        }
+
+        private static BitmapSource? GetOnSta(string path, int size)
+        {
             IShellItemImageFactory? factory = null;
             IntPtr hbitmap = IntPtr.Zero;
             try
@@ -49,10 +76,7 @@ namespace ZephyrPlayer
                 if (hr != 0 || factory == null) return null;
                 factory.GetImage(new SIZE(size, size), SIIGBF_RESIZETOFIT | SIIGBF_THUMBNAILONLY, out hbitmap);
                 if (hbitmap == IntPtr.Zero) return null;
-                var src = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(
-                    hbitmap, IntPtr.Zero, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
-                src.Freeze();
-                return src;
+                return ToBitmapSource(hbitmap);
             }
             catch { return null; }
             finally
@@ -60,6 +84,30 @@ namespace ZephyrPlayer
                 if (hbitmap != IntPtr.Zero) DeleteObject(hbitmap);
                 if (factory != null) Marshal.ReleaseComObject(factory);
             }
+        }
+
+        /// <summary>HBITMAP -> frozen BitmapSource with alpha intact:
+        /// Imaging.CreateBitmapSourceFromHBitmap drops the alpha channel (transparent
+        /// thumbnails got black corners), so the raw 32bpp pixels are copied instead.</summary>
+        private static BitmapSource? ToBitmapSource(IntPtr hbitmap)
+        {
+            using var bmp = System.Drawing.Image.FromHbitmap(hbitmap);
+            var rect = new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height);
+            var data = bmp is System.Drawing.Bitmap b
+                ? b.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly,
+                    System.Drawing.Imaging.PixelFormat.Format32bppArgb)
+                : throw new InvalidOperationException();
+            try
+            {
+                var stride = Math.Abs(data.Stride);
+                var bytes = new byte[stride * data.Height];
+                Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
+                var src = BitmapSource.Create(bmp.Width, bmp.Height, 96, 96,
+                    System.Windows.Media.PixelFormats.Bgra32, null, bytes, stride);
+                src.Freeze();
+                return src;
+            }
+            finally { (bmp as System.Drawing.Bitmap)?.UnlockBits(data); }
         }
     }
 }
