@@ -506,6 +506,56 @@ try {
     Write-Host "resume play answer: $($rResume.code) $($rResume.body)"
     Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
     Assert ($rResume.body -match '"position":120') "the saved place's position comes back"
+
+    # B4 end-to-end: NOT a seeded fixture - the helper itself records the place from
+    # VLC's live status and persists it, then a restart still asks Resume / Start
+    # over. This covers the write path; the seeded case above covers the load path.
+    & ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=duration=400:size=320x240:rate=5 -c:v mpeg4 -y (Join-Path $movies 'long.mkv')
+    if ($LASTEXITCODE -ne 0) { throw "ffmpeg could not make the long clip" }
+    Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not restart for the end-to-end resume check" }
+    $rLong = Invoke-Helper '/movies/play' '{"path":"long.mkv","resume":false}' $token
+    Assert ($rLong.code -eq 200) "end-to-end resume: the long clip starts (start-over arm)"
+    $vlcUp = $false
+    foreach ($i in 1..40) {
+        if (Get-Process vlc -ErrorAction SilentlyContinue) { $vlcUp = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
+    Assert $vlcUp "end-to-end resume: VLC is running the long clip"
+    # Seek past the 60s ask floor through VLC's own web interface, with the paired password.
+    $vlcAuth = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(':' + $paired.vlcPassword))
+    $seeked = $false
+    foreach ($i in 1..30) {
+        try {
+            $st = Invoke-RestMethod -Uri 'http://127.0.0.1:8080/requests/status.json?command=seek&val=120' -Headers @{ Authorization = "Basic $vlcAuth" }
+            if ($st.time -ge 100) { $seeked = $true; break }
+        } catch { }
+        Start-Sleep -Seconds 1
+    }
+    Assert $seeked "end-to-end resume: VLC seeks past the ask floor"
+    Start-Sleep -Seconds 7   # one 5s poller tick records the place in memory
+    Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 7   # the VLC-is-down tick persists the places to disk
+    Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 1
+    $p = Start-Process $exe -PassThru
+    $up = $false
+    foreach ($i in 1..40) {
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close(); $up = $true; break }
+        catch { Start-Sleep -Milliseconds 500 }
+    }
+    if (-not $up) { throw "helper did not restart after the app's own save" }
+    $rResume2 = Invoke-Helper '/movies/play' '{"path":"long.mkv"}' $token
+    Write-Host "end-to-end resume play answer: $($rResume2.code) $($rResume2.body)"
+    Assert ($rResume2.body -match '"ask"') "end-to-end resume: the helper's own saved place survives a restart"
+    Assert ($rResume2.body -match '"position":1[0-4][0-9]') "end-to-end resume: the saved position is the one VLC reported"
     Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
     Remove-Item (Join-Path $resumeDir 'resume-places.json') -Force -ErrorAction SilentlyContinue
 
