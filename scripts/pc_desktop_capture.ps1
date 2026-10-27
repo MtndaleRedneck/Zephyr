@@ -36,6 +36,7 @@ public static class ZWU32 {
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out ZRECT r);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, System.IntPtr w, System.IntPtr l);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out ZRECT r, int size);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
@@ -118,6 +119,15 @@ function ClickAt($xf, $yf) {
     Start-Sleep -Milliseconds 700
 }
 function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
+function Close-PairingWindow($proc) {
+    # A fresh profile auto-shows the pairing screen over Home; close it so the
+    # Home captures show the grid itself. WM_CLOSE keeps this a real UI close.
+    $pw = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player - Pair your phone')
+    if ($pw -ne [System.IntPtr]::Zero) {
+        [ZWU32]::PostMessage($pw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
+        Start-Sleep -Milliseconds 600
+    }
+}
 function FitWindow($hWnd) {
     # Whole window inside the virtual screen, top-left aligned, no clipping.
     # HWND_TOPMOST (-1): the runner taskbar otherwise overlaps the window's
@@ -156,6 +166,7 @@ Start-Sleep -Seconds 2
 $p = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
 $hw = Wait-MainWindow $p 15
 $alive = ($hw -ne [System.IntPtr]::Zero)
+Close-PairingWindow $p
 FitWindow $hw
 $sz1 = CaptureWindow $hw "$env:RUNNER_TEMP/pc-desktop.png"
 # The app is single-instance (mutex "ZephyrPlayer"): the settings launch below
@@ -174,6 +185,7 @@ $libJson = $libDir -replace '\\','\\'
 [IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$libJson`"}")
 $pH = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -PassThru
 $hwH = Wait-MainWindow $pH 15
+Close-PairingWindow $pH
 if ($hwH -ne [System.IntPtr]::Zero) {
     [ZWU32]::SetWindowPos($hwH, [System.IntPtr]::Zero, 30, 4, 940, 700, $SWP_NOZORDER) | Out-Null
     Start-Sleep -Milliseconds 900
@@ -198,10 +210,32 @@ if ($sw -eq [System.IntPtr]::Zero) { Write-Host "::error::settings window handle
 [ZWU32]::SetWindowPos($sw, [System.IntPtr]::new(-1), 40, 4, 700, 690, 0) | Out-Null
 Start-Sleep -Milliseconds 700
 $sz3 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings.png"
-[ZWU32]::SetCursorPos(390, 400) | Out-Null
-1..8 | ForEach-Object { [ZWU32]::mouse_event($MOUSEEVENTF_WHEEL, 0, 0, -120, [System.UIntPtr]::Zero); Start-Sleep -Milliseconds 120 }
-Start-Sleep -Seconds 9
-$sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-bottom.png"
+# The pinned bottom of the nav (Feedback & Updates, with the version) is a
+# section SWITCH now, not a scroll: invoke the real "Updates" nav button
+# through UI Automation and capture that section as the bottom evidence.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$settingsRoot = [System.Windows.Automation.AutomationElement]::FromHandle($sw)
+$updCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'NavUpdates')
+$upd = $settingsRoot.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $updCond)
+if ($upd -ne $null) {
+    $upd.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 700
+} else { Write-Host "::error::NavUpdates button not found via UIA" }
+$sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-updates.png"
+StopZephyr# The pinned bottom of the nav (Feedback & Updates, with the version) is a
+# section SWITCH now, not a scroll: invoke the real "Updates" nav button
+# through UI Automation and capture that section as the bottom evidence.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$settingsRoot = [System.Windows.Automation.AutomationElement]::FromHandle($sw)
+$updCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'NavUpdates')
+$upd = $settingsRoot.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $updCond)
+if ($upd -ne $null) {
+    $upd.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 700
+} else { Write-Host "::error::NavUpdates button not found via UIA" }
+$sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-updates.png"
 StopZephyr
 
 # 2b) Pairing screen (1.2.0: the dedicated pairing window replaced the banner).

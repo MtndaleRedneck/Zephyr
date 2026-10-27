@@ -175,7 +175,7 @@ jobs:
             ${{ runner.temp }}/pc-desktop.png
             ${{ runner.temp }}/pc-home-library.png
             ${{ runner.temp }}/pc-desktop-settings.png
-            ${{ runner.temp }}/pc-desktop-settings-bottom.png
+            ${{ runner.temp }}/pc-desktop-settings-updates.png
             ${{ runner.temp }}/pc-playing-controls-window.png
             ${{ runner.temp }}/pc-playing-controls-fullscreen.png
             ${{ runner.temp }}/pc-smoke-*.png
