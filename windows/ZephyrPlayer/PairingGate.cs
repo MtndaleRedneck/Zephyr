@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 
 namespace ZephyrPlayer
 {
-    public enum PairOutcome { Ok, BadCode, CodeExpired, Locked, NoCode, TooManyPhones }
+    public enum PairOutcome { Ok, BadCode, CodeExpired, Locked, NoCode, TooManyPhones, StoreUnavailable }
 
     /// <summary>
     /// Pairing protections, mirroring the inherited BingeMote helper model
@@ -43,7 +43,9 @@ namespace ZephyrPlayer
         {
             lock (_lock)
             {
-                if (_code != null) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }
+                // Grace only for a LIVE code: an already-expired code (UI stall,
+                // sleep/wake) must not be revived for another 30s (round-3 P6).
+                if (_code != null && _now() <= _expires) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }
                 _code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
                 _expires = _now() + CodeLifetime;
                 return _code;

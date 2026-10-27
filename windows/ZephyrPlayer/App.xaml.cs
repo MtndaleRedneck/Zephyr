@@ -154,15 +154,29 @@ namespace ZephyrPlayer
                 validateToken: store.IsPaired,
                 onPair: code =>
                 {
-                    var outcome = gate.TryPair(code, store.Count, () =>
+                    // Fail-closed store: no code is consumed and the phone gets a
+                    // plain answer instead of a 500 (round-3 P4).
+                    if (store.IsBroken) return (PairOutcome.StoreUnavailable, null);
+                    PairOutcome outcome;
+                    string? token;
+                    try
                     {
-                        var t = Guid.NewGuid().ToString("N");
-                        // The name typed on the Pairing screen is attached to the
-                        // token the moment that code pairs.
-                        store.Add(t, _pendingPhoneName ?? "My phone");
-                        _pendingPhoneName = null;
-                        return t;
-                    }, out var token);
+                        outcome = gate.TryPair(code, store.Count, () =>
+                        {
+                            var t = Guid.NewGuid().ToString("N");
+                            // The name typed on the Pairing screen is attached to the
+                            // token the moment that code pairs.
+                            store.Add(t, _pendingPhoneName ?? "My phone");
+                            _pendingPhoneName = null;
+                            return t;
+                        }, out token);
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // The save failed: the transactional store changed nothing and
+                        // the gate never spent the code, so a retry is safe.
+                        return (PairOutcome.StoreUnavailable, null);
+                    }
                     if (outcome == PairOutcome.Ok)
                     {
                         Current.Dispatcher.InvokeAsync(() =>

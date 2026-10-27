@@ -41,8 +41,18 @@ namespace ZephyrPlayer
             {
                 // Always a fresh code on open (review N2): no blank code with a running
                 // countdown, and closing cancels the code so none sits unseen (Closed below).
-                Mint();
-                ShowCode();
+                // Broken store: mint NOTHING - a code that can never be saved would
+                // send the phone into a pairing that always fails (round-3 P4).
+                if (!_store.IsBroken)
+                {
+                    Mint();
+                    ShowCode();
+                }
+                else
+                {
+                    CodePanel.Visibility = Visibility.Collapsed;
+                    PairButton.IsEnabled = false;
+                }
                 RefreshPhones();
                 RefreshStatus();
                 _tick.Start();
@@ -90,6 +100,7 @@ namespace ZephyrPlayer
             _gate.CancelCode();
             _codeShowing = false;
             CodePanel.Visibility = Visibility.Collapsed;
+            PairButton.Visibility = Visibility.Visible;
         }
 
         private void TickCountdown()
@@ -101,6 +112,7 @@ namespace ZephyrPlayer
                 // Spent by a successful pair or cancelled: never mint a hidden code (N4b).
                 _codeShowing = false;
                 CodePanel.Visibility = System.Windows.Visibility.Collapsed;
+                PairButton.Visibility = Visibility.Visible;
                 return;
             }
             if (left.Value <= TimeSpan.FromSeconds(2))
@@ -117,6 +129,9 @@ namespace ZephyrPlayer
         {
             _codeShowing = true;
             CodePanel.Visibility = Visibility.Visible;
+            // The code is already live: a Pair button that only re-shows the same
+            // panel reads as broken, so it hides until the code is gone (round-3 P5).
+            PairButton.Visibility = Visibility.Collapsed;
             var left = _gate.CodeTimeLeft ?? TimeSpan.FromMinutes(10);
             ExpiresText.Text = $"New code in {(int)left.TotalMinutes}:{left.Seconds:00}";
             RefreshStatus();
@@ -127,6 +142,7 @@ namespace ZephyrPlayer
         {
             _codeShowing = false;
             CodePanel.Visibility = Visibility.Collapsed;
+            PairButton.Visibility = Visibility.Visible;
             RefreshPhones();
             RefreshStatus();
         }
@@ -147,7 +163,7 @@ namespace ZephyrPlayer
                 // N5 fail-closed surfaced plainly: the pairings file could not be read,
                 // nothing was deleted, and new pairing stays off until it is fixed.
                 StatusDot.Fill = WarnOrange;
-                StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted - restart the app or repair the pairings file to bring them back.";
+                StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted - restarting the Player usually brings them back.";
             }
             else if (ConnectionState.DiscoveryOff)
             {
@@ -170,7 +186,17 @@ namespace ZephyrPlayer
         {
             if (sender is Button b && b.Tag is string token)
             {
-                _store.Remove(token);
+                try
+                {
+                    _store.Remove(token);
+                }
+                catch (InvalidOperationException)
+                {
+                    // Broken/refused store: nothing changed; say so instead of
+                    // letting the exception reach the unhandled handler (round-3 P4).
+                    StatusText.Text = "That change could not be saved - nothing was changed. Restarting the Player usually fixes this.";
+                    return;
+                }
                 RefreshPhones();
                 RefreshStatus();
             }

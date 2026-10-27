@@ -77,9 +77,16 @@ namespace ZephyrPlayer
             lock (_sync)
             {
                 var entries = EntriesLocked();
+                // Broken store: refuse BEFORE touching memory - a refused write must
+                // never leave a phantom entry that IsPaired/Count/the UI then trust
+                // (round-3 P4). Disk first too: only a persisted change reaches _cache,
+                // so a failed write changes nothing anywhere.
+                if (_broken) throw new InvalidOperationException("The saved pairings file could not be read, so nothing was changed.");
                 if (entries.Any(e => FixedTime(e.Token, token))) return;
-                entries.Add(new Entry(token, string.IsNullOrWhiteSpace(name) ? "My phone" : name.Trim()));
-                PersistLocked(entries);
+                var next = entries.Select(e => e with { }).ToList();
+                next.Add(new Entry(token, string.IsNullOrWhiteSpace(name) ? "My phone" : name.Trim()));
+                PersistLocked(next);
+                _cache = next;
             }
             Changed?.Invoke(this, EventArgs.Empty);
         }
@@ -91,8 +98,11 @@ namespace ZephyrPlayer
             lock (_sync)
             {
                 var entries = EntriesLocked();
-                entries.RemoveAll(e => FixedTime(e.Token, token));
-                PersistLocked(entries);
+                if (_broken) throw new InvalidOperationException("The saved pairings file could not be read, so nothing was changed.");
+                var next = entries.Where(e => !FixedTime(e.Token, token)).Select(e => e with { }).ToList();
+                if (next.Count == entries.Count) return; // nothing to forget
+                PersistLocked(next);
+                _cache = next;
             }
             Changed?.Invoke(this, EventArgs.Empty);
         }
@@ -114,7 +124,13 @@ namespace ZephyrPlayer
                 if (File.Exists(_path)) File.Replace(tmp, _path, null);
                 else File.Move(tmp, _path);
             }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("paired store write failed: " + ex.GetType().Name); }
+            catch (Exception ex)
+            {
+                // A failed write is NOT swallowed (round-2/round-3 ask): the caller
+                // gets a plain error and the in-memory list stays unchanged.
+                System.Diagnostics.Debug.WriteLine("paired store write failed: " + ex.GetType().Name);
+                throw new InvalidOperationException("The pairing could not be saved. Nothing was changed.", ex);
+            }
         }
 
         // ---------- file shape (old string[] + new entry[] both read) ----------
@@ -123,6 +139,8 @@ namespace ZephyrPlayer
 
         private List<Entry> Read()
         {
+            for (var attempt = 0; ; attempt++)
+            {
             try
             {
                 if (!File.Exists(_path)) return new List<Entry>();
@@ -146,7 +164,14 @@ namespace ZephyrPlayer
                 }
                 return entries;
             }
+            catch (IOException) when (attempt < 2)
+            {
+                // A scanner or backup holding the file briefly is transient: retry a
+                // couple of times before declaring the store broken (round-3 P4).
+                System.Threading.Thread.Sleep(120);
+            }
             catch { _broken = true; return new List<Entry>(); } // unreadable store = nothing paired, never fail-open; writes refuse below
+            }
         }
 
     }

@@ -33,6 +33,18 @@ namespace ZephyrPlayer
             };
             _icon.TrayLeftMouseDown += (_, __) => OpenRequested?.Invoke();
             _icon.TrayMouseDoubleClick += (_, __) => OpenRequested?.Invoke();
+            // Built in code, so the icon is never in a visual tree and its Loaded
+            // handler never fires - without ForceCreate the tray icon would never
+            // exist at all (round-3 P1). enablesEfficiencyMode stays false: the
+            // library default (true) would put the whole player into Windows 11
+            // Efficiency Mode, which is wrong for video playback.
+            try { _icon.ForceCreate(false); }
+            catch
+            {
+                // The shell is not ready (e.g. before Explorer starts at sign-in):
+                // keep the TaskbarIcon alive - its TaskbarCreated handler adds the
+                // icon once Explorer is up.
+            }
         }
 
         private ContextMenu BuildMenu()

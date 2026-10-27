@@ -32,6 +32,21 @@ namespace ZephyrPlayer
             [MarshalAs(UnmanagedType.LPStruct)] Guid riid, out IShellItemImageFactory factory);
 
         [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr hObject);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] private static extern int GetObject(IntPtr hObject, int nSize, out BITMAP lpObject);
+        [DllImport("gdi32.dll")] private static extern int GetDIBits(IntPtr hdc, IntPtr hbm, uint start, uint lines, byte[] bits, ref BITMAPINFOHEADER bmi, uint usage);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BITMAP { public int bmType; public int bmWidth; public int bmHeight; public int bmWidthBytes; public short bmPlanes; public short bmBitsPixel; public IntPtr bmBits; }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct BITMAPINFOHEADER
+        {
+            public uint biSize; public int biWidth; public int biHeight; public ushort biPlanes;
+            public ushort biBitCount; public uint biCompression; public uint biSizeImage;
+            public int biXPelsPerMeter; public int biYPelsPerMeter; public uint biClrUsed; public uint biClrImportant;
+        }
 
         private const int SIIGBF_RESIZETOFIT = 0x00;
         private const int SIIGBF_THUMBNAILONLY = 0x08;
@@ -39,17 +54,26 @@ namespace ZephyrPlayer
         // Shell thumbnail handlers expect STA (review should-fix 10): every shell call
         // runs on ONE dedicated STA worker fed by a queue, never a thread-pool MTA thread.
         private static readonly System.Collections.Concurrent.BlockingCollection<Action> _jobs = new();
-        private static readonly Thread _worker;
+        private static readonly object _workerSync = new();
+        private static Thread _worker = null!;
+        // Bumped when a shell call hangs past the timeout: queued jobs from before the
+        // hang skip themselves, and a FRESH worker takes over, so one bad thumbnail
+        // handler (network file, bad codec pack) can no longer stall every later
+        // thumbnail until restart (round-3 P3).
+        private static long _generation;
 
-        static ShellThumbs()
+        static ShellThumbs() { StartWorker(); }
+
+        private static void StartWorker()
         {
-            _worker = new Thread(() =>
+            var t = new Thread(() =>
             {
                 foreach (var job in _jobs.GetConsumingEnumerable()) { try { job(); } catch { } }
             })
             { IsBackground = true, Name = "ShellThumbs" };
-            _worker.SetApartmentState(ApartmentState.STA);
-            _worker.Start();
+            t.SetApartmentState(ApartmentState.STA);
+            lock (_workerSync) _worker = t;
+            t.Start();
         }
 
         /// <summary>The shell's real thumbnail for a file, or null (no thumbnail
@@ -58,10 +82,27 @@ namespace ZephyrPlayer
         public static BitmapSource? Get(string path, int size)
         {
             if (!OperatingSystem.IsWindows()) return null;
-            var done = new System.Threading.ManualResetEventSlim(false);
+            using var done = new System.Threading.ManualResetEventSlim(false);
             BitmapSource? result = null;
-            _jobs.Add(() => { try { result = GetOnSta(path, size); } finally { done.Set(); } });
-            try { done.Wait(TimeSpan.FromSeconds(30)); } catch { return null; }
+            var gen = Interlocked.Read(ref _generation);
+            _jobs.Add(() =>
+            {
+                if (gen != Interlocked.Read(ref _generation)) return; // caller gave up
+                try { result = GetOnSta(path, size); } catch { } finally { try { done.Set(); } catch { } }
+            });
+            try
+            {
+                if (!done.Wait(TimeSpan.FromSeconds(30)))
+                {
+                    // The worker is stuck inside a shell call that may never return.
+                    // Retire it (background thread; a hung COM call cannot be killed)
+                    // and continue on a fresh one.
+                    Interlocked.Increment(ref _generation);
+                    StartWorker();
+                    return null;
+                }
+            }
+            catch { return null; }
             return result;
         }
 
@@ -86,28 +127,38 @@ namespace ZephyrPlayer
             }
         }
 
-        /// <summary>HBITMAP -> frozen BitmapSource with alpha intact:
-        /// Imaging.CreateBitmapSourceFromHBitmap drops the alpha channel (transparent
-        /// thumbnails got black corners), so the raw 32bpp pixels are copied instead.</summary>
+        /// <summary>HBITMAP -> frozen BitmapSource with alpha intact. The old path
+        /// (System.Drawing.Image.FromHbitmap + LockBits) silently produced 32bppRgb
+        /// with alpha 255 everywhere, so transparent thumbnails still got black
+        /// corners (round-3 P2). Reading the DIB bits directly keeps the real alpha;
+        /// shell bitmaps are premultiplied, so the result is Pbgra32. This also
+        /// removes the last System.Drawing use from the Player.</summary>
         private static BitmapSource? ToBitmapSource(IntPtr hbitmap)
         {
-            using var bmp = System.Drawing.Image.FromHbitmap(hbitmap);
-            var rect = new System.Drawing.Rectangle(0, 0, bmp.Width, bmp.Height);
-            var data = bmp is System.Drawing.Bitmap b
-                ? b.LockBits(rect, System.Drawing.Imaging.ImageLockMode.ReadOnly,
-                    System.Drawing.Imaging.PixelFormat.Format32bppArgb)
-                : throw new InvalidOperationException();
+            if (GetObject(hbitmap, Marshal.SizeOf<BITMAP>(), out var bm) == 0) return null;
+            var w = bm.bmWidth; var h = bm.bmHeight;
+            if (w <= 0 || h <= 0) return null;
+            var hdc = CreateCompatibleDC(IntPtr.Zero);
+            if (hdc == IntPtr.Zero) return null;
             try
             {
-                var stride = Math.Abs(data.Stride);
-                var bytes = new byte[stride * data.Height];
-                Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);
-                var src = BitmapSource.Create(bmp.Width, bmp.Height, 96, 96,
-                    System.Windows.Media.PixelFormats.Bgra32, null, bytes, stride);
+                var bmi = new BITMAPINFOHEADER
+                {
+                    biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+                    biWidth = w,
+                    biHeight = -h, // top-down: no row flip
+                    biPlanes = 1,
+                    biBitCount = 32,
+                    biCompression = 0, // BI_RGB: alpha bytes preserved as stored
+                };
+                var bytes = new byte[w * h * 4];
+                if (GetDIBits(hdc, hbitmap, 0, (uint)h, bytes, ref bmi, 0) == 0) return null;
+                var src = BitmapSource.Create(w, h, 96, 96,
+                    System.Windows.Media.PixelFormats.Pbgra32, null, bytes, w * 4);
                 src.Freeze();
                 return src;
             }
-            finally { (bmp as System.Drawing.Bitmap)?.UnlockBits(data); }
+            finally { DeleteDC(hdc); }
         }
     }
 }

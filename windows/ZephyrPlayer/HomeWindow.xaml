@@ -153,8 +153,14 @@
                                     <StackPanel Width="124" Margin="6,6">
                                         <!-- Folder tile: poster peeking out of the wireframe outline -->
                                         <Grid Width="104" Height="88" Visibility="{Binding FolderVis}">
-                                            <Border Width="64" Height="52" CornerRadius="3" Margin="0,0,0,22"
-                                                    VerticalAlignment="Center" HorizontalAlignment="Center" ClipToBounds="True">
+                                            <!-- Peeks INSIDE the folder outline's width, above its front flap
+                                                 (round-3 P7); RectangleGeometry clip rounds the corners
+                                                 (ClipToBounds ignores CornerRadius). -->
+                                            <Border Width="44" Height="30" Margin="0,0,0,24"
+                                                    VerticalAlignment="Center" HorizontalAlignment="Center">
+                                                <Border.Clip>
+                                                    <RectangleGeometry Rect="0,0,44,30" RadiusX="3" RadiusY="3"/>
+                                                </Border.Clip>
                                                 <Image Source="{Binding Peek}" Stretch="UniformToFill"/>
                                             </Border>
                                             <Viewbox Width="96" Height="80" HorizontalAlignment="Center" VerticalAlignment="Bottom">
