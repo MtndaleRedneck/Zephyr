@@ -101,10 +101,16 @@ namespace ZephyrPlayer.Tests
             Assert.Equal("up_to_date", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
             Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe") + "]");
             Assert.Equal("available: 1.2.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            // Installed AHEAD of the feed (unpublished build) is its own state - never "latest published".
+            Assert.Equal("ahead_of_feed", UpdateCheck.CheckOutcomeOrThrow("1.3.0", _base + "/releases"));
             Feed("not json");
             Assert.ThrowsAny<Exception>(() => UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
             Assert.Equal("No published player installer available yet.", UpdateState.Display("no_release"));
             Assert.DoesNotContain("up_to_date", UpdateState.Display("up_to_date"));
+            Assert.Equal("You're up to date.", UpdateState.Display("up_to_date"));
+            Assert.Equal("No newer version is available.", UpdateState.Display("ahead_of_feed"));
+            Assert.DoesNotContain("latest published", UpdateState.Display("ahead_of_feed"));
+            Assert.DoesNotContain("latest published", UpdateState.Display("up_to_date"));
         }
 
         [Fact]

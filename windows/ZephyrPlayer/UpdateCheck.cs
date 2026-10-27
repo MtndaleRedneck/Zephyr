@@ -12,7 +12,8 @@ namespace ZephyrPlayer
     /// diagnostic surface.</summary>
     internal static class UpdateState
     {
-        /// <summary>null = never ran; "checking"; "failed: <reason>"; "up_to_date"; or "available: <version>".</summary>
+        /// <summary>null = never ran; "checking"; "failed: <reason>"; "no_release"; "up_to_date" (installed == newest published);
+        /// "ahead_of_feed" (installed newer than anything published - no published-version claim); or "available: <version>".</summary>
         public static volatile string? Outcome;
         public sealed record Offer(string Version, string ExeUrl, string? Sha256);
         public static Offer? AvailableOffer;
@@ -21,7 +22,8 @@ namespace ZephyrPlayer
             null => "Not checked yet.",
             "checking" => "Checking...",
             "no_release" => "No published player installer available yet.",
-            "up_to_date" => "You have the latest published player version.",
+            "up_to_date" => "You're up to date.",
+            "ahead_of_feed" => "No newer version is available.",
             _ when outcome.StartsWith("available: ") => "Update available: " + outcome.Substring(11),
             _ when outcome.StartsWith("failed:") => "Could not check for updates. Try again later.",
             _ => "Update status unavailable."
@@ -51,10 +53,15 @@ namespace ZephyrPlayer
             UpdateState.AvailableOffer = null;
             var published = LatestPublishedOrThrow(apiOverride);
             if (published == null) return "no_release";
-            if (Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version")) > 0)
+            var cmp = Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version"));
+            if (cmp > 0)
+            {
                 UpdateState.AvailableOffer = new UpdateState.Offer(published.Value.Version, published.Value.ExeUrl, published.Value.Sha256);
-            return Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version")) > 0
-                ? "available: " + published.Value.Version : "up_to_date";
+                return "available: " + published.Value.Version;
+            }
+            // Equal = verified current. Installed AHEAD of the feed (an unpublished build) is not
+            // "latest published" - say nothing about published state beyond "no newer version".
+            return cmp == 0 ? "up_to_date" : "ahead_of_feed";
         }
 
         public static (string Version, string ExeUrl, string? Sha256)? LatestNewerThanOrThrow(string current, string? apiOverride = null)
