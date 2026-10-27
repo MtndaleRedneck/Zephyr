@@ -355,16 +355,22 @@ internal static class Program
                 if (!FirewallSetup.ExplainAndRelaunch()) return 0;
                 if (!(FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser()))
                 {
+                    // Do NOT say the running copy "was left alone": the elevated setup
+                    // deletes and re-adds the rules, so a mid-failure may have rewritten
+                    // them for this copy's path (round-12). It was not closed, and its
+                    // own next start re-checks and offers to set up.
                     NoteDialog.Show(null,
-                        "Setup did not finish, so the phone cannot reach this copy yet. The copy that was already running was left alone. Zephyr VLC Remote will offer to set up again next time you open it from here.");
+                        "Setup did not finish, so the phone cannot reach this copy yet. The copy that was already running was not closed. If the phone loses it, open it again - it will check its setup and offer to fix it.");
                     return 0;
                 }
             }
             Log("Update launched while an older copy ran - asked it to quit, taking over.");
             oldQuit.Set();
-            // The old copy exits and releases the mutex; take it over (give it a few seconds).
+            // The old copy exits and releases the mutex; take it over. 30 seconds, not
+            // 10 (round-12): the quit signal was already sent, so giving up early leaves
+            // a gap with no helper listening until he reopens one.
             var tookOver = false;
-            for (var i = 0; i < 40 && !tookOver; i++)
+            for (var i = 0; i < 120 && !tookOver; i++)
             {
                 try { tookOver = single.WaitOne(250); } catch (AbandonedMutexException) { tookOver = true; }
             }

@@ -223,6 +223,25 @@ jobs:
         if: always()
         timeout-minutes: 8
         run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+      - name: Player hook compile-out proof (shipped exe has no CI seams)
+        # Same byte-true scan as the helper's (round-12): the tray diag env read was
+        # the one seam found outside a hook; the scan keeps that class from returning.
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $latin = [Text.Encoding]::GetEncoding(28591)
+          $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/out/ZephyrPlayer.exe"))
+          $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/capture-out/ZephyrPlayer.exe"))
+          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot') {
+            $hookedHas = $false
+            foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
+              $n = $latin.GetString($enc.GetBytes($needle))
+              if ($clean.Contains($n)) { throw "clean Player exe contains CI hook string '$needle' ($($enc.EncodingName)) - the seam is not compiled out" }
+              if ($hooked.Contains($n)) { $hookedHas = $true }
+            }
+            if (-not $hookedHas) { throw "hooked Player exe is missing '$needle' in any encoding - wrong build published to capture-out/" }
+          }
+          Write-Output 'Player compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
       - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
         if: always()
         timeout-minutes: 6
