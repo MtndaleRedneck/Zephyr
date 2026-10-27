@@ -124,9 +124,9 @@ jobs:
           target: google_apis
           profile: pixel_6
           disable-animations: true
-          env:
-            SUITE: ${{ inputs.suite || 'full' }}
           script: bash scripts/instrumented.sh
+        env:
+          SUITE: ${{ inputs.suite || 'full' }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
