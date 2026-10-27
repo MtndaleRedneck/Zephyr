@@ -163,7 +163,7 @@ namespace ZephyrPlayer
                 // N5 fail-closed surfaced plainly: the pairings file could not be read,
                 // nothing was deleted, and new pairing stays off until it is fixed.
                 StatusDot.Fill = WarnOrange;
-                StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted - restarting the Player usually brings them back.";
+                StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted or changed. Close and reopen the Player; if it still says this, send feedback from Settings and we will help.";
             }
             else if (ConnectionState.DiscoveryOff)
             {
@@ -194,7 +194,7 @@ namespace ZephyrPlayer
                 {
                     // Broken/refused store: nothing changed; say so instead of
                     // letting the exception reach the unhandled handler (round-3 P4).
-                    StatusText.Text = "That change could not be saved - nothing was changed. Restarting the Player usually fixes this.";
+                    StatusText.Text = "That change could not be saved - nothing was changed. Close and reopen the Player; if it still fails, send feedback from Settings and we will help.";
                     return;
                 }
                 RefreshPhones();

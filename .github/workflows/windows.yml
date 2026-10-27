@@ -81,6 +81,8 @@ jobs:
         timeout-minutes: 8
         run: dotnet build windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release
       - name: Windows test suite (blame-hang bounded; no silent host)
+        # Independent suites: a red in one never skips the other - both results are collected.
+        if: always()
         id: tests
         timeout-minutes: 10
         run: >
@@ -89,6 +91,8 @@ jobs:
           --logger "trx;LogFileName=win-tests.trx"
           --logger "console;verbosity=detailed"
       - name: Zephyr VLC Remote test suite
+        # Independent suites: a red in one never skips the other - both results are collected.
+        if: always()
         timeout-minutes: 10
         run: >
           dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
