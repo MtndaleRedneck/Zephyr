@@ -128,6 +128,7 @@ fun SetupScreen(
                 store.helperPort = target.port
                 store.pcName = paired.name.ifBlank { target.name }
                 remote.publishAddress(target.host, target.port, paired.token)
+                remote.refreshPairing()
                 // Automatic-first: the PC generated the VLC password and handed it over with
                 // the pair. An old helper says nothing and step 3 stays the manual card.
                 if (paired.vlcPassword != null) {
@@ -156,6 +157,7 @@ fun SetupScreen(
         store.host = ""
         // Broken secure store: nothing persisted anyway; the refusal is not an error here.
         try { store.helperToken = "" } catch (e: SecureStoreUnavailable) { }
+        remote.refreshPairing()
         store.pcName = ""
         remote.publishAddress("", HelperClient.DEFAULT_PORT, "")
         code = ""

@@ -65,7 +65,7 @@ fun MainScreen(
         Column(Modifier.fillMaxSize()) {
             TopBar(
                 source = { SourceSelector(remote) },
-                pill = { StatusPill(paired = remote.store.isPaired(remote.store.selectedSource), connected = !remote.unreachable) },
+                pill = { StatusPill(paired = remote.pairedForSelected(), connected = !remote.unreachable) },
                 settings = {
                     HeaderIconButton(onSettings, remote.store.haptics, startPad = 6.dp) {
                         androidx.compose.material3.Icon(
@@ -178,7 +178,7 @@ private fun HomeContent(
     val refused = remote.vlcRefused
     // Teardown A1: nothing paired -> the hero is a quiet way into Settings pairing,
     // never a forced setup screen. One line, whole card tappable.
-    val unpairedSource = !remote.store.isPaired(remote.store.selectedSource)
+    val unpairedSource = !remote.pairedForSelected()
     Box(
         Modifier
             .padding(horizontal = marginDp.dp)
@@ -863,7 +863,10 @@ fun SourceSelector(remote: RemoteState) {
     var expanded by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(remote.store.selectedSource) }
     Box {
-        Row(Modifier.heightIn(min = 44.dp).clickable { expanded = true },
+        Row(Modifier.heightIn(min = 44.dp).clickable(
+                onClickLabel = "Switch PC source", // C16: talkback announces the role
+                role = androidx.compose.ui.semantics.Role.DropdownList,
+            ) { expanded = true },
             verticalAlignment = Alignment.CenterVertically) {
             Text(if (selected == Source.ZEPHYR) "Zephyr PC" else "VLC PC", color = TextC,
                 fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
@@ -873,7 +876,12 @@ fun SourceSelector(remote: RemoteState) {
         }
         androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             listOf(Source.VLC to "VLC PC", Source.ZEPHYR to "Zephyr PC").forEach { (source, label) ->
-                androidx.compose.material3.DropdownMenuItem(text = { Text(label) }, onClick = {
+                // C15: an unpaired source says so in the menu instead of failing later.
+                val paired = if (source == Source.ZEPHYR) remote.zephyrPaired else remote.vlcPaired
+                androidx.compose.material3.DropdownMenuItem(text = {
+                    Text(if (paired) label else "$label - Not paired",
+                        color = if (paired) TextC else Muted)
+                }, onClick = {
                     selected = source; remote.selectSource(source); expanded = false
                 })
             }

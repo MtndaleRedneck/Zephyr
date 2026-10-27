@@ -87,7 +87,8 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     // The player's OWN at-root flag: its paths are relative, so they can never be
     // compared to the (absolute) VLC folder (teardown C4).
     var zephyrAtRoot by remember { mutableStateOf(true) }
-    var zephyrFolder: String? = null
+    // Remembered (C17): a recomposition must not force a folder refetch mid-browse.
+    var zephyrFolder by remember { mutableStateOf<String?>(null) }
     // In-flight guard: a double-tap must not start two movies (two VLCs, two soundtracks).
     var starting by remember { mutableStateOf(false) }
     // The PC found a saved place in this movie: offer Resume / Start over (Preview 1).

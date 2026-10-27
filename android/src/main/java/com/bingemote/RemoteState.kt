@@ -236,7 +236,21 @@ class RemoteState(
         }
     }
 
+    // S13: pairing state as Compose state. The keystore-backed token decrypt used to
+    // run inside composition (MainScreen pill + hero) several times a second on the
+    // main thread; now it refreshes once per poll and right after pair/clear flows.
+    var zephyrPaired by mutableStateOf(false); private set
+    var vlcPaired by mutableStateOf(false); private set
+
+    init { refreshPairing() } // once at creation; then per poll + after pair/clear
+    fun refreshPairing() {
+        zephyrPaired = store.isPaired(Source.ZEPHYR)
+        vlcPaired = store.isPaired(Source.VLC)
+    }
+    fun pairedForSelected(): Boolean = if (store.selectedSource == Source.ZEPHYR) zephyrPaired else vlcPaired
+
     suspend fun pollOnce() {
+        refreshPairing()
         if (store.selectedSource == Source.ZEPHYR) { pollZephyr(); return }
         // The helper-notice state belongs to the pairing it was learned from: a new
         // or cleared token makes it stale. Reset it here so a re-paired phone never

@@ -106,7 +106,11 @@ fun SettingsScreen(
             Spacer(Modifier.height(6.dp))
             SourceRow(
                 "Zephyr PC",
-                if (remote.store.zephyrToken.isBlank()) "Not paired" else "Paired",
+                // C17: a paired Zephyr source names the PC and its address:port,
+                // like the VLC row - never a bare "Paired".
+                if (!remote.zephyrPaired) "Not paired"
+                else (remote.store.zephyrPcName.ifBlank { "PC" }) +
+                    " (" + remote.store.zephyrHost.ifBlank { remote.store.host } + ":" + remote.store.zephyrPort + ")",
                 onLabelClick = onZephyrSetup,
             )
         }
@@ -454,7 +458,7 @@ fun ZephyrPairCard(
         )
         if (error != null) {
             Spacer(Modifier.height(8.dp))
-            Text(error, color = Orange, fontSize = 13.sp)
+            Text(error, color = ErrorRed, fontSize = 13.sp)
         }
         Spacer(Modifier.height(10.dp))
         OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && code.trim().length == 6 && host.isNotBlank(), onClick = onPair)
