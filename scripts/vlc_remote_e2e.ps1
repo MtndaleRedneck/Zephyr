@@ -67,14 +67,18 @@ function Assert-HelperFirewallRules([string]$exePath) {
     $acl = netsh http show urlacl | Out-String
     Assert ($acl -match ':8492/') "the listen permission exists"
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    if ($acl -notmatch [regex]::Escape($sid)) {
-        # Diagnose, don't just fail: show the actual reservation this port got.
-        $blocks = $acl -split "\r?\n\r?\n"
-        $ours = ($blocks | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
-        Write-Host "8492 reservation block:"; Write-Host $ours
-        Write-Host "expected SID: $sid"
+    # netsh stores well-known accounts as SDDL aliases (a RID-500 local admin comes
+    # back as "LA", Everyone as "WD"), so compare PARSED security descriptors, not
+    # the raw SID string.
+    $block = ($acl -split "\r?\n\r?\n" | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
+    $sddlMatch = [regex]::Match($block, 'SDDL:\s*(\S+)')
+    $actual = if ($sddlMatch.Success) { (New-Object System.Security.AccessControl.RawSecurityDescriptor($sddlMatch.Groups[1].Value)).GetSddlForm('All') } else { '' }
+    $expected = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sid)")).GetSddlForm('All')
+    if ($actual -ne $expected) {
+        Write-Host "8492 reservation block:"; Write-Host $block
+        Write-Host "expected SDDL: $expected (user SID $sid)"
     }
-    Assert ($acl -match [regex]::Escape($sid)) "the listen permission names the installing user's SID, not Everyone"
+    Assert ($actual -eq $expected) "the listen permission names the installing user's SID, not Everyone"
     Assert ($acl -notmatch 'S-1-1-0') "the listen permission is not Everyone"
 }
 function Invoke-HelperGet($path, $token) {

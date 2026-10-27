@@ -204,8 +204,26 @@ internal static class FirewallSetup
         return output.Contains(":" + Program.HttpPort + "/");
     }
 
-    /// <summary>True when the port's reservation SDDL names this SID.</summary>
-    private static bool UrlAclNamesUser(string sid) => UrlAclBlock().Contains(sid);
+    /// <summary>True when the port's reservation SDDL names this SID. netsh normalizes
+    /// well-known accounts to SDDL aliases when STORING the reservation (the runner's
+    /// RID-500 admin comes back as "LA", Everyone as "WD"), so a substring match on the
+    /// raw SID misses correct reservations; both sides are compared through a parsed
+    /// security descriptor instead.</summary>
+    private static bool UrlAclNamesUser(string sid)
+    {
+        var block = UrlAclBlock();
+        var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
+        if (!m.Success) return false;
+        try
+        {
+            var actual = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
+                .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+            var expected = new System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;" + sid + ")")
+                .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+            return actual == expected;
+        }
+        catch { return block.Contains(sid); }
+    }
 
     private static string UrlAclBlock()
     {

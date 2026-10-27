@@ -58,7 +58,9 @@ namespace ZephyrPlayer
                 var acl = Run("netsh", "http add urlacl url=http://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
                 if (acl.ExitCode != 0 || !UrlAclExists()) return 3;
                 // Verify the reservation really names the intended user, not just the port.
-                if (sid != null && !UrlAclBlock().Contains(sid)) return 3;
+                // Compare parsed security descriptors, not substrings: netsh stores
+                // well-known accounts as SDDL aliases (RID-500 admin comes back "LA").
+                if (sid != null && !UrlAclNamesUser(sid)) return 3;
                 return RulesExist() ? 0 : 2;
             }
             catch (Exception ex)
@@ -186,6 +188,22 @@ namespace ZephyrPlayer
             stack.Children.Add(buttons);
             dlg.Content = stack;
             return dlg;
+        }
+
+        private static bool UrlAclNamesUser(string sid)
+        {
+            var block = UrlAclBlock();
+            var m = System.Text.RegularExpressions.Regex.Match(block, @"SDDL:\s*(\S+)");
+            if (!m.Success) return false;
+            try
+            {
+                var actual = new System.Security.AccessControl.RawSecurityDescriptor(m.Groups[1].Value)
+                    .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+                var expected = new System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;" + sid + ")")
+                    .GetSddlForm(System.Security.AccessControl.AccessControlSections.All);
+                return actual == expected;
+            }
+            catch { return block.Contains(sid); }
         }
 
         private static string UrlAclBlock()

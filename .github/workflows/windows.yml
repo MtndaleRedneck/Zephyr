@@ -187,7 +187,13 @@ jobs:
           if ($udp -notmatch [regex]::Escape($installed.Replace('\','\')) -and $udp -notmatch 'ZephyrPlayer.exe') { throw 'UDP rule must scope the exe' }
           $acl = netsh http show urlacl | Out-String
           if ($acl -notmatch '47823') { throw 'URL ACL for 47823 missing' }
-          if ($acl -notmatch [regex]::Escape($sid)) { throw 'URL ACL must scope the installing user SID' }
+          # netsh stores well-known accounts as SDDL aliases (RID-500 admin -> "LA"):
+          # compare parsed security descriptors, not the raw SID string.
+          $block = ($acl -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
+          $sddlMatch = [regex]::Match($block, 'SDDL:\s*(\S+)')
+          $actualSddl = if ($sddlMatch.Success) { (New-Object System.Security.AccessControl.RawSecurityDescriptor($sddlMatch.Groups[1].Value)).GetSddlForm('All') } else { '' }
+          $expectedSddl = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sid)")).GetSddlForm('All')
+          if ($actualSddl -ne $expectedSddl) { Write-Host "47823 reservation:"; Write-Host $block; Write-Host "expected SDDL: $expectedSddl"; throw 'URL ACL must scope the installing user SID' }
           Write-Output "firewall shape: TCP System/47823/Private/LocalSubnet, UDP exe/Private/LocalSubnet, ACL user SID - verified"
           # Negative-hook test on the SHIPPED binary (round-6 G6): even with the capture
           # env switch set, the shipped exe has no ci-capture-token compiled in, so the
