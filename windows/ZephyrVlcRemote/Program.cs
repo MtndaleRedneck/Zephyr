@@ -214,11 +214,32 @@ internal static class Program
                 Program.StoreBrokenReason = "could not be read";
                 shot.RunStatusTickForShot();
             }
+            else if (shotMode == "remove" || shotMode == "remove-all")
+            {
+                // The destructive confirms, real construction (round-9 missing captures).
+                var text = shotMode == "remove"
+                    ? "Remove Shot Phone? It stops controlling this PC through Zephyr VLC Remote right away. "
+                      + "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. "
+                      + "You can pair the phone again any time with a new code."
+                    : "Remove all phones? Every phone stops controlling this PC through Zephyr VLC Remote right away. "
+                      + "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. "
+                      + "Pair them again with new codes.";
+                using var d = ConfirmDialog.Build(text, shotMode == "remove" ? "Remove" : "Remove all");
+                CaptureDialogForShot(d, shotPath);
+                return 0;
+            }
+            else if (shotMode == "tray")
+            {
+                shot.ShowTrayMenuForShot(shotPath);
+                return 0;
+            }
 #endif
             shot.ShowOffscreenAndCapture(shotPath);
             return 0;
         }
 #endif
+
+
 
         // The watchdog relaunches us with --ensure-running every few minutes: stay silent when
         // the app already runs or when he quit it on purpose. Any real launch (double-click,
@@ -693,6 +714,39 @@ internal static class Program
     internal static string MachineLabel() => Environment.MachineName;
 
     /// <summary>"1.3.1" - the running build, for the Updates card and feedback reports.</summary>
+#if PAIR_CODE_HOOK
+        // CI only: capture one of the modal dialogs exactly as constructed (same
+        // DWM-composed PrintWindow path as the window shots).
+        private static void CaptureDialogForShot(Form d, string path)
+        {
+            d.StartPosition = FormStartPosition.Manual;
+            d.Location = new Point(0, 0);
+            d.ShowInTaskbar = false;
+            d.Show();
+            d.Activate();
+            Application.DoEvents();
+            System.Threading.Thread.Sleep(400);
+            Application.DoEvents();
+            using (var bmp = new Bitmap(d.Width, d.Height))
+            using (var g = Graphics.FromImage(bmp))
+            {
+                var hdc = g.GetHdc();
+                bool captured = PrintWindowForShot(d.Handle, hdc, 2);
+                g.ReleaseHdc(hdc);
+                if (!captured)
+                {
+                    g.Clear(d.BackColor);
+                    d.DrawToBitmap(bmp, new Rectangle(0, 0, d.Width, d.Height));
+                }
+                bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            }
+            d.Close();
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll", EntryPoint = "PrintWindow")]
+        private static extern bool PrintWindowForShot(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+#endif
+
     [DllImport("shell32.dll")]
     private static extern void SHChangeNotify(int eventId, int flags, IntPtr item1, IntPtr item2);
 
@@ -1304,6 +1358,24 @@ internal sealed class HelperWindow : Form
 #if WINDOW_SHOT_HOOK
     /// <summary>CI-only: run one status tick so the shot reflects settled pairing state.</summary>
     internal void RunStatusTickForShot() { TickStatus(); }
+
+    // CI only: the tray menu rendered by its real dark renderer, captured off the
+    // desktop at its shown bounds (round-9 missing captures).
+    internal void ShowTrayMenuForShot(string path)
+    {
+        _menu.Show(new Point(60, 320));
+        Application.DoEvents();
+        System.Threading.Thread.Sleep(350);
+        Application.DoEvents();
+        var b = _menu.Bounds;
+        using (var bmp = new Bitmap(Math.Max(1, b.Width), Math.Max(1, b.Height)))
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.CopyFromScreen(b.Left, b.Top, 0, 0, b.Size);
+            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        _menu.Close();
+    }
 #endif
 
     internal void ShowOffscreenAndCapture(string path)
@@ -2294,6 +2366,14 @@ internal static class ConfirmDialog
 {
     public static bool Ask(IWin32Window? owner, string text, string confirmLabel)
     {
+        using var dlg = Build(text, confirmLabel);
+        return dlg.ShowDialog(owner) == DialogResult.OK;
+    }
+
+    // Construction shared with the CI dialog shots so a capture shows the real thing.
+    internal static Form Build(string text, string confirmLabel)
+    {
+        IWin32Window? owner = null;
         var bg = HelperWindow.DarkBg;
         var card = HelperWindow.DarkCard;
         var fg = HelperWindow.DarkText;
@@ -2324,8 +2404,7 @@ internal static class ConfirmDialog
         dlg.Controls.Add(no);
         dlg.AcceptButton = no; // Enter on a destructive prompt must mean No
         dlg.CancelButton = no;
-        answer = dlg.ShowDialog(owner) == DialogResult.OK;
-        return answer;
+        return dlg;
     }
 }
 

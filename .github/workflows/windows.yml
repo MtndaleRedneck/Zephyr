@@ -87,7 +87,28 @@ jobs:
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\window-broken-store.png"
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "broken-store"
           & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\dialog-remove.png"
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\dialog-remove-all.png"
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-all"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\tray-menu.png"
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "tray"
+          & windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe --window-shot
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+
+      # Round-9 missing-captures: the Player permission dialogs with REAL interaction
+      # state - hover/pressed from the real cursor parked over the primary button,
+      # focus from real keyboard focus. Behavior proof for the N9-7 template fix.
+      - name: Render the Player permission dialogs with real states (CI only)
+        run: |
+          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrPlayer/shot
+          foreach ($m in 'explain','hover','pressed','focus','note') {
+            & windows/ZephyrPlayer/shot/ZephyrPlayer.exe --dialog-shot $m "$PWD\windows\ZephyrPlayer\dialog-$m.png"
+            if ($LASTEXITCODE -ne 0) { throw "dialog-shot $m exit $LASTEXITCODE" }
+            if (-not (Test-Path "windows/ZephyrPlayer/dialog-$m.png")) { throw "dialog-shot $m wrote no PNG" }
+          }
 
       - name: Upload the window shot
         uses: actions/upload-artifact@v4
@@ -95,7 +116,10 @@ jobs:
           name: Zephyr-VLC-Remote-window
           path: |
             windows/ZephyrVlcRemote/window*.png
+            windows/ZephyrVlcRemote/dialog-*.png
+            windows/ZephyrVlcRemote/tray-menu.png
             windows/ZephyrVlcRemote/window-diag.txt
+            windows/ZephyrPlayer/dialog-*.png
           if-no-files-found: warn
 
       - name: Helper runtime tests (migration, pairing, endpoints, discovery identity, firewall)

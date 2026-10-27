@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace ZephyrPlayer
 {
@@ -585,6 +586,85 @@ namespace ZephyrPlayer
             dlg.Content = stack;
             return dlg;
         }
+
+#if PAIR_CODE_HOOK
+        // CI ONLY: render the permission dialogs with REAL interaction state and save
+        // actual pixels (round-9 missing-captures follow-up). Hover/pressed come from
+        // the real cursor parked over the shown dialog's primary button, focus from
+        // real keyboard focus - the template triggers fire for real, then the live
+        // visual tree is rendered. Compiled out of shipped builds like the other hooks.
+        internal static void RunDialogShot(string mode, string path)
+        {
+            var note = mode == "note";
+            var dlg = DarkDialog(
+                note
+                    ? "Setup did not finish, so the phone cannot reach this PC yet. Zephyr Player will now close and offer to set up again next time you open it."
+                    : "One Windows permission, then setup is done. Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection.",
+                note ? "OK" : "Continue",
+                note ? null : "Cancel",
+                () => { });
+            dlg.Show();
+            dlg.Activate();
+            var ok = FirstButton(dlg);
+            var step = 0;
+            var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+            timer.Tick += (_, _) =>
+            {
+                step++;
+                if (step == 1)
+                {
+                    if (mode == "focus" && ok != null) { dlg.Activate(); ok.Focus(); }
+                    else if ((mode == "hover" || mode == "pressed") && ok != null)
+                    {
+                        var pt = ok.PointToScreen(new Point(ok.ActualWidth / 2, ok.ActualHeight / 2));
+                        SetCursorPos((int)Math.Round(pt.X), (int)Math.Round(pt.Y));
+                        if (mode == "pressed") mouse_event(0x0002, 0, 0, 0, IntPtr.Zero); // LEFTDOWN, held
+                    }
+                }
+                else if (step >= 4)
+                {
+                    timer.Stop();
+                    try
+                    {
+                        var dpi = VisualTreeHelper.GetDpi(dlg);
+                        var rtb = new RenderTargetBitmap(
+                            Math.Max(1, (int)Math.Ceiling(dlg.ActualWidth * dpi.DpiScaleX)),
+                            Math.Max(1, (int)Math.Ceiling(dlg.ActualHeight * dpi.DpiScaleY)),
+                            dpi.PixelsPerInchX, dpi.PixelsPerInchY, PixelFormats.Pbgra32);
+                        rtb.Render(dlg);
+                        var enc = new PngBitmapEncoder();
+                        enc.Frames.Add(BitmapFrame.Create(rtb));
+                        using var fs = File.Create(path);
+                        enc.Save(fs);
+                    }
+                    catch { }
+                    if (mode == "pressed") mouse_event(0x0004, 0, 0, 0, IntPtr.Zero); // LEFTUP
+                    dlg.Close();
+                    Application.Current?.Shutdown(0);
+                }
+            };
+            timer.Start();
+        }
+
+        private static Button? FirstButton(DependencyObject root)
+        {
+            var n = VisualTreeHelper.GetChildrenCount(root);
+            for (var i = 0; i < n; i++)
+            {
+                var c = VisualTreeHelper.GetChild(root, i);
+                if (c is Button b) return b;
+                var r = FirstButton(c);
+                if (r != null) return r;
+            }
+            return null;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetCursorPos(int x, int y);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern void mouse_event(uint flags, int dx, int dy, int data, IntPtr extra);
+#endif
 
         /// <summary>A minimal dark button chrome: rounded fill bound to the button's own
         /// Background (lighter on hover, darker on press), centered text, a thin ring
