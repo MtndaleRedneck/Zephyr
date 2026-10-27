@@ -109,8 +109,10 @@ class MainActivity : ComponentActivity() {
                     "setup" -> SetupScreen(
                         remote,
                         setupScroll,
-                        onDone = { remote.start(); current.value = "main" },
-                        onCancel = if (store.setupDone) ({ current.value = "settings" }) else null,
+                        // Teardown A1: a finished VLC pairing selects its own source, same as Zephyr.
+                        onDone = { store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
+                        // Teardown A2: reachable only from Settings now - Cancel always exists.
+                        onCancel = { current.value = "settings" },
                         demoVlcPending = BuildConfig.DEBUG && intent.hasExtra("vlcpending"),
                     )
                     "mouse" -> MouseScreen(remote) { current.value = "main" }
@@ -179,7 +181,7 @@ class MainActivity : ComponentActivity() {
                             initialStep = 2,
                         )
                     }
-                    "feedback" -> FeedbackScreen(feedbackScroll) { current.value = "settings" }
+                    "feedback" -> FeedbackScreen(remote, feedbackScroll) { current.value = "settings" }
                     else -> MainScreen(
                         remote,
                         onMouse = { current.value = "mouse" },
@@ -202,7 +204,9 @@ class MainActivity : ComponentActivity() {
         if (::remote.isInitialized) remote.stop()
         // A drag can be latched when the app backgrounds (call, screen timeout): release the
         // PC's left button so it doesn't stay held down while he's away.
-        if (::remote.isInitialized && store.helperToken.isNotBlank()) {
+        // Gate on the SELECTED source's pairing, not the helper token: a Zephyr-only
+        // user's held button must release too (teardown C8).
+        if (::remote.isInitialized && store.isPaired(store.selectedSource)) {
             val s = store
             HelperClient.io.execute { try { InputRouter.button(remote, "left", false) } catch (_: Exception) {} }
         }

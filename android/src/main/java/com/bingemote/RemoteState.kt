@@ -167,17 +167,61 @@ class RemoteState(
                 ZephyrClient.controlStatus(zephyrHost(), store.zephyrPort, store.zephyrToken)
             }
             if (store.selectedSource != Source.ZEPHYR) return
-            status = VlcStatus(json.optString("state", "stopped"), json.optString("title", ""),
-                json.optLong("time"), json.optLong("length"),
-                (json.optInt("volume", 100).coerceIn(0, 100) * 256 / 100),
-                json.optBoolean("fullscreen"), emptyList())
-            muted = json.optBoolean("muted")
+            // Trust the phone's own volume/mute taps briefly: the poll used to snap the
+            // number back before the command landed (teardown C13).
+            val polledVol = (json.optInt("volume", 100).coerceIn(0, 100) * 256 / 100)
+            val vol = if (System.currentTimeMillis() - localVolumeAt <= 1500) status?.volumeRaw ?: polledVol else polledVol
+            val title = json.optString("title", "")
+            val length = json.optLong("length")
+            status = VlcStatus(json.optString("state", "stopped"), title,
+                json.optLong("time"), length, vol,
+                json.optBoolean("fullscreen"), ZephyrClient.parseSpuTracks(json))
+            if (System.currentTimeMillis() - localMuteAt > 1500) muted = json.optBoolean("muted")
+            // A new video clears the remembered subtitle pick, same as the VLC path.
+            if (title != lastTitle || length != lastLengthSec) {
+                lastTitle = title; lastLengthSec = length
+                pickedSubtitle = null
+            }
             failures = 0; unreachable = false; connecting = false
             vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
+        } catch (e: ZephyrClient.BadToken) {
+            if (store.selectedSource != Source.ZEPHYR) return
+            // The PC removed this phone's pairing - say "pair again", not "can't reach".
+            unpaired = true; connecting = false
         } catch (e: Exception) {
             if (store.selectedSource != Source.ZEPHYR) return
             failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true
             connecting = false
+            // A DHCP address change looks like an outage: re-find the player and keep
+            // the saved pairing (teardown C3). The token is the PC's identity.
+            if (failures >= 2) zephyrRediscover()
+        }
+    }
+
+    private var zephyrRediscovering = false
+    private fun zephyrRediscover() {
+        if (zephyrRediscovering) return
+        zephyrRediscovering = true
+        scope.launch(Dispatchers.IO) {
+            try {
+                val found = ZephyrClient.discoverPlayers(3000)
+                for (candidate in found) {
+                    try {
+                        ZephyrClient.controlStatus(candidate.host, candidate.port, store.zephyrToken)
+                        withContext(Dispatchers.Main) {
+                            store.zephyrHost = candidate.host
+                            store.zephyrPort = candidate.port
+                            failures = 0; unreachable = false
+                        }
+                        return@launch
+                    } catch (e: ZephyrClient.BadToken) {
+                        withContext(Dispatchers.Main) { unpaired = true }
+                        return@launch
+                    } catch (e: Exception) { /* not our player - keep looking */ }
+                }
+            } finally {
+                zephyrRediscovering = false
+            }
         }
     }
 
@@ -216,7 +260,7 @@ class RemoteState(
             val vm = try { volDeferred.await() } catch (e: HelperClient.BadToken) { unpaired = true; null }
             if (vm != null) {
                 helperFailures = 0
-                muted = vm.second
+                if (System.currentTimeMillis() - localMuteAt > 1500) muted = vm.second
                 helperDown = false
                 helperDownAt = 0L
                 helperNotice = false
@@ -276,8 +320,11 @@ class RemoteState(
         }
     }
 
-    /** The laptop's IP changes with DHCP: ask the network for the helper and update the address. */
+    /** The laptop's IP changes with DHCP: ask the network for the helper and update the address.
+     *  VLC path only - never broadcast for a BingeMote helper while Zephyr is selected
+     *  or VLC was never set up (teardown A1). */
     fun rediscover() {
+        if (store.selectedSource != Source.VLC || store.helperToken.isBlank()) return
         if (rediscovering) return
         rediscovering = true
         scope.launch(Dispatchers.IO) {
@@ -312,6 +359,8 @@ class RemoteState(
 
     /** Set when the phone itself changes Windows volume; the poll trusts the phone for 1.5s. */
     private var localVolumeAt = 0L
+    /** Same 1.5s trust window for mute taps (teardown C13). */
+    private var localMuteAt = 0L
 
     // One ordered queue for playback/volume commands: rapid volume taps and the phone's
     // volume keys land in tap order instead of racing each other in parallel coroutines.
@@ -341,14 +390,13 @@ class RemoteState(
     }
 
     private fun fire(kind: String, block: () -> Unit) {
+        // Teardown A1: an unpaired source drops taps quietly - they are not PC failures
+        // and must not feed the unreachable counter.
+        if (!store.isPaired(store.selectedSource)) return
         val target = store.selectedSource
         cmds.trySend(Cmd(kind, System.currentTimeMillis()) {
             // A queued tap never moves to a different source after a selector change.
-            if (store.selectedSource == target) {
-                if (target == Source.ZEPHYR && store.zephyrToken.isBlank())
-                    throw java.io.IOException("Zephyr PC isn't paired yet.")
-                block()
-            }
+            if (store.selectedSource == target && store.isPaired(target)) block()
         })
     }
 
@@ -378,10 +426,18 @@ class RemoteState(
     fun skip(seconds: Int) {
         val current = status
         if (store.selectedSource == Source.ZEPHYR && current == null) return
+        var zephyrTarget = 0L
+        if (store.selectedSource == Source.ZEPHYR) {
+            // Length 0/unknown must not pin the target to 0 (teardown B2).
+            val raw = current!!.timeSec + seconds
+            zephyrTarget = if (current.lengthSec > 0) raw.coerceIn(0, current.lengthSec) else raw.coerceAtLeast(0)
+            // Echo the tap locally so rapid taps accumulate instead of all seeking to
+            // the same point; the poll corrects within about a second (teardown B1).
+            status = current.copy(timeSec = zephyrTarget)
+        }
         fire("skip") {
             if (store.selectedSource == Source.ZEPHYR)
-                ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken,
-                    (current!!.timeSec + seconds).coerceIn(0, current.lengthSec.coerceAtLeast(0)))
+                ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken, zephyrTarget)
             else Vlc.skip(store.host, store.vlcPort, store.vlcPassword, seconds)
         }
     }
@@ -398,7 +454,9 @@ class RemoteState(
             val current = status ?: return
             val next = (current.volumePct + if (up) 5 else -5).coerceIn(0, 100)
             status = status?.copy(volumeRaw = next * 256 / 100)
+            localVolumeAt = System.currentTimeMillis()
             val wasMuted = muted; muted = false
+            if (wasMuted) localMuteAt = System.currentTimeMillis()
             fire("volume") {
                 ZephyrClient.volume(zephyrHost(), store.zephyrPort, store.zephyrToken, next)
                 if (wasMuted) ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, false)
@@ -442,14 +500,17 @@ class RemoteState(
     fun toggleMute() {
         if (store.selectedSource == Source.ZEPHYR) {
             val next = !muted; muted = next
-            fire("volume") { ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, next) }
+            localMuteAt = System.currentTimeMillis()
+            // Mute gets its own queue kind: folding it into "volume" could drop volume
+            // steps queued just before it (teardown C13).
+            fire("mute") { ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, next) }
             return
         }
         if (winVolume != null) {
             val next = !muted
             muted = next
-            localVolumeAt = System.currentTimeMillis()
-            fire("volume") { HelperClient.volumeMute(store.host, store.helperPort, store.helperToken, next) }
+            localMuteAt = System.currentTimeMillis()
+            fire("mute") { HelperClient.volumeMute(store.host, store.helperPort, store.helperToken, next) }
             return
         }
         if (muted) {

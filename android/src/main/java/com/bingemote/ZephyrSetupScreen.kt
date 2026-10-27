@@ -56,7 +56,7 @@ fun ZephyrSetupScreen(
             SetupCard {
                 Text("1. Install and open the Zephyr Player on your PC.", color = TextC, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
-                Text("2. Its home screen shows a 6-digit pairing code.", color = TextC, fontSize = 14.sp)
+                Text("2. Find the 6-digit code on its home screen, or in its Settings > Android remote.", color = TextC, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
                 Text("3. Keep this phone and the PC on the same Wi-Fi.", color = TextC, fontSize = 14.sp)
             }
@@ -93,7 +93,7 @@ fun ZephyrSetupScreen(
                         withContext(Dispatchers.Main) {
                             found = pcs
                             when {
-                                pcs.isEmpty() -> findNote = "No Zephyr PC answered. Check the player is open, or type the address below."
+                                pcs.isEmpty() -> findNote = "No PC found. Make sure Zephyr Player is open, or type the PC's address below."
                                 pcs.size == 1 -> {
                                     host = pcs[0].host
                                     foundName = pcs[0].name
@@ -128,7 +128,13 @@ fun ZephyrSetupScreen(
                                 onDone()
                             }
                         } catch (e: Exception) {
-                            withContext(Dispatchers.Main) { error = e.message ?: "Couldn't pair - is the Zephyr Player open on the PC?" }
+                            withContext(Dispatchers.Main) {
+                                // Keep ZephyrClient's plain code errors; raw network failures
+                                // become one plain sentence (teardown A3).
+                                val m = e.message ?: ""
+                                error = if (m.startsWith("Wrong code") || m.startsWith("Too many") || m.startsWith("This PC already")) m
+                                    else "Can't reach Zephyr Player at $h. Check it's open and on the same Wi-Fi."
+                            }
                         } finally { busy = false }
                     }
                 },

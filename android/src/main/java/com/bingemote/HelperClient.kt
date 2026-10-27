@@ -277,7 +277,7 @@ object HelperClient {
 
     /** Same broadcast, any reply identity (Zephyr Player answers with its own
      *  magic). [targets] override exists for loopback tests only. */
-    internal fun discoverRaw(replyMagic: String, waitMs: Int = 1500, targets: List<InetAddress>? = null): List<DiscoveredHelper> {
+    internal fun discoverRaw(replyMagic: String, waitMs: Int = 1500, targets: List<InetAddress>? = null, port: Int = DISCOVERY_PORT): List<DiscoveredHelper> {
         val found = LinkedHashMap<String, DiscoveredHelper>()
         var sock: DatagramSocket? = null
         try {
@@ -292,7 +292,7 @@ object HelperClient {
                 // Six rounds to every broadcast address: routers drop lone broadcasts in both directions.
                 if (sends < 6) {
                     for (t in targets) {
-                        try { sock.send(DatagramPacket(payload, payload.size, t, DISCOVERY_PORT)) } catch (e: Exception) {}
+                        try { sock.send(DatagramPacket(payload, payload.size, t, port)) } catch (e: Exception) {}
                     }
                     sends++
                 }

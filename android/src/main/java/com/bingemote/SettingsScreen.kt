@@ -87,7 +87,9 @@ fun SettingsScreen(
         // Each label opens that source's OWN setup screen -
         // never an inline expansion.
         SettingsSection("Connected Sources") {
-            SourceRow("VLC PC", store.pcName.ifBlank { store.host }.ifBlank { "Not set up" }, onLabelClick = onRepair)
+            // A cancelled setup can leave a helper token with no finished pairing: only a
+            // COMPLETE setup shows the PC name (teardown A2 edge).
+            SourceRow("VLC PC", if (store.isConfigured) store.pcName.ifBlank { store.host } else "Not paired", onLabelClick = onRepair)
             Spacer(Modifier.height(6.dp))
             SourceRow(
                 "Zephyr PC",

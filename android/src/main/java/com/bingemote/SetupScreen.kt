@@ -1,5 +1,6 @@
 package com.bingemote
 
+import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -32,11 +33,12 @@ fun SetupScreen(
     remote: RemoteState,
     scrollState: androidx.compose.foundation.ScrollState,
     onDone: () -> Unit,
-    onCancel: (() -> Unit)? = null,
+    onCancel: () -> Unit,
     demoVlcPending: Boolean = false,
 ) {
     val store = remote.store
     val scope = rememberCoroutineScope()
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
     // Re-entering setup with a saved pairing opens on the pair step, which offers to continue with it.
     var step by remember {
@@ -87,10 +89,10 @@ fun SetupScreen(
         }
     }
 
-    // Back walks the steps, and on step 1 leaves setup entirely when there is a
-    // pairing to fall back on (re-entry from Settings offers Cancel).
-    BackHandler(enabled = step > 1 || onCancel != null) {
-        if (step > 1) { step -= 1; say("", false) } else onCancel?.invoke()
+    // Back walks the steps, and on step 1 leaves setup entirely (teardown A2:
+    // this screen is only reachable from Settings, so there is always a way out).
+    BackHandler(enabled = true) {
+        if (step > 1) { step -= 1; say("", false) } else onCancel()
     }
 
     fun scan() {
@@ -99,7 +101,7 @@ fun SetupScreen(
         scope.launch {
             found = withContext(Dispatchers.IO) { HelperClient.discover() }
             scanning = false
-            if (found.isEmpty()) say("No PC answered. Check BingeMote is running on the PC, then try again - or type the PC's address below.", true)
+            if (found.isEmpty()) say("No PC found. Make sure BingeMote is running on the PC, or type its address below.", true)
         }
     }
 
@@ -202,11 +204,9 @@ fun SetupScreen(
     ) {
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Set up BingeMote", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            if (onCancel != null) {
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
-            }
+            Text("Set up VLC PC", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -218,13 +218,21 @@ fun SetupScreen(
         when (step) {
             1 -> Column {
                 SetupCard {
-                    Text("1. On your PC, download the BingeMote PC installer from the BingeMote release page and run it.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("1. VLC control needs the free BingeMote PC app. Install it on your PC.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Get BingeMote PC",
+                        color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) {
+                            uriHandler.openUri("https://github.com/MtndaleRedneck/BingeMote/releases")
+                        },
+                    )
                     Spacer(Modifier.height(10.dp))
-                    Text("2. Windows may warn about an unrecognized app. Click \"More info\", then \"Run anyway\". BingeMote PC is built by the same project as this app.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("2. If Windows warns about an unrecognized app, click \"More info\", then \"Run anyway\".", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("3. The installer asks for Windows permission once during install - that is the only admin prompt, and it only opens BingeMote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("3. Allow the one Windows prompt during install. It only opens BingeMote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("4. Leave BingeMote running (it sits in the tray, by the clock, and starts with Windows). It shows a 6-digit code for the next step.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("4. Leave BingeMote running (by the clock). It shows a 6-digit code.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                 }
                 Spacer(Modifier.height(18.dp))
                 OrangeButton("BingeMote is running", onClick = { say("", false); step = 2 })
