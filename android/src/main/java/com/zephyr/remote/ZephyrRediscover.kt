@@ -17,6 +17,14 @@ object ZephyrRediscover {
         object None : Plan
     }
 
+    /** The entry point RemoteState uses. Discovery results only ever produce a
+     *  Plan - this API takes no token and no HTTP client, so a spoofed responder
+     *  cannot be probed and the saved endpoint cannot be overwritten from here. */
+    fun run(
+        savedHost: String, savedPort: Int, savedName: String,
+        discover: () -> List<com.bingemote.DiscoveredHelper>,
+    ): Plan = plan(savedHost, savedPort, savedName, discover())
+
     fun plan(
         savedHost: String, savedPort: Int, savedName: String,
         found: List<com.bingemote.DiscoveredHelper>,

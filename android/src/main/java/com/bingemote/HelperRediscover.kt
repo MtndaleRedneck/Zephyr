@@ -19,6 +19,21 @@ object HelperRediscover {
         object None : Plan
     }
 
+    /** Executes the safe rediscovery against injected network calls - the SAME
+     *  entry point RemoteState uses. The token-carrying ping exists only as
+     *  pingSaved and is invoked only for the saved endpoint; discovered hosts
+     *  are never probed, and there is no save-host callback anywhere in this
+     *  API, so rediscovery structurally cannot leak a credential or mutate the
+     *  saved pairing. */
+    fun run(
+        savedHost: String, savedPort: Int,
+        pingSaved: () -> Boolean,
+        discover: () -> List<DiscoveredHelper>,
+    ): Plan {
+        if (pingSaved()) return Plan.SavedEndpointSeen
+        return plan(savedHost, savedPort, discover())
+    }
+
     fun plan(savedHost: String, savedPort: Int, found: List<DiscoveredHelper>): Plan {
         for (h in found) {
             if (h.host == savedHost && h.port == savedPort) return Plan.SavedEndpointSeen
