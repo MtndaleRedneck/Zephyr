@@ -193,6 +193,21 @@ Start-Sleep -Seconds 9
 $sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-bottom.png"
 StopZephyr
 
+# 2b) Pairing screen (1.2.0: the dedicated pairing window replaced the banner).
+$p2b = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--open-pairing" -PassThru
+$null = Wait-MainWindow $p2b 15
+$pw = [System.IntPtr]::Zero
+for ($i = 0; $i -lt 20 -and $pw -eq [System.IntPtr]::Zero; $i++) {
+    $pw = [ZWU32]::FindByTitle($p2b.Id, 'Zephyr Player - Pair your phone')
+    if ($pw -eq [System.IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
+}
+if ($pw -eq [System.IntPtr]::Zero) { Write-Host "::error::pairing window handle never appeared" }
+[ZWU32]::SetForegroundWindow($pw) | Out-Null
+[ZWU32]::SetWindowPos($pw, [System.IntPtr]::new(-1), 40, 4, 560, 600, 0) | Out-Null
+Start-Sleep -Milliseconds 900
+$sz4b = CaptureWindow $pw "$env:RUNNER_TEMP/pc-desktop-pairing.png"
+StopZephyr
+
 # 3) Real video, real mouse event, controls shown - WINDOWED.
 $p3 = Start-Process -FilePath "windows/out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
 $hw3 = Wait-MainWindow $p3 15
