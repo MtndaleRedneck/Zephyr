@@ -17,18 +17,29 @@ namespace ZephyrPlayer
     {
         private readonly MainWindow _window;
         private readonly MediaPlayer _player;
+        private readonly Action? _showForPlayback;
 
-        public MainWindowPlaybackControl(MainWindow window, MediaPlayer player)
+        /// <summary>[showForPlayback] hides Home and shows the player window - the same
+        /// shell handoff /play does. Without it, /control/play would start playback while
+        /// the app keeps showing Home (the video lands in a detached output window):
+        /// protocol.md documents /control/play with the same payload as /play, so any
+        /// caller that starts a URL expects to SEE it.</summary>
+        public MainWindowPlaybackControl(MainWindow window, MediaPlayer player, Action? showForPlayback = null)
         {
             _window = window;
             _player = player;
+            _showForPlayback = showForPlayback;
         }
 
         private void OnUi(Action a) => _window.Dispatcher.Invoke(a);
         private T OnUi<T>(Func<T> f) => _window.Dispatcher.Invoke(f);
 
         public void Play(string url, long? positionSeconds, string[] subtitles) =>
-            OnUi(() => _window.PlayFromUrl(url, positionSeconds, subtitles));
+            OnUi(() =>
+            {
+                _showForPlayback?.Invoke();
+                _window.PlayFromUrl(url, positionSeconds, subtitles);
+            });
         public void Pause() => OnUi(() => { _player.SetPause(true); _window.ShowBarOnce(); });
         public void Resume() => OnUi(() => { _player.SetPause(false); _window.ShowBarOnce(); });
         public void Seek(long positionSeconds) => OnUi(() => { if (_player.Length > 0) _player.Time = positionSeconds * 1000; });
