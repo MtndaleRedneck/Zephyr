@@ -18,16 +18,20 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <Slider x:Name="SeekBar" Grid.Row="0"
-                                Minimum="0" Maximum="1000" Value="0"
-                                PreviewMouseDown="OnSeekDown" PreviewMouseUp="OnSeekUp"/>
-                        <Grid Grid.Row="1" Margin="0,2,0,6">
+                        <!-- Banked approved placement: elapsed above-left,
+                             remaining above-right, total below-right. -->
+                        <Grid Grid.Row="0" Margin="0,0,0,2">
                             <TextBlock x:Name="ElapsedText" Text="0:00" Foreground="#F0C23E" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Left"/>
-                            <TextBlock x:Name="TotalText" Text="of 0:00" Foreground="#9696A0" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Center"/>
                             <TextBlock x:Name="RemainingText" Text="-0:00" Foreground="White" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Right"/>
                         </Grid>
-                        <Grid Grid.Row="2">
+                        <Slider x:Name="SeekBar" Grid.Row="1"
+                                Minimum="0" Maximum="1000" Value="0"
+                                PreviewMouseDown="OnSeekDown" PreviewMouseUp="OnSeekUp"/>
+                        <TextBlock x:Name="TotalText" Grid.Row="2" Text="0:00 total" Foreground="#9696A0" FontSize="12"
+                                   HorizontalAlignment="Right" Margin="0,2,0,4"/>
+                        <Grid Grid.Row="3">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
@@ -48,16 +52,13 @@
                                         Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
                                     <TextBlock x:Name="SpeedLabel" Text="1x" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" FontSize="13" FontWeight="SemiBold"/>
                                 </Button>
-                                <Button x:Name="SecondarySkipBackButton" ToolTip="Secondary skip backward" AutomationProperties.Name="Secondary skip backward" Width="60" Height="60" Padding="0" Click="OnSecondarySkipBack"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Grid>
-                                        <Grid RenderTransformOrigin="0.5,0.5">
-                                            <Grid.RenderTransform><RotateTransform x:Name="SecondarySkipBackSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Path x:Name="SecondarySkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
-                                            <Path x:Name="SecondarySkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F5F5F7"/>
-                                        </Grid>
-                                        <TextBlock x:Name="SecondarySkipBackLabel" Text="30" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Grid>
+                                <TextBlock x:Name="SecondarySkipBackLabel" Text="30s" Foreground="#F5F5F7" FontSize="14"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Button x:Name="SecondarySkipBackButton" ToolTip="Secondary skip backward" AutomationProperties.Name="Secondary skip backward" Width="40" Height="40" Padding="0" Click="OnSecondarySkipBack"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" Margin="0,0,6,0">
+                                    <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                        <Path x:Name="SecondarySkipBackIcon" Data="M11,4 L3,12 L11,20 Z M19,4 L11,12 L19,20 Z" Fill="#F5F5F7"/>
+                                    </Canvas></Viewbox>
                                 </Button>
                                 <Button x:Name="SkipBackButton" ToolTip="Primary skip backward" AutomationProperties.Name="Primary skip backward" Width="60" Height="60" Padding="0" Click="OnSkipBack"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand">
@@ -92,17 +93,14 @@
                                         <TextBlock x:Name="SkipForwardLabel" Text="10" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Button>
-                                <Button x:Name="SecondarySkipForwardButton" ToolTip="Secondary skip forward" AutomationProperties.Name="Secondary skip forward" Width="60" Height="60" Padding="0" Click="OnSecondarySkipForward"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Grid>
-                                        <Grid RenderTransformOrigin="0.5,0.5">
-                                            <Grid.RenderTransform><RotateTransform x:Name="SecondarySkipForwardSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Path x:Name="SecondarySkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
-                                            <Path x:Name="SecondarySkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F5F5F7"/>
-                                        </Grid>
-                                        <TextBlock x:Name="SecondarySkipForwardLabel" Text="30" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Grid>
+                                <Button x:Name="SecondarySkipForwardButton" ToolTip="Secondary skip forward" AutomationProperties.Name="Secondary skip forward" Width="40" Height="40" Padding="0" Click="OnSecondarySkipForward"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" Margin="6,0,0,0">
+                                    <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                        <Path x:Name="SecondarySkipForwardIcon" Data="M5,4 L13,12 L5,20 Z M13,4 L21,12 L13,20 Z" Fill="#F5F5F7"/>
+                                    </Canvas></Viewbox>
                                 </Button>
+                                <TextBlock x:Name="SecondarySkipForwardLabel" Text="30s" Foreground="#F5F5F7" FontSize="14"
+                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
                                 <Button x:Name="SleepButton" Visibility="Collapsed" Margin="10,0,0,0" Padding="8,4" Click="OnSleep"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
                                     <TextBlock x:Name="SleepLabel" Text="zZ" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" FontSize="13" FontWeight="SemiBold"/>

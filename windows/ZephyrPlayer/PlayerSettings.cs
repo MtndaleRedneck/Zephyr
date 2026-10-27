@@ -58,6 +58,10 @@ namespace ZephyrPlayer
         private static int ValidSkip(int? value, int[] choices, int fallback) =>
             value.HasValue && Array.IndexOf(choices, value.Value) >= 0 ? value.Value : fallback;
 
+        /// <summary>Bar + Settings label: 30 -> "30s", 60 -> "1m" (the bar used to
+        /// show raw seconds, reading "60"/"120"/"180" - teardown units bug).</summary>
+        public static string FormatSkip(int seconds) => seconds >= 60 ? (seconds / 60) + "m" : seconds + "s";
+
         public int SkipDelta(bool secondary, bool backward) =>
             (secondary ? SecondarySkipSeconds : PrimarySkipSeconds) * (backward ? -1 : 1);
 

@@ -4,6 +4,7 @@
 // drive a real headless libVLC (media-open/decode/control integration - video
 // output itself stays unverified on CI).
 using System;
+using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
@@ -44,6 +45,10 @@ namespace ZephyrPlayer
             volume = _player.Volume,
             muted = _player.Mute,
             spu = _player.Spu,
+            // The phone's subtitle sheet needs the track LIST, not just the
+            // current id (teardown C2): id + name per track.
+            spuTracks = (_player.SpuDescription ?? Array.Empty<TrackDescription>())
+                .Select(t => new { id = t.Id, name = t.Name }).ToArray(),
             fullscreen = _window.IsFullscreen,
             update_available = UpdateState.AvailableVersion,
             update_check = UpdateState.Outcome,
