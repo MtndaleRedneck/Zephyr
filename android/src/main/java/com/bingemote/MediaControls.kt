@@ -134,6 +134,9 @@ class MediaControlsService : Service() {
     @Volatile private var refreshRequested = false
     @Volatile private var lastPlaying = false
     private fun refreshNow() { refreshRequested = true }
+    // S8: when a session goes inactive the foreground notification must not linger
+    // over a dead player; a successful poll re-foregrounds via the normal path.
+    private var controlsDropped = false
 
     private suspend fun pollOnce() {
         val store = cachedStore
@@ -147,16 +150,23 @@ class MediaControlsService : Service() {
             failures++
             // Unreachable PC: drop the controls and back OFF (30s), never a 2s hammer
             // against a dead player for the whole setting-on session (teardown C10).
-            if (failures >= 5) { session?.isActive = false; pollDelayMs = 30_000L }
+            if (failures >= 5) {
+                session?.isActive = false; pollDelayMs = 30_000L
+                if (!controlsDropped) { controlsDropped = true; stopForeground(STOP_FOREGROUND_REMOVE) }
+            }
             return
         } catch (e: Exception) {
             failures++
             // VLC gone for good: drop the controls rather than pose over a dead player.
-            if (failures >= 5) { session?.isActive = false; pollDelayMs = 30_000L }
+            if (failures >= 5) {
+                session?.isActive = false; pollDelayMs = 30_000L
+                if (!controlsDropped) { controlsDropped = true; stopForeground(STOP_FOREGROUND_REMOVE) }
+            }
             return
         }
         failures = 0
         pollDelayMs = 2000L
+        controlsDropped = false
         val s = session ?: return
         val playing = st.playing
         lastPlaying = playing
