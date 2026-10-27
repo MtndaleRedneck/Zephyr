@@ -30,9 +30,28 @@ namespace ZephyrPlayer
         [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         private static extern void SetCurrentProcessExplicitAppUserModelID(string id);
 
+        /// <summary>Startup/crash forensics: any unhandled failure lands in a
+        /// temp log the CI capture + smoke steps print. Without this a WPF
+        /// startup death on a headless runner is invisible.</summary>
+        private static void LogCrash(string kind, string detail)
+        {
+            try
+            {
+                var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ZephyrPlayer-crash.log");
+                System.IO.File.AppendAllText(path, $"[{DateTime.Now:O}] {kind}: {detail}\n\n");
+            }
+            catch { }
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            DispatcherUnhandledException += (_, ev) =>
+                LogCrash("dispatcher", ev.Exception.ToString());
+            AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
+                LogCrash("unhandled", ev.ExceptionObject?.ToString() ?? "?");
+            TaskScheduler.UnobservedTaskException += (_, ev) =>
+                LogCrash("task", ev.Exception.ToString());
             SetCurrentProcessExplicitAppUserModelID("Zephyr.Player");
             _singleInstance = new System.Threading.Mutex(true, "ZephyrPlayer", out bool createdNew);
             if (!createdNew)
@@ -76,9 +95,15 @@ namespace ZephyrPlayer
             _settings = settings;
             _gate = gate;
 
-            _tray = new TrayService();
-            _tray.OpenRequested += RestoreApp;
-            _tray.QuitRequested += QuitApp;
+            // The tray must never take the app down: if the notification area
+            // is unavailable the player still works, just without a tray icon.
+            try
+            {
+                _tray = new TrayService();
+                _tray.OpenRequested += RestoreApp;
+                _tray.QuitRequested += QuitApp;
+            }
+            catch (Exception ex) { LogCrash("tray", ex.ToString()); _tray = null; }
 
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
@@ -117,7 +142,7 @@ namespace ZephyrPlayer
                 if (!_trayHintShown)
                 {
                     _trayHintShown = true;
-                    _tray.ShowStillRunningHint();
+                    _tray?.ShowStillRunningHint();
                 }
             };
 

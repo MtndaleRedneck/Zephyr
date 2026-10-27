@@ -9,6 +9,16 @@
 # not evidence.
 $ErrorActionPreference = 'Continue'
 $note = "$env:RUNNER_TEMP/pc-desktop-note.txt"
+# Fresh forensics for this run: the app writes ZephyrPlayer-crash.log on any
+# unhandled failure; printed below whenever a window never appears.
+$crashLog = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
+Remove-Item $crashLog -ErrorAction SilentlyContinue
+function DumpCrashLog($why) {
+    if (Test-Path $crashLog) {
+        Write-Host "::error::app crash log after: $why"
+        Get-Content $crashLog | ForEach-Object { Write-Host $_ }
+    }
+}
 
 netsh advfirewall firewall add rule name="Zephyr Player" dir=in action=allow protocol=TCP localport=47823 profile=private | Out-Null
 netsh advfirewall firewall add rule name="Zephyr Player Discovery" dir=in action=allow protocol=UDP localport=8489 profile=private | Out-Null
@@ -123,7 +133,8 @@ function Wait-MainWindow($proc, $seconds) {
         if ($proc.MainWindowHandle -ne [System.IntPtr]::Zero) { return $proc.MainWindowHandle }
         Start-Sleep -Milliseconds 500
     }
-    Write-Host "::error::process $($proc.Id) had no main window after $seconds s"
+    Write-Host "::error::process $($proc.Id) had no main window after $seconds s (HasExited=$($proc.HasExited))"
+    DumpCrashLog "process $($proc.Id) no main window"
     return [System.IntPtr]::Zero
 }
 function WakeControls() {
