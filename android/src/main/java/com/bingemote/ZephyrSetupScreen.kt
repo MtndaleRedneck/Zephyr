@@ -133,7 +133,7 @@ fun ZephyrSetupScreen(
                                     code = ""
                                     onDone()
                                 } catch (e: SecureStoreUnavailable) {
-                                    error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved - close and reopen the app, then pair again."
+                                    error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr Player's pairing list, then pair again."
                                 }
                             }
                         } catch (e: Exception) {

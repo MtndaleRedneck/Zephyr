@@ -101,7 +101,7 @@ fun SetupScreen(
         scope.launch {
             found = withContext(Dispatchers.IO) { HelperClient.discover() }
             scanning = false
-            if (found.isEmpty()) say("No PC found. Make sure BingeMote is running on the PC, or type its address below.", true)
+            if (found.isEmpty()) say("No PC found. Make sure Zephyr VLC Remote is running on the PC, or type its address below.", true)
         }
     }
 
@@ -115,7 +115,7 @@ fun SetupScreen(
             else DiscoveredHelper(manual, HelperClient.DEFAULT_PORT, "PC")
         }
         if (target.host.isBlank()) { say("Enter your PC's address or pick it above.", true); return }
-        if (code.length != 6) { say("Enter the 6-digit code BingeMote is showing on your PC.", true); return }
+        if (code.length != 6) { say("Enter the 6-digit code Zephyr VLC Remote is showing on your PC.", true); return }
         pairing = true
         say("", false)
         scope.launch {
@@ -141,13 +141,13 @@ fun SetupScreen(
                 step = 3
             } catch (e: SecureStoreUnavailable) {
                 pairing = false
-                say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved - close and reopen the app, then pair again.", true)
+                say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr VLC Remote's paired list, then pair again.", true)
             } catch (e: HelperClient.BadPairCode) {
                 pairing = false
-                say("That code didn't work. Get a fresh one: on your PC, open BingeMote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)
+                say("That code didn't work. Get a fresh one: on your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)
             } catch (e: Exception) {
                 pairing = false
-                say("Couldn't reach BingeMote on ${target.host}. Check the PC is awake and try again.", true)
+                say("Couldn't reach Zephyr VLC Remote on ${target.host}. Check the PC is awake and try again.", true)
             }
         }
     }
@@ -162,7 +162,7 @@ fun SetupScreen(
         chosen = null
         manualHost = ""
         found = emptyList()
-        say("Pairing cleared. On your PC, open BingeMote from the icon by the clock, type a name under Pair new phone, tap Pair, then enter the new code here.", false)
+        say("Pairing cleared. On your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, tap Pair, then enter the new code here.", false)
     }
 
     fun finish() {
@@ -202,9 +202,9 @@ fun SetupScreen(
                 !vlcOk && helperOk -> {
                     // VLC may just be closed: the PC writes vlcrc so the next hand-open has the remote.
                     scope.launch(Dispatchers.IO) { try { HelperClient.setupVlc(store.host, store.helperPort, store.helperToken, store.vlcPassword) } catch (e: Exception) {} }
-                    say("BingeMote answers, but VLC didn't. Check the password and that VLC is open with the web interface on.", true)
+                    say("Zephyr VLC Remote answers, but VLC didn't. Check the password and that VLC is open with the web interface on.", true)
                 }
-                vlcOk && !helperOk -> say("VLC answers, but BingeMote didn't. Mouse mode won't work until BingeMote is running on the PC.", true)
+                vlcOk && !helperOk -> say("VLC answers, but Zephyr VLC Remote didn't. Mouse mode won't work until Zephyr VLC Remote is running on the PC.", true)
                 else -> say("Nothing answered. Check the PC is awake, VLC is open, and both are on the same Wi-Fi.", true)
             }
         }
@@ -229,24 +229,24 @@ fun SetupScreen(
         when (step) {
             1 -> Column {
                 SetupCard {
-                    Text("1. VLC control needs the free BingeMote PC app. Install it on your PC.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("1. VLC control needs the free Zephyr VLC Remote PC app. Install it on your PC.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Get BingeMote PC",
+                        "Get Zephyr VLC Remote PC",
                         color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) {
-                            uriHandler.openUri("https://github.com/MtndaleRedneck/BingeMote/releases")
+                            uriHandler.openUri("https://github.com/MtndaleRedneck/Zephyr-Dev/releases")
                         },
                     )
                     Spacer(Modifier.height(10.dp))
                     Text("2. If Windows warns about an unrecognized app, click \"More info\", then \"Run anyway\".", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("3. Allow the one Windows prompt during install. It only opens BingeMote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("3. Allow the one Windows prompt during install. It only opens Zephyr VLC Remote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("4. Leave BingeMote running (by the clock). It shows a 6-digit code.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("4. Leave Zephyr VLC Remote running (by the clock). It shows a 6-digit code.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                 }
                 Spacer(Modifier.height(18.dp))
-                OrangeButton("BingeMote is running", onClick = { say("", false); step = 2 })
+                OrangeButton("Zephyr VLC Remote is running", onClick = { say("", false); step = 2 })
                 SetupMessage(message, messageIsError)
             }
 
@@ -304,7 +304,7 @@ fun SetupScreen(
                 SetupCard {
                     Text("Pair", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
-                    Text("Enter the 6-digit code BingeMote is showing on your PC. It only works once. No code on screen? Open BingeMote from the icon by the clock, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+                    Text("Enter the 6-digit code Zephyr VLC Remote is showing on your PC. It only works once. No code on screen? Open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = code,
@@ -360,7 +360,7 @@ fun SetupScreen(
                             "unreachable" -> {
                                 Text("Couldn't check with your PC", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.height(10.dp))
-                                Text("BingeMote on the PC didn't answer. Make sure it's running, then try again.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                                Text("Zephyr VLC Remote on the PC didn't answer. Make sure it's running, then try again.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                                 Spacer(Modifier.height(12.dp))
                                 OrangeButton("Try again", onClick = { autoState = "checking"; checkRun++ })
                                 SetupMessage(message, messageIsError)
@@ -426,7 +426,7 @@ fun SetupScreen(
                         OrangeButton("Done", onClick = { onDone() })
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "VLC is open on the PC - BingeMote will finish setting it up when VLC closes.",
+                            "VLC is open on the PC - Zephyr VLC Remote will finish setting it up when VLC closes.",
                             color = Muted, fontSize = 13.sp,
                         )
                     } else {

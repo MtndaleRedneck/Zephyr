@@ -113,15 +113,19 @@ class StreamService : Service() {
                 if (watchdogStop) break
                 val state = try { servedTargetState() }
                 catch (e: Exception) { StreamIdlePolicy.PlayerState.UNKNOWN } // unreachable cancels
-                if (policy.tick(srv.servedAny, srv.openStreams, state)) { stopSelf(); break }
+                if (policy.tick(srv.servedAny, srv.openStreams.get(), state)) { stopSelf(); break }
             }
         }.apply { isDaemon = true; name = "stream-watchdog"; start() }
     }
 
     /** Status of the player the stream was handed to (settled C1 covers both paths).
      *  No handoff yet = UNKNOWN = never auto-stop. */
+    // One Store per service: rebuilding the keystore-backed prefs every 60s tick
+    // was wasteful and could re-trip a failing keystore (round-3 A7).
+    private val watchdogStore by lazy { com.bingemote.Store(this) }
+
     private fun servedTargetState(): StreamIdlePolicy.PlayerState {
-        val store = com.bingemote.Store(this)
+        val store = watchdogStore
         return when (StreamCoordinator.servedTarget) {
             StreamCoordinator.ServedTarget.ZEPHYR -> {
                 if (store.zephyrToken.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN

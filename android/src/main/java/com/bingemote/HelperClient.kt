@@ -24,7 +24,7 @@ object HelperClient {
     const val DEFAULT_PORT = 8492 // Zephyr VLC Remote HTTP (BingeMote keeps 8488)
     const val DISCOVERY_PORT = 8491 // Zephyr VLC Remote discovery (BingeMote keeps 8489)
     private const val DISCOVER_MAGIC = "BINGEMOTE_DISCOVER_V1"
-    private const val REPLY_MAGIC = "ZEPHYR_VLC_REMOTE_HERE_V1"
+    internal const val REPLY_MAGIC = "ZEPHYR_VLC_REMOTE_HERE_V1"
 
     class Unreachable(val msg: String) : Exception(msg)
     /** Shown to the user. The raw socket text ("failed to connect to /192.168.1.5 (port 8488) after 2500ms") used to leak into Movies. */

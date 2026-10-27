@@ -69,7 +69,7 @@ class MediaControlsService : Service() {
     override fun onCreate() {
         super.onCreate()
         val store = cachedStore
-        val s = MediaSession(this, "BingeMote")
+        val s = MediaSession(this, "Zephyr")
         val cb = object : MediaSession.Callback() {
             override fun onPlay() { run { SelectedPlayback(store).togglePause() } }
             override fun onPause() { run { SelectedPlayback(store).togglePause() } }
@@ -119,7 +119,7 @@ class MediaControlsService : Service() {
                 return START_STICKY
             }
         }
-        if (BuildConfig.DEBUG && Store(this).demoControls) { seedDemo(); return START_STICKY }
+        if (BuildConfig.DEBUG && cachedStore.demoControls) { seedDemo(); return START_STICKY }
         if (pollJob?.isActive != true) {
             pollJob = scope.launch {
                 while (isActive) {
@@ -238,14 +238,14 @@ class MediaControlsService : Service() {
             .setContentText("${fmtClockSec(timeSec)} of ${fmtClockSec(lengthSec)}")
             .setContentIntent(openApp)
             .setOngoing(playing)
-            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_rew), "Back " + skipLabel(Store(this).skipMainSec), actionIntent(ACTION_MEDIA_REWIND)).build())
+            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_rew), "Back " + skipLabel(cachedStore.skipMainSec), actionIntent(ACTION_MEDIA_REWIND)).build())
             .addAction(
                 if (playing)
                     Notification.Action.Builder(icon(android.R.drawable.ic_media_pause), "Pause", actionIntent(ACTION_MEDIA_PLAY_PAUSE)).build()
                 else
                     Notification.Action.Builder(icon(android.R.drawable.ic_media_play), "Play", actionIntent(ACTION_MEDIA_PLAY_PAUSE)).build(),
             )
-            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_ff), "Forward " + skipLabel(Store(this).skipMainSec), actionIntent(ACTION_MEDIA_FAST_FORWARD)).build())
+            .addAction(Notification.Action.Builder(icon(android.R.drawable.ic_media_ff), "Forward " + skipLabel(cachedStore.skipMainSec), actionIntent(ACTION_MEDIA_FAST_FORWARD)).build())
             .setStyle(Notification.MediaStyle().setMediaSession(s.sessionToken).setShowActionsInCompactView(0, 1, 2))
             .build()
         try {

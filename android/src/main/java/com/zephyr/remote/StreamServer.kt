@@ -54,10 +54,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 val client = runCatching { srv.accept() }.getOrNull() ?: break
                 // A stalled client must not hold a worker forever (teardown C12).
                 runCatching { client.soTimeout = 60_000 }
-                openStreams++
+                openStreams.incrementAndGet()
                 pool.execute {
                     try { runCatching { handle(client) } }
-                    finally { openStreams--; runCatching { client.close() } }
+                    finally { openStreams.decrementAndGet(); runCatching { client.close() } }
                 }
             }
         }
@@ -71,7 +71,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
 
     /** Open client connections right now (teardown C1: an open connection means the
      *  movie is alive - a long pause keeps the socket and must never cut the stream). */
-    @Volatile var openStreams = 0
+    /** Incremented on the accept thread, decremented on pool threads: an
+     *  AtomicInteger, because @Volatile does not make ++/-- atomic and a drifted
+     *  count would stall (or rush) the idle watchdog (round-3 A4). */
+    val openStreams = java.util.concurrent.atomic.AtomicInteger(0)
     /** True once the first request was served: the shutdown watchdog arms only after this. */
     @Volatile var servedAny = false
 
