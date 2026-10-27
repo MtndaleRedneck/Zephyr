@@ -27,7 +27,13 @@ function DumpCrashLog($why) {
 # the wrong discovery port and a program-less TCP rule that http.sys ignores.)
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $fw = Start-Process "windows/capture-out/ZephyrPlayer.exe" -ArgumentList '--install-firewall',$sid -PassThru -Wait -WindowStyle Hidden
-if ($fw.ExitCode -ne 0) { throw "capture firewall setup exit $($fw.ExitCode)" }
+if ($fw.ExitCode -ne 0) {
+    Write-Host "passed SID: $sid"
+    $aclAll = netsh http show urlacl | Out-String
+    $block = ($aclAll -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
+    Write-Host "47823 reservation after setup:"; Write-Host $block
+    throw "capture firewall setup exit $($fw.ExitCode)"
+}
 
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 # Top-level types (a struct declared inside -MemberDefinition becomes nested

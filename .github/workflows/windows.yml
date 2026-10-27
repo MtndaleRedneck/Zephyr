@@ -171,7 +171,13 @@ jobs:
           # elevation takes just runs without the prompt) and verify its shape.
           $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           $fw = Start-Process $installed -ArgumentList '--install-firewall',$sid -PassThru -Wait -WindowStyle Hidden
-          if ($fw.ExitCode -ne 0) { throw "--install-firewall exit $($fw.ExitCode)" }
+          if ($fw.ExitCode -ne 0) {
+            Write-Host "passed SID: $sid"
+            $aclAll = netsh http show urlacl | Out-String
+            $block = ($aclAll -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
+            Write-Host "47823 reservation after setup:"; Write-Host $block
+            throw "--install-firewall exit $($fw.ExitCode)"
+          }
           $tcp = netsh advfirewall firewall show rule name="Zephyr Player" verbose | Out-String
           if ($tcp -notmatch 'LocalPort:\s*47823') { throw 'TCP rule missing 47823' }
           if ($tcp -notmatch 'System') { throw 'TCP rule must scope program=System (http.sys attribution)' }
