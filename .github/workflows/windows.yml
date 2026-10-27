@@ -57,6 +57,15 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
 
+      - name: Upload helper installer artifact
+        # The E2E legs install and pair-test this exact installer; keep it as a
+        # run artifact so the tested build can be delivered without a rebuild.
+        uses: actions/upload-artifact@v4
+        with:
+          name: Zephyr-VLC-Remote-installer
+          path: windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe
+          if-no-files-found: error
+
 
       - name: Render the helper window for layout review (CI only)
         run: |
