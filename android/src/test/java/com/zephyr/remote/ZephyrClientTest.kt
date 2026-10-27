@@ -98,9 +98,9 @@ class ZephyrClientTest {
         server.takeRequest().let { assertEquals("/input/type", it.path); assertTrue(it.body.readUtf8().contains("hello")) }
     }
 
-    @Test fun `401 surfaces as IOException`() {
+    @Test fun `401 surfaces as pair-again BadToken`() {
         enqueue("{\"error\":\"unauthorized\"}", 401)
         try { ZephyrClient.controlStatus(host, port, "bad"); throw AssertionError("expected throw") }
-        catch (e: java.io.IOException) { assertTrue(e.message!!.contains("401")) }
+        catch (e: ZephyrClient.BadToken) { assertTrue(e.message!!.contains("Pair again")) }
     }
 }

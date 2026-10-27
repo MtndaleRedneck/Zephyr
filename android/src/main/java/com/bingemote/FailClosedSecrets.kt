@@ -16,7 +16,7 @@ internal class FailClosedSecrets(
     private val writer: (String, String?) -> Unit,
     val broken: Boolean,
 ) {
-    fun read(key: String): String = try { reader(key) ?: "" } catch (e: Exception) { "" }
+    fun read(key: String): String = if (broken) "" else try { reader(key) ?: "" } catch (e: Exception) { "" }
 
     fun write(key: String, value: String?) {
         if (broken) throw SecureStoreUnavailable()
