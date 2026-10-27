@@ -142,7 +142,14 @@ namespace ZephyrPlayer
         {
             var ip = ConnectionState.PrimaryIPv4();
             ThisPcText.Text = ip != null ? "This PC: " + ip : "This PC: address unavailable";
-            if (ConnectionState.DiscoveryOff)
+            if (_store.IsBroken)
+            {
+                // N5 fail-closed surfaced plainly: the pairings file could not be read,
+                // nothing was deleted, and new pairing stays off until it is fixed.
+                StatusDot.Fill = WarnOrange;
+                StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted - restart the app or repair the pairings file to bring them back.";
+            }
+            else if (ConnectionState.DiscoveryOff)
             {
                 StatusDot.Fill = WarnOrange;
                 StatusText.Text = "Find my PC is off: another app is using it. Pair with the code above instead.";
