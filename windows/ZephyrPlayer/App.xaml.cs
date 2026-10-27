@@ -156,15 +156,19 @@ namespace ZephyrPlayer
 
             // Pairing (protocol.md): the gate owns the code's lifetime, one-shot
             // spend, wrong-code lockout and the phone cap (helper pairing parity).
+            // The one shell handoff for ANY playback start: Home hides, the player
+            // window shows. /play and /control/play both go through it (protocol.md
+            // gives them the same payload - starting a URL must always be visible).
+            void ShowPlayerAndPlay(string url, long? pos, string[] subs)
+            {
+                EnsurePlayer();
+                _home?.Hide();
+                _player!.Show();
+                _player!.PlayFromUrl(url, pos, subs);
+            }
             _server = new PlaybackServer(
                 onPlay: (url, pos, subs) =>
-                    Current.Dispatcher.InvokeAsync(() =>
-                    {
-                        EnsurePlayer();
-                        _home?.Hide();
-                        _player!.Show();
-                        _player!.PlayFromUrl(url, pos, subs);
-                    }).Task,
+                    Current.Dispatcher.InvokeAsync(() => ShowPlayerAndPlay(url, pos, subs)).Task,
                 // CI-only capture seam (round-5 P-1): the capture script acts as the
                 // phone over REAL HTTP for the phone-start bar proof. The fixed token
                 // is COMPILED OUT unless the CI_CAPTURE_HOOK constant is defined -
@@ -214,7 +218,8 @@ namespace ZephyrPlayer
                     return (outcome, token);
                 },
                 input: new SendInputSink(),
-                control: new MainWindowPlaybackControl(_player, player),
+                control: new MainWindowPlaybackControl(_player, player,
+                    showForPlayback: () => { EnsurePlayer(); _home?.Hide(); _player!.Show(); }),
                 settings: settings);
             // Firewall + listen permission (round-6 N-8): the per-user installer never
             // adds them, so the FIRST run explains and asks Windows once. Declining

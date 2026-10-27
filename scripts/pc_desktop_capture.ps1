@@ -393,7 +393,7 @@ StopZephyr
 [ZWU32]::SetCursorPos(5, 5) | Out-Null
 $pBar = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 $hwHome = Wait-MainWindow $pBar 15
-# /control/play opens a SEPARATE player window (App.xaml.cs _player.Show()); the home
+# /play opens a SEPARATE player window (App.xaml.cs ShowPlayerAndPlay); the home
 # window is the process's MainWindowHandle and must NOT be topmost - put it at the
 # BOTTOM of the z-order so the player window paints above it in the captures.
 [ZWU32]::SetWindowPos($hwHome, [System.IntPtr]::new(1), 100, 100, 800, 500, 0) | Out-Null
