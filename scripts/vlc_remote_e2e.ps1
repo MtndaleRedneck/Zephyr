@@ -704,7 +704,16 @@ try {
     # on its own setup prompt. CI cannot click the modal, so the un-answered prompt is
     # the decline path: kill the waiting copy and the running one must still serve.
     $pPre = Start-Process $exe2 -PassThru
-    Start-Sleep -Seconds 3
+    # Positive proof, not a timing guess (round-12): the waiting copy must LOG the
+    # preflight branch, and the running copy's PID must still be alive.
+    $helperLog = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
+    $preflightLogged = $false
+    foreach ($i in 1..20) {
+        if ((Test-Path $helperLog) -and (Select-String -Path $helperLog -Pattern 'needs its own firewall setup first' -Quiet)) { $preflightLogged = $true; break }
+        Start-Sleep -Milliseconds 250
+    }
+    Assert $preflightLogged "the other-folder copy logged the setup-first preflight branch"
+    Assert (-not $p.HasExited) "the running copy is still alive while the other-folder copy waits"
     $r = Invoke-Helper '/ping' '{}' $token
     Assert ($r.code -eq 200) "running copy keeps serving while the other-folder copy waits on setup"
     if ($pPre.HasExited) { throw "the other-folder copy vanished instead of waiting on its setup prompt" }

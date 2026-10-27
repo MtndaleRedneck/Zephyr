@@ -45,9 +45,12 @@ namespace ZephyrPlayer
                 // keep the TaskbarIcon alive - its TaskbarCreated handler adds the
                 // icon once Explorer is up.
             }
+#if CI_CAPTURE_HOOK
             // Round-4 NEW-C2: when CI asks (ZEPHYR_TRAY_DIAG=<path>), record
             // whether the icon REALLY exists in the notification area - a corner
             // pixel crop cannot tell a hidden-overflow icon from a missing one.
+            // Compiled out of shipped builds like the other hooks (round-12): an env
+            // pointing anywhere must not make the shipped exe write files.
             try
             {
                 var diag = Environment.GetEnvironmentVariable("ZEPHYR_TRAY_DIAG");
@@ -55,6 +58,7 @@ namespace ZephyrPlayer
                     System.IO.File.WriteAllText(diag, "IsCreated=" + _icon.IsCreated);
             }
             catch { }
+#endif
         }
 
         private ContextMenu BuildMenu()
