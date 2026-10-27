@@ -46,7 +46,7 @@ object ZephyrClient {
         val req = Request.Builder().url("http://$host:$port/pair").post(body).build()
         client.newCall(req).execute().use { resp ->
             if (resp.code == 403) throw java.io.IOException("Wrong code - check the code on the player screen.")
-            if (resp.code == 429) throw java.io.IOException("Too many wrong codes. Restart the Zephyr Player on the PC to try again.")
+            if (resp.code == 429) throw java.io.IOException("Too many wrong codes. Wait a few minutes, then try the fresh code on the PC screen.")
             if (resp.code == 409) throw java.io.IOException("This PC already has too many phones paired - remove one first.")
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
             return JSONObject(resp.body!!.string()).getString("token")

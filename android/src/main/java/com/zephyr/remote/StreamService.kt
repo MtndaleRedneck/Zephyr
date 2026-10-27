@@ -69,9 +69,15 @@ class StreamService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP || server != null) {
-            if (intent?.action == ACTION_STOP) stopSelf()
-            return START_STICKY
+        // A stateless restart must not stand: when the process was killed the streams
+        // died with it, and a START_STICKY rebuild would hold the wake + Wi-Fi locks
+        // with servedAny false and no target, so the watchdog could never arm (N1).
+        // NOT_STICKY keeps every stop rule for REAL streams exactly as settled; it
+        // only ends the zero-state zombie.
+        if (intent == null) { stopSelf(); return START_NOT_STICKY }
+        if (intent.action == ACTION_STOP || server != null) {
+            if (intent.action == ACTION_STOP) stopSelf()
+            return START_NOT_STICKY
         }
         val wifiAddr = wifiAddress() ?: run { stopSelf(); return START_NOT_STICKY } // bind Wi-Fi only
         val srv = StreamServer(this, wifiAddr)
@@ -91,7 +97,7 @@ class StreamService : Service() {
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zephyr:stream")
             .also { it.acquire() }
         startWatchdog(srv)
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     /**

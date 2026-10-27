@@ -137,7 +137,8 @@ fun SettingsScreen(
                 }
             }
             val folderRowText = if (zephyrSelected)
-                (zephyrFolderRow ?: "").ifBlank { "Not set yet. Tap Browse PC folders." }
+                zephyrFolderRow?.ifBlank { "Not set yet. Tap Browse PC folders." }
+                    ?: "Couldn't read it from the PC right now."
             else store.moviesPath.ifBlank { "Not set yet. Tap Browse PC folders." }
             Box(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 15.dp),

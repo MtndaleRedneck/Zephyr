@@ -183,11 +183,15 @@ class RemoteState(
                 pickedSubtitle = null
             }
             failures = 0; unreachable = false; connecting = false
+            // A good poll also clears "pair again" (N2): after a re-pair the hero must
+            // not keep accusing the NEW pairing until an app restart.
+            unpaired = false
             vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
         } catch (e: ZephyrClient.BadToken) {
             if (store.selectedSource != Source.ZEPHYR) return
-            // The PC removed this phone's pairing - say "pair again", not "can't reach".
-            unpaired = true; connecting = false
+            // The PC removed this phone's pairing - say "pair again", not "can't reach"
+            // (N2: a 401 is NOT an outage, and must clear any outage already showing).
+            unpaired = true; connecting = false; unreachable = false; failures = 0
         } catch (e: Exception) {
             if (store.selectedSource != Source.ZEPHYR) return
             failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true
@@ -198,27 +202,41 @@ class RemoteState(
         }
     }
 
-    private var zephyrRediscovering = false
+    @Volatile private var zephyrRediscovering = false
+    private var zephyrLastRediscoverAt = 0L
     private fun zephyrRediscover() {
         if (zephyrRediscovering) return
+        // Back off: rediscovering on every failing poll is a 3-6 s broadcast loop for
+        // as long as the PC stays off (S11).
+        val nowMs = System.currentTimeMillis()
+        if (nowMs - zephyrLastRediscoverAt < 60_000) return
+        zephyrLastRediscoverAt = nowMs
         zephyrRediscovering = true
         scope.launch(Dispatchers.IO) {
             try {
                 val found = ZephyrClient.discoverPlayers(3000)
-                for (candidate in found) {
-                    try {
-                        ZephyrClient.controlStatus(candidate.host, candidate.port, store.zephyrToken)
-                        withContext(Dispatchers.Main) {
-                            store.zephyrHost = candidate.host
-                            store.zephyrPort = candidate.port
-                            failures = 0; unreachable = false
-                        }
-                        return@launch
-                    } catch (e: ZephyrClient.BadToken) {
-                        withContext(Dispatchers.Main) { unpaired = true }
-                        return@launch
-                    } catch (e: Exception) { /* not our player - keep looking */ }
-                }
+                // S11 (security): the saved bearer token must never leave for an
+                // unverified host - any device can answer a broadcast. Fail closed:
+                // only EXACTLY ONE candidate whose discovery name matches the saved PC
+                // name may be probed with the token; zero or several matches (or no
+                // saved name) means keep failing and let him recover in Settings.
+                // A name is not authentication - it only narrows which single host is
+                // allowed to see the token at all.
+                val savedName = store.zephyrPcName
+                if (savedName.isBlank()) return@launch
+                val candidates = found.filter { it.name.equals(savedName, ignoreCase = true) }
+                if (candidates.size != 1) return@launch
+                val candidate = candidates.single()
+                try {
+                    ZephyrClient.controlStatus(candidate.host, candidate.port, store.zephyrToken)
+                    withContext(Dispatchers.Main) {
+                        store.zephyrHost = candidate.host
+                        store.zephyrPort = candidate.port
+                        failures = 0; unreachable = false
+                    }
+                } catch (e: ZephyrClient.BadToken) {
+                    withContext(Dispatchers.Main) { unpaired = true; unreachable = false; failures = 0 }
+                } catch (e: Exception) { /* not our player anymore */ }
             } finally {
                 zephyrRediscovering = false
             }
@@ -384,7 +402,12 @@ class RemoteState(
                     Diag.cmdsExpired.incrementAndGet()
                     continue
                 }
-                try { c.block() } catch (_: Exception) { failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true }
+                try { c.block() }
+                catch (e: ZephyrClient.BadToken) {
+                    // A revoked pairing is not a PC outage (N2): say "pair again".
+                    unpaired = true; unreachable = false; failures = 0
+                }
+                catch (_: Exception) { failures++; if (failures >= UNREACHABLE_AFTER) unreachable = true }
             }
         }
     }
@@ -456,10 +479,14 @@ class RemoteState(
             status = status?.copy(volumeRaw = next * 256 / 100)
             localVolumeAt = System.currentTimeMillis()
             val wasMuted = muted; muted = false
-            if (wasMuted) localMuteAt = System.currentTimeMillis()
+            if (wasMuted) {
+                localMuteAt = System.currentTimeMillis()
+                // Its own "mute" command: folded into "volume", two quick volume taps
+                // would coalesce the unmute away and the PC stays muted (S6).
+                fire("mute") { ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, false) }
+            }
             fire("volume") {
                 ZephyrClient.volume(zephyrHost(), store.zephyrPort, store.zephyrToken, next)
-                if (wasMuted) ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, false)
             }
             return
         }
