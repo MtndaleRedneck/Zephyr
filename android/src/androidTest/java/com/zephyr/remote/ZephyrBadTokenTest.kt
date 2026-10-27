@@ -237,3 +237,126 @@ class ZephyrBadTokenRepairedTest {
             device.executeShellCommand("pidof ${ctx.packageName}").isNotBlank())
     }
 }
+
+/* ---------- Targeted UI proof: real pairing UI, app-owned token ---------- */
+
+private fun launchToZephyrSetup(device: UiDevice, pkg: String) {
+    device.wakeUp()
+    device.executeShellCommand("wm dismiss-keyguard")
+    device.executeShellCommand("am start -n $pkg/com.bingemote.MainActivity --es screen setup-zephyr")
+}
+
+/** Evidence is captured BEFORE assertions, so a failure still ships the screen.
+ *  Captures only ever run on the main/settings screens: the one-shot pair code
+ *  is cleared with the pair form (ZephyrSetupScreen clears it on success), and
+ *  the bearer token is never displayed or logged by the app. */
+private fun capture(device: UiDevice, tag: String) {
+    device.executeShellCommand("screencap -p /sdcard/badtoken-ui-$tag.png")
+    device.executeShellCommand("uiautomator dump /sdcard/badtoken-ui-$tag.xml")
+}
+
+/** Drive the real pair card (ZephyrPairCard): address + the PC's one-shot code,
+ * then tap Pair. Success runs the app's own save path (fail-closed Store write)
+ * - the token is app-owned, no cross-process injection anywhere in this suite. */
+private fun pairThroughUi(device: UiDevice, code: String) {
+    // Step 1 -> 2 on a fresh install; already at step 2 when re-pairing.
+    device.wait(Until.findObject(By.text("Set up Zephyr Player")), 10_000)
+    device.findObject(By.text("Zephyr Player is open"))?.click()
+    val card = device.wait(Until.findObject(By.text("Pair with the Zephyr Player")), 10_000)
+    assertNotNull("pair card never appeared", card)
+    val fields = device.findObjects(By.clazz("android.widget.EditText"))
+    assertTrue("pair card fields not found (${fields.size})", fields.size >= 2)
+    fields[0].text = WIRE_HOST  // "PC address"
+    fields[1].text = code       // "6-digit code"
+    device.findObject(By.text("Pair")).click()
+}
+
+/**
+ * Targeted BadToken UI proof, step 1 (healthy baseline): pair through the REAL
+ * Zephyr setup UI, then prove the app owns a working token - the status poll
+ * succeeds and the main screen shows the Connected pill. No revocation yet.
+ */
+@RunWith(AndroidJUnit4::class)
+class ZephyrUiPairTest {
+    @Before fun wired() { wireArgs() }
+
+    @Test fun pairThroughRealUiShowsHealthyStatus() {
+        val (_, code) = wireArgs()
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        launchToZephyrSetup(device, ctx.packageName)
+        pairThroughUi(device, code)
+
+        val pill = device.wait(Until.findObject(By.text("Connected")), 20_000)
+        capture(device, "paired")
+        assertNotNull("no Connected pill after real UI pairing", pill)
+        assertNull("pair-again notice on a healthy pairing",
+            device.findObject(By.textContains(PAIR_AGAIN_MARKER)))
+    }
+}
+
+/**
+ * Step 2 (revocation): the harness restarted the wire host after step 1, so the
+ * app-owned token is revoked server-side (the same 401 remove-phone produces;
+ * the PC's remove-phone control itself is Windows UI and not exercised here).
+ * Cold app start: the app's own 1s status poll must surface pair-again.
+ */
+@RunWith(AndroidJUnit4::class)
+class ZephyrUiRevokedTest {
+    @Test fun revokedPairingShowsPairAgainNotice() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        launchApp(device, ctx.packageName)
+
+        val notice = device.wait(Until.findObject(By.textContains(PAIR_AGAIN_MARKER)), 30_000)
+        capture(device, "revoked")
+        assertNotNull("pair-again notice never appeared after revocation", notice)
+        assertNull("raw wire error leaked to the screen",
+            device.findObject(By.textContains("Player returned 401")))
+    }
+}
+
+/**
+ * Step 3 (recovery): re-pair through the real UI with the restarted host's fresh
+ * code, then the notice must be gone and the poll healthy again. Recovery only
+ * counts because the pre-repair notice and the completed re-pair are both
+ * asserted first.
+ */
+@RunWith(AndroidJUnit4::class)
+class ZephyrUiRepairedTest {
+    @Before fun wired() { wireArgs() }
+
+    @Test fun repairThroughRealUiClearsNotice() {
+        val (_, code) = wireArgs()
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+
+        // Cold start (fresh per-class session) with the revoked pairing: the
+        // notice must be showing before we touch anything.
+        launchApp(device, ctx.packageName)
+        val before = device.wait(Until.findObject(By.textContains(PAIR_AGAIN_MARKER)), 30_000)
+        capture(device, "repair-before")
+        assertNotNull("no pair-again notice before re-pair - recovery would prove nothing", before)
+
+        // Real navigation: main -> Settings -> Zephyr PC label -> setup screen.
+        device.findObject(By.desc("Settings")).click()
+        val label = device.wait(Until.findObject(By.text("Zephyr PC")), 10_000)
+        assertNotNull("Settings Zephyr PC entry not found", label)
+        label.click()
+        device.findObject(By.text("Start over with a new code"))?.click()
+        pairThroughUi(device, code)
+
+        // Re-pair must have COMPLETED (setup flow landed back on Settings) for
+        // anything below to count as recovery.
+        val settings = device.wait(Until.findObject(By.desc("Back")), 15_000)
+        capture(device, "repair-paired")
+        assertNotNull("re-pair through the UI did not complete", settings)
+        device.pressBack()
+
+        val pill = device.wait(Until.findObject(By.text("Connected")), 20_000)
+        capture(device, "repaired")
+        assertNotNull("no Connected pill after re-pairing", pill)
+        assertNull("pair-again notice survived a completed re-pair",
+            device.findObject(By.textContains(PAIR_AGAIN_MARKER)))
+    }
+}
