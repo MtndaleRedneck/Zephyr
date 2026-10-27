@@ -69,7 +69,7 @@ class HelperClientErrorDetailTest {
         enqueue(403, "{\"error\":\"bad token\"}")
         try {
             HelperClient.playMovie("127.0.0.1", port, "tok", "a/b.mp4", 8080, "pw", false)
-            fail("expected BadToken")
+            throw AssertionError("expected BadToken")
         } catch (e: HelperClient.BadToken) {
             assertEquals("The PC rejected the pairing token.", e.message)
         }
