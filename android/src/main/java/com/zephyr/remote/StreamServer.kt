@@ -52,6 +52,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         pool.execute {
             while (running) {
                 val client = runCatching { srv.accept() }.getOrNull() ?: break
+                // A stalled client must not hold a worker forever (teardown C12).
+                runCatching { client.soTimeout = 60_000 }
                 pool.execute { runCatching { handle(client) }; runCatching { client.close() } }
             }
         }
@@ -61,6 +63,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         running = false
         runCatching { socket?.close() }
         pool.shutdownNow()
+    }
+
+    companion object {
+        /** Cap for one non-seekable file copied into cache (teardown C12). */
+        const val MAX_CACHE_COPY_BYTES = 8L * 1024 * 1024 * 1024
+        /** Drop every cached stream copy (called when the service stops). */
+        fun cleanCache(context: android.content.Context) {
+            context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-") }?.forEach { it.delete() }
+        }
     }
 
     private fun handle(client: Socket) {
@@ -102,11 +113,28 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
             val size = fd.statSize
             if (size < 0) {
                 // Non-seekable provider: copy once into cache, then serve the copy.
+                // Teardown C12: the copy lands under a temp name and is renamed only when
+                // COMPLETE, so a cut-off copy is never reused; oversized copies are capped.
                 val cached = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}")
                 if (!cached.exists()) {
-                    context.contentResolver.openInputStream(uri)?.use { inp ->
-                        cached.outputStream().use { inp.copyTo(it) }
-                    } ?: return reply(client, 404, ByteArray(0), "text/plain")
+                    val tmp = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}.part")
+                    try {
+                        val inp = context.contentResolver.openInputStream(uri)
+                            ?: return reply(client, 404, ByteArray(0), "text/plain")
+                        var total = 0L
+                        inp.use { i -> tmp.outputStream().use { o ->
+                            val buf = ByteArray(64 * 1024); var n = i.read(buf)
+                            while (n >= 0) {
+                                total += n
+                                if (total > MAX_CACHE_COPY_BYTES) throw java.io.IOException("too large to cache")
+                                o.write(buf, 0, n); n = i.read(buf)
+                            }
+                        } }
+                        if (!tmp.renameTo(cached)) throw java.io.IOException("cache rename failed")
+                    } catch (e: Exception) {
+                        tmp.delete(); cached.delete()
+                        return reply(client, 500, ByteArray(0), "text/plain")
+                    }
                 }
                 return serveFile(client, cached, cached.length(), range)
             }

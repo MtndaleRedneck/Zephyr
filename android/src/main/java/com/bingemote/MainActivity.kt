@@ -265,10 +265,12 @@ fun UpdateHost(store: Store) {
             try {
                 val f = withContext(Dispatchers.IO) {
                     val existing = File(Updater.updateDir(context), "Zephyr-update.apk")
-                    if (existing.exists()) {
+                    // Reuse the cache only when it IS this offer - a file downloaded for an
+                    // older offer must never install (teardown 9a).
+                    if (existing.exists() && Updater.cachedMatchesOffer(existing, info)) {
                         try { Updater.verify(context, existing); return@withContext existing }
                         catch (e: Exception) { existing.delete() }
-                    }
+                    } else if (existing.exists()) existing.delete()
                     val file = Updater.download(
                         context, info,
                         { pr -> updateUi = UpdateUi.Downloading(info, pr.coerceIn(0f, 1f)) },
@@ -300,6 +302,17 @@ fun UpdateHost(store: Store) {
     }
 
     LaunchedEffect(Unit) {
+        // Once per 6 hours, not per activity recreation (teardown 9c).
+        if (System.currentTimeMillis() - store.lastUpdateCheckAt < 6L * 60 * 60 * 1000) return@LaunchedEffect
+        store.lastUpdateCheckAt = System.currentTimeMillis()
+        // A leftover APK from an already-installed update is deleted on launch (teardown 9b):
+        // verify() rejects anything not newer than the running version.
+        withContext(Dispatchers.IO) {
+            val cached = File(Updater.updateDir(context), "Zephyr-update.apk")
+            if (cached.exists()) {
+                try { Updater.verify(context, cached) } catch (e: Exception) { cached.delete() }
+            }
+        }
         val current = BuildConfig.VERSION_NAME
         val info = withContext(Dispatchers.IO) { Updater.check(current) } ?: return@LaunchedEffect
         if (info.versionName == store.skippedUpdate) return@LaunchedEffect
