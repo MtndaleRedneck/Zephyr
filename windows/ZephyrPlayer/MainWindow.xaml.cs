@@ -63,6 +63,17 @@ namespace ZephyrPlayer
                 ControlBar.Opacity = 0;
                 _idleTimer.Stop();
             };
+            _player.Paused += (_, __) => Dispatcher.BeginInvoke(() =>
+            {
+                // Phone-pause reveals the bar (review evidence): hiding it while
+                // paused strands phone-only viewers with no visible controls.
+                ControlBar.Opacity = 1;
+                _idleTimer.Stop(); // never auto-hide while paused
+            });
+            _player.Playing += (_, __) => Dispatcher.BeginInvoke(() =>
+            {
+                _idleTimer.Stop(); _idleTimer.Start(); // resume the hide countdown
+            });
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
             _flashTimer.Tick += (_, __) => { _flashTimer.Stop(); ApplyBarStyle(); };

@@ -142,25 +142,19 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     val lock = copyLocks.getOrPut(uri.toString()) { Object() }
                     synchronized(lock) {
                     if (!cached.exists()) {
-                    // S9: never start a copy the phone cannot hold.
-                    val free = context.cacheDir.usableSpace
-                    if (free < MIN_FREE_BYTES) return reply(client, 507, ByteArray(0), "text/plain")
                     val tmp = java.io.File(context.cacheDir, "stream-${uri.toString().hashCode()}.part")
                     try {
-                        val inp = context.contentResolver.openInputStream(uri)
-                            ?: return reply(client, 404, ByteArray(0), "text/plain")
-                        var total = 0L
-                        inp.use { i -> tmp.outputStream().use { o ->
-                            val buf = ByteArray(64 * 1024); var n = i.read(buf)
-                            while (n >= 0) {
-                                total += n
-                                if (total > MAX_CACHE_COPY_BYTES) throw java.io.IOException("too large to cache")
-                                o.write(buf, 0, n); n = i.read(buf)
-                            }
-                        } }
-                        if (!tmp.renameTo(cached)) throw java.io.IOException("cache rename failed")
+                        CacheCopier.copy(
+                            open = { context.contentResolver.openInputStream(uri) },
+                            tmp = tmp, final = cached,
+                            freeSpace = { context.cacheDir.usableSpace },
+                            maxBytes = MAX_CACHE_COPY_BYTES, minFree = MIN_FREE_BYTES,
+                        )
+                    } catch (e: CacheCopier.NoSpace) {
+                        return reply(client, 507, ByteArray(0), "text/plain")
+                    } catch (e: CacheCopier.TooLarge) {
+                        return reply(client, 413, ByteArray(0), "text/plain")
                     } catch (e: Exception) {
-                        tmp.delete(); cached.delete()
                         return reply(client, 500, ByteArray(0), "text/plain")
                     }
                     }

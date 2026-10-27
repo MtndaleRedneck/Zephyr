@@ -151,7 +151,10 @@ namespace ZephyrPlayer
                         _player!.Show();
                         _player!.PlayFromUrl(url, pos, subs);
                     }).Task,
-                validateToken: store.IsPaired,
+                // CI-only (ZEPHYR_CI_CAPTURE): the capture script acts as the phone over
+                // REAL HTTP for the phone-start bar proof - never enabled in release use.
+                validateToken: t => store.IsPaired(t)
+                    || (Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null && t == "ci-capture-token"),
                 onPair: code =>
                 {
                     // Fail-closed store: no code is consumed and the phone gets a
