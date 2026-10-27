@@ -81,15 +81,18 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
-        public async Task Player_First_Helper_Still_Binds_And_Answers()
+        public async Task Player_First_Owns_Legacy_Port_And_Answers_It()
         {
-            // Both start orders: with the player on its own port, the helper's
-            // exclusive 8489 bind is never disturbed either.
+            // Player first: it answers 8489 itself so old phones still find it,
+            // and the helper's exclusive bind then fails BY DESIGN (one owner
+            // per port; the own port keeps serving new phones regardless).
+            // Start order decides who holds 8489; both orders keep discovery up.
             if (!OperatingSystem.IsWindows()) return;
             using var player = new DiscoveryResponder(47823, "TestPC");
-            using var helper = new FakeHelper();
+            Assert.True(player.AnswersLegacyPort);
+            Assert.ThrowsAny<SocketException>(() => new FakeHelper());
             Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8490));
-            Assert.Equal("BINGEMOTE_HERE_V1|HelperPC|8488", await AskOne(8489));
+            Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TestPC|47823", await AskOne(8489));
         }
 
         [Fact]

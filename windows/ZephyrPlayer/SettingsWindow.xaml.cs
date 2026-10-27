@@ -74,10 +74,13 @@ namespace ZephyrPlayer
             {
                 var selected = k == key;
                 section.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
-                var pill = (FrameworkElement)nav.Template.FindName("Pill", nav);
-                var bg = (FrameworkElement)nav.Template.FindName("Bg", nav);
-                pill.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
-                ((Border)bg).Background = selected ? (Brush)FindResource("NavSelectedBrush") : Brushes.Transparent;
+                // The template tree does not exist until the control is applied;
+                // force it so construction-time selection cannot null-ref.
+                nav.ApplyTemplate();
+                if (nav.Template.FindName("Pill", nav) is FrameworkElement pill)
+                    pill.Visibility = selected ? Visibility.Visible : Visibility.Collapsed;
+                if (nav.Template.FindName("Bg", nav) is Border bg)
+                    bg.Background = selected ? (Brush)FindResource("NavSelectedBrush") : Brushes.Transparent;
             }
             SectionTitle.Text = _sections[key].Title;
         }

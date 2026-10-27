@@ -117,10 +117,18 @@ jobs:
               $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)
             }
           }
-          if (-not $alive) { throw "installed exe never stayed running (startup/update-check crash or auto-launch dead)" }
+          if (-not $alive) {
+            $cl = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
+            if (Test-Path $cl) { Write-Host "app crash log:"; Get-Content $cl }
+            throw "installed exe never stayed running (startup/update-check crash or auto-launch dead)"
+          }
           # Stay alive through the on-open update check window.
           Start-Sleep -Seconds 6
-          if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { throw "installed exe died during the update-check window" }
+          if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) {
+            $cl = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
+            if (Test-Path $cl) { Write-Host "app crash log:"; Get-Content $cl }
+            throw "installed exe died during the update-check window"
+          }
           Write-Output "installed exe alive through launch + on-open update check window"
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
@@ -161,6 +169,7 @@ jobs:
           name: windows-ui-evidence
           path: |
             ${{ runner.temp }}/pc-pairing-render.png
+            ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
             ${{ runner.temp }}/pc-controlbar-render.png
             ${{ runner.temp }}/pc-desktop.png
