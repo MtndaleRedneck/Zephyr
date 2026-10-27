@@ -25,6 +25,12 @@ internal static class FirewallSetup
                 Run("netsh", $"advfirewall firewall delete rule name=\"{Program.VlcFirewallRule}\"");
                 var vcode = Run("netsh", $"advfirewall firewall add rule name=\"{Program.VlcFirewallRule}\" dir=in action=allow program=\"{vlc}\" profile=private");
                 if (vcode != 0) Console.Error.WriteLine("The VLC firewall rule could not be added (the phone may still reach VLC if Windows already allows it).");
+                else
+                {
+                    // Ownership marker: a future elevated cleanup may remove only what we
+                    // created - never a rule another app (or Windows' own prompt) owns.
+                    try { File.WriteAllText(VlcRuleMarkerPath(), vlc + "\n" + DateTime.UtcNow.ToString("O")); } catch { }
+                }
             }
             else Console.Error.WriteLine("VLC is not installed - its firewall rule was skipped.");
             // Report, never touch: any broad vlc.exe rules from elsewhere (all networks, or
@@ -127,10 +133,16 @@ internal static class FirewallSetup
         catch { }
     }
 
+    private static string VlcRuleMarkerPath() =>
+        Path.Combine(Program.DataDir, "vlc-firewall-rule-owned.txt");
+
     private static void AddRule(string protocol, int port)
     {
+        // Round-5: program-scoped, not port-only - no other process may inherit the
+        // open ports. The running exe's own path is what the rule must name.
+        var exe = Environment.ProcessPath ?? "";
         Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\" protocol={protocol} localport={port}");
-        var code = Run("netsh", $"advfirewall firewall add rule name=\"{Program.FirewallRule}\" dir=in action=allow protocol={protocol} localport={port} profile=private");
+        var code = Run("netsh", $"advfirewall firewall add rule name=\"{Program.FirewallRule}\" dir=in action=allow protocol={protocol} localport={port} program=\"{exe}\" profile=private");
         if (code != 0) throw new InvalidOperationException($"netsh add rule exited {code}");
     }
 

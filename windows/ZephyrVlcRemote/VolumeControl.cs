@@ -26,7 +26,7 @@ internal static class VolumeControl
     public static (int Volume, bool Mute) Get()
     {
         using var enumerator = new MMDeviceEnumerator();
-        var device = DefaultDevice(enumerator);
+        using var device = DefaultDevice(enumerator);
         return ((int)Math.Round(device.AudioEndpointVolume.MasterVolumeLevelScalar * 100),
                 device.AudioEndpointVolume.Mute);
     }
@@ -35,14 +35,14 @@ internal static class VolumeControl
     {
         percent = Math.Clamp(percent, 0, 100);
         using var enumerator = new MMDeviceEnumerator();
-        var device = DefaultDevice(enumerator);
+        using var device = DefaultDevice(enumerator);
         device.AudioEndpointVolume.MasterVolumeLevelScalar = percent / 100f;
     }
 
     public static void SetMute(bool mute)
     {
         using var enumerator = new MMDeviceEnumerator();
-        var device = DefaultDevice(enumerator);
+        using var device = DefaultDevice(enumerator);
         device.AudioEndpointVolume.Mute = mute;
     }
 }

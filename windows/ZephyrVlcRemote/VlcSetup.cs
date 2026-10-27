@@ -12,7 +12,9 @@ internal static class VlcSetup
 {
     public static string WriteVlcrc(string password)
     {
-        if (password.Length == 0 || password.Length > 200 || password.Contains('\r') || password.Contains('\n'))
+        // Round-5: the generated password is 96 bits; refuse to arm the LAN-facing web
+        // remote with anything weak (12+ chars).
+        if (password.Length < 12 || password.Length > 200 || password.Contains('\r') || password.Contains('\n'))
             return JsonSerializer.Serialize(new { ok = false, reason = "bad password" });
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc");
         Directory.CreateDirectory(dir);
@@ -29,14 +31,14 @@ internal static class VlcSetup
         {
             bool hadPending;
             lock (Gate) { hadPending = _pendingPassword != null; _pendingPassword = null; }
-            if (hadPending) Program.SaveConfig();
+            if (hadPending) { try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save: " + ex.Message); } }
             Program.Log("vlcrc already has the web remote set up - nothing to write.");
             return JsonSerializer.Serialize(new { ok = true });
         }
         if (Process.GetProcessesByName("vlc").Length > 0)
         {
             lock (Gate) _pendingPassword = password;
-            Program.SaveConfig(); // the deferred write must survive a helper restart
+            try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save the deferred vlcrc write: " + ex.Message); } // the deferred write must survive a helper restart
             Program.Log("vlcrc write skipped - VLC is running (it rewrites vlcrc on exit). Will retry when VLC closes.");
             return JsonSerializer.Serialize(new { ok = false, reason = "vlc running" });
         }
@@ -48,7 +50,7 @@ internal static class VlcSetup
         Upsert(lines, "http-host", "0.0.0.0");
         File.WriteAllLines(path, lines);
         lock (Gate) _pendingPassword = null;
-        Program.SaveConfig(); // clear any persisted deferred write
+        try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save: " + ex.Message); } // clear any persisted deferred write
         Program.Log("VLC web remote written into vlcrc.");
         return JsonSerializer.Serialize(new { ok = true });
     }
@@ -91,7 +93,7 @@ internal static class VlcSetup
         if (Process.GetProcessesByName("vlc").Length > 0)
         {
             lock (Gate) _pendingPassword = password;
-            Program.SaveConfig();
+            try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save the restored deferred write: " + ex.Message); }
             Program.Log("Restored the vlcrc write deferred before the restart - it completes when VLC closes.");
             return;
         }
