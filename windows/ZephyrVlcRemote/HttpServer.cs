@@ -73,7 +73,7 @@ internal sealed class HttpServer : IDisposable
             // the phone were unpaired - the file is preserved and nothing here can succeed.
             if (Program.StoreBroken)
             {
-                Reply(res, 503, "{\"error\":\"store broken\",\"detail\":\"The PC's saved pairings could not be read. Pairing is off until that is fixed on the PC - see the Zephyr VLC Remote window.\"}");
+                Reply(res, 503, "{\"error\":\"store broken\",\"detail\":\"The PC's saved pairings could not be read. Pairing and every connected phone are off until that is fixed on the PC - see the Zephyr VLC Remote window.\"}");
                 return;
             }
             switch (path)
@@ -225,7 +225,9 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 400, "{\"error\":\"bad request\"}");
     }
 
-    private static readonly object PairLock = new();
+    /// <summary>UI pairing mutations (Start/Cancel/expiry name restore) take this too,
+    /// so a /pair never observes half-set pairing state (round-7 review C).</summary>
+    internal static readonly object PairLock = new();
     private void HandlePair(HttpListenerRequest req, HttpListenerResponse res)
     {
         lock (PairLock) { HandlePairLocked(req, res); }
@@ -238,9 +240,14 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
             return;
         }
+        // Snapshot the pairing state ONCE under the lock: the UI thread also writes it
+        // (Start/Cancel/expiry), and a null landing between the check and the compare
+        // would turn into an exception instead of an answer (round-7 review C).
+        var pairCode = Program.PairCode;
+        var pairCodeExpires = Program.PairCodeExpires;
         // No code on screen: guesses here must not count toward the lock, or anyone on the
         // Wi-Fi could lock pairing while he is not even pairing.
-        if (Program.PairCode == null)
+        if (pairCode == null)
         {
             Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
             return;
@@ -248,12 +255,12 @@ internal sealed class HttpServer : IDisposable
         var body = ReadBody(req);
         var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
         // An expired code is not a wrong guess - say so without spending a try (round-5).
-        if (DateTime.UtcNow > Program.PairCodeExpires)
+        if (DateTime.UtcNow > pairCodeExpires)
         {
             Reply(res, 410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
             return;
         }
-        if (!ConstantTimeEq(code, Program.PairCode))
+        if (!ConstantTimeEq(code, pairCode))
         {
             Program.PairFailures++;
             Program.Log("Wrong pairing code entered (" + Program.PairFailures + " of " + Program.MaxPairFailures + ").");

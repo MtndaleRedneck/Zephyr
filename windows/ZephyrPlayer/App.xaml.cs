@@ -63,7 +63,7 @@ namespace ZephyrPlayer
             }
             if (e.Args.Length >= 1 && e.Args[0] == "--remove-firewall")
             {
-                Shutdown(FirewallSetup.RemoveElevated());
+                Shutdown(FirewallSetup.RemoveElevated(e.Args.Length > 1 ? e.Args[1] : null));
                 return;
             }
             _singleInstance = new System.Threading.Mutex(true, "ZephyrPlayer", out bool createdNew);
@@ -225,7 +225,10 @@ namespace ZephyrPlayer
             // adds them, so the FIRST run explains and asks Windows once. Declining
             // closes the app cleanly (retry on next launch) instead of failing the
             // listen with a misleading error.
-            if (!FirewallSetup.RulesExist() || !FirewallSetup.UrlAclExists())
+            // Versioned-marker fast path + ACTUAL shape verification inside: a 1.1.0
+            // upgrade keeps same-named rules with the old shape, and name-only checks
+            // would never rerun setup (round-7 B7-1).
+            if (!FirewallSetup.SetupIsCurrent())
             {
                 if (!FirewallSetup.ExplainAndRelaunch())
                 {

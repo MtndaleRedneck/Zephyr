@@ -71,20 +71,34 @@ internal static class ResumeTracker
         }
         catch (Exception ex)
         {
-            // An unreadable places file is preserved, not silently erased by the next
-            // save: move it aside so the tracker starts fresh. If it cannot be moved,
-            // never write over it - the poller keeps running but stays read-only.
-            try
+            // An unreadable places file is NEVER moved, renamed or overwritten by the
+            // app: it is the only copy of the saved places, and no reset step happens
+            // without the owner's explicit OK. Stay read-only for this session and
+            // retry shortly; reopening the helper tries again too.
+            lock (Gate) _saveSuppressed = true;
+            Program.Log("Saved playback places could not be read (" + ex.GetType().Name
+                + "); the file is left untouched and no resume data will be written over it. Trying again shortly.");
+            Task.Run(async () =>
             {
-                var aside = StorePath + ".unreadable-" + DateTime.Now.ToString("yyyyMMdd-HHmmss");
-                File.Move(StorePath, aside);
-                Program.Log("Saved playback places could not be read (" + ex.GetType().Name + "); moved aside to " + aside + ".");
-            }
-            catch
-            {
-                _saveSuppressed = true;
-                Program.Log("Saved playback places could not be read (" + ex.GetType().Name + ") and could not be moved aside; no resume data will be written over it.");
-            }
+                for (var attempt = 0; attempt < 2; attempt++)
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(attempt == 0 ? 15 : 60));
+                    try
+                    {
+                        var map = JsonSerializer.Deserialize<Dictionary<string, Entry>>(File.ReadAllText(StorePath));
+                        if (map == null) continue;
+                        lock (Gate)
+                        {
+                            foreach (var kv in map) ByFile[kv.Key] = kv.Value;
+                            _saveSuppressed = false;
+                        }
+                        Program.Log("Saved playback places read successfully on retry.");
+                        return;
+                    }
+                    catch { }
+                }
+                Program.Log("Saved playback places are still unreadable; staying read-only until the helper is reopened.");
+            });
         }
         var pw = VlcSetup.EffectivePassword();
         if (pw != null && pw.Length > 0)

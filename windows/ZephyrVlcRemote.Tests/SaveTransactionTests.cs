@@ -8,6 +8,7 @@ namespace ZephyrVlcRemote.Tests;
 /// transactions must serialize through the OUTER save lock (no lost phone, no torn
 /// file), and a failed save must roll the in-memory add back so a retry after the
 /// cause is fixed persists cleanly - no phantom pairing either way.</summary>
+[Collection("ProgramState")]
 public class SaveTransactionTests : IDisposable
 {
     private readonly string _dir = Path.Combine(Path.GetTempPath(), "zvrt-save-" + Guid.NewGuid().ToString("N"));
@@ -24,6 +25,7 @@ public class SaveTransactionTests : IDisposable
     {
         Program.StoreBroken = false;
         lock (Program.PhonesLock) { Program.Phones.Clear(); }
+        Program.ResetDataDirForTests();
         try { Directory.Delete(_dir, true); } catch { }
     }
 

@@ -39,6 +39,9 @@ internal static class Program
     /// save/retry/concurrency tests never touch the real profile. Not an env or argument
     /// hook - production behavior is unchanged.</summary>
     internal static void RedirectDataDirForTests(string dir) { DataDir = dir; }
+    /// <summary>Restore the real data dir after a redirected test (round-7 N8: a leaked
+    /// redirect makes the NEXT suite write its config into a deleted temp folder).</summary>
+    internal static void ResetDataDirForTests() { DataDir = PickDataDir(); }
 
     private static string PickDataDir()
     {
@@ -67,6 +70,19 @@ internal static class Program
 
     internal static string ConfigPath => Path.Combine(DataDir, "config.json");
     private static string FirewallMarker => Path.Combine(DataDir, "firewall.ok");
+
+    /// <summary>The marker counts only when it names the CURRENT required shape version;
+    /// anything older triggers the shape check (and one explained elevation if wrong).</summary>
+    private static bool FirewallMarkerCurrent()
+    {
+        try { return File.ReadAllText(FirewallMarker).StartsWith(FirewallSetup.MarkerVersion + "\n"); }
+        catch { return false; }
+    }
+
+    private static void StampFirewallMarker()
+    {
+        try { File.WriteAllText(FirewallMarker, FirewallSetup.MarkerVersion + "\n" + DateTime.UtcNow.ToString("O")); } catch { }
+    }
     private static string QuitMarkerPath => Path.Combine(DataDir, "quit-on-purpose");
     /// <summary>Fresh while an update installer runs: the watchdog skips its round so it cannot
     /// start a copy mid-install. Any normal start deletes it.</summary>
@@ -102,6 +118,12 @@ internal static class Program
     /// the file is PRESERVED, reads look unpaired, no pairing code is minted, and
     /// SaveConfig refuses - a torn file is never replaced by a fresh empty one.</summary>
     internal static bool StoreBroken;
+
+    /// <summary>Why the store failed closed ("could not be read (...)" / "could not be
+    /// decrypted"): shown in the window so a transient read error is never described
+    /// as corruption. Never contains reset advice - no move/rename/reset step is
+    /// suggested anywhere without the owner's explicit OK.</summary>
+    internal static string StoreBrokenReason = "could not be read";
     internal static int PhonesCount { get { lock (PhonesLock) { return Phones.Count; } } }
     /// <summary>The name typed for the phone that is about to pair; consumed by a successful pairing.</summary>
     internal static string? PendingPhoneName;
@@ -141,12 +163,17 @@ internal static class Program
             var i = Array.IndexOf(args, "--install-firewall");
             var sid = i + 1 < args.Length ? args[i + 1] : null;
             var dir = i + 2 < args.Length ? args[i + 2] : null;
+            // Logs from this elevated copy belong in the USER's data folder, not the
+            // approving admin's profile.
+            if (!string.IsNullOrWhiteSpace(dir)) DataDir = dir;
             return FirewallSetup.RunElevated(sid, dir);
         }
         if (args.Contains("--remove-firewall"))
         {
-            // Elevated cleanup at uninstall: our rules and our listen permission only.
-            return FirewallSetup.RemoveElevated();
+            // Elevated cleanup at uninstall: our rules and OUR listen permission only.
+            var ri = Array.IndexOf(args, "--remove-firewall");
+            var rsid = ri + 1 < args.Length ? args[ri + 1] : null;
+            return FirewallSetup.RemoveElevated(rsid);
         }
 
 #if WINDOW_SHOT_HOOK
@@ -159,6 +186,16 @@ internal static class Program
             using var shot = new HelperWindow(windowShot: true);
             var shotPath = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT")
                 ?? Path.Combine(DataDir, "window.png");
+#if PAIR_CODE_HOOK
+            // CI only: render the expired-code state (born-expired code, like the e2e hook).
+            if (Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE") == "pairing-expired")
+            {
+                Program.PendingPhoneName = "Shot Phone";
+                Program.PairCode = Program.NewPairCode();
+                Program.PairCodeExpires = DateTime.UtcNow - TimeSpan.FromSeconds(1);
+                shot.RunStatusTickForShot();
+            }
+#endif
             shot.ShowOffscreenAndCapture(shotPath);
             return 0;
         }
@@ -271,14 +308,17 @@ internal static class Program
         RegisterAutostart();
         try { RegisterApplicationRestart("/restarted", 0); } catch { } // crash or hang: Windows relaunches us
 
-        if (!File.Exists(FirewallMarker))
+        if (!FirewallMarkerCurrent())
         {
             // The elevated step adds the rules and listen permission; the UNELEVATED
             // copy verifies them and writes its own marker, so the marker always lands
             // in the user's profile even when another admin approved the UAC prompt.
-            if (FirewallSetup.RuleExists() && FirewallSetup.UrlAclExists())
+            // The marker is VERSIONED and the verification checks the ACTUAL shape:
+            // a marker or same-named rules written by an older build (exe-scoped TCP,
+            // broad ACL) do not count - one explained elevation migrates them.
+            if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
             {
-                try { File.WriteAllText(FirewallMarker, DateTime.UtcNow.ToString("O")); } catch { }
+                StampFirewallMarker();
             }
             else
             {
@@ -289,10 +329,8 @@ internal static class Program
                 // (even if a leftover listen permission would let us bind) and offer the
                 // setup again on the next launch.
                 if (!FirewallSetup.ExplainAndRelaunch()) return 0;
-                if (FirewallSetup.RuleExists() && FirewallSetup.UrlAclExists())
-                {
-                    try { File.WriteAllText(FirewallMarker, DateTime.UtcNow.ToString("O")); } catch { }
-                }
+                if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
+                    StampFirewallMarker();
                 else return 0;
             }
             // Surface the vlc.exe rule inventory the elevated step saved (report only).
@@ -473,8 +511,12 @@ internal static class Program
             string? text = null;
             for (var attempt = 0; attempt < 4; attempt++)
             {
+                // A scanner, indexer or sync client can hold the file for a moment at
+                // sign-in: a transient read OR permission error is NOT a broken store.
+                // Retry both before failing closed.
                 try { text = File.ReadAllText(ConfigPath); break; }
                 catch (IOException) { if (attempt == 3) throw; Thread.Sleep(250); }
+                catch (UnauthorizedAccessException) { if (attempt == 3) throw; Thread.Sleep(250); }
             }
             using var doc = JsonDocument.Parse(text!);
             // Fail closed on ANY unreadable record (round-5, Main's catch): a dropped
@@ -484,8 +526,9 @@ internal static class Program
             if (!TryParsePhones(doc.RootElement, out var parsedPhones, out var unreadableName))
             {
                 StoreBroken = true;
+                StoreBrokenReason = "could not be decrypted";
                 Log("A saved phone" + (unreadableName != null ? " (\"" + unreadableName + "\")" : "")
-                    + " could not be decrypted. The file is left untouched; pairing and saving are refused until it is moved aside or renamed by hand.");
+                    + " could not be decrypted. The file is left untouched; pairing and saving are off. Reopen Zephyr VLC Remote to try again.");
                 lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
                 return;
             }
@@ -516,7 +559,8 @@ internal static class Program
                 // Same fail-closed rule as a phone record: a dropped pending password
                 // would silently erase the waiting vlcrc write on the next save.
                 StoreBroken = true;
-                Log("The stored pending VLC password could not be decrypted. The file is left untouched; pairing and saving are refused until it is moved aside or renamed by hand.");
+                StoreBrokenReason = "could not be decrypted";
+                Log("The stored pending VLC password could not be decrypted. The file is left untouched; pairing and saving are off. Reopen Zephyr VLC Remote to try again.");
                 lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
                 return;
             }
@@ -526,8 +570,9 @@ internal static class Program
         catch (Exception ex)
         {
             StoreBroken = true;
+            StoreBrokenReason = "could not be read (Windows reported " + ex.GetType().Name + ")";
             lock (PhonesLock) { Phones.Clear(); } DeclinedNetworks.Clear(); HomeNetworks.Clear(); MoviesFolder = null;
-            Log("Saved pairing data could not be read (" + ex.GetType().Name + "). The file is left untouched; pairing is refused until it is moved aside or renamed by hand.");
+            Log("Saved pairing data could not be read (" + ex.GetType().Name + "). The file is left untouched; pairing and saving are off. Reopen Zephyr VLC Remote to try again.");
         }
         // A vlcrc write that was waiting for VLC to close survives a helper restart:
         // complete it now when VLC is already closed, or re-arm the retry when it is not.
@@ -866,6 +911,7 @@ internal sealed class HelperWindow : Form
         };
         _nameBoxPanel.Click += (_, _) => _nameBox.Focus();
         _pair = MakeButton("Pair", margin + contentW - 60, y, 60);
+        ((ReadableButton)_pair).DimWhenDisabled = false; // StylePairEnabled owns the disabled look
         _pair.Height = 32;
         _pair.Enabled = false;
         StylePairEnabled();
@@ -1191,10 +1237,16 @@ internal sealed class HelperWindow : Form
                 _wifiBtn.Enabled = true;
                 if (ok)
                 {
-                    Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                    if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
-                        Program.HomeNetworks.Add(profile.Name);
-                    Program.TrySaveConfig("the Wi-Fi choice");
+                    // The Wi-Fi lists are persisted state: mutate + save inside the
+                    // outer save lock, or a listener thread's SaveConfig can enumerate
+                    // them mid-change and fail an unrelated save (round-7 N3).
+                    lock (Program.ConfigSaveLock)
+                    {
+                        Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
+                        if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
+                            Program.HomeNetworks.Add(profile.Name);
+                        Program.TrySaveConfig("the Wi-Fi choice");
+                    }
                     Program.Log("Network \"" + profile.Name + "\" marked Private from the window strip.");
                     _wifiProfile = null;
                     SetWifiStripVisible(false);
@@ -1215,6 +1267,11 @@ internal sealed class HelperWindow : Form
     /// DrawToBitmap renders in memory, so no visible desktop is needed.</summary>
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
+
+#if WINDOW_SHOT_HOOK
+    /// <summary>CI-only: run one status tick so the shot reflects settled pairing state.</summary>
+    internal void RunStatusTickForShot() { TickStatus(); }
+#endif
 
     internal void ShowOffscreenAndCapture(string path)
     {
@@ -1305,8 +1362,9 @@ internal sealed class HelperWindow : Form
                 _codeShown = true;
                 _codeCaption.Visible = _code.Visible = _cancelPair.Visible = false;
                 _codeNote.Visible = true;
-                _codeNote.Text = "The saved pairings on this PC could not be read. Pairing is off and nothing is being overwritten - the file is kept safe at "
-                    + Program.ConfigPath + ". To start fresh, move that file aside (rename it) and reopen Zephyr VLC Remote.";
+                _codeNote.Text = "The saved pairings on this PC " + Program.StoreBrokenReason
+                    + ". Pairing and every connected phone are off, and nothing will be saved over the file - it is kept exactly as it was at "
+                    + Program.ConfigPath + ". Reopen Zephyr VLC Remote to try again.";
                 _pair.Enabled = false;
                 _nameBox.Enabled = false;
                 // The note is measured for its short default text; this longer message
@@ -1337,8 +1395,12 @@ internal sealed class HelperWindow : Form
         {
             // The typed name goes back into the box (Pair re-enables) and the note says
             // what happened; the code itself is unusable (410) but stays for the answer.
-            var name = Program.PendingPhoneName;
-            Program.PendingPhoneName = null;
+            string? name;
+            lock (HttpServer.PairLock)
+            {
+                name = Program.PendingPhoneName;
+                Program.PendingPhoneName = null;
+            }
             if (!string.IsNullOrEmpty(name) && _nameBox.Text.Trim().Length == 0) _nameBox.Text = name;
             _codeExpired = true;
             Program.Log("Pairing code expired - showing \"Code expired\" until Pair is tapped again.");
@@ -1363,9 +1425,13 @@ internal sealed class HelperWindow : Form
     /// <summary>Cancel drops the code and goes back to step one, keeping the typed name.</summary>
     private void CancelPairing()
     {
-        var name = Program.PendingPhoneName;
-        Program.PairCode = null;
-        Program.PendingPhoneName = null;
+        string? name;
+        lock (HttpServer.PairLock)
+        {
+            name = Program.PendingPhoneName;
+            Program.PairCode = null;
+            Program.PendingPhoneName = null;
+        }
         if (!string.IsNullOrEmpty(name) && _nameBox.Text.Trim().Length == 0) _nameBox.Text = name;
         _codeExpired = false;
         Program.Log("Pairing canceled from the window.");
@@ -1498,10 +1564,15 @@ internal sealed class HelperWindow : Form
             Program.Log("Pairing refused: the saved pairing data on this PC could not be read (the file is preserved).");
             return;
         }
-        Program.PendingPhoneName = name;
-        Program.PairCode = Program.NewPairCode();
-        Program.PairCodeExpires = DateTime.UtcNow + Program.PairCodeLifetime;
-        Program.PairFailures = 0;
+        // The HTTP pair handler reads this state: mutate it under the same lock so a
+        // /pair can never observe a half-set code (round-7 review C).
+        lock (HttpServer.PairLock)
+        {
+            Program.PendingPhoneName = name;
+            Program.PairCode = Program.NewPairCode();
+            Program.PairCodeExpires = DateTime.UtcNow + Program.PairCodeLifetime;
+            Program.PairFailures = 0;
+        }
         _nameBox.Clear();
         _codeExpired = false;
         Program.Log("Pairing code created for \"" + name + "\".");
@@ -1775,18 +1846,24 @@ internal sealed class HelperWindow : Form
         protected override void OnEnabledChanged(EventArgs e) { _hover = _pressed = false; Invalidate(); base.OnEnabledChanged(e); }
         protected override void OnParentBackColorChanged(EventArgs e) { base.OnParentBackColorChanged(e); Invalidate(); }
 
+        /// <summary>When false, the button's own disabled colors are painted as-is
+        /// (the Pair button styles its disabled state itself; dimming it AGAIN here
+        /// halved the contrast twice - round-7 L1).</summary>
+        [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+        public bool DimWhenDisabled { get; set; } = true;
+
         protected override void OnPaint(PaintEventArgs e)
         {
             var fill = BackColor;
             // Disabled reads disabled: the fill leans halfway toward whatever is behind the
             // button and the text halfway toward that.
-            if (!Enabled) fill = Mix(BackColor, Parent?.BackColor ?? BackColor, 0.5f);
+            if (!Enabled && DimWhenDisabled) fill = Mix(BackColor, Parent?.BackColor ?? BackColor, 0.5f);
             // Hover/pressed lean toward the text color: lighter on dark grey, deeper on orange.
             else if (_pressed) fill = Mix(BackColor, ForeColor, 0.16f);
             else if (_hover) fill = Mix(BackColor, ForeColor, 0.08f);
             var border = FlatAppearance.BorderSize > 0 ? FlatAppearance.BorderColor : Color.Empty;
             PaintRounded(e.Graphics, this, fill, border, _radius);
-            var fg = Enabled ? ForeColor : Mix(ForeColor, fill, 0.5f);
+            var fg = Enabled || !DimWhenDisabled ? ForeColor : Mix(ForeColor, fill, 0.5f);
             TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, fg, fill,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter
                 | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
@@ -1980,10 +2057,13 @@ internal sealed class HelperWindow : Form
                     {
                         if (ok)
                         {
-                            Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                            if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
-                                Program.HomeNetworks.Add(profile.Name);
-                            Program.TrySaveConfig("the Wi-Fi choice");
+                            lock (Program.ConfigSaveLock)
+                            {
+                                Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
+                                if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
+                                    Program.HomeNetworks.Add(profile.Name);
+                                Program.TrySaveConfig("the Wi-Fi choice");
+                            }
                             _wifiProfile = null;
                             SetWifiStripVisible(false);
                             Program.Log("Network \"" + profile.Name + "\" marked Private from the popup.");
@@ -2003,10 +2083,13 @@ internal sealed class HelperWindow : Form
                 OpenWifiSettings();
                 break;
             case WifiDialog.Result.NotNow:
-                Program.DeclinedNetworks.Add(profile.Name);
-                // Saying "Not now" on a network once marked home means it is not home after all.
-                Program.HomeNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                Program.TrySaveConfig("the Wi-Fi choice");
+                lock (Program.ConfigSaveLock)
+                {
+                    Program.DeclinedNetworks.Add(profile.Name);
+                    // Saying "Not now" on a network once marked home means it is not home after all.
+                    Program.HomeNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
+                    Program.TrySaveConfig("the Wi-Fi choice");
+                }
                 Program.Log("Public-network popup declined for \"" + profile.Name + "\" - not asking again.");
                 break;
         }

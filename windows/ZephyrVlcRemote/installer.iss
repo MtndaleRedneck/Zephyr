@@ -81,6 +81,32 @@ begin
   Result := True;
 end;
 
+
+function GetUninstallUserSid: String;
+var
+  TmpFile, S: String;
+  ResultCode, P, I: Integer;
+begin
+  Result := '';
+  TmpFile := ExpandConstant('{tmp}\zeph-uninst-sid.txt');
+  Exec('cmd.exe', '/c whoami /user /fo csv /nh > "' + TmpFile + '"', '', SW_HIDE,
+    ewWaitUntilTerminated, ResultCode);
+  if LoadStringFromFile(TmpFile, S) then
+  begin
+    P := Pos('S-1-5-', S);
+    if P > 0 then
+    begin
+      Result := Copy(S, P, Length(S));
+      for I := 1 to Length(Result) do
+        if (Result[I] = '"') or (Result[I] = ',') or (Result[I] = ' ') or (Result[I] = #13) or (Result[I] = #10) then
+        begin
+          SetLength(Result, I - 1);
+          Break;
+        end;
+    end;
+  end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
@@ -91,12 +117,15 @@ begin
     // The TCP rule names program=System (http.sys owns the listener), so unlike the old
     // exe-scoped rule it is NOT inert after the exe is gone - it must not be left
     // behind. This needs one admin prompt; on a decline the leftover is a LocalSubnet,
-    // Private-only rule on an unused port plus the user's own URL ACL, and the app says
-    // so in its log the next time it runs elevated.
+    // Private-only rule on an unused port plus the user's own URL ACL.
+    // The uninstalling user's SID is passed so the ACL is removed only when it names
+    // that user (or is a broad 1.x Everyone grant) - another user's or another app's
+    // reservation is never touched.
     // Decline-safe: a cancelled prompt (or any failure) skips cleanup and the uninstall
     // still completes; the leftover is a Private+LocalSubnet rule on an unused port plus
-    // the user's own URL ACL - accurately described in the comment below, not hidden.
-    if not ShellExec('runas', ExpandConstant('{app}\ZephyrVlcRemote.exe'), '--remove-firewall', '',
+    // the user's own URL ACL.
+    if not ShellExec('runas', ExpandConstant('{app}\ZephyrVlcRemote.exe'),
+      '--remove-firewall "' + GetUninstallUserSid + '"', '',
       SW_HIDE, ewWaitUntilTerminated, ResultCode) then
       Log('firewall cleanup was declined or failed to start; rules left in place');
   end;

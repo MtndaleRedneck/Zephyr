@@ -4,24 +4,27 @@ using Xunit;
 
 namespace ZephyrVlcRemote.Tests;
 
+[Collection("ProgramState")]
 public class VlcSetupTests : IDisposable
 {
-    private static readonly string VlcrcPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc", "vlcrc");
-    private readonly string? _backup;
+    // Round-7 N8: never touch the real %APPDATA%\vlc\vlcrc - a crashed run used to
+    // leave the backup un-restored. The seam redirects every vlcrc access to a temp dir.
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "zvrt-vlc-" + Guid.NewGuid().ToString("N"));
+    private string VlcrcPath => Path.Combine(_dir, "vlcrc");
 
     public VlcSetupTests()
     {
-        _backup = File.Exists(VlcrcPath) ? File.ReadAllText(VlcrcPath) : null;
+        Directory.CreateDirectory(_dir);
+        VlcSetup.VlcDirOverride = _dir;
     }
 
     public void Dispose()
     {
-        if (_backup != null) File.WriteAllText(VlcrcPath, _backup);
-        else if (File.Exists(VlcrcPath)) File.Delete(VlcrcPath);
+        VlcSetup.VlcDirOverride = null;
+        try { Directory.Delete(_dir, true); } catch { }
     }
 
-    private static void WriteVlcrc(params string[] lines)
+    private void WriteVlcrc(params string[] lines)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(VlcrcPath)!);
         File.WriteAllLines(VlcrcPath, lines);

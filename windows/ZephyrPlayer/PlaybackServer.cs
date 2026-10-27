@@ -81,6 +81,7 @@ namespace ZephyrPlayer
         {
             try
             {
+                var path = ctx.Request.Url?.AbsolutePath ?? "";
                 // LAN-only, inherited from the helper model: refuse anything that is not
                 // loopback / RFC1918 / link-local before touching auth or routes.
                 if (!_loopbackOnly && !IsPrivateAddress(ctx.Request.RemoteEndPoint.Address))
@@ -90,7 +91,7 @@ namespace ZephyrPlayer
                 }
                 // Pairing is the ONE unauthenticated route: the phone trades the 6-digit
                 // code on the player screen for a pairing token (protocol.md Pairing).
-                if (ctx.Request.HttpMethod == "POST" && ctx.Request.Url.AbsolutePath == "/pair")
+                if (ctx.Request.HttpMethod == "POST" && path == "/pair")
                 {
                     using var pairReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
                     var pairBody = await pairReader.ReadToEndAsync();
@@ -136,12 +137,13 @@ namespace ZephyrPlayer
                     await Reply(ctx, 401, "{\"error\":\"unauthorized\"}");
                     return;
                 }
-                if (ctx.Request.HttpMethod == "POST" && ctx.Request.Url.AbsolutePath == "/play")
+                if (ctx.Request.HttpMethod == "POST" && path == "/play")
                 {
                     using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
                     var body = await reader.ReadToEndAsync();
                     var doc = System.Text.Json.JsonDocument.Parse(body).RootElement;
                     var url = doc.GetProperty("url").GetString();
+                    if (url == null) { await Reply(ctx, 400, "{\"error\":\"missing url\"}"); return; }
                     long? position = doc.TryGetProperty("position", out var p) ? p.GetInt64() : null;
                     var subs = doc.TryGetProperty("subtitles", out var s)
                         ? System.Text.Json.JsonSerializer.Deserialize<string[]>(s.GetRawText()) ?? Array.Empty<string>()
@@ -153,12 +155,12 @@ namespace ZephyrPlayer
                 // Library browsing (protocol.md Library): the paired phone picks the
                 // assigned movies folder and lists it, same contract as the helper's
                 // /movies/list + /browse. All read-only except POST /library/folder.
-                if (ctx.Request.HttpMethod == "GET" && ctx.Request.Url.AbsolutePath == "/library/folder")
+                if (ctx.Request.HttpMethod == "GET" && path == "/library/folder")
                 {
                     await Reply(ctx, 200, System.Text.Json.JsonSerializer.Serialize(new { libraryFolder = _settings.LibraryFolder }));
                     return;
                 }
-                if (ctx.Request.HttpMethod == "POST" && ctx.Request.Url.AbsolutePath == "/library/folder")
+                if (ctx.Request.HttpMethod == "POST" && path == "/library/folder")
                 {
                     using var folderReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
                     var folderBody = await folderReader.ReadToEndAsync();
@@ -172,13 +174,13 @@ namespace ZephyrPlayer
                     await Reply(ctx, 200, System.Text.Json.JsonSerializer.Serialize(new { libraryFolder = folder }));
                     return;
                 }
-                if (ctx.Request.HttpMethod == "GET" && ctx.Request.Url.AbsolutePath == "/library/list")
+                if (ctx.Request.HttpMethod == "GET" && path == "/library/list")
                 {
                     var (status, json) = Library.List(_settings.LibraryFolder, ctx.Request.QueryString["path"] ?? "");
                     await Reply(ctx, status, json);
                     return;
                 }
-                if (ctx.Request.HttpMethod == "GET" && ctx.Request.Url.AbsolutePath == "/library/browse")
+                if (ctx.Request.HttpMethod == "GET" && path == "/library/browse")
                 {
                     var (status, json) = Library.Browse(ctx.Request.QueryString["path"] ?? "");
                     await Reply(ctx, status, json);
@@ -186,10 +188,10 @@ namespace ZephyrPlayer
                 }
                 // Playback control (protocol.md Control): the paired phone drives the
                 // player's libVLC. 404 when no control seam is wired.
-                if (ctx.Request.Url.AbsolutePath.StartsWith("/control/"))
+                if (path.StartsWith("/control/"))
                 {
                     if (_control == null) { await Reply(ctx, 404, "{}"); return; }
-                    if (ctx.Request.HttpMethod == "GET" && ctx.Request.Url.AbsolutePath == "/control/status")
+                    if (ctx.Request.HttpMethod == "GET" && path == "/control/status")
                     {
                         await Reply(ctx, 200, _control.StatusJson());
                         return;
@@ -203,7 +205,7 @@ namespace ZephyrPlayer
                         var controlBody = await controlReader.ReadToEndAsync();
                         cjson = System.Text.Json.JsonDocument.Parse(controlBody).RootElement;
                     }
-                    switch (ctx.Request.Url.AbsolutePath)
+                    switch (path)
                     {
                         case "/control/play":
                         {
@@ -239,13 +241,13 @@ namespace ZephyrPlayer
                 // Input receiver (protocol.md Input, HTTP POST fallback set): mouse /
                 // keyboard replay into Windows via the injected sink (SendInput in
                 // production, a recorder in tests). 404 when no sink is wired.
-                if (ctx.Request.HttpMethod == "POST" && ctx.Request.Url.AbsolutePath.StartsWith("/input/"))
+                if (ctx.Request.HttpMethod == "POST" && path.StartsWith("/input/"))
                 {
                     if (_input == null) { await Reply(ctx, 404, "{}"); return; }
                     using var inputReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
                     var inputBody = await inputReader.ReadToEndAsync();
                     var json = System.Text.Json.JsonDocument.Parse(inputBody).RootElement;
-                    switch (ctx.Request.Url.AbsolutePath)
+                    switch (path)
                     {
                         case "/input/move":
                             _input.Move(json.GetProperty("dx").GetSingle(), json.GetProperty("dy").GetSingle());

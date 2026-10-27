@@ -1,0 +1,20 @@
+using Xunit;
+using ZephyrVlcRemote;
+
+namespace ZephyrVlcRemote.Tests;
+
+public class NetworkCheckTests
+{
+    [Fact]
+    public void DefaultRouteProfileParsesOnWindows()
+    {
+        if (!OperatingSystem.IsWindows()) return; // the probe is Windows-only
+        // The CI runner always has a default route. A null here means the PowerShell
+        // command line broke again (round-7: nested double quotes made Windows argument
+        // parsing hand PowerShell garbage, silently disabling the public-Wi-Fi notice).
+        var p = NetworkCheck.DefaultRouteProfile();
+        Assert.NotNull(p);
+        Assert.True(p!.InterfaceIndex >= 0);
+        Assert.False(string.IsNullOrEmpty(p.Category));
+    }
+}
