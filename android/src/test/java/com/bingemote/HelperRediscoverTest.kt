@@ -43,7 +43,7 @@ class HelperRediscoverTest {
         // server refusing. run() must send the token ONLY to the saved endpoint.
         val spoof = MockWebServer(); spoof.start()
         val saved = MockWebServer()
-        saved.enqueue(MockResponse().setResponseCode(401).setBody("{"error":"unauthorized"}"))
+        saved.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"))
         saved.start()
         try {
             val plan = HelperRediscover.run(
