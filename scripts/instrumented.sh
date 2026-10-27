@@ -27,6 +27,46 @@ PAIR_CODE=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log 2>/dev/null || true)
 # direction AND makes adbd hold device port 47888 -> EADDRINUSE in the test.)
 adb forward tcp:47888 tcp:47888 || true
 
+if [ "${SUITE:-full}" = "badtoken-ui" ]; then
+  # Targeted BadToken UI proof (proof branch only): REAL app pairing UI with an
+  # app-owned token, healthy baseline, host-restart revocation, UI recovery.
+  # Evidence is captured regardless of pass/fail. Privacy: the bearer token is
+  # never displayed or logged by the app; the one-shot pair code stays in
+  # /tmp/wire-host.log (never uploaded); captures run only on main/settings
+  # screens, after the code field is cleared.
+  FAIL=0
+  mkdir -p instrument-results
+  bt_run() {
+    echo "=== $1 ==="
+    adb logcat -c
+    adb shell am instrument -w -e class "$1" -e wire_port "$WIRE_PORT" -e pair_code "$2" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/$(basename $1).txt"
+    adb logcat -d -s BMSeek:I AndroidRuntime:E > "instrument-results/$(basename $1).logcat.txt" 2>/dev/null || true
+    for f in $(adb shell ls /sdcard/badtoken-ui-*.png /sdcard/badtoken-ui-*.xml 2>/dev/null); do
+      adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true
+      adb shell rm -f "$f"
+    done
+    grep -q '^OK (' "instrument-results/$(basename $1).txt" || { echo "SUITE FAIL: $(basename $1)"; FAIL=1; }
+    sleep 2
+  }
+  BT_CODE_A="$PAIR_CODE"
+  if [ -z "$BT_CODE_A" ]; then echo "wire host never came up"; exit 1; fi
+  bt_run com.zephyr.remote.ZephyrUiPairTest "$BT_CODE_A"
+  # Revoke: restarting the host drops every pairing server-side (the same 401
+  # the PC's remove-phone produces) and mints a fresh one-shot code.
+  pkill -f ZephyrPlayer.HeadlessHost || true
+  sleep 2
+  : > /tmp/wire-host.log
+  nohup dotnet run --project windows/ZephyrPlayer.HeadlessHost -c Release --no-build -- "$WIRE_PORT" /tmp/zephyr-wire-lib > /tmp/wire-host.log 2>&1 &
+  for i in $(seq 1 30); do grep -q PAIRCODE /tmp/wire-host.log && break; sleep 1; done
+  BT_CODE_B=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log || true)
+  if [ -z "$BT_CODE_B" ]; then echo "wire host restart (revocation) failed"; exit 1; fi
+  bt_run com.zephyr.remote.ZephyrUiRevokedTest "$BT_CODE_B"
+  # Recovery counts only if the re-pair itself completed (asserted in-class).
+  bt_run com.zephyr.remote.ZephyrUiRepairedTest "$BT_CODE_B"
+  adb shell wm size reset; adb shell wm density reset
+  exit $FAIL
+fi
+
 CLASSES="
 com.bingemote.AutoSetupCheckTest
 com.bingemote.StoreMigrationTest

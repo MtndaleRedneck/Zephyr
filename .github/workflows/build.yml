@@ -13,6 +13,13 @@ on:
       - 'scripts/instrumented.sh'
       - '.github/workflows/build.yml'
   workflow_dispatch:
+    # Proof-branch plumbing only: 'badtoken-ui' runs the targeted BadToken UI
+    # proof alone. Never merged to main.
+    inputs:
+      suite:
+        type: choice
+        options: [full, badtoken-ui]
+        default: full
 
 # Zephyr CI (public repo): unit tests, instrumented suites, screenshot rig.
 # No release/publish job - no downloads while in development. Release signing
@@ -27,6 +34,7 @@ permissions:
 
 jobs:
   android:
+    if: inputs.suite != 'badtoken-ui'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -46,6 +54,7 @@ jobs:
           path: android/build/outputs/apk/debug/*.apk
 
   screenshots:
+    if: inputs.suite != 'badtoken-ui'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -115,6 +124,8 @@ jobs:
           target: google_apis
           profile: pixel_6
           disable-animations: true
+          env:
+            SUITE: ${{ inputs.suite || 'full' }}
           script: bash scripts/instrumented.sh
       - uses: actions/upload-artifact@v4
         if: always()
