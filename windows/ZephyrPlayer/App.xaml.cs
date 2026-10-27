@@ -76,6 +76,14 @@ namespace ZephyrPlayer
                 Shutdown(FirewallSetup.RulesHaveCurrentShape() ? 0 : 1);
                 return;
             }
+            // CI only: render a permission dialog with real interaction state to a PNG,
+            // then shut down from the hook (round-9 missing-captures proof for the
+            // hover/pressed/focus template fix). Early arg check, before the mutex.
+            if (e.Args.Length >= 3 && e.Args[0] == "--dialog-shot")
+            {
+                FirewallSetup.RunDialogShot(e.Args[1], e.Args[2]);
+                return; // RunDialogShot shuts the app down after the capture
+            }
 #endif
             _singleInstance = new System.Threading.Mutex(true, "ZephyrPlayer", out bool createdNew);
             if (!createdNew)
