@@ -213,8 +213,10 @@ namespace ZephyrPlayer
                     UpdateState.Outcome = "failed: " + ex.GetType().Name;
                 }
             });
-            if (!store.HasAny) ShowPairingWindow();
             _home.Show();
+            // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
+            // otherwise): Home goes up first, then the pairing screen over it.
+            if (!store.HasAny) ShowPairingWindow();
             // CI evidence args (local only): --open-settings / --open-pairing show
             // those surfaces over home; --play=<uri> starts local playback.
             foreach (var arg in e.Args)
