@@ -172,7 +172,7 @@ class MainActivity : ComponentActivity() {
                         // Debug capture only: fake a saved pairing so the already-paired
                         // card renders. Captured LAST in the rig; demo values never ship.
                         remote.store.zephyrHost = "192.168.1.50"
-                        remote.store.zephyrToken = "demo-token"
+                        try { remote.store.zephyrToken = "demo-token" } catch (e: SecureStoreUnavailable) { }
                         remote.store.zephyrPcName = "Demo PC"
                         ZephyrSetupScreen(
                             remote,

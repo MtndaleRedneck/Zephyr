@@ -54,7 +54,11 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 val client = runCatching { srv.accept() }.getOrNull() ?: break
                 // A stalled client must not hold a worker forever (teardown C12).
                 runCatching { client.soTimeout = 60_000 }
-                pool.execute { runCatching { handle(client) }; runCatching { client.close() } }
+                openStreams++
+                pool.execute {
+                    try { runCatching { handle(client) } }
+                    finally { openStreams--; runCatching { client.close() } }
+                }
             }
         }
     }
@@ -64,6 +68,12 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         runCatching { socket?.close() }
         pool.shutdownNow()
     }
+
+    /** Open client connections right now (teardown C1: an open connection means the
+     *  movie is alive - a long pause keeps the socket and must never cut the stream). */
+    @Volatile var openStreams = 0
+    /** True once the first request was served: the shutdown watchdog arms only after this. */
+    @Volatile var servedAny = false
 
     companion object {
         /** Cap for one non-seekable file copied into cache (teardown C12). */
@@ -77,6 +87,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private fun handle(client: Socket) {
         val input = client.getInputStream().bufferedReader()
         val requestLine = input.readLine() ?: return
+        servedAny = true
         val parts = requestLine.split(" ")
         if (parts.size < 2 || parts[0] != "GET") return
         var range: LongRange? = null

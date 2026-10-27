@@ -72,7 +72,9 @@ fun ZephyrSetupScreen(
                     OrangeButton("Continue with this PC", onClick = onDone)
                     Spacer(Modifier.height(6.dp))
                     androidx.compose.material3.TextButton(onClick = {
-                        store.zephyrToken = ""
+                        // Broken secure store: nothing is persisted, so "start over" is
+                        // already true - the fail-closed write refusal is not an error here.
+                        try { store.zephyrToken = "" } catch (e: SecureStoreUnavailable) { }
                         error = null
                     }) { Text("Start over with a new code", color = Muted) }
                 }
@@ -121,11 +123,18 @@ fun ZephyrSetupScreen(
                         try {
                             val token = ZephyrClient.pair(h, store.zephyrPort, c)
                             withContext(Dispatchers.Main) {
-                                store.zephyrHost = h
-                                store.zephyrToken = token
-                                if (foundName.isNotBlank()) store.zephyrPcName = foundName
-                                code = ""
-                                onDone()
+                                try {
+                                    // Token FIRST: if secure storage is broken the fail-closed
+                                    // write throws before anything else is touched, so the app
+                                    // never claims a pairing that would vanish at restart.
+                                    store.zephyrToken = token
+                                    store.zephyrHost = h
+                                    if (foundName.isNotBlank()) store.zephyrPcName = foundName
+                                    code = ""
+                                    onDone()
+                                } catch (e: SecureStoreUnavailable) {
+                                    error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved - close and reopen the app, then pair again."
+                                }
                             }
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {

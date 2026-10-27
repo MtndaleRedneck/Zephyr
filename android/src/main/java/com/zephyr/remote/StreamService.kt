@@ -42,6 +42,8 @@ class StreamService : Service() {
     private var server: StreamServer? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
+    @Volatile private var watchdogStop = false
+    private var watchdog: Thread? = null
 
     override fun onBind(intent: Intent?): IBinder = binder
 
@@ -88,7 +90,41 @@ class StreamService : Service() {
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zephyr:stream")
             .also { it.acquire() }
+        startWatchdog(srv)
         return START_STICKY
+    }
+
+    /**
+     * Auto-stop when the stream is genuinely done (teardown C1, settled):
+     *  - armed only after the FIRST served stream (never kills a fresh service mid-setup);
+     *  - an OPEN connection always means alive - a long pause holds its socket;
+     *  - stops only after 5 continuous minutes with no open connection AND the selected
+     *    Zephyr player confirmed Stopped/Ended (polled every 60s);
+     *  - playing, paused, unreachable or unknown player state all cancel the countdown;
+     *  - Wi-Fi loss alone never stops the service.
+     */
+    private fun startWatchdog(srv: StreamServer) {
+        watchdogStop = false
+        watchdog = Thread {
+            var stoppedStreak = 0
+            while (!watchdogStop) {
+                try { Thread.sleep(60_000) } catch (e: InterruptedException) { break }
+                if (watchdogStop) break
+                if (!srv.servedAny) continue
+                if (srv.openStreams > 0) { stoppedStreak = 0; continue }
+                val store = com.bingemote.Store(this)
+                if (store.selectedSource != com.bingemote.Source.ZEPHYR || store.zephyrToken.isBlank()) {
+                    stoppedStreak = 0; continue // player state unknown: never auto-stop
+                }
+                val state = try {
+                    com.bingemote.SelectedPlayback(store).status().state
+                } catch (e: Exception) { stoppedStreak = 0; continue } // unreachable cancels
+                if (state.equals("stopped", true) || state.equals("ended", true)) {
+                    stoppedStreak++
+                    if (stoppedStreak >= 5) { stopSelf(); break }
+                } else stoppedStreak = 0
+            }
+        }.apply { isDaemon = true; name = "stream-watchdog"; start() }
     }
 
     /** Android 15+: dataSync budget (6h/24h) exhausted. Stop serving cleanly. */
@@ -97,6 +133,8 @@ class StreamService : Service() {
     }
 
     override fun onDestroy() {
+        watchdogStop = true
+        watchdog?.interrupt()
         server?.stop()
         runCatching { wifiLock?.release() }
         runCatching { wakeLock?.release() }
