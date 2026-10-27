@@ -12,7 +12,7 @@ namespace ZephyrPlayer
     public partial class MainWindow : Window
     {
         private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
-        private static readonly SolidColorBrush Orange = new(Color.FromRgb(0xF9, 0x7C, 0x02));
+        private static readonly SolidColorBrush Orange = new(Color.FromRgb(0xFF, 0x95, 0x00));
         private static readonly SolidColorBrush Gold = new(Color.FromRgb(0xF0, 0xC2, 0x3E));
         private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));
         private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x1B, 0x1B, 0x1E));
@@ -56,8 +56,10 @@ namespace ZephyrPlayer
             _idleTimer.Tick += (_, __) =>
             {
                 // VideoView hosts controls in a separate floating window. Never
-                // hide the seek thumb while the pointer is using the bar.
-                if (ControlBar.IsMouseOver || _seeking) return;
+                // hide the seek thumb while the pointer is using the bar. And a
+                // PAUSED movie keeps the bar (review blocker 3): hiding it while
+                // paused strands phone-only viewers with no visible controls.
+                if (ControlBar.IsMouseOver || _seeking || _player.State == LibVLCSharp.Shared.VLCState.Paused) return;
                 ControlBar.Opacity = 0;
                 _idleTimer.Stop();
             };
@@ -88,6 +90,11 @@ namespace ZephyrPlayer
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
                 _player.Time = positionSeconds.Value * 1000;
             _clock.Start();
+            // Phone-started playback shows the bar once (review blocker 3): the PC
+            // mouse may never move, so the idle timer alone can't reveal it.
+            ControlBar.Opacity = 1;
+            _idleTimer.Stop();
+            _idleTimer.Start();
             UpdatePlayPauseGlyph();
         }
 
@@ -169,8 +176,9 @@ namespace ZephyrPlayer
 
         private void Skip(int deltaSeconds, RotateTransform? spin, bool backward)
         {
-            if (_player.Length > 0)
-                _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
+            // Nothing loaded = nothing to skip: no time change, no spin, no flash.
+            if (_player.Length <= 0) return;
+            _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
             // Same language as the phone: the PRIMARY rings do one full turn per
             // tap (forward clockwise, back counter-clockwise), then settle
             // upright. The secondary double-triangles just flash their labels.
@@ -296,7 +304,19 @@ namespace ZephyrPlayer
             _player.SetSpu(next);
         }
 
+        /// <summary>Phone-initiated pause/resume shows the bar once (review blocker 3).</summary>
+        public void ShowBarOnce()
+        {
+            ControlBar.Opacity = 1;
+            _idleTimer.Stop();
+            _idleTimer.Start();
+        }
+
         public bool IsFullscreen => WindowStyle == WindowStyle.None;
+
+        /// <summary>Media actively loaded (playing or paused) - tray/relaunch restore
+        /// surfaces this window instead of Home while a movie is in progress.</summary>
+        public bool IsPlayingMedia => _player.Media != null;
 
         public void SetFullscreen(bool on)
         {

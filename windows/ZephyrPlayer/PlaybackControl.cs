@@ -29,8 +29,8 @@ namespace ZephyrPlayer
 
         public void Play(string url, long? positionSeconds, string[] subtitles) =>
             OnUi(() => _window.PlayFromUrl(url, positionSeconds, subtitles));
-        public void Pause() => OnUi(() => _player.SetPause(true));
-        public void Resume() => OnUi(() => _player.SetPause(false));
+        public void Pause() => OnUi(() => { _player.SetPause(true); _window.ShowBarOnce(); });
+        public void Resume() => OnUi(() => { _player.SetPause(false); _window.ShowBarOnce(); });
         public void Seek(long positionSeconds) => OnUi(() => { if (_player.Length > 0) _player.Time = positionSeconds * 1000; });
         public void SetVolume(int volume) => OnUi(() => _window.SetVolumeTied(volume));
         public void Mute(bool mute) => OnUi(() => _window.SetMuteTied(mute));

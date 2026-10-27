@@ -100,22 +100,27 @@ namespace ZephyrPlayer
         /// <summary>The Wi-Fi name when Windows treats it as Public (notice-only), else null.</summary>
         public static volatile string? PublicWifiName;
 
-        /// <summary>This PC's primary LAN IPv4 (shown on the Pairing screen), else null.</summary>
+        /// <summary>Raised when DiscoveryOff or PublicWifiName changes (any thread);
+        /// UI subscribers must marshal to their dispatcher before touching controls.</summary>
+        public static event System.Action? Changed;
+
+        public static void NotifyChanged() => Changed?.Invoke();
+
+        /// <summary>This PC's primary LAN IPv4 (shown on the Pairing screen), else null.
+        /// Picked from the interface that owns the default route - not the first RFC1918
+        /// address DNS happens to return (Docker/VPN adapters no longer win).</summary>
         public static string? PrimaryIPv4()
         {
             try
             {
-                foreach (var a in System.Net.Dns.GetHostAddresses(System.Net.Dns.GetHostName()))
-                    if (a.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
-                        && !System.Net.IPAddress.IsLoopback(a))
-                    {
-                        var b = a.GetAddressBytes();
-                        if (b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] <= 31) || (b[0] == 192 && b[1] == 168) || (b[0] == 169 && b[1] == 254))
-                            return a.ToString();
-                    }
+                // UDP "connect" to a documentation address: a pure routing-table lookup,
+                // no packet leaves the machine. LocalEndPoint is the outbound interface IP.
+                using var s = new System.Net.Sockets.Socket(System.Net.Sockets.AddressFamily.InterNetwork,
+                    System.Net.Sockets.SocketType.Dgram, System.Net.Sockets.ProtocolType.Udp);
+                s.Connect("192.0.2.1", 9);
+                return (s.LocalEndPoint as System.Net.IPEndPoint)?.Address.ToString();
             }
-            catch { }
-            return null;
+            catch { return null; }
         }
     }
 }

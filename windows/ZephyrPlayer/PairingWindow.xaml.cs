@@ -23,7 +23,7 @@ namespace ZephyrPlayer
         private readonly Action<string> _pairStarted;
         private readonly DispatcherTimer _tick = new() { Interval = TimeSpan.FromSeconds(1) };
         private static readonly SolidColorBrush OkGreen = new(Color.FromRgb(0x4C, 0xAF, 0x50));
-        private static readonly SolidColorBrush WarnOrange = new(Color.FromRgb(0xF9, 0x7C, 0x02));
+        private static readonly SolidColorBrush WarnOrange = new(Color.FromRgb(0xFF, 0x95, 0x00));
 
         /// <param name="pairStarted">Called with the phone name at every code mint;
         /// App attaches it to the token when that code pairs.</param>
@@ -46,6 +46,10 @@ namespace ZephyrPlayer
                 RefreshStatus();
                 _tick.Start();
             };
+            ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
+            // Prefilled "My phone" behaves like a placeholder: focusing the box selects
+            // it so typing replaces it instead of appending (review should-fix 1).
+            PhoneNameBox.GotFocus += (_, __) => PhoneNameBox.SelectAll();
             Closed += (_, __) => _tick.Stop();
         }
 
@@ -57,6 +61,10 @@ namespace ZephyrPlayer
             PairCodeText.Text = string.Join(" ", _gate.NewCode().ToCharArray());
         }
 
+        // Window-side "a code is on screen" flag: the gate's HasActiveCode goes false at
+        // expiry, so gating renewal on it meant the code NEVER renewed (review blocker 1).
+        private bool _codeShowing;
+
         private void OnPair(object sender, RoutedEventArgs e)
         {
             Mint();
@@ -66,35 +74,37 @@ namespace ZephyrPlayer
         private void OnCancelCode(object sender, RoutedEventArgs e)
         {
             _gate.CancelCode();
+            _codeShowing = false;
             CodePanel.Visibility = Visibility.Collapsed;
         }
 
         private void TickCountdown()
         {
-            if (!_gate.HasActiveCode) return; // cancelled: stay in the name + Pair state
+            if (!_codeShowing) return; // cancelled / paired: stay in the name + Pair state
             var left = _gate.CodeTimeLeft;
-            if (left == null || left.Value <= TimeSpan.Zero)
+            if (left == null || left.Value <= TimeSpan.FromSeconds(2))
             {
-                // "renews itself": mint the next code before the old one dies on
-                // screen, so the phone NEVER meets a dead code (1.2.0 teardown).
+                // Renew just BEFORE the old one dies, so the phone never meets a dead code.
                 Mint();
                 left = _gate.CodeTimeLeft;
             }
             var t = left ?? TimeSpan.Zero;
-            ExpiresText.Text = $"Expires in {(int)t.TotalMinutes}:{t.Seconds:00}";
+            ExpiresText.Text = $"New code in {(int)t.TotalMinutes}:{t.Seconds:00}";
         }
 
         private void ShowCode()
         {
+            _codeShowing = true;
             CodePanel.Visibility = Visibility.Visible;
             var left = _gate.CodeTimeLeft ?? TimeSpan.FromMinutes(10);
-            ExpiresText.Text = $"Expires in {(int)left.TotalMinutes}:{left.Seconds:00}";
+            ExpiresText.Text = $"New code in {(int)left.TotalMinutes}:{left.Seconds:00}";
             RefreshStatus();
         }
 
         /// <summary>Called by App (UI thread) when a phone completes pairing.</summary>
         public void OnPairSucceeded()
         {
+            _codeShowing = false;
             CodePanel.Visibility = Visibility.Collapsed;
             RefreshPhones();
             RefreshStatus();

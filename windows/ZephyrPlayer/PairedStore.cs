@@ -23,6 +23,10 @@ namespace ZephyrPlayer
             "ZephyrPlayer", "paired.json");
         private readonly string _path;
         private readonly object _sync = new();
+        // Read once, then the in-memory list is authoritative for the session: the HTTP
+        // auth path (IsPaired, every request) never races a UI write again, and a sharing
+        // violation on the file can never turn into a spurious 401 (review should-fix 2).
+        private List<Entry>? _cache;
 
         public PairedStore() { _path = DefaultPath; }
         internal PairedStore(string path) { _path = path; }
@@ -30,18 +34,29 @@ namespace ZephyrPlayer
         public sealed record Entry(string Token, string Name);
 
         /// <summary>Any paired phone at all (drives the pairing surfaces in the UI).</summary>
-        public bool HasAny => Read().Count > 0;
+        public bool HasAny { get { lock (_sync) return EntriesLocked().Count > 0; } }
 
         /// <summary>Number of paired phones (the gate's MaxPhones cap input).</summary>
-        public int Count => Read().Count;
+        public int Count { get { lock (_sync) return EntriesLocked().Count; } }
 
         /// <summary>Token + display name for the Pairing screen's "Paired phones" list.</summary>
         public List<Entry> Entries()
         {
-            lock (_sync) return Read().Select(e => e with { }).ToList();
+            lock (_sync) return EntriesLocked().Select(e => e with { }).ToList();
         }
 
-        public bool IsPaired(string token) => Read().Any(e => e.Token == token);
+        /// <summary>Constant-time token compare, same bar as the pairing gate's codes.</summary>
+        public bool IsPaired(string token)
+        {
+            lock (_sync) return EntriesLocked().Any(e => FixedTime(e.Token, token));
+        }
+
+        private static bool FixedTime(string a, string b)
+        {
+            var ab = System.Text.Encoding.UTF8.GetBytes(a);
+            var bb = System.Text.Encoding.UTF8.GetBytes(b);
+            return ab.Length == bb.Length && System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(ab, bb);
+        }
 
         /// <summary>Pairing flow only: persist a fresh token alongside any existing ones.</summary>
         public void Add(string token) => Add(token, "My phone");
@@ -50,10 +65,10 @@ namespace ZephyrPlayer
         {
             lock (_sync)
             {
-                var entries = Read();
-                if (entries.Any(e => e.Token == token)) return;
+                var entries = EntriesLocked();
+                if (entries.Any(e => FixedTime(e.Token, token))) return;
                 entries.Add(new Entry(token, string.IsNullOrWhiteSpace(name) ? "My phone" : name.Trim()));
-                Write(entries);
+                PersistLocked(entries);
             }
         }
 
@@ -63,10 +78,29 @@ namespace ZephyrPlayer
         {
             lock (_sync)
             {
-                var entries = Read();
-                entries.RemoveAll(e => e.Token == token);
-                Write(entries);
+                var entries = EntriesLocked();
+                entries.RemoveAll(e => FixedTime(e.Token, token));
+                PersistLocked(entries);
             }
+        }
+
+        private List<Entry> EntriesLocked() => _cache ??= Read();
+
+        /// <summary>Memory first (auth keeps working), then a best-effort atomic write:
+        /// temp file + replace, so a crash mid-write can never unpair every phone. A
+        /// failed write is logged-and-ignored, never a UI-thread exception.</summary>
+        private void PersistLocked(List<Entry> entries)
+        {
+            try
+            {
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
+                var stored = entries.Select(e => new StoredEntry(e.Token, e.Name)).ToArray();
+                var tmp = _path + ".tmp";
+                File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(stored));
+                if (File.Exists(_path)) File.Replace(tmp, _path, null);
+                else File.Move(tmp, _path);
+            }
+            catch (Exception ex) { System.Diagnostics.Debug.WriteLine("paired store write failed: " + ex.GetType().Name); }
         }
 
         // ---------- file shape (old string[] + new entry[] both read) ----------
@@ -101,11 +135,5 @@ namespace ZephyrPlayer
             catch { return new List<Entry>(); } // unreadable store = nothing paired, never fail-open
         }
 
-        private void Write(List<Entry> entries)
-        {
-            Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-            var stored = entries.Select(e => new StoredEntry(e.Token, e.Name)).ToArray();
-            File.WriteAllText(_path, System.Text.Json.JsonSerializer.Serialize(stored));
-        }
     }
 }
