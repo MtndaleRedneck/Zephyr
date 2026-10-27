@@ -712,7 +712,15 @@ namespace ZephyrPlayer
                         Log("tick " + step);
                         if (step == 1)
                         {
-                            if (mode == "focus" && ok != null) { dlg.Activate(); ok.Focus(); Log("focus set"); }
+                            if (mode == "focus" && ok != null)
+                            {
+                                // The cursor stays where the PREVIOUS shot run parked it
+                                // (the desktop session outlives each shot process); over the
+                                // button it fires IsMouseOver and the "focus" capture is
+                                // really hover+focus (round-11). Park it in a screen corner.
+                                SetCursorPos(8, 8);
+                                dlg.Activate(); ok.Focus(); Log("focus set, cursor moved away");
+                            }
                             else if ((mode == "hover" || mode == "pressed") && ok != null)
                             {
                                 var pt = ok.PointToScreen(new Point(ok.ActualWidth / 2, ok.ActualHeight / 2));

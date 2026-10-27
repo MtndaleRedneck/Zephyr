@@ -134,6 +134,10 @@ jobs:
       # misses literals at odd offsets). Runs AFTER the render/upload steps so a
       # failure here can never skip evidence collection.
       - name: Hook compile-out proof (shipped exe has no CI seams)
+        # !cancelled(): a runtime-test failure must NOT skip this proof (round-11
+        # B10-3 gap - the proof was skipped at a red head, leaving NO head with
+        # both runtime pass and compile-out proof).
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: |
           $latin = [Text.Encoding]::GetEncoding(28591)

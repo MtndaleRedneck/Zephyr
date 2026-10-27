@@ -699,6 +699,21 @@ try {
             throw "UDP rule did not land for $program - actual rules:`n$shown"
         }
     }
+    # Continuity first (round-11 R11-1): with the rules still naming the RUNNING
+    # copy's path, the other-folder copy must NOT kill the working helper - it waits
+    # on its own setup prompt. CI cannot click the modal, so the un-answered prompt is
+    # the decline path: kill the waiting copy and the running one must still serve.
+    $pPre = Start-Process $exe2 -PassThru
+    Start-Sleep -Seconds 3
+    $r = Invoke-Helper '/ping' '{}' $token
+    Assert ($r.code -eq 200) "running copy keeps serving while the other-folder copy waits on setup"
+    if ($pPre.HasExited) { throw "the other-folder copy vanished instead of waiting on its setup prompt" }
+    Stop-Process -Id $pPre.Id -Force
+    $pPre.WaitForExit(10000) | Out-Null
+    Start-Sleep -Milliseconds 500
+    $r = Invoke-Helper '/ping' '{}' $token
+    Assert ($r.code -eq 200) "running copy still serves after the other-folder copy's prompt went unanswered"
+    Write-Host "ok: working helper survived the un-answered across-paths launch (R11-1)"
     Set-TakeoverUdpRule $exe2
     Write-Host "takeover rule planted for: $exe2"
     $p2 = Start-Process $exe2 -PassThru
@@ -709,7 +724,9 @@ try {
     Assert ($r.code -eq 200) "taking-over copy serves the saved token"
     $p = $p2
     # Later phases restart from the original path: point the discovery rule back.
-    Set-TakeoverUdpRule $exe
+    # $exe is a relative forward-slash path - netsh rejects it ("invalid characters"),
+    # so resolve it to the absolute on-disk form the app's ProcessPath check expects.
+    Set-TakeoverUdpRule (Resolve-Path $exe).Path
 
     # Round-6: a failed config SAVE refuses the pair with 503 and does NOT spend the
     # code; once the file is writable again the SAME code pairs (real write/read proof).
