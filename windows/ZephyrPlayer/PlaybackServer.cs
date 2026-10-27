@@ -104,13 +104,23 @@ namespace ZephyrPlayer
                             await Reply(ctx, 200, "{\"token\":\"" + newToken + "\"}");
                             return;
                         case PairOutcome.Locked:
-                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Restart the Zephyr Player on the PC to try again.\"}");
+                            // Time-based lock: the phone says "try again in a few
+                            // minutes", never "restart the PC" (1.2.0).
+                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Try again in a few minutes.\"}");
                             return;
                         case PairOutcome.TooManyPhones:
                             await Reply(ctx, 409, "{\"error\":\"too many phones\"}");
                             return;
-                        default: // BadCode and NoCode look alike on the wire (helper parity).
-                            await Reply(ctx, 403, "{\"error\":\"bad code\"}");
+                        case PairOutcome.CodeExpired:
+                            // The code died on screen: distinct from a WRONG code so
+                            // the phone can say "use the code showing on the PC now".
+                            await Reply(ctx, 410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Use the code showing on the PC screen now.\"}");
+                            return;
+                        case PairOutcome.NoCode:
+                            await Reply(ctx, 403, "{\"error\":\"no code\",\"detail\":\"No code is showing on the PC. Open pairing on the PC first.\"}");
+                            return;
+                        default: // BadCode
+                            await Reply(ctx, 403, "{\"error\":\"bad code\",\"detail\":\"Wrong code - check the code on the PC screen.\"}");
                             return;
                     }
                 }

@@ -16,7 +16,18 @@ namespace ZephyrPlayer
     public partial class FeedbackWindow : Window
     {
         private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues";
-        private const string BugFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLSeD1ytVTxoA0GgftLr5wSu2kZm1yxRwCHcOV4Pb100Lm6hLcQ/viewform";
+        // TODO(feedback-form): wire the NEW Zephyr feedback form here - the
+        // /viewform URL and its entry IDs arrive via Main once the form is
+        // created. The shared BingeMote form must NOT be used (not even as a
+        // fallback): until the URL lands, the form button stays disabled and
+        // the GitHub issue path carries feedback. Entry IDs below follow the
+        // settled schema (message / sentfrom / source / paired / appver /
+        // android / model / display); PC fills message + source + appver + os.
+        private const string? BugFormUrl = null;
+        private const string EntryMessage = "";
+        private const string EntrySource = "";
+        private const string EntryOs = "";
+        private const string EntryAppVer = "";
         private const int MaxText = 3000;
         private const int MaxEncoded = 4500;
 
@@ -24,6 +35,11 @@ namespace ZephyrPlayer
         {
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
+            // The new Zephyr form URL is pending (see BugFormUrl above): until it
+            // is wired, the form button stays off rather than pointing anywhere
+            // else. The GitHub issue path works today.
+            FormButton.IsEnabled = BugFormUrl != null;
+            FormNote.Visibility = BugFormUrl == null ? Visibility.Visible : Visibility.Collapsed;
             UpdatePreview();
         }
 
@@ -48,11 +64,11 @@ namespace ZephyrPlayer
         private string FormUrl()
         {
             var t = Clean(MessageBox.Text);
-            return BugFormUrl + "?usp=pp_url"
-                + "&entry.1980878269=" + Enc(t)
-                + "&entry.857472167=" + Enc("Windows PC")
-                + "&entry.2017214675=" + Enc(OsVersion())
-                + "&entry.446486963=" + Enc(Version());
+            return BugFormUrl! + "?usp=pp_url"
+                + "&" + EntryMessage + "=" + Enc(t)
+                + "&" + EntrySource + "=" + Enc("Windows PC")
+                + "&" + EntryOs + "=" + Enc(OsVersion())
+                + "&" + EntryAppVer + "=" + Enc(Version());
         }
 
         private string IssueUrl()

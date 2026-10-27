@@ -16,31 +16,23 @@ namespace ZephyrPlayer
         private readonly PlayerSettings _settings;
         private readonly PairedStore _store;
         private readonly Action<string> _playLocal;
-        private readonly Func<string> _newPairCode;
+        private readonly Action _openPairing;
         private string _currentRel = "";
 
         private sealed record Entry(string Name, bool Dir);
 
-        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Func<string> newPairCode)
+        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing)
         {
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
             _settings = settings;
             _store = store;
             _playLocal = playLocal;
-            _newPairCode = newPairCode;
+            _openPairing = openPairing;
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(Refresh);
             Activated += (_, __) => Refresh();
             Refresh();
         }
-
-        public void ShowPairBanner(string code)
-        {
-            PairCodeText.Text = string.Join(" ", code.ToCharArray());
-            PairBanner.Visibility = Visibility.Visible;
-        }
-
-        public void HidePairBanner() => PairBanner.Visibility = Visibility.Collapsed;
 
         public void Refresh()
         {
@@ -54,9 +46,15 @@ namespace ZephyrPlayer
                 LoadEntries(folder, _currentRel);
             }
             var paired = _store.Count;
-            StatusText.Text = paired > 0
+            var status = paired > 0
                 ? $"Paired with {paired} phone{(paired == 1 ? "" : "s")} - pick a movie here or from your phone."
-                : "Not paired - open Settings to pair your phone, or play a local file.";
+                : "Not paired - open pairing to connect your phone, or play a local file.";
+            // Connection findings surface here too (they live on the Pairing screen).
+            if (ConnectionState.DiscoveryOff)
+                status += "  ·  Find my PC is off: another app is using it.";
+            else if (ConnectionState.PublicWifiName != null)
+                status += "  ·  Windows is treating this Wi-Fi as public, which can block your phone.";
+            StatusText.Text = status;
         }
 
         private void LoadEntries(string root, string rel)
@@ -111,7 +109,7 @@ namespace ZephyrPlayer
 
         private void OnSettings(object sender, RoutedEventArgs e)
         {
-            var w = new SettingsWindow(_settings, _store, _newPairCode) { Owner = this };
+            var w = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
             w.ShowDialog();
             Refresh();
         }
