@@ -654,11 +654,11 @@ try {
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the expired-code check"
     $rEx1 = Invoke-Helper '/pair' '{"code":"424242"}' $null
-    Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code))"
+    Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code): $($rEx1.body))"
     $rEx2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
     Assert ($rEx2.code -eq 410) "a retried expired code stays 410"
     $rEx3 = Invoke-Helper '/pair' '{"code":"999999"}' $null
-    Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code))"
+    Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code): $($rEx3.body))"
     $rEx4 = Invoke-Helper '/pair' '{"code":"424242"}' $null
     Assert ($rEx4.code -eq 410) "the expired code still answers 410 after the guess - no lock was spent"
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = $null

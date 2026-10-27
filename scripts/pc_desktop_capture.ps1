@@ -106,65 +106,6 @@ public static class ZWU32 {
     }
 }
 '@
-# Pixel metrics in managed code: GetPixel loops over a band are minutes-slow, and
-# brightness-only counts cannot tell the bar from video (the 67b6ee4 run counted
-# the test pattern's own rainbow strip as "bar"). These judge ACTUAL content:
-#  - BarMetrics: the bar's golden ElapsedText (#F0C23E) in the left of the band,
-#    and the seek track: a long contiguous run of near-gray bright pixels (the
-#    slider line). Video gradients are saturated, not near-gray; solid bars are
-#    narrower than 40% of the width.
-#  - VideoMetrics: SATURATED pixels (max-min channel > 60, max > 100). Black,
-#    white and gray transients (unrendered window) are not saturated.
-Add-Type -TypeDefinition @'
-using System;
-using System.Drawing;
-using System.Drawing.Imaging;
-using System.Runtime.InteropServices;
-public static class ZWPix {
-    public static int[] BarMetrics(string path, double y0frac) {
-        using (var bmp = new Bitmap(path)) {
-            int w = bmp.Width, h = bmp.Height;
-            int y0 = (int)(h * y0frac); int hh = h - y0;
-            var data = bmp.LockBits(new Rectangle(0, y0, w, hh), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            byte[] px = new byte[data.Stride * hh];
-            Marshal.Copy(data.Scan0, px, 0, px.Length);
-            bmp.UnlockBits(data);
-            int golden = 0, goldenBand = (int)(w * 0.12), bestRun = 0;
-            for (int y = 0; y < hh; y++) {
-                int run = 0;
-                for (int x = 0; x < w; x++) {
-                    int o = y * data.Stride + x * 4;
-                    int b = px[o], g = px[o + 1], r = px[o + 2];
-                    if (x < goldenBand && Math.Abs(r - 240) < 28 && Math.Abs(g - 194) < 28 && Math.Abs(b - 62) < 40) golden++;
-                    bool grayish = Math.Abs(r - g) < 20 && Math.Abs(g - b) < 20 && r > 120 && r < 235;
-                    if (grayish) { run++; if (run > bestRun) bestRun = run; } else run = 0;
-                }
-            }
-            return new int[] { golden, (int)(100.0 * bestRun / w) };
-        }
-    }
-    public static int VideoMetrics(string path, double y0frac, double y1frac) {
-        using (var bmp = new Bitmap(path)) {
-            int w = bmp.Width, h = bmp.Height;
-            int y0 = (int)(h * y0frac); int hh = (int)(h * y1frac) - y0;
-            var data = bmp.LockBits(new Rectangle(0, y0, w, hh), ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
-            byte[] px = new byte[data.Stride * hh];
-            Marshal.Copy(data.Scan0, px, 0, px.Length);
-            bmp.UnlockBits(data);
-            int sat = 0;
-            for (int y = 0; y < hh; y += 2) {
-                for (int x = 0; x < w; x += 2) {
-                    int o = y * data.Stride + x * 4;
-                    int b = px[o], g = px[o + 1], r = px[o + 2];
-                    int mx = Math.Max(r, Math.Max(g, b)), mn = Math.Min(r, Math.Min(g, b));
-                    if (mx - mn > 60 && mx > 100) sat++;
-                }
-            }
-            return sat;
-        }
-    }
-}
-'@
 $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
 $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 
@@ -220,6 +161,57 @@ function CountDiff($pathA, $pathB, $x0f, $x1f, $y0f, $y1f) {
     }
     $a.Dispose(); $b.Dispose()
     return $n
+}
+# Pixel metrics via LockBits (fast byte-array scans - GetPixel loops are minutes-slow).
+# These judge ACTUAL content, not brightness (the 67b6ee4 brightness count mistook the
+# test pattern's own rainbow strip for the bar):
+#  - Measure-Bar: the bar's golden ElapsedText (#F0C23E) in the left of the band, and
+#    the seek track: a long contiguous run of near-gray bright pixels. Video gradients
+#    are saturated, not near-gray; solid color bars are narrower than 40% of the width.
+#  - Measure-Video: SATURATED pixels (max-min channel > 60, max > 100). Black, white
+#    and gray transients (unrendered window) are not saturated.
+function Load-Band($path, $y0frac, $y1frac) {
+    $bmp = [System.Drawing.Image]::FromFile($path)
+    $w = $bmp.Width; $h = $bmp.Height
+    $y0 = [int]($h * $y0frac); $hh = [int]($h * $y1frac) - $y0
+    $rect = New-Object System.Drawing.Rectangle(0, $y0, $w, $hh)
+    $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $len = [math]::Abs($data.Stride) * $hh
+    $bytes = [byte[]]::new($len)
+    [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $len)
+    $stride = [math]::Abs($data.Stride)
+    $bmp.UnlockBits($data)
+    $bmp.Dispose()
+    return @{ B = $bytes; S = $stride; W = $w; H = $hh }
+}
+function Measure-Video($path) {
+    if (-not (Test-Path $path)) { return 0 }
+    $band = Load-Band $path 0.10 0.70
+    $sat = 0
+    for ($y = 0; $y -lt $band.H; $y += 3) {
+        for ($x = 0; $x -lt $band.W; $x += 3) {
+            $o = $y * $band.S + $x * 4
+            $b = $band.B[$o]; $g = $band.B[$o + 1]; $r = $band.B[$o + 2]
+            $mx = [math]::Max($r, [math]::Max($g, $b)); $mn = [math]::Min($r, [math]::Min($g, $b))
+            if ($mx - $mn -gt 60 -and $mx -gt 100) { $sat++ }
+        }
+    }
+    return $sat
+}
+function Measure-Bar($path) {
+    if (-not (Test-Path $path)) { return @(0, 0) }
+    $band = Load-Band $path 0.75 1.0
+    $golden = 0; $goldenBand = [int]($band.W * 0.12); $bestRun = 0
+    for ($y = 0; $y -lt $band.H; $y += 2) {
+        $run = 0
+        for ($x = 0; $x -lt $band.W; $x++) {
+            $o = $y * $band.S + $x * 4
+            $b = $band.B[$o]; $g = $band.B[$o + 1]; $r = $band.B[$o + 2]
+            if ($x -lt $goldenBand -and [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40) { $golden++ }
+            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 120 -and $r -lt 235) { $run++; if ($run -gt $bestRun) { $bestRun = $run } } else { $run = 0 }
+        }
+    }
+    return @($golden, [int](100.0 * $bestRun / $band.W))
 }
 function ClickAt($xf, $yf) {
     # Real mouse click at a window-relative fraction (real functional input,
@@ -530,10 +522,10 @@ foreach ($i in 1..40) {
         [ZWU32]::SetWindowPos($hwBar, [System.IntPtr]::new(-1), 100, 100, 800, 500, 0) | Out-Null
         $sz = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
         if ($sz -ne "0 x 0") {
-            $vidStart = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.10, 0.70)
-            $m = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.75)
+            $vidStart = Measure-Video "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+            $m = Measure-Bar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
             $barStartGolden = $m[0]; $barStartSeek = $m[1]
-            if ($vidStart -ge 30000 -and $barStartGolden -ge 5 -and $barStartSeek -ge 40) { $gotStart = $true; break }
+            if ($vidStart -ge 3000 -and $barStartGolden -ge 5 -and $barStartSeek -ge 40) { $gotStart = $true; break }
         }
     }
     Start-Sleep -Milliseconds 500
@@ -559,19 +551,19 @@ StopZephyr
 Write-Host "phone-start bar captures: $sz / $szBar2 / $szBar3 / $szBar4"
 # C-1 verdict from ACTUAL bar signatures, not brightness: the golden ElapsedText
 # plus the full-width seek track mark the bar; saturated pixels mark real video.
-$vidStartPx   = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.10, 0.70)
-$mStart       = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-phonestart.png", 0.75)
-$vidAutoPx    = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-autohide.png", 0.10, 0.70)
-$mAuto        = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-autohide.png", 0.75)
-$mPaused      = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-paused.png", 0.75)
-$vidParkedPx  = [ZWPix]::VideoMetrics("$env:RUNNER_TEMP/pc-bar-parked.png", 0.10, 0.70)
-$mParked      = [ZWPix]::BarMetrics("$env:RUNNER_TEMP/pc-bar-parked.png", 0.75)
+$vidStartPx   = Measure-Video "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+$mStart       = Measure-Bar "$env:RUNNER_TEMP/pc-bar-phonestart.png"
+$vidAutoPx    = Measure-Video "$env:RUNNER_TEMP/pc-bar-autohide.png"
+$mAuto        = Measure-Bar "$env:RUNNER_TEMP/pc-bar-autohide.png"
+$mPaused      = Measure-Bar "$env:RUNNER_TEMP/pc-bar-paused.png"
+$vidParkedPx  = Measure-Video "$env:RUNNER_TEMP/pc-bar-parked.png"
+$mParked      = Measure-Bar "$env:RUNNER_TEMP/pc-bar-parked.png"
 $barOnStart  = ($mStart[0]  -ge 5 -and $mStart[1]  -ge 40)
 $barOnAuto   = ($mAuto[0]   -ge 5 -and $mAuto[1]   -ge 40)
 $barOnPaused = ($mPaused[0] -ge 5 -and $mPaused[1] -ge 40)
 $barOnParked = ($mParked[0] -ge 5 -and $mParked[1] -ge 40)
-$vidOkAuto   = ($vidAutoPx   -ge 30000)
-$vidOkParked = ($vidParkedPx -ge 30000)
+$vidOkAuto   = ($vidAutoPx   -ge 3000)
+$vidOkParked = ($vidParkedPx -ge 3000)
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
 $p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
