@@ -293,6 +293,10 @@ private fun pairThroughUi(device: UiDevice, code: String, tag: String) {
     fields[0].text = WIRE_HOST  // "PC address"
     fields[1].text = code       // "6-digit code"
     device.findObject(By.text("Pair")).click()
+    // No-code evidence boundary: clear the code field right after the tap (the
+    // pair request already read it) so no later capture - success OR failure -
+    // can show the one-shot code.
+    runCatching { device.findObjects(By.clazz("android.widget.EditText")).getOrNull(1)?.text = "" }
 }
 
 /**
