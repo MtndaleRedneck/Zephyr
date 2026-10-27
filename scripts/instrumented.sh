@@ -73,5 +73,42 @@ for cls in $CLASSES; do
     FAIL=1
   fi
 done
+# BadToken integration (revoked pairing -> pair-again notice -> re-pair), two
+# phases with a wire-host restart between: the restart drops every pairing
+# server-side, which is the same 401 the PC's remove-phone produces. Each phase
+# needs a FRESH host because the pairing code is one-shot (ZephyrWireTest already
+# spent the original above).
+echo "=== com.zephyr.remote.ZephyrBadTokenSeedTest ==="
+pkill -f ZephyrPlayer.HeadlessHost || true
+sleep 2
+: > /tmp/wire-host.log
+nohup dotnet run --project windows/ZephyrPlayer.HeadlessHost -c Release --no-build -- "$WIRE_PORT" /tmp/zephyr-wire-lib > /tmp/wire-host.log 2>&1 &
+for i in $(seq 1 30); do grep -q PAIRCODE /tmp/wire-host.log && break; sleep 1; done
+BT_CODE_A=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log || true)
+if [ -z "$BT_CODE_A" ]; then echo "wire host restart (phase A) failed"; FAIL=1; else
+adb logcat -c
+adb shell am instrument -w -e class com.zephyr.remote.ZephyrBadTokenSeedTest -e wire_port "$WIRE_PORT" -e pair_code "$BT_CODE_A" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/ZephyrBadTokenSeedTest.txt"
+if ! grep -q '^OK (' "instrument-results/ZephyrBadTokenSeedTest.txt"; then echo "SUITE FAIL: ZephyrBadTokenSeedTest"; FAIL=1; fi
+
+echo "=== com.zephyr.remote.ZephyrBadTokenPathsTest ==="
+pkill -f ZephyrPlayer.HeadlessHost || true
+sleep 2
+: > /tmp/wire-host.log
+nohup dotnet run --project windows/ZephyrPlayer.HeadlessHost -c Release --no-build -- "$WIRE_PORT" /tmp/zephyr-wire-lib > /tmp/wire-host.log 2>&1 &
+for i in $(seq 1 30); do grep -q PAIRCODE /tmp/wire-host.log && break; sleep 1; done
+BT_CODE_B=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log || true)
+if [ -z "$BT_CODE_B" ]; then echo "wire host restart (phase B) failed"; FAIL=1; else
+adb logcat -c
+adb shell am instrument -w -e class com.zephyr.remote.ZephyrBadTokenPathsTest -e wire_port "$WIRE_PORT" -e pair_code "$BT_CODE_B" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/ZephyrBadTokenPathsTest.txt"
+if ! grep -q '^OK (' "instrument-results/ZephyrBadTokenPathsTest.txt"; then echo "SUITE FAIL: ZephyrBadTokenPathsTest"; FAIL=1; fi
+adb logcat -c
+adb shell am instrument -w -e class com.zephyr.remote.ZephyrBadTokenAfterRemovalTest -e wire_port "$WIRE_PORT" -e pair_code "$BT_CODE_B" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/ZephyrBadTokenAfterRemovalTest.txt"
+if ! grep -q '^OK (' "instrument-results/ZephyrBadTokenAfterRemovalTest.txt"; then echo "SUITE FAIL: ZephyrBadTokenAfterRemovalTest"; FAIL=1; fi
+adb logcat -c
+adb shell am instrument -w -e class com.zephyr.remote.ZephyrBadTokenRepairedTest "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/ZephyrBadTokenRepairedTest.txt"
+if ! grep -q '^OK (' "instrument-results/ZephyrBadTokenRepairedTest.txt"; then echo "SUITE FAIL: ZephyrBadTokenRepairedTest"; FAIL=1; fi
+fi
+fi
+
 adb shell wm size reset; adb shell wm density reset
 exit $FAIL
