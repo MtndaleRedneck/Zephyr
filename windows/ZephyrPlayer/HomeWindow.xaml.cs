@@ -34,6 +34,7 @@ namespace ZephyrPlayer
         private int _thumbGeneration;
         private readonly PlaybackHistory _history = new();
         private readonly bool _loadDurations;
+        internal Task DurationWork { get; private set; } = Task.CompletedTask;
 
         private sealed record Crumb(string Label, string Rel);
 
@@ -311,7 +312,7 @@ namespace ZephyrPlayer
 
         private void LoadDurations(string root, List<Entry> entries, int generation)
         {
-            Task.Run(async () =>
+            DurationWork = Task.Run(async () =>
             {
                 try
                 {
