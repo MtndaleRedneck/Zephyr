@@ -37,7 +37,7 @@ namespace ZephyrPlayer
         private readonly VolumeService _volume;
         private readonly DispatcherTimer _idleTimer = new();
         private readonly DispatcherTimer _clock = new();
-        private readonly DispatcherTimer _flashTimer = new() { Interval = TimeSpan.FromMilliseconds(220) };
+
         private DispatcherTimer? _sleepTimer;
         private readonly DispatcherTimer _cursorWatch = new() { Interval = TimeSpan.FromMilliseconds(150) };
         [StructLayout(LayoutKind.Sequential)] private struct CursorPoint { public int X; public int Y; }
@@ -48,6 +48,13 @@ namespace ZephyrPlayer
 
         private bool _seeking;
         private bool _volumeSync;
+        private readonly PlaybackHistory _history = new();
+        private string _currentSource = "";
+        private DateTime _lastHistorySave;
+        internal void SavePlaybackProgress()
+        {
+            if (_player.Length > 0 && _player.Time >= 0) _history.Save(_currentSource, _player.Time, _player.Length);
+        }
 
         /// <summary>Fired when the sleep timer ends playback; App lands on Home.</summary>
         public event Action? SleepFired;
@@ -105,7 +112,7 @@ namespace ZephyrPlayer
             });
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
-            _flashTimer.Tick += (_, __) => { _flashTimer.Stop(); ApplyBarStyle(); };
+
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(ApplyBarStyle);
 
             // Remembered volume restored on open. With the
@@ -119,6 +126,11 @@ namespace ZephyrPlayer
 
         public void PlayFromUrl(string url, long? positionSeconds, string[] subtitles)
         {
+            SavePlaybackProgress();
+            _currentSource = url;
+            var localTitle = PlaybackHistory.LocalPath(url);
+            MovieTitle.Text = localTitle != null ? System.IO.Path.GetFileNameWithoutExtension(localTitle) : "Playing from phone";
+            _lastHistorySave = DateTime.MinValue;
             // Restore the player's remembered loudness when a movie starts:
             // Windows master = the slider number, libVLC adds the boost on top.
             if (_volume.Available) _volume.SetMaster(_settings.LastVolume);
@@ -143,6 +155,8 @@ namespace ZephyrPlayer
 
         private void UpdatePosition()
         {
+            if (DateTime.UtcNow - _lastHistorySave >= TimeSpan.FromSeconds(5))
+            { SavePlaybackProgress(); _lastHistorySave = DateTime.UtcNow; }
             // Volume tie, other direction: if Windows' volume changed elsewhere,
             // the bar follows so both places show the same number.
             if (_volume.Available)
@@ -258,24 +272,26 @@ namespace ZephyrPlayer
             // Rotate only the ring/arc; the duration label stays upright.
             if (spin != null)
             {
+                spin.BeginAnimation(RotateTransform.AngleProperty, null);
                 spin.Angle = 0;
-                var anim = new DoubleAnimation(backward ? -360 : 360, TimeSpan.FromMilliseconds(420))
-                {
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-                };
+                var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420), FillBehavior = FillBehavior.Stop };
+                anim.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
                 spin.BeginAnimation(RotateTransform.AngleProperty, anim);
             }
-            Flash();
+            Flash(backward, spin == SecondaryBackSpin || spin == SecondaryForwardSpin);
         }
 
-        private void Flash()
+        private void Flash(bool backward, bool secondary)
         {
-            SkipBackLabel.Foreground = Orange;
-            SkipForwardLabel.Foreground = Orange;
-            SecondarySkipBackLabel.Foreground = Orange;
-            SecondarySkipForwardLabel.Foreground = Orange;
-            _flashTimer.Stop();
-            _flashTimer.Start();
+            // Animate only the pressed glyph. The number keeps its selected color.
+            var path = secondary ? (backward ? SecondarySkipBackIcon : SecondarySkipForwardIcon) : (backward ? SkipBackRing : SkipForwardRing);
+            var arrow = backward ? SkipBackArrow : SkipForwardArrow;
+            var normal = ((SolidColorBrush)path.Stroke).Color;
+            var brush = new SolidColorBrush(normal);
+            path.Stroke = brush;
+            if (!secondary) arrow.Fill = brush;
+            brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(normal == Brand.Orange ? Colors.WhiteSmoke : Brand.Orange, TimeSpan.FromMilliseconds(110)) { AutoReverse = true });
         }
 
         // ---------- volume (tied to Windows master; boost from Settings) ----------
@@ -311,7 +327,8 @@ namespace ZephyrPlayer
             var mute = !_player.Mute;
             _player.Mute = mute;
             if (_volume.Available) _volume.SetMute(mute);
-            VolumeButton.Opacity = mute ? 0.45 : 1.0;
+            VolumeButton.Opacity = 1.0;
+            VolumeGlyph.Data = Geometry.Parse(mute ? "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17" : "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8");
         }
 
         /// <summary>Phone-driven mute takes the same tied path.</summary>
@@ -319,7 +336,8 @@ namespace ZephyrPlayer
         {
             _player.Mute = mute;
             if (_volume.Available) _volume.SetMute(mute);
-            VolumeButton.Opacity = mute ? 0.45 : 1.0;
+            VolumeButton.Opacity = 1.0;
+            VolumeGlyph.Data = Geometry.Parse(mute ? "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17" : "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8");
         }
 
         // ---------- speed + sleep timer (bar toggles, off by default) ----------
@@ -357,6 +375,7 @@ namespace ZephyrPlayer
                         _sleepTimer?.Stop();
                         _sleepTimer = null;
                         SleepLabel.Text = "zZ";
+                        SavePlaybackProgress();
                         _player.Stop();
                         SleepFired?.Invoke();
                     };
@@ -411,6 +430,8 @@ namespace ZephyrPlayer
             ControlBar.Opacity = 1;
             Overlay.Cursor = Cursors.Arrow;
             TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+            FullscreenGlyph.Data = Geometry.Parse(on ? "M10,4 V10 H4 M18,4 V10 H24 M24,18 H18 V24 M4,18 H10 V24" : "M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8");
+            FullscreenButton.ToolTip = on ? "Exit full screen (Esc)" : "Full screen (F)";
             ShowBarOnce();
         }
 
@@ -450,6 +471,8 @@ namespace ZephyrPlayer
             // Settled units: minutes read as minutes (60 -> "1m"), never raw seconds.
             SecondarySkipBackLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
             SecondarySkipForwardLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
+            SecondarySkipBackButton.ToolTip = $"Back {_settings.SecondarySkipSeconds} s";
+            SecondarySkipForwardButton.ToolTip = $"Forward {_settings.SecondarySkipSeconds} s";
 
             var hollow = _settings.IconStyle == "hollow";
             PlayRing.Stroke = hollow ? ring : Brushes.Transparent;

@@ -436,7 +436,7 @@ fun ZephyrPairCard(
     ) {
         Text("Pair with the Zephyr Player", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
-        Text("Open the player on the PC and enter the code it shows.", color = Muted, fontSize = 13.sp)
+        Text("Type a name in Settings > Paired phones on the PC, tap Pair, then enter the code here.", color = Muted, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         // Same automated discovery as the helper setup ("Find my PC").
         OrangeButton(if (finding) "Looking\u2026" else "Find my PC", enabled = !finding, onClick = onFind)
