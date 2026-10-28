@@ -291,7 +291,7 @@ if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
 # Long enough for every leg of the bar proof (a 30s clip ENDED mid-proof: the last
 # phonestart poll frame already showed the counter at 29s - round-7 review C).
-& $ffmpeg -y -f lavfi -i "testsrc=duration=120:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+& $ffmpeg -y -f lavfi -i "testsrc=duration=600:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
 
 # Populated-grid evidence: distinct REAL bitmaps per tile, fed through the app's
 # ZEPHYR_THUMB_FIXTURE_DIR evidence seam. Whether THIS runner's shell can produce
@@ -638,6 +638,25 @@ $hw3 = Wait-MainWindow $p3 15
 FitWindow $hw3
 WakeControls
 $sz5 = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-playing-controls-window.png"
+# Mouse-only recovery, twenty independent hides/reveals; no phone commands to rescue it.
+function Prove-MouseRecovery($handle, $mode) {
+    $failures = 0
+    for ($cycle = 1; $cycle -le 20; $cycle++) {
+        [ZWU32]::SetCursorPos(2, 2) | Out-Null
+        Start-Sleep -Milliseconds 3500
+        $null = CaptureWindow $handle "$env:RUNNER_TEMP/pc-cycle-hidden.png"
+        $hidden = Measure-Bar "$env:RUNNER_TEMP/pc-cycle-hidden.png"
+        WakeControls
+        $null = CaptureWindow $handle "$env:RUNNER_TEMP/pc-cycle-shown.png"
+        $shown = Measure-Bar "$env:RUNNER_TEMP/pc-cycle-shown.png"
+        $ok = ($hidden[1] -lt 40 -and $shown[0] -ge 2 -and $shown[1] -ge 40)
+        "$mode cycle=$cycle hidden=$($hidden[1]) shown=$($shown[0])/$($shown[1]) ok=$ok" | Add-Content "$env:RUNNER_TEMP/pc-mouse-recovery.txt"
+        if (-not $ok) { $failures++ }
+    }
+    if ($failures -gt 0) { throw "$mode mouse recovery failed $failures of20cycles" }
+}
+Prove-MouseRecovery $hw3 'windowed'
+
 
 # Functional desktop control smoke (real mouse input through the actual UI,
 # verdicts from pixel diffs - route tests alone do not close these):
@@ -731,6 +750,7 @@ $hw4 = Wait-MainWindow $p4 15
 Start-Sleep -Seconds 2
 WakeControls
 $sz6 = CaptureWindow $hw4 "$env:RUNNER_TEMP/pc-playing-controls-fullscreen.png"
+Prove-MouseRecovery $hw4 'fullscreen'
 StopZephyr
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
