@@ -90,6 +90,8 @@ namespace ZephyrPlayer.Tests
                         if (px[i] > 60 || px[i + 1] > 60 || px[i + 2] > 60) lit++;
                     }
                     Assert.True(lit > 4000, $"lit pixels {lit} - home grid not rendered");
+                    // Finish native metadata work before tearing down its owning STA.
+                    Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
                     w.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
