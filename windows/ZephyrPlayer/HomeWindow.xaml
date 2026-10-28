@@ -168,7 +168,7 @@
                                         <Border Width="202" Height="126" Background="#141417" CornerRadius="10" ClipToBounds="True" Visibility="{Binding FileVis}">
                                           <Grid><Image Source="{Binding Thumb}" Stretch="UniformToFill"/>
                                             <Border Background="#D91B1B1E" CornerRadius="4" Padding="5,2" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="6,0,6,8" Visibility="{Binding DurationVis}"><TextBlock Text="{Binding Duration}" Foreground="#F5F5F7" FontSize="11"/></Border>
-                                            <ProgressBar Height="3" VerticalAlignment="Bottom" Minimum="0" Maximum="1" Value="{Binding Progress}" Foreground="#FF9500" Background="#34343D" BorderThickness="0" Visibility="{Binding ProgressVis}"/>
+                                            <ProgressBar Height="3" VerticalAlignment="Bottom" Minimum="0" Maximum="1" Value="{Binding Progress, Mode=OneWay}" Foreground="#FF9500" Background="#34343D" BorderThickness="0" Visibility="{Binding ProgressVis}"/>
                                           </Grid>
                                         </Border>
                                         <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="13"
