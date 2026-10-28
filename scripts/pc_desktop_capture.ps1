@@ -261,7 +261,10 @@ function Wait-MainWindow($proc, $seconds) {
     # of assuming the window exists after a fixed sleep.
     for ($i = 0; $i -lt ($seconds * 2); $i++) {
         $proc.Refresh()
-        if ($proc.MainWindowHandle -ne [System.IntPtr]::Zero) { return $proc.MainWindowHandle }
+        # First-run Settings can be the process main HWND. Select the actual
+        # Player/Home title, never whatever window last gained focus.
+        $candidate = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player')
+        if ($candidate -ne [System.IntPtr]::Zero) { return $candidate }
         Start-Sleep -Milliseconds 500
     }
     Write-Host "::error::process $($proc.Id) had no main window after $seconds s (HasExited=$($proc.HasExited))"
@@ -652,6 +655,7 @@ $vidOkParked = ($vidParkedPx -ge 3000)
 # 3) Real video, real mouse event, controls shown - WINDOWED.
 $p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
 $hw3 = Wait-MainWindow $p3 15
+Close-PairingWindow $p3
 FitWindow $hw3
 WakeControls
 $sz5 = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-playing-controls-window.png"
@@ -760,6 +764,7 @@ StopZephyr
 # 4) Real video, real mouse event, controls shown - FULLSCREEN.
 $p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4","--fullscreen" -PassThru
 $hw4 = Wait-MainWindow $p4 15
+Close-PairingWindow $p4
 # Fullscreen transition and floating VideoView overlay can lag HWND creation.
 # Position the already-fullscreen window on the captured monitor and wait for
 # both host and overlay layout to settle. Do not crop an offscreen rectangle.
