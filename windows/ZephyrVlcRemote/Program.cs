@@ -1087,14 +1087,14 @@ internal sealed class HelperWindow : Form
         _pair = MakeButton("Pair", margin + contentW - 60, y, 60);
         ((ReadableButton)_pair).DimWhenDisabled = false; // StylePairEnabled owns the disabled look
         _pair.Height = 32;
-        _pair.Enabled = false;
+        _pair.Enabled = true;
         StylePairEnabled();
         _pair.EnabledChanged += (_, _) => StylePairEnabled();
         _pair.Click += (_, _) => StartPairing();
         _nameBox.TextChanged += (_, _) =>
         {
-            _pair.Enabled = _nameBox.Text.Trim().Length > 0;
-            _pairHint.Visible = !_pair.Enabled;
+            _pairHint.Visible = _nameBox.Text.Trim().Length == 0;
+            StylePairEnabled();
         };
         y += 32 + 12;
         _codeCaption = new Label
@@ -1760,7 +1760,7 @@ internal sealed class HelperWindow : Form
     private void StartPairing()
     {
         var name = _nameBox.Text.Trim();
-        if (name.Length == 0) return;
+        if (name.Length == 0) { _nameBox.Focus(); return; }
         if (Program.StoreBroken)
         {
             Program.Log("Pairing refused: the saved pairing data on this PC could not be read (the file is preserved).");
@@ -1775,7 +1775,7 @@ internal sealed class HelperWindow : Form
             Program.PairCodeExpires = DateTime.UtcNow + Program.PairCodeLifetime;
             Program.PairFailures = 0;
         }
-        _nameBox.Clear();
+        // Keep the name visible while this code is active.
         _codeExpired = false;
         Program.Log("Pairing code created for \"" + name + "\".");
         TickStatus();
@@ -2084,11 +2084,11 @@ internal sealed class HelperWindow : Form
     /// muddy half-orange that still looks tappable (broken store / pairing states).</summary>
     private void StylePairEnabled()
     {
-        if (_pair.Enabled) StylePrimary(_pair);
+        if (_pair.Enabled && _nameBox.Text.Trim().Length > 0) StylePrimary(_pair);
         else
         {
-            _pair.BackColor = Color.FromArgb(58, 58, 64);
-            _pair.ForeColor = DarkMuted;
+            _pair.BackColor = Color.FromArgb(0xD0, 0x76, 0x00);
+            _pair.ForeColor = OnOrange;
             _pair.Invalidate();
         }
     }

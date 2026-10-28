@@ -17,6 +17,19 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void Connected_Requires_Recent_Authenticated_Activity()
+        {
+            var store = new PairedStore(FilePath);
+            store.Add("tok-new", "Phone");
+            Assert.False(store.IsConnected("tok-new"));
+            Assert.False(store.ValidateAndTouch("wrong"));
+            Assert.True(store.ValidateAndTouch("tok-new"));
+            Assert.True(store.IsConnected("tok-new"));
+            Assert.NotNull(store.Entries()[0].PairedAt);
+            store.Remove("tok-new");
+            Assert.False(store.ValidateAndTouch("tok-new"));
+        }
+        [Fact]
         public void Unreadable_File_Fails_Closed_And_Never_Gets_Overwritten()
         {
             File.WriteAllText(FilePath, "{ this is not json ");

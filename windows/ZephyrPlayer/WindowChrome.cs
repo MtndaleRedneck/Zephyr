@@ -23,6 +23,8 @@ namespace ZephyrPlayer
                 // 20 = DWMWA_USE_IMMERSIVE_DARK_MODE (1903+); 19 = the older id.
                 if (DwmSetWindowAttribute(hwnd, 20, ref on, sizeof(int)) != 0)
                     DwmSetWindowAttribute(hwnd, 19, ref on, sizeof(int));
+                int backdrop = 2; // DWMSBT_MAINWINDOW, unsupported OS ignores it.
+                DwmSetWindowAttribute(hwnd, 38, ref backdrop, sizeof(int));
             };
         }
     }
