@@ -125,9 +125,11 @@ namespace ZephyrPlayer.Tests
                     Assert.False(((Button)w.FindName("CaptionsButton")!).Content is string, "captions must be a vector icon, not literal text");
                     Assert.False(((Button)w.FindName("FullscreenButton")!).Content is string, "fullscreen must be a vector icon, not literal text");
                     bar.Opacity = 1; // XAML starts it at 0 (fades in on mouse move); render the shown state
-                    bar.Measure(new Size(1920, 200));
-                    bar.Arrange(new Rect(0, 0, 1920, bar.DesiredSize.Height));
-                    var bw = 1920;
+                    bar.Measure(new Size(800, 200));
+                    bar.Arrange(new Rect(0, 0, 800, bar.DesiredSize.Height));
+                    w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle);
+                    bar.UpdateLayout();
+                    var bw = 800;
                     var bh = (int)Math.Ceiling(bar.DesiredSize.Height);
                     var rtb = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
                     rtb.Render(bar);
@@ -162,9 +164,11 @@ namespace ZephyrPlayer.Tests
                     var w2 = new MainWindow(libvlc, player, settingsDefault, new VolumeService());
                     var bar2 = w2.ControlBar;
                     bar2.Opacity = 1;
-                    bar2.Measure(new Size(1920, 200));
-                    bar2.Arrange(new Rect(0, 0, 1920, bar2.DesiredSize.Height));
-                    var bw2 = 1920;
+                    bar2.Measure(new Size(800, 200));
+                    bar2.Arrange(new Rect(0, 0, 800, bar2.DesiredSize.Height));
+                    w2.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle);
+                    bar2.UpdateLayout();
+                    var bw2 = 800;
                     var bh2 = (int)Math.Ceiling(bar2.DesiredSize.Height);
                     var rtb2 = new RenderTargetBitmap(bw2, bh2, 96, 96, PixelFormats.Pbgra32);
                     rtb2.Render(bar2);
