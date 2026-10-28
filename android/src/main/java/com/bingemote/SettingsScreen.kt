@@ -469,6 +469,9 @@ fun ZephyrPairCard(
             Text(error, color = ErrorRed, fontSize = 13.sp)
         }
         Spacer(Modifier.height(10.dp))
+        androidx.compose.runtime.LaunchedEffect(code) {
+            if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
+        }
         OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && code.trim().length == 6 && host.isNotBlank(), onClick = onPair)
     }
 }

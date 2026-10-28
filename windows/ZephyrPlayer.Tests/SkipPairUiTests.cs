@@ -117,8 +117,8 @@ namespace ZephyrPlayer.Tests
                     }
                     Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
                     Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
-                    Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                    Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                    Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                    Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 }
                 finally { w.Close(); }
             });

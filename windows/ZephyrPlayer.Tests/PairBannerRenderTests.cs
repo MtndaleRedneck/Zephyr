@@ -35,6 +35,15 @@ namespace ZephyrPlayer.Tests
                     w.RefreshPhones();
                     var codePanel = (UIElement)w.FindName("CodePanel")!;
                     var list = (ItemsControl)w.FindName("PhoneList")!;
+                    Assert.Equal(Visibility.Collapsed, codePanel.Visibility);
+                    Assert.False(gate.HasActiveCode);
+                    var pair = (Button)w.FindName("PairButton")!;
+                    pair.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.False(gate.HasActiveCode); // empty Pair focuses, never mints
+                    ((TextBox)w.FindName("PhoneNameBox")!).Text = "Test phone";
+                    pair.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Equal("Test phone", ((TextBox)w.FindName("PhoneNameBox")!).Text);
+                    Assert.True(gate.HasActiveCode);
                     Assert.Equal(Visibility.Visible, codePanel.Visibility);
                     Assert.Equal(1, list.Items.Count);
                     // The big code text is 6 spaced digits.
@@ -137,7 +146,7 @@ namespace ZephyrPlayer.Tests
                     for (var i = 0; i < wide.Length; i += 4)
                     {
                         var b = wide[i]; var g = wide[i + 1]; var r = wide[i + 2];
-                        if (r > 200 && g > 150 && g < 230 && b < 110) gold++;
+                        if (r > 200 && g > 90 && g < 180 && b < 110) gold++;
                         if (r > 230 && g > 230 && b > 230) white++;
                     }
                     // Threshold encodes the settled 13pt captions (~44 pure-gold px on the 96dpi runner render; 0-ish would mean not rendered).

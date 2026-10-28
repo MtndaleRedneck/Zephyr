@@ -1,4 +1,6 @@
 using System;
+using System.Runtime.InteropServices;
+using System.Windows.Input;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -37,11 +39,20 @@ namespace ZephyrPlayer
         private readonly DispatcherTimer _clock = new();
         private readonly DispatcherTimer _flashTimer = new() { Interval = TimeSpan.FromMilliseconds(220) };
         private DispatcherTimer? _sleepTimer;
+        private readonly DispatcherTimer _cursorWatch = new() { Interval = TimeSpan.FromMilliseconds(150) };
+        [StructLayout(LayoutKind.Sequential)] private struct CursorPoint { public int X; public int Y; }
+        [DllImport("user32.dll")] private static extern bool GetCursorPos(out CursorPoint point);
+        private CursorPoint? _lastScreenCursor;
+        private WindowState _previousState;
+        private bool _menuOpen;
+
         private bool _seeking;
         private bool _volumeSync;
 
         /// <summary>Fired when the sleep timer ends playback; App lands on Home.</summary>
         public event Action? SleepFired;
+        public event Action? HomeRequested;
+        private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
 
         public MainWindow(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
         {
@@ -51,7 +62,20 @@ namespace ZephyrPlayer
             _player = player;
             _settings = settings ?? new PlayerSettings();
             _volume = volume ?? new VolumeService();
-            Loaded += (_, __) => Video.MediaPlayer = _player;
+            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
+            IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
+            Closed += (_, __) => _cursorWatch.Stop();
+            _cursorWatch.Tick += (_, __) =>
+            {
+                if (!IsVisible || !GetCursorPos(out var point)) return;
+                var old = _lastScreenCursor;
+                _lastScreenCursor = point;
+                if (old.HasValue && Math.Abs(point.X - old.Value.X) + Math.Abs(point.Y - old.Value.Y) > 2)
+                {
+                    var local = PointFromScreen(new Point(point.X, point.Y));
+                    if (local.X >= 0 && local.Y >= 0 && local.X <= ActualWidth && local.Y <= ActualHeight) ShowBarOnce();
+                }
+            };
             _idleTimer.Interval = TimeSpan.FromSeconds(3);
             _idleTimer.Tick += (_, __) =>
             {
@@ -59,15 +83,20 @@ namespace ZephyrPlayer
                 // hide the seek thumb while the pointer is using the bar. And a
                 // PAUSED movie keeps the bar (review blocker 3): hiding it while
                 // paused strands phone-only viewers with no visible controls.
-                if (ControlBar.IsMouseOver || _seeking || _player.State == LibVLCSharp.Shared.VLCState.Paused) return;
-                ControlBar.Opacity = 0;
+                if (ControlBar.IsMouseOver || _seeking || _menuOpen || _player.State == LibVLCSharp.Shared.VLCState.Paused) return;
+                ControlBar.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(250)));
+                TopOverlay.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(250)));
+                if (IsFullscreen) Overlay.Cursor = Cursors.None;
                 _idleTimer.Stop();
             };
             _player.Paused += (_, __) => Dispatcher.BeginInvoke(() =>
             {
                 // Phone-pause reveals the bar (review evidence): hiding it while
                 // paused strands phone-only viewers with no visible controls.
-                ControlBar.Opacity = 1;
+                ControlBar.BeginAnimation(OpacityProperty, null);
+            ControlBar.Opacity = 1;
+            Overlay.Cursor = Cursors.Arrow;
+            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
                 _idleTimer.Stop(); // never auto-hide while paused
             });
             _player.Playing += (_, __) => Dispatcher.BeginInvoke(() =>
@@ -103,7 +132,10 @@ namespace ZephyrPlayer
             _clock.Start();
             // Phone-started playback shows the bar once (review blocker 3): the PC
             // mouse may never move, so the idle timer alone can't reveal it.
+            ControlBar.BeginAnimation(OpacityProperty, null);
             ControlBar.Opacity = 1;
+            Overlay.Cursor = Cursors.Arrow;
+            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
             _idleTimer.Stop();
             _idleTimer.Start();
             UpdatePlayPauseGlyph();
@@ -162,9 +194,34 @@ namespace ZephyrPlayer
             var pos = e.GetPosition(this);
             if (_lastMousePos.HasValue && pos == _lastMousePos.Value) return;
             _lastMousePos = pos;
+            ControlBar.BeginAnimation(OpacityProperty, null);
             ControlBar.Opacity = 1;
+            Overlay.Cursor = Cursors.Arrow;
+            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
             _idleTimer.Stop();
             _idleTimer.Start();
+        }
+
+        private static string ShortSkip(int seconds) => seconds >= 60 ? (seconds / 60) + "m" : seconds.ToString();
+        private void OnPlayerKeyDown(object sender, KeyEventArgs e)
+        {
+            ShowBarOnce();
+            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || _menuOpen) return;
+            switch (e.Key)
+            {
+                case Key.Space: OnPlayPause(this, new RoutedEventArgs()); break;
+                case Key.Left: OnSkipBack(this, new RoutedEventArgs()); break;
+                case Key.Right: OnSkipForward(this, new RoutedEventArgs()); break;
+                case Key.F: SetFullscreen(!IsFullscreen); break;
+                case Key.Escape: if (IsFullscreen) SetFullscreen(false); break;
+                case Key.M: OnMute(this, new RoutedEventArgs()); break;
+                default: return;
+            }
+            e.Handled = true;
+        }
+        private void OnVideoDoubleClick(object sender, MouseButtonEventArgs e)
+        {
+            if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
         }
 
         private void OnSeekDown(object sender, RoutedEventArgs e) => _seeking = true;
@@ -189,9 +246,9 @@ namespace ZephyrPlayer
 
         private void OnSkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(false, false), SkipForwardSpin, false);
 
-        private void OnSecondarySkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, true), null, true);
+        private void OnSecondarySkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, true), SecondaryBackSpin, true);
 
-        private void OnSecondarySkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, false), null, false);
+        private void OnSecondarySkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, false), SecondaryForwardSpin, false);
 
         private void Skip(int deltaSeconds, RotateTransform? spin, bool backward)
         {
@@ -279,6 +336,8 @@ namespace ZephyrPlayer
                 item.Click += (_, __) => { _player.SetRate(r); SpeedLabel.Text = rate + "x"; };
                 menu.Items.Add(item);
             }
+            _menuOpen = true;
+            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
             menu.IsOpen = true;
         }
 
@@ -308,6 +367,8 @@ namespace ZephyrPlayer
                 };
                 menu.Items.Add(item);
             }
+            _menuOpen = true;
+            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
             menu.IsOpen = true;
         }
 
@@ -326,7 +387,10 @@ namespace ZephyrPlayer
         /// <summary>Phone-initiated pause/resume shows the bar once (review blocker 3).</summary>
         public void ShowBarOnce()
         {
+            ControlBar.BeginAnimation(OpacityProperty, null);
             ControlBar.Opacity = 1;
+            Overlay.Cursor = Cursors.Arrow;
+            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
             _idleTimer.Stop();
             _idleTimer.Start();
         }
@@ -340,13 +404,16 @@ namespace ZephyrPlayer
 
         public void SetFullscreen(bool on)
         {
-            WindowStyle = on ? WindowStyle.None : WindowStyle.SingleBorderWindow;
-            WindowState = on ? WindowState.Maximized : WindowState.Normal;
+            if (on == IsFullscreen) return;
+            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = 1000; ControlBar.Margin = new Thickness(20, 20, 20, 44); }
+            else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.Margin = new Thickness(20); }
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
+            ControlBar.BeginAnimation(OpacityProperty, null);
             ControlBar.Opacity = 1;
-            _idleTimer.Stop();
-            _idleTimer.Start();
+            Overlay.Cursor = Cursors.Arrow;
+            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+            ShowBarOnce();
         }
 
         private void OnFullscreen(object sender, RoutedEventArgs e) => SetFullscreen(!IsFullscreen);
@@ -357,8 +424,8 @@ namespace ZephyrPlayer
         {
             var style = _settings.BarColorStyle;
             var ring = style is "orange" or "twotone" ? Orange : RingDefault;
-            var label = style == "orange" ? Orange : RingDefault;
-            var times = style == "orange" ? Orange : style == "original" ? Gold : RingDefault;
+            var label = style is "orange" or "inverse" ? Orange : RingDefault;
+            var times = Orange;
 
             SkipBackRing.Stroke = ring;
             SkipForwardRing.Stroke = ring;
@@ -368,13 +435,13 @@ namespace ZephyrPlayer
             SkipForwardLabel.Foreground = label;
             SkipBackLabel.Text = _settings.PrimarySkipSeconds.ToString();
             SkipForwardLabel.Text = _settings.PrimarySkipSeconds.ToString();
-            SecondarySkipBackIcon.Fill = ring;
-            SecondarySkipForwardIcon.Fill = ring;
+            SecondarySkipBackIcon.Stroke = ring;
+            SecondarySkipForwardIcon.Stroke = ring;
             SecondarySkipBackLabel.Foreground = label;
             SecondarySkipForwardLabel.Foreground = label;
             // Settled units: minutes read as minutes (60 -> "1m"), never raw seconds.
-            SecondarySkipBackLabel.Text = PlayerSettings.FormatSkip(_settings.SecondarySkipSeconds);
-            SecondarySkipForwardLabel.Text = PlayerSettings.FormatSkip(_settings.SecondarySkipSeconds);
+            SecondarySkipBackLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
+            SecondarySkipForwardLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
 
             var hollow = _settings.IconStyle == "hollow";
             PlayRing.Stroke = hollow ? ring : Brushes.Transparent;
