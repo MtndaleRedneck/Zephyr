@@ -209,8 +209,8 @@ function Measure-Bar($path) {
     # BOTH signatures (round-7 review C). 0.55 keeps full margin while the seek-run's
     # near-gray requirement still rejects the test pattern's own content.
     $band = Load-Band $path 0.55 1.0
-    $golden = 0; $goldenBand = [int]($band.W * 0.12); $bestRun = 0
-    for ($y = 0; $y -lt $band.H; $y += 2) {
+    $golden = 0; $goldenBand = [int]($band.W * 0.24); $bestRun = 0
+    for ($y = 0; $y -lt $band.H; $y++) {
         $run = 0
         for ($x = 0; $x -lt $band.W; $x++) {
             $o = $y * $band.S + $x * 4

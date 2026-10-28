@@ -6,4 +6,14 @@
  <Style TargetType="Window"><Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/></Style>
  <Style TargetType="ContextMenu"><Setter Property="Background" Value="{StaticResource CardBrush}"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/></Style>
  <Style TargetType="MenuItem"><Setter Property="Padding" Value="14,9"/></Style>
+ <Style x:Key="PlaybackSlider" TargetType="Slider">
+  <Setter Property="MinHeight" Value="22"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider">
+   <Grid VerticalAlignment="Center"><Border Background="#525258" Height="3" CornerRadius="1.5"/>
+    <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}" IsDirectionReversed="{TemplateBinding IsDirectionReversed}">
+     <Track.DecreaseRepeatButton><RepeatButton Command="Slider.DecreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" Height="3" CornerRadius="1.5"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.DecreaseRepeatButton>
+     <Track.Thumb><Thumb Width="16" Height="16"><Thumb.Template><ControlTemplate TargetType="Thumb"><Ellipse Fill="#F5F5F7" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" StrokeThickness="2.5"/></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>
+     <Track.IncreaseRepeatButton><RepeatButton Command="Slider.IncreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.IncreaseRepeatButton>
+    </Track>
+   </Grid></ControlTemplate></Setter.Value></Setter>
+ </Style>
 </ResourceDictionary>

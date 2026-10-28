@@ -126,8 +126,8 @@ namespace ZephyrPlayer.Tests
                     Assert.False(((Button)w.FindName("FullscreenButton")!).Content is string, "fullscreen must be a vector icon, not literal text");
                     bar.Opacity = 1; // XAML starts it at 0 (fades in on mouse move); render the shown state
                     bar.Measure(new Size(1920, 200));
-                    bar.Arrange(new Rect(0, 0, bar.DesiredSize.Width, bar.DesiredSize.Height));
-                    var bw = (int)Math.Ceiling(bar.DesiredSize.Width);
+                    bar.Arrange(new Rect(0, 0, 1920, bar.DesiredSize.Height));
+                    var bw = 1920;
                     var bh = (int)Math.Ceiling(bar.DesiredSize.Height);
                     var rtb = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
                     rtb.Render(bar);
@@ -163,8 +163,8 @@ namespace ZephyrPlayer.Tests
                     var bar2 = w2.ControlBar;
                     bar2.Opacity = 1;
                     bar2.Measure(new Size(1920, 200));
-                    bar2.Arrange(new Rect(0, 0, bar2.DesiredSize.Width, bar2.DesiredSize.Height));
-                    var bw2 = (int)Math.Ceiling(bar2.DesiredSize.Width);
+                    bar2.Arrange(new Rect(0, 0, 1920, bar2.DesiredSize.Height));
+                    var bw2 = 1920;
                     var bh2 = (int)Math.Ceiling(bar2.DesiredSize.Height);
                     var rtb2 = new RenderTargetBitmap(bw2, bh2, 96, 96, PixelFormats.Pbgra32);
                     rtb2.Render(bar2);
