@@ -418,6 +418,16 @@ namespace ZephyrPlayer
 
         // ---------- bar styling (Settings, live) ----------
 
+        private static void ApplyGlyphBrush(DependencyObject element, Brush brush)
+        {
+            if (element is System.Windows.Shapes.Path path)
+            {
+                if (path.Stroke != null) path.Stroke = brush;
+                if (path.Fill != null) path.Fill = brush;
+            }
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++) ApplyGlyphBrush(VisualTreeHelper.GetChild(element, i), brush);
+        }
+
         public void ApplyBarStyle()
         {
             var style = _settings.BarColorStyle;
@@ -456,6 +466,8 @@ namespace ZephyrPlayer
             SleepButton.Foreground = label;
             CaptionsButton.Foreground = label;
             FullscreenButton.Foreground = label;
+            foreach (var button in new[] { VolumeButton, SpeedButton, SleepButton, CaptionsButton, FullscreenButton })
+                ApplyGlyphBrush(button, label);
 
             SpeedButton.Visibility = _settings.ShowSpeed ? Visibility.Visible : Visibility.Collapsed;
             SleepButton.Visibility = _settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
