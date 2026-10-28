@@ -82,6 +82,29 @@ namespace ZephyrPlayer.Tests
             });
         }
 
+        [Fact]
+        public void Pause_Bars_Stay_Separated_And_Fullscreen_Pill_Is_Bounded()
+        {
+            Sta(path => {
+                Core.Initialize(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
+                var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
+                var pause = (Grid)window.FindName("PauseGlyph")!;
+                pause.Visibility = Visibility.Visible;
+                pause.Measure(new Size(24,24)); pause.Arrange(new Rect(0,0,24,24)); pause.UpdateLayout();
+                var a = (FrameworkElement)pause.Children[0]; var b = (FrameworkElement)pause.Children[1];
+                var ar = a.TransformToAncestor(pause).TransformBounds(new Rect(0,0,a.ActualWidth,a.ActualHeight));
+                var br = b.TransformToAncestor(pause).TransformBounds(new Rect(0,0,b.ActualWidth,b.ActualHeight));
+                Assert.True(br.Left - ar.Right >= 6, "Pause bars merge");
+                window.SetFullscreen(true);
+                Assert.Equal(1000, window.ControlBar.MaxWidth);
+                Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
+                window.ControlBar.Opacity=1;
+                Capture(window.ControlBar,1000,"pc-redesign-fullscreen-pill.png");
+                window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Stretch,window.ControlBar.HorizontalAlignment);
+                window.Close();
+            });
+        }
+
         [Theory]
         [InlineData(1024, false)]
         [InlineData(1024, true)]

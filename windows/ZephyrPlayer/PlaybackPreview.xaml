@@ -48,9 +48,9 @@
                                     <Grid>
                                         <Ellipse x:Name="PlayRing" Width="60" Height="60" Stroke="#F5F5F7" StrokeThickness="3" Fill="Transparent" />
                                         <Path x:Name="PlayGlyph" Data="M26,20 L46,32 L26,44 Z" Fill="#F5F5F7" />
-                                        <Grid x:Name="PauseGlyph" Visibility="Collapsed">
-                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Left" Margin="24,0,0,0" />
-                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Right" Margin="0,0,24,0" />
+                                        <Grid x:Name="PauseGlyph" Width="24" Height="24" Visibility="Collapsed">
+                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Left" Margin="2,0,0,0" />
+                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Right" Margin="0,0,2,0" />
                                         </Grid>
                                     </Grid>
                                 </Button>

@@ -796,6 +796,8 @@ jobs:
           name: windows-ui-evidence
           path: |
             ${{ runner.temp }}/pc-redesign-*.png
+            ${{ runner.temp }}/pc-mouse-recovery.txt
+            ${{ runner.temp }}/pc-cycle-*.png
             ${{ runner.temp }}/pc-pairing-render.png
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
