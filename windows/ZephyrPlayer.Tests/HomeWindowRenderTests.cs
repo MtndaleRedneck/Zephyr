@@ -48,6 +48,14 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal(3, list.Items.Count); // Kids folder + Demo Reel.mp4
                     Assert.True(crumbs.Items.Count >= 1);
 
+                    // Real per-file history drives the badge/progress, not a fixed mock label.
+                    var history = new PlaybackHistory();
+                    history.Save(Path.Combine(lib, "Episode 2.mp4"), 20000, 90000);
+                    w.Refresh();
+                    var entry = list.Items[1]; // natural sort after folder
+                    Assert.Equal("1:30", entry.GetType().GetProperty("Duration")!.GetValue(entry));
+                    Assert.Equal(Visibility.Visible, entry.GetType().GetProperty("ProgressVis")!.GetValue(entry));
+
                     // Empty-folder state flips correctly when nothing is set.
                     var settings2 = new PlayerSettings(Path.Combine(dir, "settings2.json"));
                     var w2 = new HomeWindow(settings2, store, _ => { }, () => { });

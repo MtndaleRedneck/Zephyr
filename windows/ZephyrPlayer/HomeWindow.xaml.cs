@@ -32,6 +32,7 @@ namespace ZephyrPlayer
         private readonly List<string> _backStack = new();
         private List<Entry> _all = new();
         private int _thumbGeneration;
+        private readonly PlaybackHistory _history = new();
 
         private sealed record Crumb(string Label, string Rel);
 
@@ -44,6 +45,15 @@ namespace ZephyrPlayer
             public string Detail { get; init; } = "";
             public Visibility FolderVis => Dir ? Visibility.Visible : Visibility.Collapsed;
             public Visibility FileVis => Dir ? Visibility.Collapsed : Visibility.Visible;
+            private long _durationMs;
+            private long _positionMs;
+            public string Duration => PlaybackHistory.DurationLabel(_durationMs);
+            public Visibility DurationVis => !Dir && _durationMs > 0 ? Visibility.Visible : Visibility.Collapsed;
+            public double Progress => _durationMs > 0 ? Math.Clamp(1.0 * _positionMs / _durationMs, 0, 1) : 0;
+            public Visibility ProgressVis => !Dir && Progress > 0 && Progress < .98 ? Visibility.Visible : Visibility.Collapsed;
+            public Visibility WatchedVis => Dir && Name.Equals(".Watched", StringComparison.OrdinalIgnoreCase) ? Visibility.Visible : Visibility.Collapsed;
+            public void SetMetadata(long position, long duration)
+            { _positionMs = position; _durationMs = duration; PropertyChanged?.Invoke(this, new(null)); }
 
             private ImageSource? _peek;
             public ImageSource? Peek { get => _peek; set { _peek = value; PropertyChanged?.Invoke(this, new(nameof(Peek))); } }
@@ -61,7 +71,7 @@ namespace ZephyrPlayer
             _playLocal = playLocal;
             _openPairing = openPairing;
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
-            Activated += (_, __) => RefreshStatus();
+            Activated += (_, __) => { RefreshStatus(); foreach (var entry in _all.Where(e => !e.Dir)) { var item = _history.Get(Path.Combine(_settings.LibraryFolder, entry.Rel.Replace('/', Path.DirectorySeparatorChar))); if (item != null) entry.SetMetadata(item.PositionMs, item.DurationMs); } };
             ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
             var statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             statusTimer.Tick += (_, __) => RefreshStatus();
@@ -114,7 +124,9 @@ namespace ZephyrPlayer
                 status += "  ·  Windows is treating this Wi-Fi as public, which can block your phone.";
             StatusText.Text = status;
             var active = _store.Entries().FirstOrDefault(e => _store.IsConnected(e.Token));
-            PhoneCard.Content = active != null ? active.Name + "\nConnected" : paired > 0 ? "Paired phones\nNot connected" : "Pair a phone";
+            PhoneCardName.Text = active?.Name ?? (paired > 0 ? "Paired phones" : "Pair a phone");
+            PhoneCardStatus.Text = active != null ? "Connected" : paired > 0 ? "Not connected" : "Not paired";
+            PhoneConnectedDot.Visibility = active != null ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // ---------- breadcrumb ----------
@@ -172,7 +184,10 @@ namespace ZephyrPlayer
                 string detail;
                 try { detail = dir ? Directory.EnumerateFiles(path).Count(LibraryIsVideo) + " videos" : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + FileSize(new FileInfo(path).Length); }
                 catch { detail = dir ? "Folder" : "Video"; }
-                entries.Add(new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail });
+                var entry = new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail };
+                var saved = dir ? null : _history.Get(path);
+                if (saved != null) entry.SetMetadata(saved.PositionMs, saved.DurationMs);
+                entries.Add(entry);
             }
             CountText.Text = entries.Count(e => e.Dir) + " folders - " + entries.Count(e => !e.Dir) + " videos";
             _all = entries;
@@ -180,6 +195,7 @@ namespace ZephyrPlayer
             BackButton.IsEnabled = _backStack.Count > 0;
             UpButton.IsEnabled = rel.Length > 0;
             LoadThumbnails(root, entries);
+            LoadDurations(root, entries, _thumbGeneration);
         }
 
         /// <summary>First video inside a folder, descending into subfolders when the
@@ -291,6 +307,35 @@ namespace ZephyrPlayer
             });
         }
 
+        private void LoadDurations(string root, List<Entry> entries, int generation)
+        {
+            Task.Run(async () =>
+            {
+                try
+                {
+                    LibVLCSharp.Shared.Core.Initialize();
+                    using var vlc = new LibVLCSharp.Shared.LibVLC("--no-video", "--no-audio");
+                    foreach (var entry in entries.Where(e => !e.Dir))
+                    {
+                        if (generation != _thumbGeneration) return;
+                        var path = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
+                        if (_history.Get(path) != null) continue;
+                        try
+                        {
+                            using var media = new LibVLCSharp.Shared.Media(vlc, path, LibVLCSharp.Shared.FromType.FromPath);
+                            await media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500);
+                            var duration = media.Duration;
+                            if (duration <= 0) continue;
+                            _history.Save(path, 0, duration, metadataOnly: true);
+                            Dispatcher.BeginInvoke(new Action(() => { if (generation == _thumbGeneration) entry.SetMetadata(_history.Get(path)?.PositionMs ?? 0, duration); }));
+                        }
+                        catch { }
+                    }
+                }
+                catch { } // Missing codec/invalid file: omit the badge, never invent a duration.
+            });
+        }
+
         private static bool LibraryIsVideo(string path)
         {
             var ext = Path.GetExtension(path);
@@ -331,6 +376,7 @@ namespace ZephyrPlayer
             var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Choose movies folder", InitialDirectory = _settings.LibraryFolder };
             if (picker.ShowDialog(this) == true) _settings.LibraryFolder = picker.FolderName;
         }
+        private void OnRefresh(object sender, RoutedEventArgs e) => Refresh();
         private void OnPairing(object sender, RoutedEventArgs e) => OpenSettings("remote");
 
         private void OnSort(object sender, RoutedEventArgs e)

@@ -169,6 +169,11 @@ namespace ZephyrPlayer
                 StatusDot.Fill = WarnOrange;
                 StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted or changed. Close and reopen the Player; if it still says this, send feedback from Settings and we will help.";
             }
+            else if (ip == null)
+            {
+                StatusDot.Fill = WarnOrange;
+                StatusText.Text = "No network address found. Connect this PC to the same Wi-Fi as your phone.";
+            }
             else if (ConnectionState.DiscoveryOff)
             {
                 StatusDot.Fill = WarnOrange;

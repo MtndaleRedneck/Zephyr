@@ -56,7 +56,7 @@ fun ZephyrSetupScreen(
             SetupCard {
                 Text("1. Install and open the Zephyr Player on your PC.", color = TextC, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
-                Text("2. Find the 6-digit code on its home screen, or in its Settings > Android remote.", color = TextC, fontSize = 14.sp)
+                Text("2. On the PC, open Settings > Paired phones, enter a name for this phone, then click Pair to get the 6-digit code.", color = TextC, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
                 Text("3. Keep this phone and the PC on the same Wi-Fi.", color = TextC, fontSize = 14.sp)
             }
