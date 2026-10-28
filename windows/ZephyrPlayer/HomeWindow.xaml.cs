@@ -33,6 +33,7 @@ namespace ZephyrPlayer
         private List<Entry> _all = new();
         private int _thumbGeneration;
         private readonly PlaybackHistory _history = new();
+        private readonly bool _loadDurations;
 
         private sealed record Crumb(string Label, string Rel);
 
@@ -62,10 +63,11 @@ namespace ZephyrPlayer
             public event PropertyChangedEventHandler? PropertyChanged;
         }
 
-        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing)
+        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true)
         {
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
+            _loadDurations = loadDurations;
             _settings = settings;
             _store = store;
             _playLocal = playLocal;
@@ -195,7 +197,7 @@ namespace ZephyrPlayer
             BackButton.IsEnabled = _backStack.Count > 0;
             UpButton.IsEnabled = rel.Length > 0;
             LoadThumbnails(root, entries);
-            LoadDurations(root, entries, _thumbGeneration);
+            if (_loadDurations) LoadDurations(root, entries, _thumbGeneration);
         }
 
         /// <summary>First video inside a folder, descending into subfolders when the
