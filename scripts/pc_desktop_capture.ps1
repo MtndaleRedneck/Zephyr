@@ -1,3 +1,4 @@
+param([switch]$HomeOnly)
 # Real-desktop capture of the actual ZephyrPlayer.exe on the Windows runner.
 # Framing rules (owner-review grade): the app window is resized to fit the
 # runner's 1024x768 virtual screen so NO part is clipped, and every capture is
@@ -366,6 +367,15 @@ $libJson = $libDir -replace '\\','\\'
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', '1', 'Process')
 $prevFx = [Environment]::GetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR','Process')
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $thumbDir, 'Process')
+if ($HomeOnly) {
+    # Test-only paired fixture avoids the intentional first-run Settings overlay.
+    '[{"token":"home-visual-fixture","name":"CI phone"}]' | Set-Content (Join-Path $cfgDir 'paired.json')
+    $history = @{}
+    foreach ($file in Get-ChildItem $libDir -Filter '*.mp4') {
+        $history[$file.FullName.ToUpperInvariant()] = @{ PositionMs=120000; DurationMs=600000; FileSize=$file.Length; ModifiedUtc=$file.LastWriteTimeUtc }
+    }
+    $history | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $cfgDir 'playback-history.json')
+}
 $pH = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $prevFx, 'Process')
 $hwH = Wait-MainWindow $pH 15
@@ -374,8 +384,16 @@ if ($hwH -ne [System.IntPtr]::Zero) {
     [ZWU32]::SetWindowPos($hwH, [System.IntPtr]::Zero, 30, 4, 940, 700, $SWP_NOZORDER) | Out-Null
     Start-Sleep -Milliseconds 900
 }
+[ZWU32]::SetForegroundWindow($hwH) | Out-Null
+Start-Sleep -Seconds 2
+Close-PairingWindow $pH
 $sz1b = CaptureWindow $hwH "$env:RUNNER_TEMP/pc-home-library.png"
 StopZephyr
+if ($HomeOnly) {
+    if ($sz1b -eq '0 x 0') { throw 'Home visual capture missing' }
+    Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+    return
+}
 # Back to a clean first-run state for the sections below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 
