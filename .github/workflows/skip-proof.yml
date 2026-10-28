@@ -1,26 +1,15 @@
-name: Bounded redesign diagnostics
+name: Real four-button seek proof
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  reproduce:
+  seek:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - name: Whole suite with metadata lifetime drained before STA teardown
-        run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --blame-crash --blame-crash-dump-type mini --blame-hang --blame-hang-timeout 90s --results-directory diagnostics/full --logger trx --logger "console;verbosity=detailed"
-      - name: Windows crash event records
-        if: always()
-        shell: pwsh
-        run: |
-          Get-WinEvent -FilterHashtable @{LogName='Application';StartTime=(Get-Date).AddMinutes(-20)} -ErrorAction SilentlyContinue | Where-Object { $_.ProviderName -match 'Application Error|.NET Runtime|Windows Error Reporting' } | Format-List TimeCreated,ProviderName,Message | Out-File diagnostics/events.txt
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: redesign-diagnostics
-          path: diagnostics/**
+      - run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter FullyQualifiedName~SkipPairPlaybackTests --blame-hang --blame-hang-timeout 120s --logger "console;verbosity=detailed"
