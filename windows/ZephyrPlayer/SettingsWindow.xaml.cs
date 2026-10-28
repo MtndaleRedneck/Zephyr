@@ -48,7 +48,7 @@ namespace ZephyrPlayer
             NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
             Loaded += (_, __) => _updateStatusTimer.Start();
             Closed += (_, __) => { _updateStatusTimer.Stop(); _store.Changed -= OnStoreChanged; };
-            if (PairingFactory != null) { _pairPanel = PairingFactory(); PairingHost.Content = _pairPanel; PairButton.Visibility = Visibility.Collapsed; }
+            if (PairingFactory != null) { _pairPanel = PairingFactory(); PairingHost.Content = _pairPanel; PairButton.Visibility = Visibility.Collapsed; PairStatusText.Visibility = Visibility.Collapsed; PairHelpText.Visibility = Visibility.Collapsed; }
             FeedbackHost.Content = new FeedbackPanel(_store.Count) { MinHeight = 420 };
             _settings.Changed += OnSettingsUpdated;
             Closed += (_, __) => _settings.Changed -= OnSettingsUpdated;
