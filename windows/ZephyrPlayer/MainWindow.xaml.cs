@@ -403,8 +403,8 @@ namespace ZephyrPlayer
         public void SetFullscreen(bool on)
         {
             if (on == IsFullscreen) return;
-            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = 1000; ControlBar.Margin = new Thickness(20, 20, 20, 44); }
-            else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.Margin = new Thickness(20); }
+            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = 1000; ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
+            else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
             ControlBar.BeginAnimation(OpacityProperty, null);
