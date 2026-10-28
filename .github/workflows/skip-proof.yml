@@ -1,10 +1,10 @@
-name: Home visual confirmation
+name: Real four-button seek proof
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  home:
+  seek:
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -12,10 +12,4 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 8.0.x
-      - run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:CaptureHook=true -o windows/capture-out
-      - run: scripts/pc_desktop_capture.ps1 -HomeOnly
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: home-visual-confirmation
-          path: ${{ runner.temp }}/pc-home-library.png
+      - run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter FullyQualifiedName~SkipPairPlaybackTests --blame-hang --blame-hang-timeout 120s --logger "console;verbosity=detailed"
