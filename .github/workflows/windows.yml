@@ -24,6 +24,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   vlc-remote-e2e:
@@ -403,7 +404,7 @@ jobs:
             }
           }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
-      - name: Published 1.1.0 -> new build upgrade smoke (real artifacts)
+      - name: Original CI 1.1.0 -> new build upgrade smoke (real artifacts)
         if: always()
         timeout-minutes: 12
         shell: pwsh
@@ -428,7 +429,8 @@ jobs:
           }
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
           netsh http delete urlacl url=http://+:47823/ | Out-Null
-          gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/old110" --clobber
+          # Original release assets were removed; recover original CI binaries, do not rebuild old code.
+          gh run download 40413487207 -n Zephyr-PC-installer --dir "$env:RUNNER_TEMP/old110"
           $oldInstaller = "$env:RUNNER_TEMP/old110/Zephyr-PC-1.1.0.exe"
           if (-not (Test-Path $oldInstaller)) { throw "published 1.1.0 installer missing after download" }
           $oldLog = "$env:RUNNER_TEMP/installer-old110.log"
@@ -529,7 +531,7 @@ jobs:
           $unauth = $false
           try { Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -TimeoutSec 3 -UseBasicParsing | Out-Null } catch { $unauth = ($_.Exception.Response.StatusCode.value__ -eq 401) }
           if (-not $unauth) { throw 'unauthenticated /control/status was not 401 after upgrade' }
-          Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - player-v1.1.0 installed from the release feed, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
+          Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - original CI 1.1.0 installer recovered from run40413487207, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
           # Round-8 N-10: 1.2.0 installs into the same folder + AppId as 1.1.0, so the
@@ -625,8 +627,8 @@ jobs:
           }
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
           netsh http delete urlacl url=http://+:47823/ | Out-Null
-          gh release download player-v1.0.0 -p Zephyr-PC-1.0.0.exe --dir "$env:RUNNER_TEMP/old100" --clobber
-          gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/old110b" --clobber
+          gh run download 40387624659 -n Zephyr-PC-installer --dir "$env:RUNNER_TEMP/old100"
+          gh run download 40413487207 -n Zephyr-PC-installer --dir "$env:RUNNER_TEMP/old110b"
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
           $link = 0
@@ -733,7 +735,7 @@ jobs:
             Remove-Item $k -Recurse -Force -ErrorAction SilentlyContinue
           }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
-          gh release download player-v1.1.0 -p Zephyr-PC-1.1.0.exe --dir "$env:RUNNER_TEMP/leg110" --clobber
+          gh run download 40413487207 -n Zephyr-PC-installer --dir "$env:RUNNER_TEMP/leg110"
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
           $i1 = Start-Process "$env:RUNNER_TEMP/leg110/Zephyr-PC-1.1.0.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
@@ -793,6 +795,7 @@ jobs:
         with:
           name: windows-ui-evidence
           path: |
+            ${{ runner.temp }}/pc-redesign-*.png
             ${{ runner.temp }}/pc-pairing-render.png
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png

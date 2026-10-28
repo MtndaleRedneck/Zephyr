@@ -8,7 +8,7 @@ using System.Windows.Threading;
 namespace ZephyrPlayer
 {
     /// <summary>
-    /// The pairing surface (owner-approved look): "Pair new phone" with a live
+    /// The pairing surface (pairing layout): "Pair new phone" with a live
     /// code + countdown that renews before expiry (the pre-1.2 code silently
     /// dies after 10 minutes and Settings clobbers it), "This PC:" address for
     /// manual entry, the paired-phones list with Remove, and a status row for

@@ -97,10 +97,10 @@
 
         <!-- Status -->
         <Border x:Name="WarningPanel" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="14,10">
-            <StackPanel Orientation="Horizontal">
+            <DockPanel LastChildFill="True">
                 <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#4CAF50" VerticalAlignment="Center" Margin="0,0,8,0"/>
                 <TextBlock x:Name="StatusText" Text="" Foreground="{StaticResource TextBrush}" FontSize="12" TextWrapping="Wrap"/>
-            </StackPanel>
+            </DockPanel>
         </Border>
     </StackPanel>
 </UserControl>

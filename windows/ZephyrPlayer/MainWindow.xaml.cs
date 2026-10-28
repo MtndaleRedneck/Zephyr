@@ -255,15 +255,13 @@ namespace ZephyrPlayer
             // Nothing loaded = nothing to skip: no time change, no spin, no flash.
             if (_player.Length <= 0) return;
             _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
-            // Same language as the phone: the PRIMARY rings do one full turn per
-            // tap (forward clockwise, back counter-clockwise), then settle
-            // upright. The secondary double-triangles just flash their labels.
+            // Rotate only the ring/arc; the duration label stays upright.
             if (spin != null)
             {
                 spin.Angle = 0;
                 var anim = new DoubleAnimation(backward ? -360 : 360, TimeSpan.FromMilliseconds(420))
                 {
-                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
                 };
                 spin.BeginAnimation(RotateTransform.AngleProperty, anim);
             }

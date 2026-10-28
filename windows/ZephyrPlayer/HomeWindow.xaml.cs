@@ -15,7 +15,7 @@ namespace ZephyrPlayer
 {
     /// <summary>
     /// Home: the app's resting screen, now an Explorer-style icon grid of the
-    /// designated movies folder (owner-approved look): back/up + clickable
+    /// designated movies folder (pairing layout): back/up + clickable
     /// breadcrumb + search box on a toolbar, large folder tiles with a poster
     /// peeking out of the wireframe folder outline, loose videos as film-strip
     /// frames around the real Windows shell thumbnail, names under each tile.
@@ -170,7 +170,7 @@ namespace ZephyrPlayer
                 DateTime created;
                 try { created = File.GetCreationTimeUtc(path); } catch { created = DateTime.MinValue; }
                 string detail;
-                try { detail = dir ? Directory.EnumerateFiles(path).Count(LibraryIsVideo) + " videos" : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + (new FileInfo(path).Length / (1024d * 1024 * 1024)).ToString("0.##") + " GB"; }
+                try { detail = dir ? Directory.EnumerateFiles(path).Count(LibraryIsVideo) + " videos" : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + FileSize(new FileInfo(path).Length); }
                 catch { detail = dir ? "Folder" : "Video"; }
                 entries.Add(new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail });
             }
@@ -323,6 +323,8 @@ namespace ZephyrPlayer
         private static extern int StrCmpLogicalW(string a, string b);
         private static int NaturalCompare(string? a, string? b) =>
             OperatingSystem.IsWindows() ? StrCmpLogicalW(a ?? "", b ?? "") : StringComparer.OrdinalIgnoreCase.Compare(a, b);
+
+        private static string FileSize(long bytes) => bytes >= 1024L * 1024 * 1024 ? (bytes / (1024d * 1024 * 1024)).ToString("0.#") + " GB" : bytes >= 1024 * 1024 ? (bytes / (1024d * 1024)).ToString("0.#") + " MB" : bytes >= 1024 ? (bytes / 1024d).ToString("0.#") + " KB" : bytes + " B";
 
         private void OnBrowseFolder(object sender, RoutedEventArgs e)
         {

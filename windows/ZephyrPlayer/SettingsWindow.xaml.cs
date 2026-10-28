@@ -10,7 +10,7 @@ using System.Windows.Media;
 namespace ZephyrPlayer
 {
     /// <summary>
-    /// Compact centered settings window (owner-approved Task-Manager-style
+    /// Compact centered settings window (tabbed
     /// layout): clickable section list on the LEFT, one section's content on
     /// the right, Feedback & bugs and Updates pinned at the bottom with the
     /// version under Updates. Every change writes through PlayerSettings,

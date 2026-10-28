@@ -205,7 +205,7 @@
 
         <!-- Status strip -->
         <Border Grid.Row="2" Background="#141417" Padding="20,8">
-            <TextBlock x:Name="StatusText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
         </Border>
       </Grid>
     </Grid>

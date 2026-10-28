@@ -30,7 +30,8 @@ namespace ZephyrPlayer.Tests
                     Directory.CreateDirectory(dir);
                     var lib = Path.Combine(dir, "Movies");
                     Directory.CreateDirectory(Path.Combine(lib, "Kids"));
-                    File.WriteAllBytes(Path.Combine(lib, "Demo Reel.mp4"), new byte[] { 1, 2, 3 });
+                    File.WriteAllBytes(Path.Combine(lib, "Episode 10.mp4"), new byte[] { 1, 2, 3 });
+                    File.WriteAllBytes(Path.Combine(lib, "Episode 2.mp4"), new byte[] { 1, 2, 3 });
                     var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));
                     settings.LibraryFolder = lib;
                     var store = new PairedStore(Path.Combine(dir, "paired.json"));
@@ -44,7 +45,7 @@ namespace ZephyrPlayer.Tests
                     var crumbs = (ItemsControl)w.FindName("Breadcrumb")!;
                     Assert.Equal(Visibility.Collapsed, emptyState.Visibility);
                     Assert.Equal(Visibility.Visible, libraryView.Visibility);
-                    Assert.Equal(2, list.Items.Count); // Kids folder + Demo Reel.mp4
+                    Assert.Equal(3, list.Items.Count); // Kids folder + Demo Reel.mp4
                     Assert.True(crumbs.Items.Count >= 1);
 
                     // Empty-folder state flips correctly when nothing is set.
