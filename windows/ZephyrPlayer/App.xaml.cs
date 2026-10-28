@@ -15,7 +15,6 @@ namespace ZephyrPlayer
         private TrayService? _tray;
         private MainWindow? _player;
         private HomeWindow? _home;
-        private PairingWindow? _pairing;
         private LibVLC? _libvlc;
         private MediaPlayer? _mediaPlayer;
         private PairingGate? _gate;
@@ -121,6 +120,8 @@ namespace ZephyrPlayer
             Core.Initialize();
             var libvlc = new LibVLC();
             var player = new MediaPlayer(libvlc);
+            player.EnableMouseInput = false;
+            player.EnableKeyInput = false;
             var store = new PairedStore();
             var settings = new PlayerSettings();
             var gate = new PairingGate();
@@ -142,6 +143,7 @@ namespace ZephyrPlayer
 
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
+            _player.HomeRequested += () => { player.Stop(); _player.Hide(); _home?.Show(); _home?.Activate(); };
             _player.SleepFired += () =>
             {
                 _player.Hide();
@@ -198,7 +200,7 @@ namespace ZephyrPlayer
                 // no known credential at all.
                 validateToken: t =>
                 {
-                    if (store.IsPaired(t)) return true;
+                    if (store.ValidateAndTouch(t)) return true;
 #if CI_CAPTURE_HOOK
                     if (Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null && t == "ci-capture-token") return true;
 #endif
@@ -233,7 +235,6 @@ namespace ZephyrPlayer
                     {
                         Current.Dispatcher.InvokeAsync(() =>
                         {
-                            _pairing?.OnPairSucceeded();
                             _home?.Refresh();
                         });
                     }
@@ -305,7 +306,8 @@ namespace ZephyrPlayer
             _home.Show();
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
             // otherwise): Home goes up first, then the pairing screen over it.
-            if (!store.HasAny) ShowPairingWindow();
+            SettingsWindow.PairingFactory = () => new PairingPanel(_gate!, store, name => _pendingPhoneName = name);
+            if (!store.HasAny) _home.OpenSettings("remote");
             // CI evidence args: COMPILED OUT of the shipped binary (round-6 S6-7/G6;
             // review nit 3 - a release binary must not grow a second Settings window
             // or autoplay from stray args). Only the dedicated capture build defines
@@ -317,8 +319,7 @@ namespace ZephyrPlayer
             {
                 if (arg == "--open-settings")
                 {
-                    var sw = new SettingsWindow(settings, store, ShowPairingWindow) { Owner = _home };
-                    sw.Show();
+                    _home.OpenSettings("volume");
                 }
                 else if (arg == "--tray-menu")
                 {
@@ -326,7 +327,8 @@ namespace ZephyrPlayer
                 }
                 else if (arg == "--open-pairing")
                 {
-                    ShowPairingWindow();
+                    var capturePair = new PairingWindow(gate, store, name => _pendingPhoneName = name) { Owner = _home };
+                    capturePair.Show();
                 }
                 else if (arg.StartsWith("--play=", StringComparison.Ordinal))
                 {
@@ -346,19 +348,7 @@ namespace ZephyrPlayer
         /// every surface shows the SAME live gate.</summary>
         public void ShowPairingWindow()
         {
-            if (_pairing != null)
-            {
-                _pairing.Show();
-                _pairing.Activate();
-                return;
-            }
-            _pairing = new PairingWindow(_gate!, _store!, name => _pendingPhoneName = name)
-            {
-                Owner = _home,
-            };
-            _pairing.Closed += (_, __) => _pairing = null;
-            _pairing.Show();
-            _pairing.Activate();
+            _home?.OpenSettings("remote");
         }
 
         /// <summary>Tray icon / relaunch restore: bring the app back up. A movie on
@@ -384,7 +374,6 @@ namespace ZephyrPlayer
         private void QuitApp()
         {
             _reallyQuit = true;
-            try { _pairing?.Close(); } catch { }
             try { _player?.Close(); } catch { }
             try { _home?.Close(); } catch { }
             Shutdown();

@@ -20,7 +20,7 @@ namespace ZephyrPlayer
         public static readonly int[] BoostChoices = { 100, 125, 150, 175, 200 };
         public static readonly int[] PrimarySkipChoices = { 5, 10, 15, 30 };
         public static readonly int[] SecondarySkipChoices = { 15, 30, 60, 120, 180 };
-        public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone" };
+        public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone", "inverse" };
         public static readonly string[] IconStyles = { "hollow", "filled" };
 
         /// <summary>Raised on the setting thread after any change is written.</summary>
@@ -98,6 +98,18 @@ namespace ZephyrPlayer
             set { Write(d => d with { LastVolume = Math.Clamp(value, 0, 100) }); }
         }
 
+        public string LibrarySort
+        {
+            get { lock (_lock) return Read().LibrarySort == "created" ? "created" : "name"; }
+            set { if (value is "name" or "created") Write(d => d with { LibrarySort = value }); }
+        }
+
+        public bool FoldersFirst
+        {
+            get { lock (_lock) return Read().FoldersFirst ?? true; }
+            set { Write(d => d with { FoldersFirst = value }); }
+        }
+
         private record Data(
             string? LibraryFolder,
             int? VolumeBoostMaxPct,
@@ -109,7 +121,9 @@ namespace ZephyrPlayer
             bool? ShowSleepTimer,
             int? LastVolume,
             int? PrimarySkipSeconds = null,
-            int? SecondarySkipSeconds = null);
+            int? SecondarySkipSeconds = null,
+            string? LibrarySort = null,
+            bool? FoldersFirst = null);
 
         private Data Read()
         {

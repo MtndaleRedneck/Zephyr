@@ -5,11 +5,7 @@
         Background="#1B1B1E" Icon="/ZephyrPlayer;component/assets/icon.ico"
         WindowStartupLocation="CenterScreen">
     <Window.Resources>
-        <SolidColorBrush x:Key="CardBrush" Color="#26262D"/>
-        <SolidColorBrush x:Key="Card2Brush" Color="#2E2E36"/>
-        <SolidColorBrush x:Key="OrangeBrush" Color="#FF9500"/>
-        <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/>
-        <SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
+      <ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries>
         <Style x:Key="OrangeButton" TargetType="Button">
             <Setter Property="Background" Value="{StaticResource OrangeBrush}"/>
             <Setter Property="Foreground" Value="#1B1B1E"/>
@@ -65,8 +61,17 @@
                 </Setter.Value>
             </Setter>
         </Style>
+      </ResourceDictionary>
     </Window.Resources>
     <Grid>
+      <Grid.ColumnDefinitions><ColumnDefinition Width="220"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+      <Grid Grid.Column="0" Background="#1B1B1E" Margin="8,12,12,12">
+        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+        <Button Content="Movies" Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"/>
+        <Button Grid.Row="2" Style="{StaticResource GhostButton}" x:Name="PhoneCard" Content="Paired phones" Click="OnPairing" HorizontalContentAlignment="Left"/>
+        <Button Grid.Row="3" Style="{StaticResource GhostButton}" Content="Settings" Click="OnSettings" HorizontalContentAlignment="Left"/>
+      </Grid>
+      <Grid Grid.Column="1" Background="#232328">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -78,11 +83,12 @@
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Image Source="/ZephyrPlayer;component/assets/icon.ico" Width="26" Height="26"/>
-                    <TextBlock Text="Zephyr Player" Foreground="{StaticResource TextBrush}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    <TextBlock Text="Movies" Foreground="{StaticResource TextBrush}" FontSize="28" FontWeight="SemiBold" VerticalAlignment="Center" Margin="10,0,0,0"/><TextBlock x:Name="CountText" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="16,0"/>
                 </StackPanel>
+                <Button x:Name="SortButton" Style="{StaticResource GhostButton}" Content="Sort: Name" HorizontalAlignment="Right" Margin="0,0,140,0" Click="OnSort"/>
                 <Button x:Name="SettingsButton" Style="{StaticResource GhostButton}" HorizontalAlignment="Right" Click="OnSettings">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE713;" FontFamily="Segoe MDL2 Assets" FontSize="16" VerticalAlignment="Center"/>
+                        <Path Data="M9,3 H15 L16,7 L20,8 V16 L16,17 L15,21 H9 L8,17 L4,16 V8 L8,7 Z M8,12 A4,4 0 1 0 16,12 A4,4 0 1 0 8,12" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="18" Height="18" Stretch="Uniform" Margin="0,0,10,0"/>
                         <TextBlock Text=" Settings" VerticalAlignment="Center"/>
                     </StackPanel>
                 </Button>
@@ -95,8 +101,8 @@
             <StackPanel x:Name="EmptyState" Visibility="Collapsed" VerticalAlignment="Center" HorizontalAlignment="Center">
                 <Viewbox Width="64" Height="64" HorizontalAlignment="Center" VerticalAlignment="Center"><Canvas Width="28" Height="28"><Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62" Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="{x:Null}"/></Canvas></Viewbox>
                 <TextBlock Text="Pick your movies folder" Foreground="{StaticResource TextBrush}" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,14,0,4"/>
-                <TextBlock Text="Your designated folder lives in Settings." Foreground="{StaticResource MutedBrush}" FontSize="13" HorizontalAlignment="Center" Margin="0,0,0,16"/>
-                <Button Style="{StaticResource OrangeButton}" Content="Open Settings" Click="OnSettings" HorizontalAlignment="Center"/>
+                <TextBlock Text="Choose the folder you want to browse." Foreground="{StaticResource MutedBrush}" FontSize="13" HorizontalAlignment="Center" Margin="0,0,0,16"/>
+                <Button Style="{StaticResource OrangeButton}" Content="Choose movies folder" Click="OnBrowseFolder" HorizontalAlignment="Center"/>
             </StackPanel>
 
             <!-- Explorer view -->
@@ -114,11 +120,12 @@
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <Button x:Name="BackButton" Grid.Column="0" Style="{StaticResource GhostButton}" Content="&#x2190;" FontSize="15" Click="OnBack" ToolTip="Back"/>
-                    <Button x:Name="UpButton" Grid.Column="1" Style="{StaticResource GhostButton}" Content="&#x2191;" FontSize="15" Click="OnUp" ToolTip="Up one folder" Margin="2,0,0,0"/>
+                    <Button x:Name="BackButton" Grid.Column="0" Style="{StaticResource GhostButton}" Content="Back" FontSize="15" Click="OnBack" ToolTip="Back"/>
+                    <Button x:Name="UpButton" Grid.Column="1" Style="{StaticResource GhostButton}" Content="Up" FontSize="15" Click="OnUp" ToolTip="Up one folder" Margin="2,0,0,0"/>
                     <Border Grid.Column="2" Background="{StaticResource CardBrush}" CornerRadius="10" Padding="8,4" Margin="10,0,0,0" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE7F4;" FontFamily="Segoe MDL2 Assets" FontSize="13" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" Margin="2,0,4,0"/>
+                            <Path Data="M3,4 H21 V16 H3 Z M8,20 H16 M12,16 V20" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="18" Height="18" Stretch="Uniform" Margin="0,0,10,0"/>
+                            <Button Style="{StaticResource GhostButton}" Content="Choose folder" Click="OnBrowseFolder" ToolTip="Change movies folder"/>
                             <ItemsControl x:Name="Breadcrumb" VerticalAlignment="Center">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
@@ -150,56 +157,19 @@
                             </ListBox.ItemsPanel>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <StackPanel Width="124" Margin="6,6">
-                                        <!-- Folder tile: poster peeking out of the wireframe outline -->
-                                        <Grid Width="104" Height="88" Visibility="{Binding FolderVis}">
-                                            <!-- Peeks INSIDE the folder outline's width, above its front flap
-                                                 (round-3 P7); RectangleGeometry clip rounds the corners
-                                                 (ClipToBounds ignores CornerRadius). -->
-                                            <Border Width="44" Height="30" Margin="0,0,0,24"
-                                                    VerticalAlignment="Center" HorizontalAlignment="Center">
-                                                <Border.Clip>
-                                                    <RectangleGeometry Rect="0,0,44,30" RadiusX="3" RadiusY="3"/>
-                                                </Border.Clip>
-                                                <Image Source="{Binding Peek}" Stretch="UniformToFill"/>
-                                            </Border>
-                                            <Viewbox Width="96" Height="80" HorizontalAlignment="Center" VerticalAlignment="Bottom">
-                                                <Canvas Width="28" Height="28">
-                                                    <Path Data="M4.96,21.62 L4.96,6.86 L12.57,6.86 L14.48,9.24 L23.04,9.24 L23.04,21.62 Z M4.96,11.62 L23.04,11.62"
-                                                          Stroke="{StaticResource OrangeBrush}" StrokeThickness="1" StrokeStartLineCap="Round"
-                                                          StrokeEndLineCap="Round" StrokeLineJoin="Round" Fill="#1B1B1E"/>
-                                                </Canvas>
-                                            </Viewbox>
-                                        </Grid>
-                                        <!-- File tile: film-strip frame around the real shell thumbnail -->
-                                        <Border Width="104" Height="88" Background="#141417" CornerRadius="6" Padding="7,6" Visibility="{Binding FileVis}">
-                                            <Grid>
-                                                <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Left">
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                </StackPanel>
-                                                <StackPanel Orientation="Vertical" VerticalAlignment="Center" HorizontalAlignment="Right">
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                    <Rectangle Width="3" Height="3" RadiusX="1" RadiusY="1" Fill="#2E2E36" Margin="0,1.4"/>
-                                                </StackPanel>
-                                                <!-- Placeholder play glyph sits BEHIND the thumbnail; the
-                                                     real frame covers it once loaded. -->
-                                                <Path Data="M0,0 L12,7 L0,14 Z" Fill="{StaticResource OrangeBrush}" Stretch="Uniform"
-                                                      Width="18" Height="18" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                <Image Source="{Binding Thumb}" Stretch="UniformToFill" Margin="7,0"/>
-                                            </Grid>
+                                    <StackPanel Width="202" Margin="0,0,25,20">
+                                        <Border Width="202" Height="126" Background="{StaticResource CardBrush}" CornerRadius="10" BorderBrush="#12FFFFFF" BorderThickness="1" Visibility="{Binding FolderVis}">
+                                          <Viewbox Width="140" Height="114"><Grid Width="140" Height="114">
+                                            <Image Source="{Binding Peek}" Width="122" Height="65" Margin="0,28,0,0" Stretch="UniformToFill"/>
+                                            <Path Data="M7,105 V17 Q7,8 16,8 H49 Q55,8 59,14 L67,23 H124 Q133,23 133,31 V105 Q133,109 128,109 H12 Q7,109 7,105 Z M7,40 H133" Stroke="#FF9500" StrokeThickness="2.6" StrokeLineJoin="Round" Fill="{x:Null}"/>
+                                          </Grid></Viewbox>
                                         </Border>
-                                        <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="12"
-                                                   TextAlignment="Center" TextWrapping="Wrap" MaxHeight="32" TextTrimming="CharacterEllipsis"
-                                                   Margin="0,6,0,0"/>
+                                        <Border Width="202" Height="126" Background="#141417" CornerRadius="10" ClipToBounds="True" Visibility="{Binding FileVis}">
+                                          <Image Source="{Binding Thumb}" Stretch="UniformToFill"/>
+                                        </Border>
+                                        <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="13"
+                                                   TextAlignment="Left" TextWrapping="Wrap" MaxHeight="32" TextTrimming="CharacterEllipsis"
+                                                   Margin="0,6,0,0"/><TextBlock Text="{Binding Detail}" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,3,0,0"/>
                                     </StackPanel>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -237,5 +207,6 @@
         <Border Grid.Row="2" Background="#141417" Padding="20,8">
             <TextBlock x:Name="StatusText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
         </Border>
+      </Grid>
     </Grid>
 </Window>

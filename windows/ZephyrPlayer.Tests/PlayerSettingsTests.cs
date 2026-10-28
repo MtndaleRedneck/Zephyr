@@ -18,6 +18,15 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void Library_Sort_Roundtrips_Without_Losing_Older_Settings()
+        {
+            var settings = new PlayerSettings(_path);
+            Assert.Equal("name", settings.LibrarySort); Assert.True(settings.FoldersFirst);
+            settings.LibraryFolder = @"C:\Movies"; settings.LibrarySort = "created"; settings.FoldersFirst = false;
+            var reread = new PlayerSettings(_path);
+            Assert.Equal("created", reread.LibrarySort); Assert.False(reread.FoldersFirst); Assert.Equal(@"C:\Movies", reread.LibraryFolder);
+        }
+        [Fact]
         public void Defaults_On_Missing_File()
         {
             var s = new PlayerSettings(_path);
