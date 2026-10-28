@@ -57,8 +57,8 @@ namespace ZephyrPlayer.Tests
             {
                 Assert.Equal("10", w.FindName("SkipBackLabel") is System.Windows.Controls.TextBlock b ? b.Text : "");
                 Assert.Equal("10", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
-                Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 // Speed + sleep hidden by default.
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
@@ -92,7 +92,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("1m", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
                 Assert.Equal("1m", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 // Secondary icons are double-triangles (fill restyles, no ring).
-                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!).Fill).Color);
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!).Stroke).Color);
                 // Filled play/pause = colored DISC: the design fills the ring and
                 // clears its stroke (hollow keeps the stroke instead). Assert the
                 // filled semantics, not the hollow one.

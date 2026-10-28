@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -39,6 +40,8 @@ namespace ZephyrPlayer
             public required string Name { get; init; }
             public required bool Dir { get; init; }
             public required string Rel { get; init; }
+            public DateTime Created { get; init; }
+            public string Detail { get; init; } = "";
             public Visibility FolderVis => Dir ? Visibility.Visible : Visibility.Collapsed;
             public Visibility FileVis => Dir ? Visibility.Collapsed : Visibility.Visible;
 
@@ -60,6 +63,10 @@ namespace ZephyrPlayer
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
             Activated += (_, __) => RefreshStatus();
             ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
+            var statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            statusTimer.Tick += (_, __) => RefreshStatus();
+            Loaded += (_, __) => statusTimer.Start();
+            Closed += (_, __) => statusTimer.Stop();
             Refresh();
         }
 
@@ -72,7 +79,7 @@ namespace ZephyrPlayer
         private void OnSettingsChanged()
         {
             var folder = _settings.LibraryFolder;
-            if (folder == _lastFolder) return;
+            if (folder == _lastFolder) { ApplySearch(); return; }
             _currentRel = "";
             _backStack.Clear();
             SearchBox.Text = "";
@@ -106,6 +113,8 @@ namespace ZephyrPlayer
             else if (ConnectionState.PublicWifiName != null)
                 status += "  ·  Windows is treating this Wi-Fi as public, which can block your phone.";
             StatusText.Text = status;
+            var active = _store.Entries().FirstOrDefault(e => _store.IsConnected(e.Token));
+            PhoneCard.Content = active != null ? active.Name + "\nConnected" : paired > 0 ? "Paired phones\nNot connected" : "Pair a phone";
         }
 
         // ---------- breadcrumb ----------
@@ -157,8 +166,15 @@ namespace ZephyrPlayer
                 var name = e.GetProperty("name").GetString() ?? "";
                 var dir = e.GetProperty("dir").GetBoolean();
                 var childRel = rel.Length == 0 ? name : rel + "/" + name;
-                entries.Add(new Entry { Name = name, Dir = dir, Rel = childRel });
+                var path = Path.Combine(root, childRel.Replace('/', Path.DirectorySeparatorChar));
+                DateTime created;
+                try { created = File.GetCreationTimeUtc(path); } catch { created = DateTime.MinValue; }
+                string detail;
+                try { detail = dir ? Directory.EnumerateFiles(path).Count(LibraryIsVideo) + " videos" : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + (new FileInfo(path).Length / (1024d * 1024 * 1024)).ToString("0.##") + " GB"; }
+                catch { detail = dir ? "Folder" : "Video"; }
+                entries.Add(new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail });
             }
+            CountText.Text = entries.Count(e => e.Dir) + " folders - " + entries.Count(e => !e.Dir) + " videos";
             _all = entries;
             ApplySearch();
             BackButton.IsEnabled = _backStack.Count > 0;
@@ -289,11 +305,49 @@ namespace ZephyrPlayer
         private void ApplySearch()
         {
             var q = SearchBox.Text.Trim();
-            MovieList.ItemsSource = q.Length == 0
-                ? _all
-                : _all.Where(e => e.Name.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+            IEnumerable<Entry> filtered = _all.Where(e => q.Length == 0 || e.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
+            var comparer = Comparer<string>.Create(NaturalCompare);
+            IOrderedEnumerable<Entry> ordered = _settings.FoldersFirst
+                ? filtered.OrderBy(e => !e.Dir)
+                : filtered.OrderBy(e => 0);
+            ordered = _settings.LibrarySort == "created"
+                ? ordered.ThenByDescending(e => e.Created).ThenBy(e => e.Name, comparer)
+                : ordered.ThenBy(e => e.Name, comparer);
+            MovieList.ItemsSource = ordered.ToList();
+            if (SortButton != null) SortButton.Content = _settings.LibrarySort == "created" ? "Sort: Date created" : "Sort: Name";
             EmptyFolderText.Text = q.Length == 0 ? "This folder is empty." : "Nothing here matches \"" + q + "\".";
             EmptyFolderText.Visibility = ((IEnumerable<Entry>)MovieList.ItemsSource).Any() ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+        private static extern int StrCmpLogicalW(string a, string b);
+        private static int NaturalCompare(string? a, string? b) =>
+            OperatingSystem.IsWindows() ? StrCmpLogicalW(a ?? "", b ?? "") : StringComparer.OrdinalIgnoreCase.Compare(a, b);
+
+        private void OnBrowseFolder(object sender, RoutedEventArgs e)
+        {
+            var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Choose movies folder", InitialDirectory = _settings.LibraryFolder };
+            if (picker.ShowDialog(this) == true) _settings.LibraryFolder = picker.FolderName;
+        }
+        private void OnPairing(object sender, RoutedEventArgs e) => OpenSettings("remote");
+
+        private void OnSort(object sender, RoutedEventArgs e)
+        {
+            var menu = new System.Windows.Controls.ContextMenu();
+            void Add(string label, bool selected, Action act)
+            {
+                var item = new System.Windows.Controls.MenuItem { Header = label, IsCheckable = true, IsChecked = selected };
+                item.Click += (_, __) => act();
+                menu.Items.Add(item);
+            }
+            Add("Name", _settings.LibrarySort == "name", () => _settings.LibrarySort = "name");
+            Add("Date created", _settings.LibrarySort == "created", () => _settings.LibrarySort = "created");
+            menu.Items.Add(new System.Windows.Controls.Separator());
+            Add("Folders first", _settings.FoldersFirst, () => _settings.FoldersFirst = true);
+            Add("Mixed in", !_settings.FoldersFirst, () => _settings.FoldersFirst = false);
+            menu.PlacementTarget = SortButton;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
         }
 
         private void OnSearchChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -353,9 +407,14 @@ namespace ZephyrPlayer
         /// must not freeze playback controls (review should-fix 6).</summary>
         private void OnSettings(object sender, RoutedEventArgs e)
         {
-            if (_settingsWin != null) { _settingsWin.Activate(); return; }
+            OpenSettings("volume");
+        }
+        public void OpenSettings(string section)
+        {
+            if (_settingsWin != null) { _settingsWin.SelectSection(section); _settingsWin.Activate(); return; }
             _settingsWin = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
             _settingsWin.Closed += (_, __) => _settingsWin = null;
+            _settingsWin.SelectSection(section);
             _settingsWin.Show();
         }
     }

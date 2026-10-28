@@ -241,6 +241,8 @@ function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | S
 function Close-PairingWindow($proc) {
     # A fresh profile auto-shows the pairing screen over Home; close it so the
     # Home captures show the grid itself. WM_CLOSE keeps this a real UI close.
+    $settings = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Settings')
+    if ($settings -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($settings, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null; Start-Sleep -Milliseconds 400 }
     $pw = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player - Pair your phone')
     if ($pw -ne [System.IntPtr]::Zero) {
         [ZWU32]::PostMessage($pw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null

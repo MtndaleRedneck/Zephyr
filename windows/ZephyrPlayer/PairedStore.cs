@@ -42,7 +42,19 @@ namespace ZephyrPlayer
         public PairedStore() { _path = DefaultPath; }
         internal PairedStore(string path) { _path = path; }
 
-        public sealed record Entry(string Token, string Name);
+        public sealed record Entry(string Token, string Name, DateTime? PairedAt = null);
+        private readonly Dictionary<string, DateTime> _lastSeen = new();
+        public bool ValidateAndTouch(string token)
+        {
+            lock (_sync)
+            {
+                if (!EntriesLocked().Any(e => FixedTime(e.Token, token))) return false;
+                _lastSeen[token] = DateTime.UtcNow;
+                return true;
+            }
+        }
+        public DateTime? LastSeen(string token) { lock (_sync) return _lastSeen.TryGetValue(token, out var seen) ? seen : null; }
+        public bool IsConnected(string token) => LastSeen(token) is DateTime seen && DateTime.UtcNow - seen < TimeSpan.FromSeconds(15);
 
         /// <summary>Any paired phone at all (drives the pairing surfaces in the UI).</summary>
         public bool HasAny { get { lock (_sync) return EntriesLocked().Count > 0; } }
@@ -84,7 +96,7 @@ namespace ZephyrPlayer
                 if (_broken) throw new InvalidOperationException("The saved pairings file could not be read, so nothing was changed.");
                 if (entries.Any(e => FixedTime(e.Token, token))) return;
                 var next = entries.Select(e => e with { }).ToList();
-                next.Add(new Entry(token, string.IsNullOrWhiteSpace(name) ? "My phone" : name.Trim()));
+                next.Add(new Entry(token, string.IsNullOrWhiteSpace(name) ? "My phone" : name.Trim(), DateTime.UtcNow));
                 PersistLocked(next);
                 _cache = next;
             }
@@ -118,7 +130,7 @@ namespace ZephyrPlayer
             try
             {
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-                var stored = entries.Select(e => new StoredEntry(e.Token, e.Name)).ToArray();
+                var stored = entries.Select(e => new StoredEntry(e.Token, e.Name, e.PairedAt)).ToArray();
                 var tmp = _path + ".tmp";
                 File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(stored));
                 if (File.Exists(_path)) File.Replace(tmp, _path, null);
@@ -135,7 +147,7 @@ namespace ZephyrPlayer
 
         // ---------- file shape (old string[] + new entry[] both read) ----------
 
-        private sealed record StoredEntry(string token, string? name);
+        private sealed record StoredEntry(string token, string? name, DateTime? pairedAt);
 
         private List<Entry> Read()
         {
@@ -159,7 +171,8 @@ namespace ZephyrPlayer
                     {
                         var t = el.TryGetProperty("token", out var tp) ? tp.GetString() : null;
                         var n = el.TryGetProperty("name", out var np) ? np.GetString() : null;
-                        if (!string.IsNullOrEmpty(t)) entries.Add(new Entry(t, string.IsNullOrWhiteSpace(n) ? "My phone" : n));
+                        DateTime? pairedAt = el.TryGetProperty("pairedAt", out var pp) && pp.ValueKind == System.Text.Json.JsonValueKind.String && pp.TryGetDateTime(out var pd) ? pd : null;
+                        if (!string.IsNullOrEmpty(t)) entries.Add(new Entry(t, string.IsNullOrWhiteSpace(n) ? "My phone" : n, pairedAt));
                     }
                 }
                 return entries;
