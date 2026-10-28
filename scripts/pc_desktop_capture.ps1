@@ -222,7 +222,7 @@ function Measure-Bar($path) {
             $isGold = [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40
             $isOrange = $r -gt 227 -and [math]::Abs($g - 149) -lt 28 -and $b -lt 40
             if ($x -lt $goldenBand -and ($isGold -or $isOrange)) { $golden++ }
-            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 120 -and $r -lt 235) { $run++; if ($run -gt $bestRun) { $bestRun = $run } } else { $run = 0 }
+            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 65 -and $r -lt 235) { $run++; if ($run -gt $bestRun) { $bestRun = $run } } else { $run = 0 }
         }
     }
     return @($golden, [int](100.0 * $bestRun / $band.W))
