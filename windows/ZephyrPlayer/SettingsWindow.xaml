@@ -60,7 +60,7 @@
         </Style>
       </ResourceDictionary>
     </Window.Resources>
-    <Grid Margin="14,14">
+    <Grid Margin="14,14" Background="#1B1B1E">
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="178"/>
             <ColumnDefinition Width="*"/>
