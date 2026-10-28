@@ -68,7 +68,7 @@
       <Grid Grid.Column="0" Background="#1B1B1E" Margin="8,12,12,12">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Button Content="Movies" Style="{StaticResource GhostButton}" HorizontalContentAlignment="Left"/>
-        <Button Grid.Row="2" Style="{StaticResource GhostButton}" x:Name="PhoneCard" Content="Paired phones" Click="OnPairing" HorizontalContentAlignment="Left"/>
+        <Button Grid.Row="2" Style="{StaticResource GhostButton}" x:Name="PhoneCard" Click="OnPairing" HorizontalContentAlignment="Left"><StackPanel><TextBlock x:Name="PhoneCardName" Text="Pair a phone" Foreground="{StaticResource TextBrush}"/><StackPanel Orientation="Horizontal" Margin="0,4,0,0"><Ellipse x:Name="PhoneConnectedDot" Width="7" Height="7" Fill="#3FB950" Margin="0,0,6,0" Visibility="Collapsed"/><TextBlock x:Name="PhoneCardStatus" Text="Not paired" Foreground="{StaticResource MutedBrush}" FontSize="12"/></StackPanel></StackPanel></Button>
         <Button Grid.Row="3" Style="{StaticResource GhostButton}" Content="Settings" Click="OnSettings" HorizontalContentAlignment="Left"/>
       </Grid>
       <Grid Grid.Column="1" Background="#232328">
@@ -119,9 +119,10 @@
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <Button x:Name="BackButton" Grid.Column="0" Style="{StaticResource GhostButton}" Content="Back" FontSize="15" Click="OnBack" ToolTip="Back"/>
-                    <Button x:Name="UpButton" Grid.Column="1" Style="{StaticResource GhostButton}" Content="Up" FontSize="15" Click="OnUp" ToolTip="Up one folder" Margin="2,0,0,0"/>
+                    <Button x:Name="BackButton" Grid.Column="0" Style="{StaticResource GhostButton}" Click="OnBack" ToolTip="Back"><Path Data="M16,4 L8,12 L16,20 M8,12 H23" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="18" Height="18" Stretch="Uniform"/></Button>
+                    <Button x:Name="UpButton" Grid.Column="1" Style="{StaticResource GhostButton}" Click="OnUp" ToolTip="Up one folder" Margin="2,0,0,0"><Path Data="M4,16 L12,8 L20,16 M12,8 V23" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="18" Height="18" Stretch="Uniform"/></Button>
                     <Border Grid.Column="2" Background="{StaticResource CardBrush}" CornerRadius="10" Padding="8,4" Margin="10,0,0,0" VerticalAlignment="Center">
                         <StackPanel Orientation="Horizontal">
                             <Path Data="M3,4 H21 V16 H3 Z M8,20 H16 M12,16 V20" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="18" Height="18" Stretch="Uniform" Margin="0,0,10,0"/>
@@ -134,7 +135,7 @@
                         </StackPanel>
                     </Border>
                     <!-- Same 10px rounding as the address bar next to it (review nit 6). -->
-                    <Border Grid.Column="3" Width="220" Margin="10,0,0,0" VerticalAlignment="Center"
+                    <Button Grid.Column="3" Style="{StaticResource GhostButton}" ToolTip="Refresh" Click="OnRefresh"><Path Data="M20,8 A8,8 0 1 0 20,17 M20,8 H14 M20,8 V2" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="18" Height="18" Stretch="Uniform"/></Button><Border Grid.Column="4" Width="220" Margin="10,0,0,0" VerticalAlignment="Center"
                             Background="{StaticResource CardBrush}" CornerRadius="10">
                         <Grid>
                             <TextBox x:Name="SearchBox" Background="Transparent" Foreground="{StaticResource TextBrush}"
@@ -159,13 +160,16 @@
                                 <DataTemplate>
                                     <StackPanel Width="202" Margin="0,0,25,20">
                                         <Border Width="202" Height="126" Background="{StaticResource CardBrush}" CornerRadius="10" BorderBrush="#12FFFFFF" BorderThickness="1" Visibility="{Binding FolderVis}">
-                                          <Viewbox Width="140" Height="114"><Grid Width="140" Height="114">
+                                          <Grid><Viewbox Width="140" Height="114"><Grid Width="140" Height="114">
                                             <Image Source="{Binding Peek}" Width="122" Height="65" Margin="0,28,0,0" Stretch="UniformToFill"/>
                                             <Path Data="M7,105 V17 Q7,8 16,8 H49 Q55,8 59,14 L67,23 H124 Q133,23 133,31 V105 Q133,109 128,109 H12 Q7,109 7,105 Z M7,40 H133" Stroke="#FF9500" StrokeThickness="2.6" StrokeLineJoin="Round" Fill="{x:Null}"/>
-                                          </Grid></Viewbox>
+                                          </Grid></Viewbox><Border HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" Background="#FF9500" CornerRadius="8" Width="18" Height="18" Visibility="{Binding WatchedVis}"><Path Data="M4,9 L7,12 L14,5" Stroke="#1B1B1E" StrokeThickness="2" Margin="1"/></Border></Grid>
                                         </Border>
                                         <Border Width="202" Height="126" Background="#141417" CornerRadius="10" ClipToBounds="True" Visibility="{Binding FileVis}">
-                                          <Image Source="{Binding Thumb}" Stretch="UniformToFill"/>
+                                          <Grid><Image Source="{Binding Thumb}" Stretch="UniformToFill"/>
+                                            <Border Background="#D91B1B1E" CornerRadius="4" Padding="5,2" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="6,0,6,8" Visibility="{Binding DurationVis}"><TextBlock Text="{Binding Duration}" Foreground="#F5F5F7" FontSize="11"/></Border>
+                                            <ProgressBar Height="3" VerticalAlignment="Bottom" Minimum="0" Maximum="1" Value="{Binding Progress}" Foreground="#FF9500" Background="#34343D" BorderThickness="0" Visibility="{Binding ProgressVis}"/>
+                                          </Grid>
                                         </Border>
                                         <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="13"
                                                    TextAlignment="Left" TextWrapping="Wrap" MaxHeight="32" TextTrimming="CharacterEllipsis"

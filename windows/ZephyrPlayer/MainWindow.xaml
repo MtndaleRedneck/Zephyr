@@ -13,7 +13,7 @@
     <libvlc:VideoView x:Name="Video" Background="Black">
         <libvlc:VideoView.Content>
             <Grid x:Name="Overlay" Background="#01000000" MouseMove="OnMouseMove">
-                <Border x:Name="TopOverlay" VerticalAlignment="Top" Background="#551B1B1E" Padding="18,10"><DockPanel><Button Content="Back to Movies" Click="OnHome" Background="Transparent" Foreground="#F5F5F7" BorderThickness="0"/><TextBlock Text="Zephyr Player" Foreground="#F5F5F7" VerticalAlignment="Center" Margin="20,0,0,0"/></DockPanel></Border>
+                <Border x:Name="TopOverlay" VerticalAlignment="Top" Background="#551B1B1E" Padding="18,10"><DockPanel><Button x:Name="HomeButton" ToolTip="Back to Movies" Click="OnHome" Background="Transparent" Foreground="#F5F5F7" BorderThickness="0" Padding="8"><Path Data="M16,4 L8,12 L16,20 M8,12 H23" Stroke="#F5F5F7" StrokeThickness="1.6" Width="20" Height="20" Stretch="Uniform"/></Button><TextBlock Text="Zephyr Player" Foreground="#F5F5F7" VerticalAlignment="Center" Margin="14,0"/><TextBlock x:Name="MovieTitle" Foreground="#F5F5F7" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/></DockPanel></Border>
                 <Border x:Name="ControlBar" x:FieldModifier="public"
                         VerticalAlignment="Bottom" Margin="20"
                         Padding="22,14" CornerRadius="16"
@@ -113,7 +113,7 @@
                                 </Button>
                                 <Button x:Name="FullscreenButton" Padding="6" Click="OnFullscreen" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Fullscreen">
                                     <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
-                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8"/>
+                                        <Path x:Name="FullscreenGlyph" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8"/>
                                     </Canvas></Viewbox>
                                 </Button>
                             </StackPanel>

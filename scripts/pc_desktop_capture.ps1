@@ -613,6 +613,23 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Hea
 [ZWU32]::SetCursorPos(500, 350) | Out-Null   # window center: inside, over the video
 Start-Sleep -Seconds 5
 $szBar4 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-parked.png"
+# Close the real player to return Home, then start again through the phone route.
+[ZWU32]::PostMessage($hwBar, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
+Start-Sleep -Milliseconds 800
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') | Out-Null
+Start-Sleep -Seconds 2
+$hwRestart = Find-PlayerWindow $pBar.Id $hwHome
+if ($hwRestart -eq [System.IntPtr]::Zero) { throw "Home/replay did not restore player" }
+[ZWU32]::SetWindowPos($hwRestart, [System.IntPtr]::new(-1), 0, 0, $vs.Width, $vs.Height, 0) | Out-Null
+[ZWU32]::SetCursorPos(2, 2) | Out-Null
+Start-Sleep -Seconds 4
+$null = CaptureWindow $hwRestart "$env:RUNNER_TEMP/pc-replay-hidden.png"
+$restartHidden = Measure-Bar "$env:RUNNER_TEMP/pc-replay-hidden.png"
+WakeControls
+$null = CaptureWindow $hwRestart "$env:RUNNER_TEMP/pc-replay-shown.png"
+$restartShown = Measure-Bar "$env:RUNNER_TEMP/pc-replay-shown.png"
+if ($restartHidden[1] -ge 40 -or $restartShown[0] -lt 2 -or $restartShown[1] -lt 40) { throw "Mouse recovery failed after Home/replay" }
+"Home/replay mouse-only recovery passed" | Add-Content "$env:RUNNER_TEMP/pc-mouse-recovery.txt"
 [ZWU32]::SetCursorPos(5, 5) | Out-Null
 StopZephyr
 Write-Host "phone-start bar captures: $sz / $szBar2 / $szBar3 / $szBar4"

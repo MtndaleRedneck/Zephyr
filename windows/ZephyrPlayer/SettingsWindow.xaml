@@ -151,7 +151,7 @@
                             <ContentControl x:Name="PairingHost"/>
                             <TextBlock x:Name="PairStatusText" Foreground="{StaticResource TextBrush}" FontSize="13"/>
                             <Button x:Name="PairButton" Style="{StaticResource OrangeButton}" Content="Open pairing..." Click="OnPair" Margin="0,10,0,0" HorizontalAlignment="Left"/>
-                            <TextBlock Style="{StaticResource Small}" Margin="0,8,0,0" Text="The pairing screen shows a live code, this PC's address and your paired phones."/>
+                            <TextBlock x:Name="PairHelpText" Style="{StaticResource Small}" Margin="0,8,0,0" Text="The pairing screen shows a live code, this PC's address and your paired phones."/>
                         </StackPanel>
                     </Border>
 

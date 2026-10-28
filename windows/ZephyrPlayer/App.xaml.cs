@@ -143,7 +143,7 @@ namespace ZephyrPlayer
 
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
-            _player.HomeRequested += () => { player.Stop(); _player.Hide(); _home?.Show(); _home?.Activate(); };
+            _player.HomeRequested += () => { _player.SavePlaybackProgress(); player.Stop(); _player.Hide(); _home?.Show(); _home?.Activate(); };
             _player.SleepFired += () =>
             {
                 _player.Hide();
@@ -155,6 +155,7 @@ namespace ZephyrPlayer
                 // Player X never destroys the window: stop playback, hide it,
                 // and land back on Home, the app's resting screen.
                 ev.Cancel = true;
+                _player.SavePlaybackProgress();
                 player.Stop();
                 _player.Hide();
                 if (_home != null) { _home.Show(); _home.Activate(); }
@@ -373,6 +374,7 @@ namespace ZephyrPlayer
 
         private void QuitApp()
         {
+            _player?.SavePlaybackProgress();
             _reallyQuit = true;
             try { _player?.Close(); } catch { }
             try { _home?.Close(); } catch { }

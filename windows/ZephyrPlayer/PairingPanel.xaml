@@ -59,8 +59,8 @@
                 </Grid>
                 <StackPanel x:Name="CodePanel" Visibility="Collapsed" Margin="0,10,0,0">
                     <TextBlock Text="Enter this code in the Zephyr app on your phone. Works once, for 10 minutes." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <TextBlock x:Name="PairCodeText" Text="" Foreground="{StaticResource OrangeBrush}"
-                               FontSize="34" FontWeight="Bold" HorizontalAlignment="Center"/>
+                    <TextBlock Text="Pairing code:" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="PairCodeText" Text="" Foreground="{StaticResource OrangeBrush}"
+                               FontSize="34" FontFamily="Consolas" FontWeight="Bold" HorizontalAlignment="Center"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
                         <TextBlock x:Name="ExpiresText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
                         <TextBlock Text="  ·  " Foreground="{StaticResource MutedBrush}" FontSize="12"/>

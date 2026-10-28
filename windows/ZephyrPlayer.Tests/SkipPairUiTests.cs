@@ -95,7 +95,15 @@ namespace ZephyrPlayer.Tests
                 var ar = a.TransformToAncestor(pause).TransformBounds(new Rect(0,0,a.ActualWidth,a.ActualHeight));
                 var br = b.TransformToAncestor(pause).TransformBounds(new Rect(0,0,b.ActualWidth,b.ActualHeight));
                 Assert.True(br.Left - ar.Right >= 6, "Pause bars merge");
+                var fullscreenGlyph = (System.Windows.Shapes.Path)window.FindName("FullscreenGlyph")!;
+                var enterShape = fullscreenGlyph.Data.ToString();
                 window.SetFullscreen(true);
+                Assert.NotEqual(enterShape, fullscreenGlyph.Data.ToString());
+                Assert.Contains("Exit", window.FindName("FullscreenButton") is Button fb ? fb.ToolTip.ToString() : "");
+                window.SetMuteTied(true);
+                var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
+                window.SetMuteTied(false);
+                Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
                 Assert.Equal(1000, window.ControlBar.MaxWidth);
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;
