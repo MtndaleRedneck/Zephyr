@@ -18,8 +18,10 @@ namespace ZephyrPlayer.Tests
     /// </summary>
     public class HomeWindowRenderTests
     {
-        [Fact]
-        public void HomeWindow_RendersOffscreen_WithLibrary()
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void HomeWindow_RendersOffscreen_WithLibrary(bool durations)
         {
             string? error = null;
             var t = new Thread(() =>
@@ -36,7 +38,7 @@ namespace ZephyrPlayer.Tests
                     settings.LibraryFolder = lib;
                     var store = new PairedStore(Path.Combine(dir, "paired.json"));
 
-                    var w = new HomeWindow(settings, store, _ => { }, () => { });
+                    var w = new HomeWindow(settings, store, _ => { }, () => { }, loadDurations: durations);
                     w.Show(); w.Hide(); // drives Loaded/Refresh like startup does
 
                     var emptyState = (UIElement)w.FindName("EmptyState")!;
@@ -58,7 +60,7 @@ namespace ZephyrPlayer.Tests
 
                     // Empty-folder state flips correctly when nothing is set.
                     var settings2 = new PlayerSettings(Path.Combine(dir, "settings2.json"));
-                    var w2 = new HomeWindow(settings2, store, _ => { }, () => { });
+                    var w2 = new HomeWindow(settings2, store, _ => { }, () => { }, loadDurations: durations);
                     w2.Show(); w2.Hide();
                     Assert.Equal(Visibility.Visible, ((UIElement)w2.FindName("EmptyState")!).Visibility);
                     w2.Close();
