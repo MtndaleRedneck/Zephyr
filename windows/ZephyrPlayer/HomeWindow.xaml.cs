@@ -312,7 +312,7 @@ namespace ZephyrPlayer
 
         private void LoadDurations(string root, List<Entry> entries, int generation)
         {
-            DurationWork = Task.Run(async () =>
+            DurationWork = Task.Run(() =>
             {
                 try
                 {
@@ -326,7 +326,9 @@ namespace ZephyrPlayer
                         try
                         {
                             using var media = new LibVLCSharp.Shared.Media(vlc, path, LibVLCSharp.Shared.FromType.FromPath);
-                            await media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500);
+                            // Keep native release on this worker, never on LibVLC's ParsedChanged
+                            // callback thread (Parse's completion can run continuations inline).
+                            media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500).GetAwaiter().GetResult();
                             var duration = media.Duration;
                             if (duration <= 0) continue;
                             _history.Save(path, 0, duration, metadataOnly: true);
