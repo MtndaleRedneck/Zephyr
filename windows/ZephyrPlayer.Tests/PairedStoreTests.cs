@@ -17,6 +17,61 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void LockedStore_200BogusBearerChecksDoNotSleepOrRereadPerRequest()
+        {
+            File.WriteAllText(FilePath,"[\"legacy\"]");var store=new PairedStore(FilePath);
+            using var locked=new FileStream(FilePath,FileMode.Open,FileAccess.ReadWrite,FileShare.None);
+            var watch=System.Diagnostics.Stopwatch.StartNew();
+            for(var i=0;i<200;i++)Assert.False(store.ValidateAndTouch("bogus-"+i));
+            Assert.True(watch.Elapsed<TimeSpan.FromSeconds(1),"locked store blocked request admission");Assert.True(store.IsBroken);
+        }
+        [Fact]
+        public void TransientLockedRead_DoesNotOfferDestructiveResetAndRecovers()
+        {
+            File.WriteAllText(FilePath,"[\"legacy\"]");var store=new PairedStore(FilePath);
+            using(var locked=new FileStream(FilePath,FileMode.Open,FileAccess.ReadWrite,FileShare.None)) {
+                Assert.False(store.HasAny);Assert.True(store.IsBroken);Assert.False(store.CanResetUnreadable);
+                Assert.Throws<InvalidOperationException>(()=>store.ResetUnreadablePairings());
+            }
+            System.Threading.Thread.Sleep(3100);Assert.True(store.IsPaired("legacy"));Assert.False(store.IsBroken);
+        }
+        [Fact]
+        public void ValidLegacyRead_MigrationWriteFailureRetainsAuthentication()
+        {
+            var original="[\"legacy-token\"]";File.WriteAllText(FilePath,original);Directory.CreateDirectory(FilePath+".tmp");
+            var store=new PairedStore(FilePath);Assert.True(store.IsPaired("legacy-token"));Assert.False(store.IsBroken);Assert.Equal(original,File.ReadAllText(FilePath));
+            Directory.Delete(FilePath+".tmp");store.Add("new-token");Assert.True(new PairedStore(FilePath).IsPaired("legacy-token"));Assert.Contains("dpapi:",File.ReadAllText(FilePath));
+        }
+        [Fact]
+        public void ExplicitBrokenStoreReset_QuarantinesOriginalThenAllowsRePair()
+        {
+            var original="[{\"token\":\"dpapi:broken\",\"name\":\"Phone\"}]";File.WriteAllText(FilePath,original);var store=new PairedStore(FilePath);Assert.False(store.HasAny);Assert.True(store.IsBroken);
+            var quarantined=store.ResetUnreadablePairings();Assert.Equal(original,File.ReadAllText(quarantined));Assert.False(store.IsBroken);Assert.Empty(store.Entries());store.Add("repaired","Phone");Assert.True(store.IsPaired("repaired"));
+            Assert.Throws<InvalidOperationException>(()=>store.ResetUnreadablePairings());
+        }
+
+        [Fact]
+        public void SavedToken_IsProtected_AndRoundTrips()
+        {
+            var store = new PairedStore(FilePath);
+            store.Add("private-pairing-token", "Phone");
+            var stored = File.ReadAllText(FilePath);
+            Assert.DoesNotContain("private-pairing-token", stored);
+            Assert.Contains("dpapi:", stored);
+            Assert.True(new PairedStore(FilePath).IsPaired("private-pairing-token"));
+        }
+        [Fact]
+        public void UnreadableProtectedToken_FailsClosed_WithoutRewrite()
+        {
+            var json = "[{\"token\":\"dpapi:invalid\",\"name\":\"Phone\"}]";
+            File.WriteAllText(FilePath, json);
+            var store = new PairedStore(FilePath);
+            Assert.False(store.HasAny);
+            Assert.True(store.IsBroken);
+            Assert.Throws<InvalidOperationException>(() => store.Add("new", "Phone"));
+            Assert.Equal(json, File.ReadAllText(FilePath));
+        }
+        [Fact]
         public void Connected_Requires_Recent_Authenticated_Activity()
         {
             var store = new PairedStore(FilePath);
@@ -93,10 +148,11 @@ namespace ZephyrPlayer.Tests
             Assert.True(store.IsPaired("tok-a"));
             Assert.True(store.IsPaired("tok-b"));
             Assert.False(store.IsPaired("tok-c"));
-            // Names default for the Pairing screen; reading never rewrites the file.
+            // Names default; successful legacy reads migrate tokens atomically.
             Assert.Equal(new[] { "My phone", "My phone" },
                 store.Entries().ConvertAll(e => e.Name).ToArray());
-            Assert.Equal("[\"tok-a\",\"tok-b\"]", File.ReadAllText(FilePath));
+            Assert.DoesNotContain("tok-a", File.ReadAllText(FilePath));
+            Assert.True(new PairedStore(FilePath).IsPaired("tok-a"));
         }
 
         [Fact]

@@ -293,9 +293,13 @@ if (-not $ffmpeg) {
 }
 if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
+$streamFixture = Join-Path $env:RUNNER_TEMP "s/tok"
+New-Item -ItemType Directory -Path $streamFixture -Force | Out-Null
 # Long enough for every leg of the bar proof (a 30s clip ENDED mid-proof: the last
 # phonestart poll frame already showed the counter at 29s - round-7 review C).
 & $ffmpeg -y -f lavfi -i "testsrc=duration=600:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+
+Copy-Item $mp4 (Join-Path $streamFixture "1") -Force
 
 # Populated-grid evidence: distinct REAL bitmaps per tile, fed through the app's
 # ZEPHYR_THUMB_FIXTURE_DIR evidence seam. Whether THIS runner's shell can produce
@@ -507,7 +511,7 @@ if (-not $ctrlUp) { throw "control server did not come up for the phone-start ba
 # /play is the route the real phone uses to START playback (ZephyrClient.play): it
 # hides Home and SHOWS the player window. /control/play only drives the current
 # session (no Show) - using it here proved nothing about the phone-start flow.
-$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
+$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') -SkipHttpErrorCheck
 if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
 # Find the player window BY TITLE: Home and MainWindow are both titled "Zephyr
 # Player", the pairing window has its own title, and any transient dialog (which
@@ -637,7 +641,7 @@ $szBar4 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-parked.png"
 # Close the real player to return Home, then start again through the phone route.
 [ZWU32]::PostMessage($hwBar, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
 Start-Sleep -Milliseconds 800
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') | Out-Null
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') | Out-Null
 Start-Sleep -Seconds 2
 $hwRestart = Find-PlayerWindow $pBar.Id $hwHome
 if ($hwRestart -eq [System.IntPtr]::Zero) { throw "Home/replay did not restore player" }
@@ -671,7 +675,7 @@ $vidOkAuto   = ($vidAutoPx   -ge 3000)
 $vidOkParked = ($vidParkedPx -ge 3000)
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
-$p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
+$p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/s/tok/1" -PassThru
 $hw3 = Wait-MainWindow $p3 15
 Close-PairingWindow $p3
 FitWindow $hw3
@@ -780,7 +784,7 @@ if ([ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$r, 16) -eq 0) {
 StopZephyr
 
 # 4) Real video, real mouse event, controls shown - FULLSCREEN.
-$p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4","--fullscreen" -PassThru
+$p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/s/tok/1","--fullscreen" -PassThru
 $hw4 = Wait-MainWindow $p4 15
 Close-PairingWindow $p4
 # Fullscreen transition and floating VideoView overlay can lag HWND creation.

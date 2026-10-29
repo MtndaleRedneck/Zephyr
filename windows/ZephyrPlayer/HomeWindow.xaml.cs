@@ -325,10 +325,12 @@ namespace ZephyrPlayer
                         if (_history.Get(path) != null) continue;
                         try
                         {
-                            using var media = new LibVLCSharp.Shared.Media(vlc, path, LibVLCSharp.Shared.FromType.FromPath);
+                            using var safe = new SafeMediaSource(vlc, new Uri(path).AbsoluteUri);
+                            var media = safe.Media;
                             // Keep native release on this worker, never on LibVLC's ParsedChanged
                             // callback thread (Parse's completion can run continuations inline).
-                            media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500).GetAwaiter().GetResult();
+                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500).GetAwaiter().GetResult(); }
+                            finally { media.ParseStop(); }
                             var duration = media.Duration;
                             if (duration <= 0) continue;
                             _history.Save(path, 0, duration, metadataOnly: true);

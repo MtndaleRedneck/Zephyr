@@ -475,6 +475,7 @@ internal static class Program
 
         using var http = new HttpServer();
         using var discovery = new DiscoveryResponder();
+        SelfUpdate.CleanOldDownloads();
         CheckForUpdate();
         try { http.Start(); discovery.Start(); }
         catch (Exception ex) {

@@ -13,7 +13,7 @@ using LibVLCSharp.Shared;
 namespace ZephyrPlayer
 {
     /// <summary>Production control: every player touch on the window's dispatcher.</summary>
-    public sealed class MainWindowPlaybackControl : IPlaybackControl
+    public sealed class MainWindowPlaybackControl : IPlaybackControl, IAsyncPlaybackControl
     {
         private readonly MainWindow _window;
         private readonly MediaPlayer _player;
@@ -40,6 +40,9 @@ namespace ZephyrPlayer
                 _showForPlayback?.Invoke();
                 _window.PlayFromUrl(url, positionSeconds, subtitles);
             });
+        public Task PlayAsync(string url,long? positionSeconds,string[] subtitles) => _window.Dispatcher.InvokeAsync(() => {
+            _showForPlayback?.Invoke();return _window.PlayFromUrlAsync(url,positionSeconds,subtitles);
+        }).Task.Unwrap();
         public void Pause() => OnUi(() => { _player.SetPause(true); _window.ShowBarOnce(); });
         public void Resume() => OnUi(() => { _player.SetPause(false); _window.ShowBarOnce(); });
         public void Seek(long positionSeconds) => OnUi(() => { if (_player.Length > 0) _player.Time = positionSeconds * 1000; _window.ShowBarOnce(); });
