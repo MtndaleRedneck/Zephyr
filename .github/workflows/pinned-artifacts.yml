@@ -49,7 +49,8 @@ jobs:
         shell: pwsh
         run: |
           $iscc='C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
-          # Actual successful compile banner below is authoritative, not0.0.0.0 PE metadata.
+          if((Get-FileHash $iscc -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-iscc-sha256.txt").Trim()){throw 'ISCC binary drifted after toolchain step'}
+          if((Get-FileHash (Join-Path (Split-Path $iscc) 'ISCmplr.dll') -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-compiler-engine-sha256.txt").Trim()){throw 'Compiler engine drifted after toolchain step'}
           $v=(Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath '//Version').Node.InnerText
           & $iscc "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/pinned-artifacts/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw 'Player ISCC failed' }
