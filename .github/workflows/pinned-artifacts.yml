@@ -1,0 +1,68 @@
+name: Frozen candidate pinned installer artifacts
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  artifacts:
+    runs-on: windows-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 490408d3922a2e15a0fe7a878a498a27d071cf57
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+      - name: Verify native toolchain, not just requested package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/pinned-artifacts" | Out-Null
+          if ((git -C harness rev-parse HEAD) -ne '${{ github.sha }}') { throw 'Harness identity mismatch' }
+          "harness=${{ github.sha }} candidate=490408d3922a2e15a0fe7a878a498a27d071cf57" | Set-Content "$env:RUNNER_TEMP/pinned-artifacts/identity.txt"
+          ./harness/scripts/pinned_installer_toolchain.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/pinned-artifacts/toolchain.txt"
+      - name: Frozen clean publishes and exact native inventory
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          git diff --exit-code
+          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+          if ($LASTEXITCODE -ne 0) { throw 'Player publish failed' }
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
+          if ($LASTEXITCODE -ne 0) { throw 'Helper publish failed' }
+          ./scripts/verify_native_inventory.ps1 -Published windows/out -Version 3.0.24 *>&1 | Tee-Object "$env:RUNNER_TEMP/pinned-artifacts/native-inventory.txt"
+          $latin=[Text.Encoding]::GetEncoding(28591)
+          foreach ($spec in @(@('windows/out/ZephyrPlayer.exe',@('ZEPHYR_TRAY_DIAG','dialog-shot','ci-capture-token','ZEPHYR_CI_CAPTURE')),@('windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe',@('firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot')))) {
+            $bytes=$latin.GetString([IO.File]::ReadAllBytes($spec[0]))
+            foreach($needle in $spec[1]) { foreach($enc in [Text.Encoding]::Unicode,[Text.Encoding]::ASCII) { if($bytes.Contains($latin.GetString($enc.GetBytes($needle)))) { throw "Release seam present: $needle" } } }
+          }
+          'Clean-release seam absence PASS for both published executables' | Set-Content "$env:RUNNER_TEMP/pinned-artifacts/release-seams.txt"
+      - name: Compile both installers with verified ISCC
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          $iscc='C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
+          if ((Get-Item $iscc).VersionInfo.ProductVersion -notmatch '^6\.6\.1(?:\D|$)') { throw 'ISCC changed before compile' }
+          $v=(Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath '//Version').Node.InnerText
+          & $iscc "/DMyAppVersion=$v" windows/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Player ISCC failed' }
+          $v=(Select-Xml -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -XPath '//Version').Node.InnerText -replace '\.0$',''
+          & $iscc "/DMyAppVersion=$v" '/DMySourceDir=release-out' windows/ZephyrVlcRemote/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw 'Helper ISCC failed' }
+          Get-ChildItem windows/Output/*.exe,windows/ZephyrVlcRemote/Output/*.exe | ForEach-Object { "artifact=$($_.Name) SHA256=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" } | Set-Content "$env:RUNNER_TEMP/pinned-artifacts/SHA256SUMS"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: frozen-pinned-installer-artifacts
+          path: |
+            candidate/windows/Output/*.exe
+            candidate/windows/ZephyrVlcRemote/Output/*.exe
+            ${{ runner.temp }}/pinned-artifacts/*
+          if-no-files-found: error
