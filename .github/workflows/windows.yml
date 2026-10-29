@@ -53,10 +53,11 @@ jobs:
       # ZEPHYR_VLC_REMOTE_PAIR_CODE before any runtime test runs.
       - name: Build the installer from the clean release build
         run: |
-          choco install innosetup --version=6.6.1 --no-progress -y
+          ./scripts/pinned_installer_toolchain.ps1
           $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/helper-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if ((Get-Content "$env:RUNNER_TEMP/*-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
 
       - name: Upload helper installer artifact
         # The E2E legs install and pair-test this exact installer; keep it as a
@@ -229,10 +230,11 @@ jobs:
         timeout-minutes: 8
         shell: pwsh
         run: |
-          choco install innosetup --version=6.6.1 --no-progress -y
+          ./scripts/pinned_installer_toolchain.ps1
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if ((Get-Content "$env:RUNNER_TEMP/*-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
       - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
         if: always()
         timeout-minutes: 8
