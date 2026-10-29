@@ -55,10 +55,10 @@ namespace ZephyrPlayer.Tests
         {
             Sta((settings, w) =>
             {
-                Assert.Equal("10", w.FindName("SkipBackLabel") is System.Windows.Controls.TextBlock b ? b.Text : "");
-                Assert.Equal("10", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
-                Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                Assert.Equal("10s", w.FindName("SkipBackLabel") is System.Windows.Controls.TextBlock b ? b.Text : "");
+                Assert.Equal("10s", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
+                Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 // Speed + sleep hidden by default.
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
                 Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
@@ -85,8 +85,8 @@ namespace ZephyrPlayer.Tests
                 // jumps AHEAD of the Normal-priority ApplyBarStyle callbacks; pumping at
                 // SystemIdle waits until they have all run.
                 w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle);
-                Assert.Equal("10", ((System.Windows.Controls.TextBlock)w.FindName("SkipBackLabel")!).Text);
-                Assert.Equal("10", ((System.Windows.Controls.TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                Assert.Equal("10s", ((System.Windows.Controls.TextBlock)w.FindName("SkipBackLabel")!).Text);
+                Assert.Equal("10s", ((System.Windows.Controls.TextBlock)w.FindName("SkipForwardLabel")!).Text);
                 Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
                 // Settled units: 60 reads "1m", never raw seconds.
                 Assert.Equal("1m", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);

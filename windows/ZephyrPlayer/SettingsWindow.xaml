@@ -128,6 +128,7 @@
                             <WrapPanel x:Name="PrimarySkipPanel"/>
                             <TextBlock Text="Secondary skip buttons" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
                             <WrapPanel x:Name="SecondarySkipPanel"/>
+                            <CheckBox x:Name="FlashToggle" Content="Button flash" Margin="0,10,0,0" Click="OnFlashToggle"/>
                         </StackPanel>
                     </Border>
 

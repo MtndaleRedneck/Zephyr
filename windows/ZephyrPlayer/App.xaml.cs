@@ -143,7 +143,7 @@ namespace ZephyrPlayer
 
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
-            _player.HomeRequested += () => { _player.SavePlaybackProgress(); player.Stop(); _player.Hide(); _home?.Show(); _home?.Activate(); };
+            _player.HomeRequested += () => { _player.SavePlaybackProgress(); _player.StopPlaybackSource(); _player.Hide(); _home?.Show(); _home?.Activate(); };
             _player.SleepFired += () =>
             {
                 _player.Hide();
@@ -156,7 +156,7 @@ namespace ZephyrPlayer
                 // and land back on Home, the app's resting screen.
                 ev.Cancel = true;
                 _player.SavePlaybackProgress();
-                player.Stop();
+                _player.StopPlaybackSource();
                 _player.Hide();
                 if (_home != null) { _home.Show(); _home.Activate(); }
             };
@@ -184,16 +184,18 @@ namespace ZephyrPlayer
             // The one shell handoff for ANY playback start: Home hides, the player
             // window shows. /play and /control/play both go through it (protocol.md
             // gives them the same payload - starting a URL must always be visible).
-            void ShowPlayerAndPlay(string url, long? pos, string[] subs)
+            SelfUpdate.CleanOldDownloads();
+            SafeMediaSource.CleanOldSubtitles();
+            System.Threading.Tasks.Task ShowPlayerAndPlay(string url, long? pos, string[] subs)
             {
                 EnsurePlayer();
                 _home?.Hide();
                 _player!.Show();
-                _player!.PlayFromUrl(url, pos, subs);
+                return _player!.PlayFromUrlAsync(url, pos, subs);
             }
             _server = new PlaybackServer(
                 onPlay: (url, pos, subs) =>
-                    Current.Dispatcher.InvokeAsync(() => ShowPlayerAndPlay(url, pos, subs)).Task,
+                    Current.Dispatcher.InvokeAsync(() => ShowPlayerAndPlay(url, pos, subs)).Task.Unwrap(),
                 // CI-only capture seam (round-5 P-1): the capture script acts as the
                 // phone over REAL HTTP for the phone-start bar proof. The fixed token
                 // is COMPILED OUT unless the CI_CAPTURE_HOOK constant is defined -
@@ -218,7 +220,7 @@ namespace ZephyrPlayer
                     {
                         outcome = gate.TryPair(code, store.Count, () =>
                         {
-                            var t = Guid.NewGuid().ToString("N");
+                            var t = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
                             // The name typed on the Pairing screen is attached to the
                             // token the moment that code pairs.
                             store.Add(t, _pendingPhoneName ?? "My phone");

@@ -61,12 +61,68 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public async Task BrowserOriginAndUnboundHost_AreRejected()
+        {
+            var (server,_) = Start(out _);
+            using(server) using(var client=Client(null))
+            {
+                var origin = new HttpRequestMessage(HttpMethod.Post,"/pair"){Content=new StringContent("{}")};origin.Headers.Add("Origin","http://evil.invalid");
+                Assert.Equal(HttpStatusCode.Forbidden,(await client.SendAsync(origin)).StatusCode);
+                var host = new HttpRequestMessage(HttpMethod.Post,"/pair"){Content=new StringContent("{}")};host.Headers.Host="evil.invalid";
+                Assert.Equal(HttpStatusCode.Forbidden,(await client.SendAsync(host)).StatusCode);
+            }
+        }
+        [Fact]
+        public async Task FourStalledPairBodies_DoNotStarveAuthenticatedPhone()
+        {
+            var (server,_) = Start(out _);
+            using(server)
+            {
+                var sockets=new System.Collections.Generic.List<System.Net.Sockets.TcpClient>();
+                try {
+                    for(int i=0;i<4;i++) {var socket=new System.Net.Sockets.TcpClient();sockets.Add(socket);await socket.ConnectAsync("127.0.0.1",TestPort);await socket.GetStream().WriteAsync(Encoding.ASCII.GetBytes("POST /pair HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{"));}
+                    await Task.Delay(150);
+                    using var client=Client(GoodToken);
+                    Assert.Equal(HttpStatusCode.NotFound,(await client.GetAsync("/unknown")).StatusCode);
+                } finally { foreach(var socket in sockets)socket.Dispose(); }
+            }
+        }
+        [Fact]
+        public async Task Pair_StalledBody_HasDeadline()
+        {
+            var (server, _) = Start(out _);
+            using (server)
+            using (var socket = new System.Net.Sockets.TcpClient())
+            {
+                await socket.ConnectAsync("127.0.0.1", TestPort);
+                var stream = socket.GetStream();
+                await stream.WriteAsync(Encoding.ASCII.GetBytes("POST /pair HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{"));
+                using var deadline = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15));
+                var data = new byte[4096];
+                var n = await stream.ReadAsync(data.AsMemory(), deadline.Token);
+                Assert.True(n == 0 || Encoding.ASCII.GetString(data, 0, n).Contains("408"), "stalled request must time out or disconnect");
+            }
+        }
+        [Fact]
+        public async Task Pair_ChunkedOversize_IsRefusedBeforePairing()
+        {
+            var (server, _) = Start(out _);
+            using (server)
+            {
+                var content = new StringContent(new string('x', 70000));
+                var req = new HttpRequestMessage(HttpMethod.Post, "/pair") { Content = content };
+                req.Headers.TransferEncodingChunked = true;
+                using var client = Client(null);
+                Assert.Equal(HttpStatusCode.RequestEntityTooLarge, (await client.SendAsync(req)).StatusCode);
+            }
+        }
+        [Fact]
         public async Task NoToken_401()
         {
             var (server, _) = Start(out _);
             using (server)
             {
-                var resp = await Client(null).PostAsync("/play", new StringContent("{\"url\":\"http://x/1\"}", Encoding.UTF8, "application/json"));
+                var resp = await Client(null).PostAsync("/play", new StringContent("{\"url\":\"http://127.0.0.1:8080/s/tok/1\"}", Encoding.UTF8, "application/json"));
                 Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
             }
         }
@@ -77,7 +133,7 @@ namespace ZephyrPlayer.Tests
             var (server, _) = Start(out _);
             using (server)
             {
-                var resp = await Client("wrong").PostAsync("/play", new StringContent("{\"url\":\"http://x/1\"}", Encoding.UTF8, "application/json"));
+                var resp = await Client("wrong").PostAsync("/play", new StringContent("{\"url\":\"http://127.0.0.1:8080/s/tok/1\"}", Encoding.UTF8, "application/json"));
                 Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
             }
         }
@@ -88,14 +144,14 @@ namespace ZephyrPlayer.Tests
             var (server, _) = Start(out var received);
             using (server)
             {
-                var body = "{\"url\":\"http://10.0.0.5:8080/s/tok/1\",\"position\":95,\"subtitles\":[\"http://10.0.0.5:8080/s/tok/1/sub/0\"]}";
+                var body = "{\"url\":\"http://127.0.0.1:8080/s/tok/1\",\"position\":95,\"subtitles\":[\"http://127.0.0.1:8080/s/tok/1/sub/0\"]}";
                 var resp = await Client(GoodToken).PostAsync("/play", new StringContent(body, Encoding.UTF8, "application/json"));
                 Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
                 var done = await Task.WhenAny(received.Task, Task.Delay(5000));
                 Assert.Same(received.Task, done);
-                Assert.Equal("http://10.0.0.5:8080/s/tok/1", received.Task.Result.url);
+                Assert.Equal("http://127.0.0.1:8080/s/tok/1", received.Task.Result.url);
                 Assert.Equal(95, received.Task.Result.pos);
-                Assert.Equal(new[] { "http://10.0.0.5:8080/s/tok/1/sub/0" }, received.Task.Result.subs);
+                Assert.Equal(new[] { "http://127.0.0.1:8080/s/tok/1/sub/0" }, received.Task.Result.subs);
             }
         }
 
@@ -120,7 +176,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
                 Assert.Contains(MintedToken, await resp.Content.ReadAsStringAsync());
                 // The minted token must open /play immediately (no second step).
-                var play = await Client(MintedToken).PostAsync("/play", new StringContent("{\"url\":\"http://x/1\"}", Encoding.UTF8, "application/json"));
+                var play = await Client(MintedToken).PostAsync("/play", new StringContent("{\"url\":\"http://127.0.0.1:8080/s/tok/1\"}", Encoding.UTF8, "application/json"));
                 Assert.Equal(HttpStatusCode.OK, play.StatusCode);
                 // One-shot: the same code must not mint a second token.
                 var again = await Pair(Client(null), code!);

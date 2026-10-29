@@ -146,10 +146,19 @@ namespace ZephyrPlayer.Tests
                         if (previous.HasValue) Assert.True(previous.Value.Right <= rect.Left + 0.5, name + " overlaps its left neighbor");
                         previous = rect;
                     }
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
-                    Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
-                    Assert.Equal("30", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("TotalText")!).Visibility);
+                    foreach (var side in new[] { "Back", "Forward" })
+                    {
+                        var ring = (FrameworkElement)((System.Windows.Shapes.Path)w.FindName("Skip" + side + "Ring")!).Parent;
+                        var text = (TextBlock)w.FindName("Skip" + side + "Label")!;
+                        var rc = ring.TransformToAncestor(bar).Transform(new Point(ring.ActualWidth/2, ring.ActualHeight/2));
+                        var tc = text.TransformToAncestor(bar).Transform(new Point(text.ActualWidth/2, text.ActualHeight/2));
+                        Assert.True(Math.Abs(rc.X-tc.X)<0.5 && Math.Abs(rc.Y-tc.Y)<0.5, "Primary label not centered within ring");
+                    }
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                    Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
+                    Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 }
                 finally { w.Close(); }
             });

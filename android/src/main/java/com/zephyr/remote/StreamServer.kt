@@ -35,6 +35,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private val entries = LinkedHashMap<String, Entry>()
     private var socket: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
+    private val permits = java.util.concurrent.Semaphore(24)
+    private val mediaPermits = java.util.concurrent.Semaphore(8)
+    private val perPeer = java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
+    private val clients = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
     @Volatile private var running = false
 
     val baseUrl: String get() = "http://${wifiAddr.hostAddress}:${socket?.localPort ?: port}/s/$token"
@@ -52,20 +56,35 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         pool.execute {
             while (running) {
                 val client = runCatching { srv.accept() }.getOrNull() ?: break
+                val peer = client.inetAddress.hostAddress.orEmpty()
+                var count = 0
+                perPeer.compute(peer) { _, current -> (current ?: java.util.concurrent.atomic.AtomicInteger(0)).also { count = it.incrementAndGet() } }
+                if (count > 4) { releasePeer(peer); runCatching { client.close() }; continue }
+                if (!permits.tryAcquire()) { releasePeer(peer); runCatching { client.close() }; continue }
                 // A stalled client must not hold a worker forever (teardown C12).
                 runCatching { client.soTimeout = 60_000 }
+                clients.add(client)
                 openStreams.incrementAndGet()
-                pool.execute {
-                    try { runCatching { handle(client) } }
-                    finally { openStreams.decrementAndGet(); runCatching { client.close() } }
+                try {
+                    pool.execute {
+                        try { runCatching { handle(client) } }
+                        finally { clients.remove(client); openStreams.decrementAndGet(); releasePeer(peer); permits.release(); runCatching { client.close() } }
+                    }
+                } catch (e: java.util.concurrent.RejectedExecutionException) {
+                    clients.remove(client); openStreams.decrementAndGet(); releasePeer(peer); permits.release(); runCatching { client.close() }
                 }
             }
         }
     }
 
+    private fun releasePeer(peer: String) {
+        perPeer.computeIfPresent(peer) { _, count -> if (count.decrementAndGet() == 0) null else count }
+    }
+
     fun stop() {
         running = false
         runCatching { socket?.close() }
+        clients.forEach { runCatching { it.close() } }
         pool.shutdownNow()
     }
 
@@ -109,12 +128,29 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
 
     private fun handle(client: Socket) {
         val input = client.getInputStream().bufferedReader()
-        val requestLine = input.readLine() ?: return
+        val deadline = android.os.SystemClock.elapsedRealtime() + 10_000
+        fun line(): String? {
+            val b = StringBuilder()
+            while (b.length < 8192) {
+                val left = deadline - android.os.SystemClock.elapsedRealtime()
+                if (left <= 0) throw java.net.SocketTimeoutException()
+                client.soTimeout = minOf(left, 10_000L).toInt()
+                val c = input.read(); if (c < 0) return null
+                if (c == 10) return b.toString().trimEnd('\r')
+                b.append(c.toChar())
+            }
+            throw java.io.IOException("header line too long")
+        }
+        val requestLine = line() ?: return
         if (!validRequestLine(requestLine)) return
         val parts = requestLine.split(" ")
         var range: LongRange? = null
+        var headerBytes = requestLine.length
+        var headerCount = 0
         while (true) {
-            val line = input.readLine() ?: return
+            val line = line() ?: return
+            headerBytes += line.length
+            if (++headerCount > 64 || headerBytes > 32768) return
             if (line.isEmpty()) break
             if (line.startsWith("Range:", ignoreCase = true)) {
                 // bytes=a-b | bytes=a- | bytes=-b (suffix not supported -> ignore)
@@ -134,7 +170,9 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 ?: return reply(client, 404, ByteArray(0), "text/plain")
             else -> return reply(client, 404, ByteArray(0), "text/plain")
         }
-        serve(client, uri, range)
+        if (!mediaPermits.tryAcquire()) return reply(client, 503, ByteArray(0), "text/plain")
+        try { client.soTimeout = 60_000; serve(client, uri, range) }
+        finally { mediaPermits.release() }
     }
 
     /** Serve the document, honoring Range. Falls back to a cached copy when the

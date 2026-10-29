@@ -95,6 +95,7 @@
             </StackPanel>
         </Border>
 
+        <Button x:Name="ResetPairingsButton" Content="Reset unreadable pairings" Click="OnResetPairings" Visibility="Collapsed" Margin="0,0,0,12" HorizontalAlignment="Left"/>
         <!-- Status -->
         <Border x:Name="WarningPanel" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="14,10">
             <DockPanel LastChildFill="True">

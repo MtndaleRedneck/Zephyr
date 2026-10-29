@@ -109,6 +109,7 @@ namespace ZephyrPlayer
             BuildChoices(SecondarySkipPanel, PlayerSettings.SecondarySkipChoices, SkipLabel, () => _settings.SecondarySkipSeconds, v => _settings.SecondarySkipSeconds = v, "secondaryskip");
             BuildChoices(BarColorPanel, PlayerSettings.BarColorStyles, Label, () => _settings.BarColorStyle, v => _settings.BarColorStyle = v, "barcolor");
             BuildChoices(IconStylePanel, PlayerSettings.IconStyles, Label, () => _settings.IconStyle, v => _settings.IconStyle = v, "iconstyle");
+            FlashToggle.IsChecked = _settings.ButtonFlash;
             SpeedToggle.IsChecked = _settings.ShowSpeed;
             SleepToggle.IsChecked = _settings.ShowSleepTimer;
             PairStatusText.Text = _store.Count > 0
@@ -137,6 +138,8 @@ namespace ZephyrPlayer
                 panel.Children.Add(rb);
             }
         }
+
+        private void OnFlashToggle(object sender, RoutedEventArgs e) => _settings.ButtonFlash = FlashToggle.IsChecked == true;
 
         private void OnToggle(object sender, RoutedEventArgs e)
         {

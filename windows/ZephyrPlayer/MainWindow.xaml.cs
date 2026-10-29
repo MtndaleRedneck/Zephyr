@@ -33,6 +33,7 @@ namespace ZephyrPlayer
 
         private readonly LibVLC _libvlc;
         private readonly MediaPlayer _player;
+        private SafeMediaSource? _safeSource;
         private readonly PlayerSettings _settings;
         private readonly VolumeService _volume;
         private readonly DispatcherTimer _idleTimer = new();
@@ -71,7 +72,7 @@ namespace ZephyrPlayer
             _volume = volume ?? new VolumeService();
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => _cursorWatch.Stop();
+            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); };
             _cursorWatch.Tick += (_, __) =>
             {
                 if (!IsVisible || !GetCursorPos(out var point)) return;
@@ -124,8 +125,34 @@ namespace ZephyrPlayer
             UpdatePlayPauseGlyph();
         }
 
-        public void PlayFromUrl(string url, long? positionSeconds, string[] subtitles)
+        private int _playGeneration;
+        private System.Threading.CancellationTokenSource? _preparation;
+        public void StopPlaybackSource()
         {
+            ++_playGeneration; _preparation?.Cancel();
+            _safeSource?.Abort(); _player.Stop(); _player.Media=null; _safeSource?.Dispose(); _safeSource=null;
+        }
+        public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles)
+        {
+            try { await PlayFromUrlAsync(url,positionSeconds,subtitles); }
+            catch (OperationCanceledException) { }
+            catch { MovieTitle.Text="Could not open this movie safely. Check the file or phone connection."; }
+        }
+        public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
+        {
+            var generation=++_playGeneration;
+            _preparation?.Cancel();
+            using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
+            _preparation=timeout;
+            SafeMediaSource source;
+            try {source=await System.Threading.Tasks.Task.Run(() => {
+                var ready=new SafeMediaSource(_libvlc,url,timeout.Token);
+                try {foreach(var sub in subtitles)ready.AddSubtitle(sub,timeout.Token);ready.PreparationComplete();return ready;}
+                catch {ready.Dispose();throw;}
+            });}
+            catch(OperationCanceledException) when(generation==_playGeneration) {throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
+            finally {if(ReferenceEquals(_preparation,timeout))_preparation=null;}
+            if(generation!=_playGeneration || timeout.IsCancellationRequested) {source.Dispose();throw new OperationCanceledException("Playback preparation was canceled or superseded.");}
             SavePlaybackProgress();
             _currentSource = url;
             var localTitle = PlaybackHistory.LocalPath(url);
@@ -135,10 +162,12 @@ namespace ZephyrPlayer
             // Windows master = the slider number, libVLC adds the boost on top.
             if (_volume.Available) _volume.SetMaster(_settings.LastVolume);
             ApplyPlayerGain();
-            var media = new Media(_libvlc, url, FromType.FromLocation);
-            foreach (var sub in subtitles)
-                media.AddSlave(MediaSlaveType.Subtitle, 0, sub);
-            _player.Play(media);
+            _safeSource?.Abort();
+            _player.Stop();
+            _player.Media=null;
+            _safeSource?.Dispose();
+            _safeSource = source;
+            _player.Play(source.Media);
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
                 _player.Time = positionSeconds.Value * 1000;
             _clock.Start();
@@ -216,7 +245,7 @@ namespace ZephyrPlayer
             _idleTimer.Start();
         }
 
-        private static string ShortSkip(int seconds) => seconds >= 60 ? (seconds / 60) + "m" : seconds.ToString();
+        private static string ShortSkip(int seconds) => PlayerSettings.FormatSkip(seconds);
         private void OnPlayerKeyDown(object sender, KeyEventArgs e)
         {
             ShowBarOnce();
@@ -279,7 +308,7 @@ namespace ZephyrPlayer
                 anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
                 spin.BeginAnimation(RotateTransform.AngleProperty, anim);
             }
-            Flash(backward, spin == SecondaryBackSpin || spin == SecondaryForwardSpin);
+            if (_settings.ButtonFlash) Flash(backward, spin == SecondaryBackSpin || spin == SecondaryForwardSpin);
         }
 
         private void Flash(bool backward, bool secondary)
@@ -376,7 +405,7 @@ namespace ZephyrPlayer
                         _sleepTimer = null;
                         SleepLabel.Text = "zZ";
                         SavePlaybackProgress();
-                        _player.Stop();
+                        StopPlaybackSource();
                         SleepFired?.Invoke();
                     };
                     _sleepTimer.Start();
@@ -462,8 +491,8 @@ namespace ZephyrPlayer
             SkipForwardArrow.Fill = ring;
             SkipBackLabel.Foreground = label;
             SkipForwardLabel.Foreground = label;
-            SkipBackLabel.Text = _settings.PrimarySkipSeconds.ToString();
-            SkipForwardLabel.Text = _settings.PrimarySkipSeconds.ToString();
+            SkipBackLabel.Text = PlayerSettings.FormatSkip(_settings.PrimarySkipSeconds);
+            SkipForwardLabel.Text = PlayerSettings.FormatSkip(_settings.PrimarySkipSeconds);
             SecondarySkipBackIcon.Stroke = ring;
             SecondarySkipForwardIcon.Stroke = ring;
             SecondarySkipBackLabel.Foreground = label;
