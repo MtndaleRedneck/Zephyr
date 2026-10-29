@@ -280,22 +280,30 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     }
 
     private fun serveChannel(client: Socket, pfd: ParcelFileDescriptor, size: Long, range: LongRange?, mime: String) {
-        val channel = java.io.FileInputStream(pfd.fileDescriptor).channel
         val (code, start, end) = resolveRange(size, range)
         val out = client.getOutputStream()
         headers(client, out, code, end - start + 1, mime, size, start, end)
         if (code == 416) { out.flush(); return }
-        channel.position(start)
-        val buf = java.nio.ByteBuffer.allocate(64 * 1024)
+        // The PFD remains the sole descriptor owner, including stop/watchdog close.
+        // Avoid a FileInputStream wrapper that would need a second ownership policy.
+        while (true) {
+            try { android.system.Os.lseek(pfd.fileDescriptor, start, android.system.OsConstants.SEEK_SET); break }
+            catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e }
+        }
+        val buf = ByteArray(64 * 1024)
         var left = end - start + 1
         while (left > 0) {
-            buf.clear()
-            if (left < buf.capacity()) buf.limit(left.toInt())
             deadlines[pfd] = android.os.SystemClock.elapsedRealtime() + 60_000
-            val n = try { channel.read(buf) } catch (e: Exception) { -1 }
+            var n: Int
+            while (true) {
+                try { n = android.system.Os.read(pfd.fileDescriptor, buf, 0, minOf(buf.size.toLong(), left).toInt()); break }
+                catch (e: android.system.ErrnoException) {
+                    if (e.errno != android.system.OsConstants.EINTR) throw EOFException().apply { initCause(e) }
+                }
+            }
             if (n <= 0) throw EOFException()
             deadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
-            out.write(buf.array(), 0, n)
+            out.write(buf, 0, n)
             deadlines.remove(client)
             deadlines.remove(pfd)
             left -= n
