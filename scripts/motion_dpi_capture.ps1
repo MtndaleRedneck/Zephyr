@@ -23,14 +23,14 @@ public static class MotionProof {
 function Shot($hw,$path){
  $r=[MotionProof+Rect]::new();if([MotionProof]::DwmGetWindowAttribute($hw,9,[ref]$r,16)-ne 0){throw 'DWM bounds missing'}
  $b=[System.Drawing.Bitmap]::new($r.R-$r.L,$r.B-$r.T);$g=[System.Drawing.Graphics]::FromImage($b)
- try{$g.CopyFromScreen($r.L,$r.T,0,0,$b.Size);$b.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}
+ try{$g.CopyFromScreen($r.L,$r.T,0,0,$b.Size);if($script:burstClock){Write-Output "$path postCopyMs=$($script:burstClock.ElapsedMilliseconds)"};$b.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}
 }
 function Burst($hw,$x,$y,$prefix){
  [MotionProof]::SetCursorPos($x,$y)|Out-Null;Start-Sleep -Milliseconds 250;Shot $hw "$prefix-before.png"
  [MotionProof]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[MotionProof]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
- $sw=[Diagnostics.Stopwatch]::StartNew();$late=0;$first=-1
- foreach($ms in 40,130,220,310,400,600){while($sw.ElapsedMilliseconds-lt$ms){[Threading.Thread]::Sleep(1)};$actual=$sw.ElapsedMilliseconds;if($first-lt 0){$first=$actual};Shot $hw "$prefix-$($ms)ms.png";if($actual-$ms-gt 50){$late++};Write-Output "$prefix intendedMs=$ms actualMs=$actual lateOver50=$($actual-$ms-gt 50)"}
- Write-Output "$prefix firstCaptureOffsetMs=$first lateOver50FrameCount=$late"
+ $sw=[Diagnostics.Stopwatch]::StartNew();$script:burstClock=$sw;$late=0;$first=-1
+ foreach($ms in 40,130,220,310,400,600){while($sw.ElapsedMilliseconds-lt$ms){[Threading.Thread]::Sleep(1)};$actual=$sw.ElapsedMilliseconds;if($first-lt 0){$first=$actual};Shot $hw "$prefix-$($ms)ms.png";if($actual-$ms-gt 50){$late++};Write-Output "$prefix intendedMs=$ms captureStartMs=$actual lateOver50=$($actual-$ms-gt 50)"}
+ Write-Output "$prefix firstCaptureStartOffsetMs=$first lateOver50FrameCount=$late";$script:burstClock=$null
 }
 [MotionProof]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))|Out-Null
 $exe=(Resolve-Path windows/capture-out/ZephyrPlayer.exe).Path
