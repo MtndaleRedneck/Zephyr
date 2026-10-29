@@ -804,6 +804,7 @@ jobs:
             ${{ runner.temp }}/pc-cycle-*.png
             ${{ runner.temp }}/pc-pairing-render.png
             ${{ runner.temp }}/pc-pairing-recovery-render.png
+            ${{ runner.temp }}/pc-secondary-highlight-*.png
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
             ${{ runner.temp }}/pc-tray-menu.png

@@ -1,4 +1,4 @@
-name: Real four-button seek proof
+name: Targeted native and four-button proof
 on:
   workflow_dispatch:
 permissions:
@@ -12,4 +12,9 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
-      - run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter FullyQualifiedName~SkipPairPlaybackTests --blame-hang --blame-hang-timeout 120s --logger "console;verbosity=detailed"
+      - run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter "FullyQualifiedName~SkipPairPlaybackTests|FullyQualifiedName~SafeMediaSourceTests|FullyQualifiedName~Pair_StalledBody_HasDeadline|FullyQualifiedName~SecondaryHighlight_ReversesSelectedColor" --blame-hang --blame-hang-timeout 120s --logger "console;verbosity=detailed"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: targeted-native-pixels
+          path: ${{ runner.temp }}/pc-secondary-highlight-*.png

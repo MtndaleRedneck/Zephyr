@@ -88,6 +88,18 @@ namespace ZephyrPlayer.Tests
                                 Await(() => Math.Abs(player.Time - expected) <= 1000,
                                     step.Name + " expected " + expected + "ms, got " + player.Time + "ms");
                                 Assert.Equal(VLCState.Paused, player.State);
+                                if(step.Name.StartsWith("Secondary",StringComparison.Ordinal)) {
+                                    var field=typeof(MainWindow).GetField(step.Delta<0?"_secondaryBackHighlight":"_secondaryForwardHighlight",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!;
+                                    var highlight=(SecondarySkipHighlight)field.GetValue(window)!;
+                                    Assert.True(highlight.HasAnimatedProperties,"secondary click did not start traveling highlight");
+                                    var label=(TextBlock)window.FindName(step.Delta<0?"SecondarySkipBackLabel":"SecondarySkipForwardLabel")!;
+                                    Assert.True(label.RenderTransform.Value.IsIdentity,"duration label moved with animation");
+                                    player.Time=240000;Await(()=>Math.Abs(player.Time-240000)<=1000,"reset midpoint for flash-off proof");
+                                    settings.ButtonFlash=false;var offBefore=player.Time;button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent,button));
+                                    Await(()=>Math.Abs(player.Time-(offBefore+step.Delta*1000L))<=1000,"flash off changed seek behavior");
+                                    Assert.False(highlight.HasAnimatedProperties,"flash off must disable traveling highlight");settings.ButtonFlash=true;
+                                }
+
                                 Console.WriteLine($"REAL_SKIP_PASS {step.Name}: before={before}ms delta={step.Delta}s after={player.Time}ms");
                             }
                         }
