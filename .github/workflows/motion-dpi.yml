@@ -43,10 +43,18 @@ jobs:
       - name: Actual running window motion and measured DPI
         working-directory: candidate
         shell: pwsh
-        run: ../harness/scripts/motion_dpi_capture.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/motion-dpi/capture.log"
+        run: |
+          try { ../harness/scripts/motion_dpi_capture.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/motion-dpi/capture.log" }
+          catch { $_ | Out-String | Add-Content "$env:RUNNER_TEMP/motion-dpi/capture-error.txt"; 'FAILED' | Set-Content "$env:RUNNER_TEMP/motion-dpi/aggregate-result.txt" }
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
           name: frozen-candidate-motion-dpi
           path: ${{ runner.temp }}/motion-dpi/*
           if-no-files-found: error
+      - name: Final aggregate gate after evidence upload
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path "$env:RUNNER_TEMP/motion-dpi/aggregate-result.txt") { throw 'Capture incomplete; evidence uploaded for review' }
