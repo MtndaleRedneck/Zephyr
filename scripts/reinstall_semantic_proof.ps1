@@ -1,8 +1,9 @@
 $ErrorActionPreference='Stop'
 $out=Join-Path $env:RUNNER_TEMP 'motion-dpi';New-Item -ItemType Directory -Force $out|Out-Null
-$installer=(Get-ChildItem "$env:RUNNER_TEMP/frozen-installer" -Filter '*.exe' -Recurse|Select-Object -First 1).FullName
+$installer=$env:ZEPHYR_PROOF_INSTALLER
+if(!$installer){$installer=(Get-ChildItem "$env:RUNNER_TEMP/frozen-installer" -Filter '*.exe' -Recurse|Select-Object -First 1).FullName}
 if(!$installer){throw 'Frozen run40793721589 installer missing'}
-"installerSHA256=$((Get-FileHash $installer -Algorithm SHA256).Hash) source=490408d3922a2e15a0fe7a878a498a27d071cf57 artifact=12862958774"|Set-Content "$out/reinstall-proof.txt"
+"installerSHA256=$((Get-FileHash $installer -Algorithm SHA256).Hash) source=490408d3922a2e15a0fe7a878a498a27d071cf57 artifact=$env:ZEPHYR_PROOF_ARTIFACT"|Set-Content "$out/reinstall-proof.txt"
 $installed="$env:LOCALAPPDATA/Programs/Zephyr Player/ZephyrPlayer.exe"
 $config=Join-Path $env:APPDATA 'ZephyrPlayer';New-Item -ItemType Directory -Force $config|Out-Null
 $settings=Join-Path $config 'settings.json';$pairs=Join-Path $config 'paired.json'
@@ -24,6 +25,7 @@ try{
  Install 'replacement';Start-Sleep -Seconds 5
  $running=@(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue|Where-Object Path -eq $installed);if($running.Count-eq 0){throw 'Installer did not relaunch installed app'}
  AssertAuth
+ if($env:ZEPHYR_EXPECTED_PLAYER_HASH-and(Get-FileHash $installed -Algorithm SHA256).Hash-ne$env:ZEPHYR_EXPECTED_PLAYER_HASH){throw 'Installed player payload differs from frozen published exe'}
  if((Get-FileHash $settings).Hash-ne$settingsHash){throw 'Settings bytes changed'}
  $text=[IO.File]::ReadAllText($pairs);$entries=@($text|ConvertFrom-Json)
  if($entries.Count-ne 1-or!$entries[0].token.StartsWith('dpapi:')-or$text.Contains('local-smoke-token')){throw 'Protected pairing format not proven'}
