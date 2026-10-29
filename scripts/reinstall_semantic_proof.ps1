@@ -26,6 +26,7 @@ try{
  $running=@();for($i=0;$i-lt 30;$i++){Start-Sleep -Seconds 1;$running=@(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue|Where-Object {$_.Path-and[IO.Path]::GetFullPath($_.Path)-eq$installed});if($running.Count-gt 0){break}}
  if($running.Count-eq 0){Get-Process ZephyrPlayer -ErrorAction SilentlyContinue|Format-List Id,Path,MainWindowTitle|Out-String|Add-Content "$out/reinstall-proof.txt";throw 'Installer did not relaunch installed app'}
  AssertAuth
+ "installedPlayerSHA256=$((Get-FileHash $installed -Algorithm SHA256).Hash)"|Add-Content "$out/reinstall-proof.txt"
  if($env:ZEPHYR_EXPECTED_PLAYER_HASH-and(Get-FileHash $installed -Algorithm SHA256).Hash-ne$env:ZEPHYR_EXPECTED_PLAYER_HASH){throw 'Installed player payload differs from frozen published exe'}
  if((Get-FileHash $settings).Hash-ne$settingsHash){throw 'Settings bytes changed'}
  $text=[IO.File]::ReadAllText($pairs);$entries=@($text|ConvertFrom-Json)
