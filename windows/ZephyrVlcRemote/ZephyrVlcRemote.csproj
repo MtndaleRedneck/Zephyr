@@ -17,6 +17,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="8.0.33" PrivateAssets="all" />
     <PackageReference Include="NAudio" Version="2.2.1" />
   </ItemGroup>
 
