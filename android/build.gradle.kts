@@ -12,8 +12,8 @@ android {
         applicationId = "com.zephyr.remote"
         minSdk = 31
         targetSdk = 34
-        versionCode = 24
-        versionName = "1.2.1"
+        versionCode = 25
+        versionName = "1.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

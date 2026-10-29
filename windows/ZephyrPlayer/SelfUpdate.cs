@@ -16,6 +16,9 @@ namespace ZephyrPlayer
     {
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Verified = new();
         private static readonly HttpClient Http = new(new HttpClientHandler { AllowAutoRedirect = false });
+        /// <summary>Hard cap on one installer download (the real installer is far
+        /// under this): a broken or hostile feed must never fill the disk.</summary>
+        internal static long MaxInstallerBytes = 512L * 1024 * 1024;
 
         internal static void CleanOldDownloads()
         {
@@ -60,6 +63,7 @@ namespace ZephyrPlayer
                 var total = resp.Content.Headers.ContentLength ?? -1;
                 try
                 {
+                if (total > MaxInstallerBytes) throw new InvalidOperationException("The update download is too large to be a real installer.");
                 await using (var fs = new FileStream(dest, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 {
                     await using var src = await resp.Content.ReadAsStreamAsync(stall.Token);
@@ -70,6 +74,7 @@ namespace ZephyrPlayer
                     {
                         await fs.WriteAsync(buf.AsMemory(0, n), stall.Token);
                         got += n;
+                        if (got > MaxInstallerBytes) throw new InvalidOperationException("The update download is too large to be a real installer.");
                         stall.CancelAfter(TimeSpan.FromSeconds(60));
                         if (total > 0) progress?.Report((int)(got * 100 / total));
                     }

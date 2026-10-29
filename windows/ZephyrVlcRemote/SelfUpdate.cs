@@ -13,6 +13,9 @@ internal static class SelfUpdate
 {
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,string> Verified = new();
     private static readonly HttpClient Http = new(new HttpClientHandler {AllowAutoRedirect=false});
+    /// <summary>Hard cap on one installer download (the real installer is far
+    /// under this): a broken or hostile feed must never fill the disk.</summary>
+    internal static long MaxInstallerBytes = 512L * 1024 * 1024;
 
     internal static void CleanOldDownloads()
     {
@@ -61,6 +64,7 @@ internal static class SelfUpdate
             var dest = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZephyrVlcRemote", "Updates", Guid.NewGuid().ToString("N"), "installer.exe");
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             var total = resp.Content.Headers.ContentLength ?? -1;
+            if (total > MaxInstallerBytes) throw new InvalidOperationException("The update download is too large to be a real installer.");
             await using (var fs = new FileStream(dest,FileMode.CreateNew,FileAccess.Write,FileShare.None))
             {
                 await using var src = await resp.Content.ReadAsStreamAsync(stall.Token);
@@ -71,6 +75,7 @@ internal static class SelfUpdate
                 {
                     await fs.WriteAsync(buf.AsMemory(0, n), stall.Token);
                     got += n;
+                    if (got > MaxInstallerBytes) throw new InvalidOperationException("The update download is too large to be a real installer.");
                     // Every arrived chunk proves the download is alive: the 60 seconds only
                     // ever count silence.
                     stall.CancelAfter(TimeSpan.FromSeconds(60));

@@ -199,6 +199,35 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public async Task Download_DeclaredLengthOverCap_RefusedBeforeWriting()
+        {
+            var oldLimit = SelfUpdate.MaxInstallerBytes;
+            SelfUpdate.MaxInstallerBytes = 100;
+            try
+            {
+                _exeBytes = new byte[200];
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: _ => true));
+                Assert.Contains("too large", ex.Message);
+            }
+            finally { SelfUpdate.MaxInstallerBytes = oldLimit; }
+        }
+
+        [Fact]
+        public async Task Download_BodyGrowsPastCap_DeletesAndThrows()
+        {
+            var oldLimit = SelfUpdate.MaxInstallerBytes;
+            SelfUpdate.MaxInstallerBytes = 100;
+            try
+            {
+                _exeBytes = new byte[64 * 1024 + 200]; // chunk larger than the cap: the running-total check fires
+                await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                    SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: _ => true));
+            }
+            finally { SelfUpdate.MaxInstallerBytes = oldLimit; }
+        }
+
+        [Fact]
         public async Task Download_UntrustedHost_Refused()
         {
             await Assert.ThrowsAsync<InvalidOperationException>(() =>

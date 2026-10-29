@@ -40,12 +40,29 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private val permits = java.util.concurrent.Semaphore(24)
     private val mediaPermits = java.util.concurrent.Semaphore(8)
     private val perPeer = java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
-    private val providers = java.util.concurrent.ConcurrentHashMap.newKeySet<java.io.Closeable>()
     private val cancellations = java.util.concurrent.ConcurrentHashMap.newKeySet<android.os.CancellationSignal>()
-    private val deadlines = java.util.concurrent.ConcurrentHashMap<java.io.Closeable, Long>()
+    private val providers = java.util.concurrent.ConcurrentHashMap.newKeySet<Guarded<*>>()
+    private val clientDeadlines = java.util.concurrent.ConcurrentHashMap<Socket, Long>()
     private val watchdog = Executors.newSingleThreadScheduledExecutor()
     private val clients = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
     @Volatile private var running = false
+
+    /** Serializes close() against every raw-descriptor use. A watchdog or stop()
+     *  close can never slip between a worker obtaining the descriptor number and
+     *  its read, so descriptor reuse can never feed bytes from the wrong file.
+     *  All uses poll with a short timeout and re-check the flags, so close()
+     *  never waits more than one poll cycle on a stuck provider. */
+    private class Guarded<T : java.io.Closeable>(val inner: T) {
+        private val gate = Object()
+        @Volatile var closed = false; private set
+        val closeQueued = java.util.concurrent.atomic.AtomicBoolean(false)
+        @Volatile var deadlineAt: Long = Long.MAX_VALUE
+        fun close() { synchronized(gate) { if (!closed) { closed = true; runCatching { inner.close() } } } }
+        fun <R> use(block: (T) -> R): R = synchronized(gate) {
+            if (closed) throw java.io.InterruptedIOException("provider closed")
+            block(inner)
+        }
+    }
 
     val baseUrl: String get() = "http://${wifiAddr.hostAddress}:${socket?.localPort ?: port}/s/$token"
 
@@ -63,7 +80,16 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         running = true
         watchdog.scheduleWithFixedDelay({
             val now = android.os.SystemClock.elapsedRealtime()
-            deadlines.forEach { resource, at -> if (now >= at && deadlines.remove(resource, at)) runCatching { resource.close() } }
+            // Client sockets close inline: Socket.close never blocks.
+            clientDeadlines.forEach { (client, at) -> if (now >= at && clientDeadlines.remove(client, at)) runCatching { client.close() } }
+            // Provider closes run on the pool: a SAF/FUSE close can block, and one
+            // blocked close must never stall the watchdog and every other expiry.
+            providers.forEach { res ->
+                if (now >= res.deadlineAt && res.closeQueued.compareAndSet(false, true)) {
+                    try { pool.execute { providers.remove(res); res.close() } }
+                    catch (e: java.util.concurrent.RejectedExecutionException) { providers.remove(res); res.close() }
+                }
+            }
         }, 1, 1, java.util.concurrent.TimeUnit.SECONDS)
         pool.execute {
             while (running) {
@@ -80,10 +106,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 try {
                     pool.execute {
                         try { runCatching { handle(client) } }
-                        finally { clients.remove(client); deadlines.remove(client); openStreams.decrementAndGet(); releasePeer(peer); permits.release(); runCatching { client.close() } }
+                        finally { clients.remove(client); clientDeadlines.remove(client); openStreams.decrementAndGet(); releasePeer(peer); permits.release(); runCatching { client.close() } }
                     }
                 } catch (e: java.util.concurrent.RejectedExecutionException) {
-                    clients.remove(client); deadlines.remove(client); openStreams.decrementAndGet(); releasePeer(peer); permits.release(); runCatching { client.close() }
+                    clients.remove(client); clientDeadlines.remove(client); openStreams.decrementAndGet(); releasePeer(peer); permits.release(); runCatching { client.close() }
                 }
             }
         }
@@ -97,13 +123,19 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         running = false
         runCatching { socket?.close() }
         cancellations.forEach { it.cancel() }
-        providers.forEach { runCatching { it.close() } }
+        // Cheap, unblocking closes first: cutting client sockets frees worker
+        // writes, and cancel signals free pending provider opens.
         clients.forEach { runCatching { it.close() } }
         watchdog.shutdownNow()
         pool.shutdownNow()
-        // Cleanup only after copy workers end; never delete while a worker can rename.
         kotlin.concurrent.thread(name = "stream-drain", isDaemon = true) {
-            while (!pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) { providers.forEach { runCatching { it.close() } } }
+            // Provider closes can block on a stuck SAF/FUSE provider: they belong
+            // here, never on the caller (service shutdown / UI) thread.
+            providers.forEach { it.close() }
+            // Cleanup only after copy workers end; never delete while a worker can rename.
+            while (!pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) { providers.forEach { it.close() } }
+            // A process killed before this point leaves files behind; cleanCache()
+            // on the next start() reclaims them.
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-$token-") }?.forEach { it.delete() }
             activeTokens.remove(token)
         }
@@ -199,18 +231,23 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         val signal = android.os.CancellationSignal()
         cancellations.add(signal)
         if (!running) { cancellations.remove(signal); return }
-        val openDeadline = watchdog.schedule({ signal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS)
+        val openDeadline = try { watchdog.schedule({ signal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS) }
+            catch (e: java.util.concurrent.RejectedExecutionException) { cancellations.remove(signal); return }
         val pfd: ParcelFileDescriptor = try { openDescriptor(uri, signal) } finally { openDeadline.cancel(false); cancellations.remove(signal) }
             ?: return reply(client, 404, ByteArray(0), "text/plain")
         if (!running) { pfd.close(); return }
-        providers.add(pfd)
-        if (!running) { providers.remove(pfd); pfd.close(); return }
-        deadlines[pfd] = android.os.SystemClock.elapsedRealtime() + 60_000
+        val guarded = Guarded(pfd)
+        providers.add(guarded)
+        if (!running) { providers.remove(guarded); guarded.close(); return }
+        guarded.deadlineAt = android.os.SystemClock.elapsedRealtime() + 60_000
         try {
-        pfd.use { fd ->
-            val size = fd.statSize
+        run {
+            val size = guarded.use { it.statSize }
             if (size < 0) {
-                deadlines.remove(pfd) // This descriptor is only the seekability probe; the copy owns its own stall timer.
+                // This descriptor is only the seekability probe: close it BEFORE the
+                // copy and the cached serve. Holding a pipe provider open while nobody
+                // reads it can stall the provider's writer. The copy owns its own descriptor.
+                providers.remove(guarded); guarded.close()
                 // Non-seekable provider: copy once into cache, then serve the copy.
                 // Teardown C12: the copy lands under a temp name and is renamed only when
                 // COMPLETE, so a cut-off copy is never reused; oversized copies are capped.
@@ -229,28 +266,36 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                 CacheCopier.copy(
                                     open = {
                                         val copySignal = android.os.CancellationSignal(); cancellations.add(copySignal)
-                                        val copyOpenDeadline = watchdog.schedule({ copySignal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS)
+                                        val copyOpenDeadline = try { watchdog.schedule({ copySignal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS) }
+                                            catch (e: java.util.concurrent.RejectedExecutionException) { cancellations.remove(copySignal); throw java.io.InterruptedIOException() }
                                         val copyFd = try { openDescriptor(uri, copySignal) } finally { copyOpenDeadline.cancel(false); cancellations.remove(copySignal) }
                                             ?: throw java.io.IOException("no provider")
                                         if (!running) { copyFd.close(); throw java.io.InterruptedIOException() }
                                         val input = ParcelFileDescriptor.AutoCloseInputStream(copyFd)
-                                        providers.add(input)
-                                        if (!running) { providers.remove(input); input.close(); throw java.io.InterruptedIOException() }
-                                        deadlines[input] = android.os.SystemClock.elapsedRealtime() + 60_000
+                                        val ginput = Guarded<java.io.InputStream>(input)
+                                        providers.add(ginput)
+                                        if (!running) { providers.remove(ginput); ginput.close(); throw java.io.InterruptedIOException() }
+                                        ginput.deadlineAt = android.os.SystemClock.elapsedRealtime() + 60_000
                                         object : java.io.FilterInputStream(input) {
                                             override fun read(b: ByteArray, off: Int, len: Int): Int {
                                                 // Poll a non-seekable pipe instead of entering an uninterruptible read.
-                                                val poll = android.system.StructPollfd().apply { this.fd = copyFd.fileDescriptor; events = android.system.OsConstants.POLLIN.toShort() }
+                                                // Each poll/read holds the guard briefly, so a deadline close can
+                                                // interpose between cycles and can never recycle the fd mid-read.
                                                 while (running) {
-                                                    try { if (android.system.Os.poll(arrayOf(poll), 500) > 0) break }
-                                                    catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e }
+                                                    val ready = ginput.use {
+                                                        val poll = android.system.StructPollfd().apply { this.fd = copyFd.fileDescriptor; events = android.system.OsConstants.POLLIN.toShort() }
+                                                        try { android.system.Os.poll(arrayOf(poll), 500) > 0 }
+                                                        catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e; false }
+                                                    }
+                                                    if (ready) return ginput.use { raw ->
+                                                        val n = raw.read(b, off, len)
+                                                        ginput.deadlineAt = android.os.SystemClock.elapsedRealtime() + 60_000
+                                                        n
+                                                    }
                                                 }
-                                                if (!running) throw java.io.InterruptedIOException()
-                                                val n = super.read(b, off, len)
-                                                deadlines[input] = android.os.SystemClock.elapsedRealtime() + 60_000
-                                                return n
+                                                throw java.io.InterruptedIOException()
                                             }
-                                            override fun close() { providers.remove(input); deadlines.remove(input); super.close() }
+                                            override fun close() { providers.remove(ginput); ginput.close() }
                                         }
                                     },
                                     tmp = tmp, final = cached,
@@ -274,38 +319,55 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
             return serveFile(client, cached, cached.length(), range)
             }
             servedAny = true
-            serveChannel(client, pfd, size, range, guessMime(uri))
+            serveChannel(client, guarded, size, range, guessMime(uri))
         }
-        } finally { providers.remove(pfd); deadlines.remove(pfd) }
+        } finally { providers.remove(guarded); guarded.close() }
     }
 
-    private fun serveChannel(client: Socket, pfd: ParcelFileDescriptor, size: Long, range: LongRange?, mime: String) {
+    private fun serveChannel(client: Socket, guarded: Guarded<ParcelFileDescriptor>, size: Long, range: LongRange?, mime: String) {
         val (code, start, end) = resolveRange(size, range)
         val out = client.getOutputStream()
         headers(client, out, code, end - start + 1, mime, size, start, end)
         if (code == 416) { out.flush(); return }
         // The PFD remains the sole descriptor owner, including stop/watchdog close.
         // Avoid a FileInputStream wrapper that would need a second ownership policy.
-        while (true) {
-            try { android.system.Os.lseek(pfd.fileDescriptor, start, android.system.OsConstants.SEEK_SET); break }
-            catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e }
+        guarded.use { pfd ->
+            while (true) {
+                try { android.system.Os.lseek(pfd.fileDescriptor, start, android.system.OsConstants.SEEK_SET); break }
+                catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e }
+            }
         }
         val buf = ByteArray(64 * 1024)
         var left = end - start + 1
         while (left > 0) {
-            deadlines[pfd] = android.os.SystemClock.elapsedRealtime() + 60_000
-            var n: Int
-            while (true) {
-                try { n = android.system.Os.read(pfd.fileDescriptor, buf, 0, minOf(buf.size.toLong(), left).toInt()); break }
-                catch (e: android.system.ErrnoException) {
-                    if (e.errno != android.system.OsConstants.EINTR) throw EOFException().apply { initCause(e) }
+            // Poll, then read: never an uninterruptible read on a stuck provider.
+            // Each cycle holds the guard briefly, so a deadline/stop close waits at
+            // most one poll cycle and can never recycle the fd mid-read.
+            val n = run {
+                while (running) {
+                    val ready = guarded.use { pfd ->
+                        val poll = android.system.StructPollfd().apply { this.fd = pfd.fileDescriptor; events = android.system.OsConstants.POLLIN.toShort() }
+                        try { android.system.Os.poll(arrayOf(poll), 500) > 0 }
+                        catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e; false }
+                    }
+                    if (ready) return@run guarded.use { pfd ->
+                        var read: Int
+                        while (true) {
+                            try { read = android.system.Os.read(pfd.fileDescriptor, buf, 0, minOf(buf.size.toLong(), left).toInt()); break }
+                            catch (e: android.system.ErrnoException) {
+                                if (e.errno != android.system.OsConstants.EINTR) throw EOFException().apply { initCause(e) }
+                            }
+                        }
+                        read
+                    }
                 }
+                throw java.io.InterruptedIOException()
             }
             if (n <= 0) throw EOFException()
-            deadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
+            guarded.deadlineAt = android.os.SystemClock.elapsedRealtime() + 60_000
+            clientDeadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
             out.write(buf, 0, n)
-            deadlines.remove(client)
-            deadlines.remove(pfd)
+            clientDeadlines.remove(client)
             left -= n
         }
         out.flush()
@@ -323,9 +385,9 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
             while (left > 0) {
                 val n = raf.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
                 if (n <= 0) break
-                deadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
+                clientDeadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
                 out.write(buf, 0, n)
-                deadlines.remove(client)
+                clientDeadlines.remove(client)
                 left -= n
             }
             out.flush()
@@ -345,8 +407,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         if (code == 416) sb.append("Content-Range: bytes */").append(total).append("\r\n")
         if (code == 206) sb.append("Content-Range: bytes ").append(start).append('-').append(end).append('/').append(total).append("\r\n")
         sb.append("Connection: close\r\n\r\n")
-        deadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
-        try { out.write(sb.toString().toByteArray(Charsets.US_ASCII)) } finally { deadlines.remove(client) }
+        clientDeadlines[client] = android.os.SystemClock.elapsedRealtime() + 60_000
+        try { out.write(sb.toString().toByteArray(Charsets.US_ASCII)) } finally { clientDeadlines.remove(client) }
     }
 
     private fun reply(client: Socket, code: Int, body: ByteArray, mime: String) {

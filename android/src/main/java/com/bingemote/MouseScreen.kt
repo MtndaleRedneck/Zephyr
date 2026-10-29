@@ -122,8 +122,10 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
     }
     DisposableEffect(commands) { onDispose {
         commands.close()
-        // Always release a held mouse button when leaving this screen.
+        // Always release ANY held mouse button when leaving this screen: releasing
+        // only "left" would strand a held right button pressed on the PC.
         HelperClient.io.execute { try { InputRouter.button(remote, "left", false) } catch (_: Exception) {} }
+        HelperClient.io.execute { try { InputRouter.button(remote, "right", false) } catch (_: Exception) {} }
     } }
     fun fire(block: () -> Unit): Boolean {
         val queued = commands.trySend(block).isSuccess

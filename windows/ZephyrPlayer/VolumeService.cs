@@ -47,7 +47,10 @@ namespace ZephyrPlayer
             [PreserveSig] int GetMute(out int mute);
         }
 
-        private IAudioEndpointVolume? _endpoint;
+        // No cached endpoint: the DEFAULT output device is resolved again for every
+        // call, so plugging headphones or switching Windows' output is followed at
+        // once instead of writes landing on the stale device from app start.
+        private int _disposed;
 
         // Read-only ABI probe for ordinary Windows CI. No volume setting is changed.
         internal static (int enumerateHr, bool collection, int defaultHr, bool device) ProbeComSlots()
@@ -63,61 +66,94 @@ namespace ZephyrPlayer
 
         public VolumeService()
         {
+            // Kept parameterless for callers and tests; resolution is per call.
+        }
+
+        /// <summary>Activate the CURRENT default render endpoint's volume control,
+        /// or null when the machine has no usable audio endpoint (headless CI).</summary>
+        private IAudioEndpointVolume? ActivateDefault()
+        {
+            if (_disposed != 0) return null;
             IMMDeviceEnumerator? enumerator = null; IMMDevice? device = null;
             try
             {
                 enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
                 var hr = enumerator.GetDefaultAudioEndpoint(0 /* eRender */, 0 /* eConsole */, out device);
                 Marshal.ThrowExceptionForHR(hr);
-                if (device == null) return;
+                if (device == null) return null;
                 var iid = typeof(IAudioEndpointVolume).GUID;
                 hr = device.Activate(ref iid, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out var obj);
                 Marshal.ThrowExceptionForHR(hr);
-                _endpoint = (IAudioEndpointVolume)obj;
+                return (IAudioEndpointVolume)obj;
             }
-            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Windows volume initialization failed: " + ex.GetType().Name + " HRESULT=0x" + ex.HResult.ToString("X8")); _endpoint = null; } // no audio device (headless CI) - fail soft
+            catch { return null; } // no audio device (headless CI) - fail soft
             finally { if (device != null) Marshal.ReleaseComObject(device); if (enumerator != null) Marshal.ReleaseComObject(enumerator); }
         }
 
-        /// <summary>False when the machine has no usable audio endpoint.</summary>
-        public bool Available => _endpoint != null;
+        /// <summary>False when the machine has no usable audio endpoint right now.</summary>
+        public bool Available
+        {
+            get
+            {
+                var ep = ActivateDefault();
+                if (ep == null) return false;
+                Marshal.ReleaseComObject(ep);
+                return true;
+            }
+        }
 
         /// <summary>Windows master volume, 0-100; -1 when unavailable.</summary>
         public int GetMaster()
         {
-            if (_endpoint == null) return -1;
+            var ep = ActivateDefault();
+            if (ep == null) return -1;
             try
             {
-                return _endpoint.GetMasterVolumeLevelScalar(out var level) == 0 ? (int)Math.Round(level * 100) : -1;
+                return ep.GetMasterVolumeLevelScalar(out var level) == 0 ? (int)Math.Round(level * 100) : -1;
             }
             catch { return -1; }
+            finally { Marshal.ReleaseComObject(ep); }
         }
 
         public bool GetMute()
         {
-            if (_endpoint == null) return false;
-            try { return _endpoint.GetMute(out var m) == 0 && m != 0; }
+            var ep = ActivateDefault();
+            if (ep == null) return false;
+            try { return ep.GetMute(out var m) == 0 && m != 0; }
             catch { return false; }
+            finally { Marshal.ReleaseComObject(ep); }
         }
 
         public void SetMaster(int volume)
         {
-            if (_endpoint == null) return;
-            try { var context = Guid.Empty; Marshal.ThrowExceptionForHR(_endpoint.SetMasterVolumeLevelScalar(Math.Clamp(volume, 0, 100) / 100f, ref context)); }
+            var ep = ActivateDefault();
+            if (ep == null) return;
+            try
+            {
+                var context = Guid.Empty;
+                // A volume write must never silently unmute. Some endpoint paths
+                // drop mute when the level changes; preserve the user's mute.
+                var wasMuted = ep.GetMute(out var before) == 0 && before != 0;
+                Marshal.ThrowExceptionForHR(ep.SetMasterVolumeLevelScalar(Math.Clamp(volume, 0, 100) / 100f, ref context));
+                if (wasMuted && ep.GetMute(out var after) == 0 && after == 0)
+                    ep.SetMute(1, ref context);
+            }
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Windows volume write failed: 0x" + ex.HResult.ToString("X8")); }
+            finally { Marshal.ReleaseComObject(ep); }
         }
 
         public void SetMute(bool mute)
         {
-            if (_endpoint == null) return;
-            try { var context = Guid.Empty; Marshal.ThrowExceptionForHR(_endpoint.SetMute(mute ? 1 : 0, ref context)); }
+            var ep = ActivateDefault();
+            if (ep == null) return;
+            try { var context = Guid.Empty; Marshal.ThrowExceptionForHR(ep.SetMute(mute ? 1 : 0, ref context)); }
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Windows volume write failed: 0x" + ex.HResult.ToString("X8")); }
+            finally { Marshal.ReleaseComObject(ep); }
         }
 
         public void Dispose()
         {
-            if (_endpoint != null) Marshal.ReleaseComObject(_endpoint);
-            _endpoint = null;
+            _disposed = 1; // nothing cached to release; per-call activation owns its COM objects
         }
     }
 }

@@ -135,7 +135,12 @@ namespace ZephyrPlayer
         public void StopPlaybackSource()
         {
             ++_playGeneration; _preparation?.Cancel();
-            _safeSource?.Abort(); _player.Stop(); _player.Media=null; _safeSource?.Dispose(); _safeSource=null;
+            _safeSource?.Abort(); _player.Stop(); _player.Media=null;
+            var old = _safeSource; _safeSource = null;
+            // Teardown off the caller thread: disposing the media waits on native
+            // decoder threads and provider closes, and a blocked close/read must
+            // never stall stop/cleanup on the UI.
+            if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => old.Dispose());
         }
         public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles)
         {
@@ -171,12 +176,18 @@ namespace ZephyrPlayer
             // Windows master = the slider number, libVLC adds the boost on top.
             if (_volume.Available) _volume.SetMaster(_settings.LastVolume);
             ApplyPlayerGain();
-            _safeSource?.Abort();
+            // Preserve the user's mute across the playback start: libVLC resets its
+            // own mute state on a new Media, so carry Windows' truth over BEFORE play
+            // instead of waiting for the next 500 ms poll (a half-second audio blip).
+            if (_volume.Available) _player.Mute = _volume.GetMute();
+            var replaced = _safeSource;
+            replaced?.Abort();
             _player.Stop();
             _player.Media=null;
-            _safeSource?.Dispose();
             _safeSource = source;
             _player.Play(source.Media);
+            // The replaced source tears down off the UI thread (see StopPlaybackSource).
+            if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => replaced.Dispose());
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
                 _player.Time = positionSeconds.Value * 1000;
             _clock.Start();
