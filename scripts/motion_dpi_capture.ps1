@@ -37,6 +37,11 @@ $exe=(Resolve-Path windows/capture-out/ZephyrPlayer.exe).Path
 $out=Join-Path $env:RUNNER_TEMP 'motion-dpi';New-Item -ItemType Directory -Force $out|Out-Null
 $settings=Join-Path $env:APPDATA 'ZephyrPlayer/settings.json';New-Item -ItemType Directory -Force (Split-Path $settings)|Out-Null
 $env:ZEPHYR_CI_CAPTURE='1'
+# Same permission setup used by the passing full-desktop harness. Without it,
+# a fresh runner is correctly held at its first-run network permission dialog.
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$setup=Start-Process $exe -ArgumentList '--install-firewall',$sid -PassThru -Wait
+if($setup.ExitCode-ne 0){throw "Capture first-run setup failed: $($setup.ExitCode)"}
 function FindId($pidValue,$id){
  $cond=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,[int]$pidValue)
  $roots=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$cond)
@@ -53,7 +58,12 @@ try{
     $argsList=@('--play='+[Uri]::new((Resolve-Path 'motion-fixture.mp4').Path).AbsoluteUri);if($full){$argsList+='--fullscreen'}
     $p=Start-Process $exe -ArgumentList $argsList -PassThru
     $btn=$null;for($i=0;$i-lt 30;$i++){Start-Sleep -Milliseconds 300;$btn=FindId $p.Id 'SecondarySkipBackButton';if($btn){break}}
-    if(!$btn){throw 'Secondary button missing'}
+    if(!$btn){
+     $roots=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,[int]$p.Id))
+     foreach($root in $roots){"WINDOW_DIAGNOSTIC name=$($root.Current.Name) hwnd=$($root.Current.NativeWindowHandle)"|Add-Content "$out/startup-diagnostic.txt";if($root.Current.NativeWindowHandle-ne 0){Shot ([IntPtr]$root.Current.NativeWindowHandle) "$out/startup-$($root.Current.NativeWindowHandle).png"}}
+     $crash=Join-Path $env:TEMP 'ZephyrPlayer-crash.log';if(Test-Path $crash){Copy-Item $crash "$out/startup-crash.log"}
+     throw 'Secondary button missing'
+    }
     $rootCond=[System.Windows.Automation.AndCondition]::new([System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,[int]$p.Id),[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Zephyr Player'))
     $root=[System.Windows.Automation.AutomationElement]::RootElement.FindFirst([System.Windows.Automation.TreeScope]::Children,$rootCond)
     if(!$root){throw 'Actual player window missing'}
