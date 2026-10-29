@@ -155,8 +155,12 @@ namespace ZephyrPlayer
                 catch {ready.Dispose();throw;}
             });}
             catch(OperationCanceledException) when(generation==_playGeneration) {throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
-            finally {if(ReferenceEquals(_preparation,timeout))_preparation=null;}
-            if(generation!=_playGeneration || timeout.IsCancellationRequested) {source.Dispose();throw new OperationCanceledException("Playback preparation was canceled or superseded.");}
+            finally {await Dispatcher.InvokeAsync(()=>{if(ReferenceEquals(_preparation,timeout))_preparation=null;});}
+            await Dispatcher.InvokeAsync(()=>CompletePreparedPlayback(source,generation,timeout.IsCancellationRequested,url,positionSeconds));
+        }
+        private void CompletePreparedPlayback(SafeMediaSource source,int generation,bool canceled,string url,long? positionSeconds)
+        {
+            if(generation!=_playGeneration || canceled) {source.Dispose();throw new OperationCanceledException("Playback preparation was canceled or superseded.");}
             SavePlaybackProgress();
             _currentSource = url;
             var localTitle = PlaybackHistory.LocalPath(url);
