@@ -189,7 +189,7 @@ namespace ZephyrPlayer
             // own mute state on a new Media, so carry Windows' truth over BEFORE play
             // instead of waiting for the next 500 ms poll (a half-second audio blip).
             var muteAtStart = _volume.TryGetMute();
-            if (muteAtStart.HasValue) _player.Mute = muteAtStart.Value;
+            if (muteAtStart.HasValue) { _playerMute = muteAtStart.Value; _player.Mute = _playerMute; }
             // A failed read (null) keeps the player's previous mute: unknown is
             // never treated as "unmuted".
             var replaced = _safeSource;
@@ -219,6 +219,15 @@ namespace ZephyrPlayer
         /// VolumeMuteTests.</summary>
         internal static bool MuteAfterRead(bool current, bool? read) => read ?? current;
 
+        // The player's mute as last APPLIED by this window. libvlc's Mute
+        // read-back is unreliable with no media loaded or no audio device (it
+        // returns false regardless of what was set), so preservation on a failed
+        // endpoint read and the SharedMute fallback track this field instead of
+        // reading _player.Mute back. Every assignment below keeps both in step.
+        private bool _playerMute;
+        /// <summary>Test seam (InternalsVisibleTo): the tracked player mute.</summary>
+        internal bool TrackedPlayerMute { get => _playerMute; set => _playerMute = value; }
+
         private DateTime _lastMasterSave;
         private void UpdatePosition()
         {
@@ -228,7 +237,8 @@ namespace ZephyrPlayer
             // the bar follows so both places show the same number.
             if (_volume.Available)
             {
-                _player.Mute = MuteAfterRead(_player.Mute, _volume.TryGetMute());
+                _playerMute = MuteAfterRead(_playerMute, _volume.TryGetMute());
+                _player.Mute = _playerMute;
                 var master = _volume.GetMaster();
                 if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
                 {
@@ -396,7 +406,7 @@ namespace ZephyrPlayer
         }
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
-        public bool SharedMute => _volume.TryGetMute() ?? _player.Mute;
+        public bool SharedMute => _volume.TryGetMute() ?? _playerMute;
         public string CurrentMovieTitle => MovieTitle.Text;
 
         private void ApplyPlayerGain()
@@ -408,7 +418,8 @@ namespace ZephyrPlayer
 
         private void OnMute(object sender, RoutedEventArgs e)
         {
-            var mute = !_player.Mute;
+            var mute = !_playerMute;
+            _playerMute = mute;
             _player.Mute = mute;
             if (_volume.Available) _volume.SetMute(mute);
             VolumeButton.Opacity = 1.0;
@@ -418,6 +429,7 @@ namespace ZephyrPlayer
         /// <summary>Phone-driven mute takes the same tied path.</summary>
         public void SetMuteTied(bool mute)
         {
+            _playerMute = mute;
             _player.Mute = mute;
             if (_volume.Available) _volume.SetMute(mute);
             VolumeButton.Opacity = 1.0;
