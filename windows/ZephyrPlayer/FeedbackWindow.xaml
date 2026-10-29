@@ -37,10 +37,12 @@
         <TextBlock Grid.Row="0" Text="What happened?" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
         <TextBox x:Name="MessageTextBox" Grid.Row="1" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                  Background="{StaticResource CardBrush}" Foreground="{StaticResource TextBrush}" BorderThickness="0"
-                 Padding="12,10" FontSize="13" TextChanged="OnTextChanged"/>
+                 Padding="12,10" FontSize="13" TextChanged="OnTextChanged"
+                 ToolTip="Don't include passwords, pairing codes, or other secrets."/>
         <Border Grid.Row="2" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="12,8" Margin="0,12,0,12">
             <StackPanel>
                 <TextBlock Text="Exactly what gets sent:" Foreground="{StaticResource OrangeBrush}" FontSize="11" FontWeight="SemiBold"/>
+                <TextBlock Text="Reports may become public - don't include passwords, pairing codes, or other secrets." Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
                 <TextBlock x:Name="PreviewText" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
             </StackPanel>
         </Border>

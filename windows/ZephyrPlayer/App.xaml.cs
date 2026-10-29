@@ -36,6 +36,14 @@ namespace ZephyrPlayer
             try
             {
                 var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "ZephyrPlayer-crash.log");
+                // Retention: keep the log bounded - once past 256 KB keep only the
+                // newest half instead of appending forever.
+                var info = new System.IO.FileInfo(path);
+                if (info.Exists && info.Length > 256 * 1024)
+                {
+                    var all = System.IO.File.ReadAllText(path);
+                    System.IO.File.WriteAllText(path, "[... older entries trimmed ...]\n\n" + all.Substring(all.Length / 2));
+                }
                 System.IO.File.AppendAllText(path, $"[{DateTime.Now:O}] {kind}: {detail}\n\n");
             }
             catch { }

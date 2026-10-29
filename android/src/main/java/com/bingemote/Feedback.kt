@@ -128,7 +128,7 @@ fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> 
         BackHandler { onBack() }
 
         SettingsSection("") {
-            Text("Tell us what is on your mind: a bug, an idea, or general feedback. Reports may become public issues on GitHub, so leave out personal details.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+            Text("Tell us what is on your mind: a bug, an idea, or general feedback. Reports may become public issues on GitHub, so leave out personal details, passwords, pairing codes and other secrets.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
                 text, { text = it.take(MAX_TEXT) },
