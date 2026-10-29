@@ -132,6 +132,15 @@ namespace ZephyrPlayer
 
         private int _playGeneration;
         private System.Threading.CancellationTokenSource? _preparation;
+        /// <summary>Best-effort teardown of a replaced source off the UI thread.
+        /// A Dispose failure is logged by exception type only, and nothing
+        /// guarantees this runs before process exit.</summary>
+        private static void DisposeReplacedSource(SafeMediaSource source)
+        {
+            try { source.Dispose(); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Replaced media source cleanup failed: " + ex.GetType().Name); }
+        }
+
         public void StopPlaybackSource()
         {
             ++_playGeneration; _preparation?.Cancel();
@@ -140,7 +149,7 @@ namespace ZephyrPlayer
             // Teardown off the caller thread: disposing the media waits on native
             // decoder threads and provider closes, and a blocked close/read must
             // never stall stop/cleanup on the UI.
-            if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => old.Dispose());
+            if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(old));
         }
         public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles)
         {
@@ -179,7 +188,10 @@ namespace ZephyrPlayer
             // Preserve the user's mute across the playback start: libVLC resets its
             // own mute state on a new Media, so carry Windows' truth over BEFORE play
             // instead of waiting for the next 500 ms poll (a half-second audio blip).
-            if (_volume.Available) _player.Mute = _volume.GetMute();
+            var muteAtStart = _volume.TryGetMute();
+            if (muteAtStart.HasValue) _player.Mute = muteAtStart.Value;
+            // A failed read (null) keeps the player's previous mute: unknown is
+            // never treated as "unmuted".
             var replaced = _safeSource;
             replaced?.Abort();
             _player.Stop();
@@ -187,7 +199,7 @@ namespace ZephyrPlayer
             _safeSource = source;
             _player.Play(source.Media);
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
-            if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => replaced.Dispose());
+            if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
                 _player.Time = positionSeconds.Value * 1000;
             _clock.Start();
@@ -202,6 +214,11 @@ namespace ZephyrPlayer
             UpdatePlayPauseGlyph();
         }
 
+        /// <summary>Poll/first-play mute application: a failed read (null) keeps
+        /// the player's CURRENT mute; only a successful read moves it. Pinned by
+        /// VolumeMuteTests.</summary>
+        internal static bool MuteAfterRead(bool current, bool? read) => read ?? current;
+
         private DateTime _lastMasterSave;
         private void UpdatePosition()
         {
@@ -211,7 +228,7 @@ namespace ZephyrPlayer
             // the bar follows so both places show the same number.
             if (_volume.Available)
             {
-                _player.Mute = _volume.GetMute();
+                _player.Mute = MuteAfterRead(_player.Mute, _volume.TryGetMute());
                 var master = _volume.GetMaster();
                 if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
                 {
@@ -379,7 +396,7 @@ namespace ZephyrPlayer
         }
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
-        public bool SharedMute => _volume.Available ? _volume.GetMute() : _player.Mute;
+        public bool SharedMute => _volume.TryGetMute() ?? _player.Mute;
         public string CurrentMovieTitle => MovieTitle.Text;
 
         private void ApplyPlayerGain()

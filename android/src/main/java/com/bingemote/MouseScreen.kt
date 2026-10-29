@@ -122,8 +122,11 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
     }
     DisposableEffect(commands) { onDispose {
         commands.close()
-        // Always release ANY held mouse button when leaving this screen: releasing
-        // only "left" would strand a held right button pressed on the PC.
+        // Best-effort release of EVERY button this screen can hold (left and
+        // right) when leaving: releasing only "left" would strand a held right
+        // button pressed on the PC. Not a guarantee: a press already draining
+        // through the command channel can land after these releases, and the
+        // fire-and-forget queue itself can drop them if the line is down.
         HelperClient.io.execute { try { InputRouter.button(remote, "left", false) } catch (_: Exception) {} }
         HelperClient.io.execute { try { InputRouter.button(remote, "right", false) } catch (_: Exception) {} }
     } }

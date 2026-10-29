@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Security.Cryptography;
@@ -198,6 +199,11 @@ namespace ZephyrPlayer.Tests
             Assert.Throws<InvalidOperationException>(() => SelfUpdate.OpenVerifiedForLaunch(path));
         }
 
+        private static string UpdatesRoot =>
+            System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZephyrPlayer", "Updates");
+
+        private static string[] UpdateDirs() => System.IO.Directory.Exists(UpdatesRoot) ? System.IO.Directory.GetDirectories(UpdatesRoot) : new string[0];
+
         [Fact]
         public async Task Download_DeclaredLengthOverCap_RefusedBeforeWriting()
         {
@@ -206,9 +212,11 @@ namespace ZephyrPlayer.Tests
             try
             {
                 _exeBytes = new byte[200];
+                var before = UpdateDirs();
                 var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
                     SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: _ => true));
                 Assert.Contains("too large", ex.Message);
+                Assert.Empty(UpdateDirs().Except(before)); // no partial download directory survives
             }
             finally { SelfUpdate.MaxInstallerBytes = oldLimit; }
         }
@@ -221,8 +229,13 @@ namespace ZephyrPlayer.Tests
             try
             {
                 _exeBytes = new byte[64 * 1024 + 200]; // chunk larger than the cap: the running-total check fires
+                var before = UpdateDirs();
                 await Assert.ThrowsAsync<InvalidOperationException>(() =>
                     SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: _ => true));
+                var survivors = UpdateDirs().Except(before).ToArray();
+                Assert.Empty(survivors); // the partial file's directory is gone...
+                foreach (var dir in survivors)
+                    Assert.False(System.IO.File.Exists(System.IO.Path.Combine(dir, "installer.exe"))); // ...and no partial installer.exe remains
             }
             finally { SelfUpdate.MaxInstallerBytes = oldLimit; }
         }
