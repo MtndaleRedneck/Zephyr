@@ -264,7 +264,9 @@ jobs:
           Write-Output 'Player compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
       - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
         if: always()
-        timeout-minutes: 6
+        # Passing runs already take ~5:47 of the old 6-minute budget; the
+        # poll-close of the first-run Settings window adds seconds per leg.
+        timeout-minutes: 10
         shell: pwsh
         run: scripts/pc_desktop_capture.ps1
       - name: Install + update continuity smoke (real installer)
