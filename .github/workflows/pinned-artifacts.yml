@@ -51,11 +51,13 @@ jobs:
           $iscc='C:/Program Files (x86)/Inno Setup 6/ISCC.exe'
           if ((Get-Item $iscc).VersionInfo.ProductVersion -notmatch '^6\.6\.1(?:\D|$)') { throw 'ISCC changed before compile' }
           $v=(Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath '//Version').Node.InnerText
-          & $iscc "/DMyAppVersion=$v" windows/installer.iss
+          & $iscc "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/pinned-artifacts/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw 'Player ISCC failed' }
           $v=(Select-Xml -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -XPath '//Version').Node.InnerText -replace '\.0$',''
-          & $iscc "/DMyAppVersion=$v" '/DMySourceDir=release-out' windows/ZephyrVlcRemote/installer.iss
+          & $iscc "/DMyAppVersion=$v" '/DMySourceDir=release-out' windows/ZephyrVlcRemote/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/pinned-artifacts/helper-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw 'Helper ISCC failed' }
+          foreach($name in 'player','helper') { if((Get-Content "$env:RUNNER_TEMP/pinned-artifacts/$name-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual compile banner mismatch: $name" } }
+          'Hook-positive controls previously passed on frozen490408d: run40793721589 Playerjob123184942272 and Helperattempt2job123193308087 actual clean+hooked byte scans. This run checks new clean output absence; no new hook-positive claim.' | Set-Content "$env:RUNNER_TEMP/pinned-artifacts/hook-positive-provenance.txt"
           Get-ChildItem windows/Output/*.exe,windows/ZephyrVlcRemote/Output/*.exe | ForEach-Object { "artifact=$($_.Name) SHA256=$((Get-FileHash $_.FullName -Algorithm SHA256).Hash)" } | Set-Content "$env:RUNNER_TEMP/pinned-artifacts/SHA256SUMS"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
