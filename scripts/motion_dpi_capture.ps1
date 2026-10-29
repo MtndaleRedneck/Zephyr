@@ -42,6 +42,9 @@ $env:ZEPHYR_CI_CAPTURE='1'
 $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $setup=Start-Process $exe -ArgumentList '--install-firewall',$sid -PassThru -Wait
 if($setup.ExitCode-ne 0){throw "Capture first-run setup failed: $($setup.ExitCode)"}
+$shape=Start-Process $exe -ArgumentList '--firewall-shape-ok',('"'+$exe+'"') -PassThru -Wait
+if($shape.ExitCode-ne 0){throw "Capture permission shape not ready: $($shape.ExitCode)"}
+'CAPTURE_PERMISSION_SHAPE_PASS runner-only capture executable'|Set-Content "$out/startup-diagnostic.txt"
 function FindId($pidValue,$id){
  $cond=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,[int]$pidValue)
  $roots=[System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children,$cond)
@@ -50,7 +53,7 @@ function FindId($pidValue,$id){
 }
 try{
  foreach($scale in 100,150){
-  [MotionProof]::Scale($scale)|Tee-Object -FilePath "$out/dpi.txt" -Append;Start-Sleep -Seconds 3
+  try{[MotionProof]::Scale($scale)|Tee-Object -FilePath "$out/dpi.txt" -Append}catch{"DPI_UNAVAILABLE requested=$scale reason=$_"|Tee-Object -FilePath "$out/dpi.txt" -Append;throw};Start-Sleep -Seconds 3
   foreach($style in 'orange','white'){
    foreach($full in $false,$true){
     Get-Process ZephyrPlayer -ErrorAction SilentlyContinue|Stop-Process -Force;Start-Sleep -Milliseconds 500
