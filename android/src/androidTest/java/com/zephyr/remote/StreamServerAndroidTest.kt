@@ -50,24 +50,33 @@ class StreamServerAndroidTest {
         return Triple(code, c.headerFields, body)
     }
 
-    @Test fun stalledProviderStopReturnsAndWorkersDrain() {
-        val context = InstrumentationRegistry.getInstrumentation().context
-        server.stop(); server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0); server.start()
-        val uri = android.provider.DocumentsContract.buildDocumentUri(TestDocumentsProvider.AUTHORITY, "stall")
-        val url = server.addMovie(uri, "stall.mkv")
+    /** Actual pipe/copy/stop lifecycle. Deliberately not a SAF permission/grant test. */
+    @Test fun stalledPipeStopReturnsAndWorkersDrain() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        val opened = java.util.concurrent.atomic.AtomicInteger()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]); opened.incrementAndGet() }[0]
+        })
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/stall"), "stall.mkv")
         val client = kotlin.concurrent.thread { runCatching { get(url) } }
-        val deadline = android.os.SystemClock.elapsedRealtime() + 5000
-        while (TestDocumentsProvider.stalledOpened.get() < 2 && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10)
-        assertTrue("copy provider was opened", TestDocumentsProvider.stalledOpened.get() >= 2)
-        val before = android.os.SystemClock.elapsedRealtime(); server.stop()
-        assertTrue("stop must return promptly", android.os.SystemClock.elapsedRealtime() - before < 2000)
-        client.join(5000); assertTrue("stalled client ended", !client.isAlive)
-        // A hostile provider might ignore close. End its producer too; no cache may land.
-        TestDocumentsProvider.stalledWrites.forEach { runCatching { it.close() } }; TestDocumentsProvider.stalledWrites.clear()
-        val until = android.os.SystemClock.elapsedRealtime()+5000
-        while (server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<until) Thread.sleep(10)
-        assertEquals(0, server.openStreams.get())
-        assertTrue(context.cacheDir.listFiles().orEmpty().none { it.name.endsWith(".part") && it.name.startsWith("stream-") })
+        try {
+            val deadline = android.os.SystemClock.elapsedRealtime() + 5000
+            while (opened.get() < 2 && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10)
+            assertTrue("copy pipe was opened", opened.get() >= 2)
+            val before = android.os.SystemClock.elapsedRealtime(); server.stop()
+            assertTrue("stop must return promptly", android.os.SystemClock.elapsedRealtime() - before < 2000)
+            client.join(5000); assertTrue("stalled client ended", !client.isAlive)
+            val until = android.os.SystemClock.elapsedRealtime()+5000
+            while (server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<until) Thread.sleep(10)
+            assertEquals(0, server.openStreams.get())
+            // Keep producer ends open until after drain assertions: no false release from test teardown.
+            assertTrue(context.cacheDir.listFiles().orEmpty().none { it.name.endsWith(".part") && it.name.startsWith("stream-") })
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
     }
     @Test fun stalledWriterIsClosedByDeadline() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
