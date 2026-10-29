@@ -54,6 +54,8 @@ jobs:
       - name: Build the installer from the clean release build
         run: |
           ./scripts/pinned_installer_toolchain.ps1
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-iscc-sha256.txt").Trim()){throw 'ISCC binary drifted'}
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCmplr.dll' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-compiler-engine-sha256.txt").Trim()){throw 'Compiler engine drifted'}
           $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/helper-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
@@ -231,6 +233,8 @@ jobs:
         shell: pwsh
         run: |
           ./scripts/pinned_installer_toolchain.ps1
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-iscc-sha256.txt").Trim()){throw 'ISCC binary drifted'}
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCmplr.dll' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-compiler-engine-sha256.txt").Trim()){throw 'Compiler engine drifted'}
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
