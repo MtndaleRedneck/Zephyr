@@ -49,6 +49,28 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void SecondaryHighlight_ReversesSelectedColor_AndRendersBroadBand()
+        {
+            Sta(path=>{
+                Assert.Equal(Colors.White,SecondarySkipHighlight.HighlightColor(Brand.Orange));Assert.Equal(Brand.Orange,SecondarySkipHighlight.HighlightColor(Color.FromRgb(245,245,247)));
+                foreach(var color in new[]{Brand.Orange,Color.FromRgb(245,245,247)}) {
+                    var canvas=new Canvas{Width=108,Height=92,Background=new SolidColorBrush(Color.FromRgb(27,27,30))};
+                    var basePath=new System.Windows.Shapes.Path{Data=Geometry.Parse("M8,17 Q27,-2 46,17 M46,17 L46,8 M46,17 L37,14"),Stroke=new SolidColorBrush(color),StrokeThickness=2.6};
+                    var highlight=new SecondarySkipHighlight{Width=54,Height=46};canvas.Children.Add(basePath);canvas.Children.Add(highlight);canvas.LayoutTransform=new ScaleTransform(2,2);
+                    highlight.Preview(color,.54);Capture(canvas,216,"pc-secondary-highlight-"+(color==Brand.Orange?"orange":"white")+".png");
+                    var pixels=new RenderTargetBitmap(216,184,96,96,PixelFormats.Pbgra32);pixels.Render(canvas);
+                    var bytes=new byte[216*184*4];pixels.CopyPixels(bytes,216*4,0);
+                    Color AtPixel(int x,int y){var at=(y*216+x)*4;return Color.FromRgb(bytes[at+2],bytes[at+1],bytes[at]);}
+                    double Dist(Color a,Color b)=>Math.Abs(a.R-b.R)+Math.Abs(a.G-b.G)+Math.Abs(a.B-b.B);
+                    var center=AtPixel(57,15);var outside=AtPixel(20,30);var inverse=SecondarySkipHighlight.HighlightColor(color);
+                    Assert.True(Dist(center,inverse)<Dist(center,color),"band center did not render inverse color");
+                    Assert.True(Dist(outside,color)<Dist(outside,inverse),"outside band must retain selected base color");
+
+                    highlight.Start(color);Assert.True(highlight.HasAnimatedProperties);highlight.Stop();Assert.False(highlight.HasAnimatedProperties);Assert.Equal(-2,highlight.Progress);
+                }
+            });
+        }
+        [Fact]
         public void Settings_Choices_Update_Both_Directions_And_Keep_Pairs_Independent()
         {
             Sta(path =>
