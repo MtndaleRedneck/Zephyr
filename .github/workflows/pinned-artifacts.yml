@@ -67,7 +67,6 @@ jobs:
           $env:ZEPHYR_EXPECTED_PLAYER_HASH=(Get-FileHash windows/out/ZephyrPlayer.exe -Algorithm SHA256).Hash
           $env:ZEPHYR_PROOF_ARTIFACT='current run ${{ github.run_id }} frozen-pinned-installer-artifacts pending upload'
           ../harness/scripts/reinstall_semantic_proof.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/pinned-artifacts/reinstall-console.log"
-          Copy-Item "$env:RUNNER_TEMP/motion-dpi/reinstall*" "$env:RUNNER_TEMP/pinned-artifacts/"
           $helper=(Get-ChildItem windows/ZephyrVlcRemote/Output/*.exe | Select-Object -First 1).FullName
           $p=Start-Process $helper -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
           if (!$p.WaitForExit(120000) -or $p.ExitCode -ne 0) { throw 'Gated helper installation failed' }
@@ -75,6 +74,12 @@ jobs:
           if (!(Test-Path $installed)) { throw 'Installed helper missing' }
           if ((Get-FileHash $installed -Algorithm SHA256).Hash -ne (Get-FileHash windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe -Algorithm SHA256).Hash) { throw 'Installed helper payload mismatch' }
           'Both installed payload SHA256 equal their frozen clean publishes; exact installer SHA256 in manifest' | Add-Content "$env:RUNNER_TEMP/pinned-artifacts/reinstall-proof.txt"
+      - name: Preserve bounded proof logs even on failure
+        if: always()
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/pinned-artifacts" | Out-Null
+          Copy-Item "$env:RUNNER_TEMP/motion-dpi/reinstall*" "$env:RUNNER_TEMP/pinned-artifacts/" -ErrorAction SilentlyContinue
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
