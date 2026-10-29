@@ -34,7 +34,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
 
     private val random = SecureRandom()
     private val token: String = ByteArray(18).also(random::nextBytes).joinToString("") { "%02x".format(it) }
-    private val entries = LinkedHashMap<String, Entry>()
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Entry>()
+    private val nextEntryId = java.util.concurrent.atomic.AtomicInteger()
     private var socket: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
     private val permits = java.util.concurrent.Semaphore(24)
@@ -50,7 +51,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     val baseUrl: String get() = "http://${wifiAddr.hostAddress}:${socket?.localPort ?: port}/s/$token"
 
     fun addMovie(uri: Uri, name: String, subtitles: List<Uri> = emptyList()): String {
-        val id = (entries.size + 1).toString()
+        val id = nextEntryId.incrementAndGet().toString()
         entries[id] = Entry(uri, name, subtitles)
         return "$baseUrl/$id"
     }
@@ -93,16 +94,20 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         perPeer.computeIfPresent(peer) { _, count -> if (count.decrementAndGet() == 0) null else count }
     }
 
+    private val stopped = java.util.concurrent.atomic.AtomicBoolean()
     fun stop() {
+        if (!stopped.compareAndSet(false, true)) return
         running = false
         runCatching { socket?.close() }
-        cancellations.forEach { it.cancel() }
-        providers.forEach { runCatching { it.close() } }
         clients.forEach { runCatching { it.close() } }
         watchdog.shutdownNow()
         pool.shutdownNow()
         // Cleanup only after copy workers end; never delete while a worker can rename.
         kotlin.concurrent.thread(name = "stream-drain", isDaemon = true) {
+            // Provider cancellation/close may call a remote provider. Never do it
+            // on the service main thread; worker/permit accounting stays real.
+            cancellations.forEach { runCatching { it.cancel() } }
+            providers.forEach { runCatching { it.close() } }
             while (!pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) { providers.forEach { runCatching { it.close() } } }
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-$token-") }?.forEach { it.delete() }
             activeTokens.remove(token)
@@ -242,8 +247,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                                 // Poll a non-seekable pipe instead of entering an uninterruptible read.
                                                 val poll = android.system.StructPollfd().apply { this.fd = copyFd.fileDescriptor; events = android.system.OsConstants.POLLIN.toShort() }
                                                 while (running) {
-                                                    try { if (android.system.Os.poll(arrayOf(poll), 500) > 0) break }
-                                                    catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e }
+                                                    if (!copyFd.fileDescriptor.valid()) throw java.io.InterruptedIOException("Provider closed")
+                                                    try {
+                                                        if (android.system.Os.poll(arrayOf(poll), 500) > 0) {
+                                                            val flags = poll.revents.toInt()
+                                                            if (flags and (android.system.OsConstants.POLLNVAL or android.system.OsConstants.POLLERR) != 0) throw java.io.IOException("Provider poll failed")
+                                                            if (flags and android.system.OsConstants.POLLIN != 0) break
+                                                            if (flags and android.system.OsConstants.POLLHUP != 0) return -1
+                                                        }
+                                                    } catch (e: android.system.ErrnoException) { if (e.errno != android.system.OsConstants.EINTR) throw e }
                                                 }
                                                 if (!running) throw java.io.InterruptedIOException()
                                                 val n = super.read(b, off, len)

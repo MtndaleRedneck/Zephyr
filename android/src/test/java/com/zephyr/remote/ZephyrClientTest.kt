@@ -29,6 +29,30 @@ class ZephyrClientTest {
             .addHeader("Content-Type", "application/json"))
     }
 
+    @Test fun `leave during pending press sends compensating release and no heartbeat`() {
+        val downSeen = java.util.concurrent.CountDownLatch(1)
+        val finishDown = java.util.concurrent.CountDownLatch(1)
+        server.dispatcher = object : okhttp3.mockwebserver.Dispatcher() {
+            override fun dispatch(request: okhttp3.mockwebserver.RecordedRequest): MockResponse {
+                if (request.body.clone().readUtf8().contains("\"down\":true")) {
+                    downSeen.countDown(); check(finishDown.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                }
+                return MockResponse().setBody("{}")
+            }
+        }
+        ZephyrClient.startInputLeases()
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>()
+        val worker = kotlin.concurrent.thread { try { ZephyrClient.inputButton(host,port,"race-token","left",true) } catch (t: Throwable) { failure.set(t) } }
+        try {
+            assertTrue(downSeen.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            ZephyrClient.stopInputLeases()
+            finishDown.countDown(); worker.join(5000)
+            assertTrue(!worker.isAlive); assertEquals(null, failure.get())
+            assertTrue(server.takeRequest().body.readUtf8().contains("\"down\":true"))
+            assertTrue(server.takeRequest().body.readUtf8().contains("\"down\":false"))
+            assertEquals(null, server.takeRequest(2500, java.util.concurrent.TimeUnit.MILLISECONDS))
+        } finally { finishDown.countDown(); ZephyrClient.stopInputLeases(); worker.join(5000) }
+    }
     @Test fun `play permits seven second response but control remains short`() {
         server.enqueue(MockResponse().setBody("{}").setHeadersDelay(7, java.util.concurrent.TimeUnit.SECONDS))
         ZephyrClient.play(host, port, "t", "http://127.0.0.1:8080/s/t/1", emptyList())

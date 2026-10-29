@@ -93,12 +93,16 @@ namespace ZephyrPlayer
             catch { return -1; }
         }
 
-        public bool GetMute()
+        public bool GetMute() => GetMuteOrNull() ?? false;
+
+        public bool? GetMuteOrNull()
         {
-            if (_endpoint == null) return false;
-            try { return _endpoint.GetMute(out var m) == 0 && m != 0; }
-            catch { return false; }
+            if (_endpoint == null) return null;
+            try { return _endpoint.GetMute(out var m) == 0 ? m != 0 : null; }
+            catch { return null; }
         }
+
+        internal static bool MuteAfterPoll(bool current, bool? observed) => observed ?? current;
 
         public void SetMaster(int volume)
         {

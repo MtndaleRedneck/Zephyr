@@ -2,6 +2,10 @@ name: Audit targeted follow-up
 on:
   workflow_dispatch:
     inputs:
+      repair_tests:
+        description: Run current Windows repair tests instead of old installer checks
+        type: boolean
+        default: false
       android_only:
         description: Skip already-proven Windows checks
         type: boolean
@@ -11,7 +15,7 @@ permissions:
   actions: read
 jobs:
   installer-checks:
-    if: ${{ !inputs.android_only }}
+    if: ${{ !inputs.android_only && !inputs.repair_tests }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -281,6 +285,29 @@ jobs:
           path: |
             ${{ runner.temp }}/*smoke.log
             ${{ runner.temp }}/uninstall-legacy-entry.log
+  windows-repairs:
+    if: ${{ inputs.repair_tests }}
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+      - name: Native repair and existing lease regressions
+        run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter "FullyQualifiedName~ZephyrPlayer.LeaseTests|FullyQualifiedName~ZephyrPlayer.Tests.CoreAudioTests.ComMetadata|FullyQualifiedName~ZephyrPlayer.Tests.CoreAudioTests.RealComActivation" --logger "trx;LogFileName=repair-tests.trx" --results-directory repair-results
+      - name: Require actual targeted execution
+        shell: pwsh
+        run: |
+          [xml]$trx = Get-Content repair-results/repair-tests.trx
+          $c = $trx.TestRun.ResultSummary.Counters
+          Write-Output "REPAIR_TRX total=$($c.total) executed=$($c.executed) passed=$($c.passed) failed=$($c.failed) notExecuted=$($c.notExecuted)"
+          if ([int]$c.executed -lt 10 -or [int]$c.passed -lt 10 -or [int]$c.failed -ne 0 -or [int]$c.notExecuted -ne 0) { throw 'Targeted tests missing, skipped, or failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: audit-windows-repairs
+          path: repair-results/*
   stalled-pipe:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -81,6 +81,69 @@ class StreamServerAndroidTest {
             server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
         }
     }
+    @Test fun stopReturnsWhileProviderCloseIsBlocked() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val closeStarted = java.util.concurrent.CountDownLatch(1)
+        val releaseClose = java.util.concurrent.CountDownLatch(1)
+        val opens = java.util.concurrent.atomic.AtomicInteger()
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            val pair = android.os.ParcelFileDescriptor.createPipe(); writers.add(pair[1]); opens.incrementAndGet()
+            object : android.os.ParcelFileDescriptor(pair[0]) {
+                override fun close() {
+                    closeStarted.countDown(); releaseClose.await(10, java.util.concurrent.TimeUnit.SECONDS); super.close()
+                }
+            }
+        })
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/blocked-close"), "close.mkv")
+        val client = kotlin.concurrent.thread { runCatching { get(url) } }
+        try {
+            val until=android.os.SystemClock.elapsedRealtime()+5000
+            while(opens.get()<2 && android.os.SystemClock.elapsedRealtime()<until) Thread.sleep(10)
+            assertTrue(opens.get()>=2)
+            val before=android.os.SystemClock.elapsedRealtime(); server.stop()
+            assertTrue("caller not blocked by provider close",android.os.SystemClock.elapsedRealtime()-before<2000)
+            assertTrue(closeStarted.await(5,java.util.concurrent.TimeUnit.SECONDS))
+            client.join(3000);assertTrue("socket closed despite blocked provider close",!client.isAlive)
+        } finally { releaseClose.countDown();writers.forEach { runCatching { it.close() } };server.stop();client.join(5000) }
+    }
+    @Test fun stalledPipeDeadlineReleasesCopyWithoutStop() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val writers=java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        val opens=java.util.concurrent.atomic.AtomicInteger()
+        server.stop()
+        server=StreamServer(context,InetAddress.getByName("127.0.0.1"),0,openDescriptor={_,_->android.os.ParcelFileDescriptor.createPipe().also{writers.add(it[1]);opens.incrementAndGet()}[0]})
+        server.start()
+        val url=server.addMovie(Uri.parse("content://synthetic-pipe/deadline"),"deadline.mkv")
+        val result=java.util.concurrent.atomic.AtomicReference<Int>()
+        val client=kotlin.concurrent.thread { runCatching { result.set(get(url).first) } }
+        try {
+            val until=android.os.SystemClock.elapsedRealtime()+5000
+            while(opens.get()<2 && android.os.SystemClock.elapsedRealtime()<until)Thread.sleep(10)
+            assertTrue("copy opened",opens.get()>=2)
+            client.join(65000)
+            assertTrue("deadline ended request without stop",!client.isAlive)
+            assertEquals(500,result.get())
+            val drain=android.os.SystemClock.elapsedRealtime()+5000
+            while(server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<drain)Thread.sleep(10)
+            assertEquals(0,server.openStreams.get())
+            assertTrue(context.cacheDir.listFiles().orEmpty().none{it.name.startsWith("stream-")&&it.name.endsWith(".part")})
+        } finally {server.stop();writers.forEach{runCatching{it.close()}};client.join(5000)}
+    }
+    @Test fun concurrentMovieRegistrationHasUniqueIdsAndSafeLookup() {
+        val urls = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        val threads = (1..8).map { kotlin.concurrent.thread { repeat(25) { urls.add(server.addMovie(Uri.fromFile(file), "concurrent")) } } }
+        threads.forEach { it.join() }
+        assertEquals(200, urls.size)
+        urls.forEach { assertArrayEquals(bytes, get(it).third) }
+    }
+    @Test fun capturedTargetStringRedactsCredentials() {
+        val target = com.bingemote.StreamTarget.Target(com.bingemote.Source.ZEPHYR, "127.0.0.1", 1, "secret-sentinel")
+        assertTrue(!target.toString().contains("secret-sentinel"))
+        assertTrue(target.toString().contains("<redacted>"))
+    }
     @Test fun stalledWriterIsClosedByDeadline() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val large = File(context.cacheDir, "stalled-writer.bin")

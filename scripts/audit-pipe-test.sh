@@ -9,7 +9,7 @@ cp android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk audit-p
 adb logcat -c
 adb shell am instrument -w -e class com.zephyr.remote.StreamServerAndroidTest com.zephyr.remote.debug.test/androidx.test.runner.AndroidJUnitRunner 2>&1 | tee audit-pipe-results/result.txt
 adb logcat -d > audit-pipe-results/logcat.txt
-grep -q '^OK (14 tests)' audit-pipe-results/result.txt
+grep -q '^OK (18 tests)' audit-pipe-results/result.txt
 ! grep -Eq 'FAILURES|INSTRUMENTATION_FAILED|INSTRUMENTATION_ABORTED' audit-pipe-results/result.txt
 python3 - <<'PYCODE'
 from pathlib import Path

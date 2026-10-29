@@ -106,12 +106,13 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
 
     // Unbounded: a backed-up send must never shed a move/button (a dropped button-up
     // leaves the PC mouse pressed). The sender drains at link speed.
+    val inputSessionActive = remember { java.util.concurrent.atomic.AtomicBoolean(true) }
     val commands = remember { kotlinx.coroutines.channels.Channel<() -> Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED) }
     LaunchedEffect(commands) {
         var failedInARow = 0
         for (command in commands) {
             try {
-                kotlinx.coroutines.withContext(Dispatchers.IO) { command() }; helperOk = true
+                kotlinx.coroutines.withContext(Dispatchers.IO) { if (inputSessionActive.get()) command() }; helperOk = true
                 failedInARow = 0
             } catch (e: Exception) {
                 helperOk = false
@@ -120,7 +121,11 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
             }
         }
     }
-    DisposableEffect(commands) { onDispose {
+    DisposableEffect(commands) {
+        com.zephyr.remote.ZephyrClient.startInputLeases()
+        onDispose {
+        inputSessionActive.set(false)
+        com.zephyr.remote.ZephyrClient.stopInputLeases()
         commands.close()
         // Always release a held mouse button when leaving this screen.
         HelperClient.io.execute { try { InputRouter.button(remote, "left", false) } catch (_: Exception) {} }
