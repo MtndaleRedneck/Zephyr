@@ -26,7 +26,9 @@ import java.util.concurrent.Executors
  * Prototype status: platform-verification list still open (SAF seekability across
  * providers, service type, Wi-Fi lock behavior). Nothing here is final.
  */
-class StreamServer(private val context: Context, private val wifiAddr: InetAddress, private val port: Int = 0) {
+class StreamServer(private val context: Context, private val wifiAddr: InetAddress, private val port: Int = 0,
+    private val openDescriptor: (Uri, android.os.CancellationSignal) -> ParcelFileDescriptor? = { uri, signal -> context.contentResolver.openFileDescriptor(uri, "r", signal) },
+) {
 
     data class Entry(val uri: Uri, val displayName: String, val subtitles: List<Uri>)
 
@@ -198,7 +200,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         cancellations.add(signal)
         if (!running) { cancellations.remove(signal); return }
         val openDeadline = watchdog.schedule({ signal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS)
-        val pfd: ParcelFileDescriptor = try { context.contentResolver.openFileDescriptor(uri, "r", signal) } finally { openDeadline.cancel(false); cancellations.remove(signal) }
+        val pfd: ParcelFileDescriptor = try { openDescriptor(uri, signal) } finally { openDeadline.cancel(false); cancellations.remove(signal) }
             ?: return reply(client, 404, ByteArray(0), "text/plain")
         if (!running) { pfd.close(); return }
         providers.add(pfd)
@@ -228,7 +230,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                     open = {
                                         val copySignal = android.os.CancellationSignal(); cancellations.add(copySignal)
                                         val copyOpenDeadline = watchdog.schedule({ copySignal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS)
-                                        val copyFd = try { context.contentResolver.openFileDescriptor(uri, "r", copySignal) } finally { copyOpenDeadline.cancel(false); cancellations.remove(copySignal) }
+                                        val copyFd = try { openDescriptor(uri, copySignal) } finally { copyOpenDeadline.cancel(false); cancellations.remove(copySignal) }
                                             ?: throw java.io.IOException("no provider")
                                         if (!running) { copyFd.close(); throw java.io.InterruptedIOException() }
                                         val input = ParcelFileDescriptor.AutoCloseInputStream(copyFd)

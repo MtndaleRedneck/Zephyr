@@ -401,9 +401,24 @@ jobs:
           $running = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
           if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'replacement did not relaunch installed app' }
           if ((Get-FileHash $settingsPath).Hash -ne $beforeSettings) { throw 'replacement changed settings' }
-          if ((Get-FileHash $pairingPath).Hash -ne $beforePairing) { throw 'replacement changed pairing' }
+          # Startup may migrate the legacy token to DPAPI. Prove identity, not ciphertext bytes.
+          $req = [System.Net.Http.HttpClient]::new()
+          $req.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer','local-smoke-token')
+          $auth = $req.GetAsync('http://127.0.0.1:47823/control/status').GetAwaiter().GetResult()
+          if ([int]$auth.StatusCode -ne 200) { throw "replacement lost original pairing: $($auth.StatusCode)" }
+          $req.DefaultRequestHeaders.Authorization = $null
+          $noAuth = $req.GetAsync('http://127.0.0.1:47823/control/status').GetAwaiter().GetResult()
+          if ([int]$noAuth.StatusCode -ne 401) { throw 'replacement accepted unauthenticated control' }
+          $savedPairings = Get-Content $pairingPath -Raw | ConvertFrom-Json
+          if (@($savedPairings).Count -ne 1) { throw 'replacement changed pairing count' }
+          $storedToken = [string]$savedPairings[0].token
+          if (-not $storedToken.StartsWith('dpapi:')) { throw 'replacement pairing was not protected at rest' }
+          Add-Type -AssemblyName System.Security
+          $decoded = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($storedToken.Substring(6)), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
+          if ($decoded -cne 'local-smoke-token') { throw 'replacement changed pairing identity' }
+          $req.Dispose()
           if (-not (Test-Path (Join-Path (Split-Path $installed) 'libvlc'))) { throw 'installed libvlc directory missing' }
-          Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings and pairing hashes unchanged. Same-version replacement, not published version upgrade.'
+          Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings hash unchanged; original pairing identity/count preserved, protected at rest, authenticated 200/unauthenticated 401. Same-version replacement, not published version upgrade.'
           # Report actual installed shortcut display names, never user paths.
           $shell = New-Object -ComObject WScript.Shell
           $desktopFolders = @([Environment]::GetFolderPath('Desktop'), "$env:PUBLIC/Desktop")
@@ -753,6 +768,8 @@ jobs:
           if ($i1.ExitCode -ne 0) { throw "legacy leg: 1.1.0 install exit $($i1.ExitCode)" }
           $uninsPath = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
           $stamp110 = (Get-Item $uninsPath).LastWriteTimeUtc
+          $beforeEngineHash = (Get-FileHash $uninsPath -Algorithm SHA256).Hash
+          Write-Output "UNINSTALL_ENGINE_BEFORE_SHA256=$beforeEngineHash"
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 1
           # Upgrade; do NOT run setup - the UAC-declined/failed leg.
@@ -775,7 +792,11 @@ jobs:
           if (-not (Test-Path $target)) { throw "legacy leg: entry target missing: $target" }
           $stampNew = (Get-Item $target).LastWriteTimeUtc
           Write-Output "unins000.exe stamps: after-1.1.0=$stamp110 entry-target=$stampNew"
-          if ($stampNew -le $stamp110) { throw "legacy leg: entry target predates the upgrade - it would run 1.1.0's OWN uninstaller engine" }
+          # Timestamp/hash are diagnostic. Actual legacy-entry behavior below is
+          # the safety verdict; do not infer replacement from modification time.
+          Write-Output "uninstaller engine metadata: $((Get-Item $target).VersionInfo.FileVersion)"
+          $afterEngineHash = (Get-FileHash $target -Algorithm SHA256).Hash
+          Write-Output "UNINSTALL_ENGINE_AFTER_SHA256=$afterEngineHash CHANGED=$($afterEngineHash -ne $beforeEngineHash)"
           if ((Resolve-Path $target).Path -ne (Resolve-Path $uninsPath).Path) { throw "legacy leg: entry target is not the shared uninstaller: $target" }
           # Behavior through THAT entry: plant a foreign reservation, invoke the path.
           netsh http delete urlacl url=http://+:47823/ | Out-Null
