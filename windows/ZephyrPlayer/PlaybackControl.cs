@@ -56,8 +56,10 @@ namespace ZephyrPlayer
             state = _player.State.ToString(),
             time = _player.Time / 1000,
             length = _player.Length / 1000,
-            volume = _player.Volume,
-            muted = _player.Mute,
+            volume = _window.SharedVolume,
+            decoder_gain = _player.Volume,
+            title = _window.CurrentMovieTitle,
+            muted = _window.SharedMute,
             spu = _player.Spu,
             // The phone's subtitle sheet needs the track LIST, not just the
             // current id (teardown C2): id + name per track.

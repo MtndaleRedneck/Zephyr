@@ -31,6 +31,14 @@ object StreamCoordinator {
      *  selection, so flipping sources mid-stream can't wrongly stop or strand it. */
     enum class ServedTarget { ZEPHYR, VLC }
     @Volatile var servedTarget: ServedTarget? = null
+    val servedReceivers = java.util.concurrent.CopyOnWriteArraySet<com.bingemote.StreamTarget.Target>()
+
+    fun receiverState(): StreamIdlePolicy.PlayerState {
+        val targets = servedReceivers.toList()
+        if (targets.isEmpty()) return StreamIdlePolicy.PlayerState.UNKNOWN
+        val states = targets.map { runCatching { it.state() }.getOrDefault(StreamIdlePolicy.PlayerState.UNKNOWN) }
+        return if (states.all { it == StreamIdlePolicy.PlayerState.STOPPED_OR_ENDED }) StreamIdlePolicy.PlayerState.STOPPED_OR_ENDED else StreamIdlePolicy.PlayerState.UNKNOWN
+    }
 
     suspend fun bind(context: Context): Bound = suspendCancellableCoroutine { cont ->
         val app = context.applicationContext

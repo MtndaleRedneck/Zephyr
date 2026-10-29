@@ -19,6 +19,8 @@ object ZephyrClient {
         .readTimeout(5, TimeUnit.SECONDS)
         .build()
 
+    private val playClient = client.newBuilder().readTimeout(40, TimeUnit.SECONDS).callTimeout(45, TimeUnit.SECONDS).build()
+
     /** "Find my PC" for the Zephyr Player: same broadcast question as the
      *  helper's discovery, answered with the player's own identity
      *  (ZEPHYR_PLAYER_HERE_V1) so the two apps never get confused. */
@@ -155,8 +157,22 @@ object ZephyrClient {
 
     fun inputMove(host: String, port: Int, token: String, dx: Double, dy: Double) =
         post(host, port, token, "/input/move", JSONObject().put("dx", dx).put("dy", dy))
-    fun inputButton(host: String, port: Int, token: String, button: String, down: Boolean) =
+    private val heldButtons = java.util.concurrent.ConcurrentHashMap<String, () -> Unit>()
+    private val heartbeatClient = client.newBuilder().callTimeout(2, TimeUnit.SECONDS).build()
+    private val leaseTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "zephyr-input-lease").apply { isDaemon = true } }
+    init { leaseTimer.scheduleWithFixedDelay({ heldButtons.values.toSet().forEach { runCatching { it() } } }, 2, 2, TimeUnit.SECONDS) }
+    private val leaseGate = Any()
+    @Volatile private var leaseActive = true
+    fun startInputLeases() { synchronized(leaseGate) { leaseActive = true } }
+    private val leaseEpoch = java.util.concurrent.atomic.AtomicLong()
+    fun stopInputLeases() { synchronized(leaseGate) { leaseActive = false; leaseEpoch.incrementAndGet(); heldButtons.clear() } }
+    fun inputButton(host: String, port: Int, token: String, button: String, down: Boolean) {
+        val epoch = leaseEpoch.get()
+        val key = "$host:$port:$token:$button"
+        if (!down) heldButtons.remove(key)
         post(host, port, token, "/input/button", JSONObject().put("button", button).put("down", down))
+        synchronized(leaseGate) { if (down && leaseActive && epoch == leaseEpoch.get()) heldButtons[key] = { heartbeatClient.newCall(authReq(host, port, token, "/input/heartbeat").post("{}".toRequestBody("application/json".toMediaType())).build()).execute().use { if (it.code == 401) heldButtons.keys.removeAll { k -> k.startsWith("$host:$port:$token:") } } } }
+    }
     fun inputScroll(host: String, port: Int, token: String, dy: Double) =
         post(host, port, token, "/input/scroll", JSONObject().put("dy", dy))
     fun inputZoom(host: String, port: Int, token: String, delta: Double) =
@@ -179,7 +195,7 @@ object ZephyrClient {
             .header("Authorization", "Bearer $token")
             .post(body)
             .build()
-        client.newCall(req).execute().use { resp ->
+        playClient.newCall(req).execute().use { resp ->
             if (resp.code == 401) throw BadToken()
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
         }

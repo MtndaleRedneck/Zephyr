@@ -19,6 +19,7 @@ internal object CacheCopier {
         open: () -> java.io.InputStream?,
         tmp: File, final: File,
         freeSpace: () -> Long, maxBytes: Long, minFree: Long,
+        cancelled: () -> Boolean = { false },
     ) {
         try {
             if (freeSpace() < minFree) throw NoSpace()
@@ -29,6 +30,7 @@ internal object CacheCopier {
                     var total = 0L
                     var n = i.read(buf)
                     while (n >= 0) {
+                        if (cancelled()) throw java.io.InterruptedIOException("copy stopped")
                         total += n
                         if (total > maxBytes) throw TooLarge()
                         // Space is consumed as we write: the floor must hold for the
@@ -39,6 +41,7 @@ internal object CacheCopier {
                     }
                 }
             }
+            if (cancelled()) throw java.io.InterruptedIOException("copy stopped")
             if (!tmp.renameTo(final)) throw java.io.IOException("cache rename failed")
         } catch (e: Throwable) {
             tmp.delete()

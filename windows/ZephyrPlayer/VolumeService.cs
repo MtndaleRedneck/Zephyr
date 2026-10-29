@@ -15,51 +15,68 @@ namespace ZephyrPlayer
         [ComImport, Guid("BCDE0395-E52F-467C-8E3D-C4579291692E")]
         private class MMDeviceEnumeratorCom { }
 
-        [Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [ComImport, Guid("A95664D2-9614-4F35-A746-DE8DB63617E6"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IMMDeviceEnumerator
         {
-            int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice device);
+            [PreserveSig] int EnumAudioEndpoints(int dataFlow, uint stateMask, out IntPtr devices);
+            [PreserveSig] int GetDefaultAudioEndpoint(int dataFlow, int role, out IMMDevice device);
         }
 
-        [Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [ComImport, Guid("D666063F-1587-4E43-81F1-B948E807363F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IMMDevice
         {
-            int Activate(ref Guid iid, int clsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object endpoint);
+            [PreserveSig] int Activate(ref Guid iid, int clsCtx, IntPtr activationParams, [MarshalAs(UnmanagedType.IUnknown)] out object endpoint);
         }
 
         // Partial vtable: declared in order, only these are called.
-        [Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        [ComImport, Guid("5CDF2C82-841E-4546-9722-0CF74078229A"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface IAudioEndpointVolume
         {
-            int RegisterControlChangeNotify(IntPtr notify);
-            int UnregisterControlChangeNotify(IntPtr notify);
-            int GetChannelCount(out int channels);
-            int SetMasterVolumeLevel(float levelDb, Guid eventContext);
-            int SetMasterVolumeLevelScalar(float level, Guid eventContext);
-            int GetMasterVolumeLevel(out float levelDb);
-            int GetMasterVolumeLevelScalar(out float level);
-            int SetChannelVolumeLevel(int channel, float levelDb, Guid eventContext);
-            int SetChannelVolumeLevelScalar(int channel, float level, Guid eventContext);
-            int GetChannelVolumeLevel(int channel, out float levelDb);
-            int GetChannelVolumeLevelScalar(int channel, out float level);
-            int SetMute(int mute, Guid eventContext);
-            int GetMute(out int mute);
+            [PreserveSig] int RegisterControlChangeNotify(IntPtr notify);
+            [PreserveSig] int UnregisterControlChangeNotify(IntPtr notify);
+            [PreserveSig] int GetChannelCount(out int channels);
+            [PreserveSig] int SetMasterVolumeLevel(float levelDb, ref Guid eventContext);
+            [PreserveSig] int SetMasterVolumeLevelScalar(float level, ref Guid eventContext);
+            [PreserveSig] int GetMasterVolumeLevel(out float levelDb);
+            [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
+            [PreserveSig] int SetChannelVolumeLevel(int channel, float levelDb, ref Guid eventContext);
+            [PreserveSig] int SetChannelVolumeLevelScalar(int channel, float level, ref Guid eventContext);
+            [PreserveSig] int GetChannelVolumeLevel(int channel, out float levelDb);
+            [PreserveSig] int GetChannelVolumeLevelScalar(int channel, out float level);
+            [PreserveSig] int SetMute(int mute, ref Guid eventContext);
+            [PreserveSig] int GetMute(out int mute);
         }
 
         private IAudioEndpointVolume? _endpoint;
 
+        // Read-only ABI probe for ordinary Windows CI. No volume setting is changed.
+        internal static (int enumerateHr, bool collection, int defaultHr, bool device) ProbeComSlots()
+        {
+            IMMDeviceEnumerator? enumerator = null; IMMDevice? device = null; IntPtr collection = IntPtr.Zero;
+            try {
+                enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+                var enumHr = enumerator.EnumAudioEndpoints(0, 15, out collection);
+                var defaultHr = enumerator.GetDefaultAudioEndpoint(0, 0, out device);
+                return (enumHr, collection != IntPtr.Zero, defaultHr, device != null);
+            } finally { if (collection != IntPtr.Zero) Marshal.Release(collection); if (device != null) Marshal.ReleaseComObject(device); if (enumerator != null) Marshal.ReleaseComObject(enumerator); }
+        }
+
         public VolumeService()
         {
+            IMMDeviceEnumerator? enumerator = null; IMMDevice? device = null;
             try
             {
-                var enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
-                var hr = enumerator.GetDefaultAudioEndpoint(0 /* eRender */, 0 /* eConsole */, out var device);
-                if (hr != 0 || device == null) return;
+                enumerator = (IMMDeviceEnumerator)new MMDeviceEnumeratorCom();
+                var hr = enumerator.GetDefaultAudioEndpoint(0 /* eRender */, 0 /* eConsole */, out device);
+                Marshal.ThrowExceptionForHR(hr);
+                if (device == null) return;
                 var iid = typeof(IAudioEndpointVolume).GUID;
                 hr = device.Activate(ref iid, 0x17 /* CLSCTX_ALL */, IntPtr.Zero, out var obj);
-                if (hr == 0) _endpoint = (IAudioEndpointVolume)obj;
+                Marshal.ThrowExceptionForHR(hr);
+                _endpoint = (IAudioEndpointVolume)obj;
             }
-            catch { _endpoint = null; } // no audio device (headless CI) - fail soft
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Windows volume initialization failed: " + ex.GetType().Name + " HRESULT=0x" + ex.HResult.ToString("X8")); _endpoint = null; } // no audio device (headless CI) - fail soft
+            finally { if (device != null) Marshal.ReleaseComObject(device); if (enumerator != null) Marshal.ReleaseComObject(enumerator); }
         }
 
         /// <summary>False when the machine has no usable audio endpoint.</summary>
@@ -86,15 +103,15 @@ namespace ZephyrPlayer
         public void SetMaster(int volume)
         {
             if (_endpoint == null) return;
-            try { _endpoint.SetMasterVolumeLevelScalar(Math.Clamp(volume, 0, 100) / 100f, Guid.Empty); }
-            catch { }
+            try { var context = Guid.Empty; Marshal.ThrowExceptionForHR(_endpoint.SetMasterVolumeLevelScalar(Math.Clamp(volume, 0, 100) / 100f, ref context)); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Windows volume write failed: 0x" + ex.HResult.ToString("X8")); }
         }
 
         public void SetMute(bool mute)
         {
             if (_endpoint == null) return;
-            try { _endpoint.SetMute(mute ? 1 : 0, Guid.Empty); }
-            catch { }
+            try { var context = Guid.Empty; Marshal.ThrowExceptionForHR(_endpoint.SetMute(mute ? 1 : 0, ref context)); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Windows volume write failed: 0x" + ex.HResult.ToString("X8")); }
         }
 
         public void Dispose()

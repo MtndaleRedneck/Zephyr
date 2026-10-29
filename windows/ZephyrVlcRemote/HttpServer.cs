@@ -21,9 +21,9 @@ internal sealed class HttpServer : IDisposable
     private Thread? _thread;
     private volatile bool _running;
 
-    public void Start()
+    public void Start(int? loopbackPort = null)
     {
-        _listener.Prefixes.Add($"http://+:{Program.HttpPort}/");
+        _listener.Prefixes.Add(loopbackPort.HasValue ? $"http://127.0.0.1:{loopbackPort.Value}/" : $"http://+:{Program.HttpPort}/");
         _listener.Start();
         _running = true;
         _thread = new Thread(Loop) { IsBackground = true };
@@ -242,14 +242,19 @@ internal sealed class HttpServer : IDisposable
     internal static readonly object PairLock = new();
     private void HandlePair(HttpListenerRequest req, HttpListenerResponse res)
     {
-        lock (PairLock) { HandlePairLocked(req, res); }
+        // Network/body waits must never hold the lock shared with Cancel/Pair UI.
+        var body = ReadBody(req);
+        var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
+        int status = 400; string payload = "{}";
+        lock (PairLock) { HandlePairLocked(code, (c, j) => { status = c; payload = j; }); }
+        Reply(res, status, payload);
     }
-    private void HandlePairLocked(HttpListenerRequest req, HttpListenerResponse res)
+    private void HandlePairLocked(string code, Action<int, string> respond)
     {
         if (Program.PairFailures >= Program.MaxPairFailures)
         {
             Program.Log("Pairing locked - too many wrong codes.");
-            Reply(res, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
+            respond(429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
             return;
         }
         // Snapshot the pairing state ONCE under the lock: the UI thread also writes it
@@ -261,28 +266,26 @@ internal sealed class HttpServer : IDisposable
         // Wi-Fi could lock pairing while he is not even pairing.
         if (pairCode == null)
         {
-            Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
+            respond(403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
             return;
         }
-        var body = ReadBody(req);
-        var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
         // An expired code is not a wrong guess - say so without spending a try (round-5).
         if (DateTime.UtcNow > pairCodeExpires)
         {
-            Reply(res, 410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
+            respond(410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
             return;
         }
         if (!ConstantTimeEq(code, pairCode))
         {
             Program.PairFailures++;
             Program.Log("Wrong pairing code entered (" + Program.PairFailures + " of " + Program.MaxPairFailures + ").");
-            Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"Wrong code. Check the code on the PC and try again.\"}");
+            respond(403, "{\"error\":\"bad code\",\"detail\":\"Wrong code. Check the code on the PC and try again.\"}");
             return;
         }
         if (Program.PhonesCount >= Program.MaxPhones)
         {
             Program.Log("Pairing refused - already " + Program.MaxPhones + " phones paired.");
-            Reply(res, 409, "{\"error\":\"too many phones\",\"detail\":\"This PC already has " + Program.MaxPhones + " phones paired. Remove one in the Zephyr VLC Remote window on the PC to make room.\"}");
+            respond(409, "{\"error\":\"too many phones\",\"detail\":\"This PC already has " + Program.MaxPhones + " phones paired. Remove one in the Zephyr VLC Remote window on the PC to make room.\"}");
             return;
         }
         var token = Program.NewToken();
@@ -300,7 +303,7 @@ internal sealed class HttpServer : IDisposable
             // name goes back too, so the retry pairs under the name he chose.
             Program.PendingPhoneName = phoneName;
             Program.Log("Pairing could not be saved: " + ex.Message);
-            Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"The pairing worked but could not be saved on the PC. Try the same code again in a moment.\"}");
+            respond(503, "{\"error\":\"save failed\",\"detail\":\"The pairing worked but could not be saved on the PC. Try the same code again in a moment.\"}");
             return;
         }
         // Persisted: only now is the code spent.
@@ -310,7 +313,7 @@ internal sealed class HttpServer : IDisposable
         // Automatic-first VLC setup: the freshly paired phone gets the PC's password in the
         // code-gated pair response, so nobody types anything into VLC's settings.
         var vlcPassword = VlcSetup.ReadOrCreatePassword();
-        Reply(res, 200, JsonSerializer.Serialize(new
+        respond(200, JsonSerializer.Serialize(new
         {
             token = token,
             name = Program.MachineLabel(),
@@ -579,7 +582,7 @@ internal sealed class DiscoveryResponder : IDisposable
     private Thread? _thread;
     private volatile bool _running;
 
-    public void Start()
+    public void Start(int? loopbackPort = null)
     {
         // Exclusive claim on 8491: BingeMote keeps 8489 and the Player keeps 8490, and
         // nothing else may co-bind ours. ICMP port-unreachable must not kill the loop.

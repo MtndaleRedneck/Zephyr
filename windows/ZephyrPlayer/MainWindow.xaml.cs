@@ -119,6 +119,7 @@ namespace ZephyrPlayer
             _clock.Tick += (_, __) => UpdatePosition();
 
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(ApplyBarStyle);
+            _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => MessageBox.Show(this, "Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved", MessageBoxButton.OK, MessageBoxImage.Warning));
 
             // Remembered volume restored on open. With the
             // tied-volume behavior, the slider IS Windows' master volume.
@@ -190,6 +191,7 @@ namespace ZephyrPlayer
             UpdatePlayPauseGlyph();
         }
 
+        private DateTime _lastMasterSave;
         private void UpdatePosition()
         {
             if (DateTime.UtcNow - _lastHistorySave >= TimeSpan.FromSeconds(5))
@@ -198,6 +200,7 @@ namespace ZephyrPlayer
             // the bar follows so both places show the same number.
             if (_volume.Available)
             {
+                _player.Mute = _volume.GetMute();
                 var master = _volume.GetMaster();
                 if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
                 {
@@ -206,6 +209,12 @@ namespace ZephyrPlayer
                     _volumeSync = false;
                     ApplyPlayerGain();
                 }
+            }
+            if (_volume.Available && DateTime.UtcNow - _lastMasterSave >= TimeSpan.FromSeconds(1))
+            {
+                var master = _volume.GetMaster();
+                if (master >= 0 && _settings.LastVolume != master) _settings.LastVolume = master;
+                _lastMasterSave = DateTime.UtcNow;
             }
             if (!_seeking)
             {
@@ -358,11 +367,15 @@ namespace ZephyrPlayer
             // OnVolumeChanged does the master + gain + save.
         }
 
+        public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
+        public bool SharedMute => _volume.Available ? _volume.GetMute() : _player.Mute;
+        public string CurrentMovieTitle => MovieTitle.Text;
+
         private void ApplyPlayerGain()
         {
             // Slider 0-100 is the shared number; boost is extra libVLC gain on top
             // (100% boost = none, 200% = VLC-style doubling).
-            _player.Volume = (int)(_settings.LastVolume * _settings.VolumeBoostMaxPct / 100.0);
+            _player.Volume = (int)(VolumeSlider.Value * _settings.VolumeBoostMaxPct / 100.0);
         }
 
         private void OnMute(object sender, RoutedEventArgs e)

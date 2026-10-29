@@ -51,6 +51,12 @@ namespace ZephyrPlayer.Tests
             return c;
         }
 
+        [Fact] public void JunctionEscape_IsNotListed() {
+            var outside=Path.Combine(Path.GetTempPath(),"zephyr-outside-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(outside);
+            var link=Path.Combine(_root,"escape");
+            try {if(OperatingSystem.IsWindows()){using var proc=System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \""+link+"\" \""+outside+"\""){CreateNoWindow=true,UseShellExecute=false})!;proc.WaitForExit();Assert.Equal(0,proc.ExitCode);}else Directory.CreateSymbolicLink(link,outside);Assert.Equal(404,Library.List(_root,"escape").status);Assert.Equal(200,Library.List(_root,"").status);}
+            finally {try{Directory.Delete(link);}catch{}Directory.Delete(outside);}
+        }
         [Fact]
         public async Task NoToken_401()
         {

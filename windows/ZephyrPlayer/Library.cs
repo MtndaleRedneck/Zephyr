@@ -33,7 +33,10 @@ namespace ZephyrPlayer
             {
                 var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
                 var full = Path.GetFullPath(Path.Combine(fullRoot, rel.Replace('/', Path.DirectorySeparatorChar)));
-                if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase)) return null;
+                if (!full.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase) && !string.Equals(full.TrimEnd(Path.DirectorySeparatorChar), fullRoot.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) return null;
+                var resolvedRoot = PlaybackSourcePolicy.ResolvePath(Path.GetFullPath(root)).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                var resolved = PlaybackSourcePolicy.ResolvePath(full);
+                if ((!resolved.StartsWith(resolvedRoot, StringComparison.OrdinalIgnoreCase) && !string.Equals(resolved.TrimEnd(Path.DirectorySeparatorChar), resolvedRoot.TrimEnd(Path.DirectorySeparatorChar), StringComparison.OrdinalIgnoreCase)) || resolved.StartsWith(@"\\")) return null;
                 return full;
             }
             catch { return null; }
@@ -100,6 +103,9 @@ namespace ZephyrPlayer
                     if (!path.StartsWith('/')) return Error(404, "not found", "That folder does not exist on the PC.");
                     full = Path.GetFullPath(path);
                 }
+                var resolved = PlaybackSourcePolicy.ResolvePath(full);
+                if (resolved.StartsWith(@"\\")) return Error(404, "not found", "Network folders are not supported.");
+                if (OperatingSystem.IsWindows()) { var drive = new DriveInfo(Path.GetPathRoot(resolved)!); if (drive.DriveType != DriveType.Fixed && drive.DriveType != DriveType.Removable) return Error(404, "not found", "Local folders only."); }
                 if (!Directory.Exists(full)) return Error(404, "not found", "That folder does not exist on the PC.");
                 var entries = new List<object>();
                 foreach (var d in Directory.GetDirectories(full).Where(VisibleDir).OrderBy(d => Path.GetFileName(d), Natural))

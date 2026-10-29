@@ -25,6 +25,8 @@ namespace ZephyrPlayer
 
         /// <summary>Raised on the setting thread after any change is written.</summary>
         public event EventHandler? Changed;
+        public event EventHandler? WriteFailed;
+        private bool _warned;
 
         public PlayerSettings(string? path = null) { _path = path ?? DefaultPath; }
 
@@ -132,14 +134,19 @@ namespace ZephyrPlayer
             bool? FoldersFirst = null,
             bool? ButtonFlash = null);
 
+        private bool _readFailed;
+        private Data? _lastGood;
+
         private Data Read()
         {
             try
             {
-                if (!File.Exists(_path)) return Empty();
-                return JsonSerializer.Deserialize<Data>(File.ReadAllText(_path)) ?? Empty();
+                if (!File.Exists(_path)) { _readFailed = false; return _lastGood ?? Empty(); }
+                var data = JsonSerializer.Deserialize<Data>(File.ReadAllText(_path)) ?? throw new InvalidDataException("Empty settings");
+                _readFailed = false;
+                return _lastGood = data;
             }
-            catch { return Empty(); } // unreadable settings = defaults, never fail-open
+            catch { _readFailed = true; return _lastGood ?? Empty(); } // Keep original; refuse writes until readable.
         }
 
         private static Data Empty() => new(null, null, null, null, null, null, null, null, null);
@@ -149,7 +156,17 @@ namespace ZephyrPlayer
             lock (_lock)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-                File.WriteAllText(_path, JsonSerializer.Serialize(update(Read())));
+                var current = Read();
+                if (_readFailed) { if (!_warned) { _warned = true; WriteFailed?.Invoke(this, EventArgs.Empty); } return; }
+                _warned = false;
+                var next = update(current);
+                var tmp = _path + ".tmp-" + Guid.NewGuid().ToString("N");
+                try {
+                    File.WriteAllText(tmp, JsonSerializer.Serialize(next));
+                    if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
+                    else File.Move(tmp, _path);
+                    _lastGood = next;
+                } finally { if (File.Exists(tmp)) File.Delete(tmp); }
             }
             Changed?.Invoke(this, EventArgs.Empty);
         }

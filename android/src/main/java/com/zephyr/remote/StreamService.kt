@@ -83,6 +83,8 @@ class StreamService : Service() {
         val srv = StreamServer(this, wifiAddr)
         // Movie + sidecar subtitle URIs arrive via the activity binder/intent extras
         // (hooked up when the Movies screen wiring lands); subtitles get /sub/<n> URLs.
+        StreamCoordinator.servedReceivers.clear()
+        StreamCoordinator.servedTarget = null
         srv.start()
         server = srv
 
@@ -126,26 +128,7 @@ class StreamService : Service() {
 
     /** Status of the player the stream was handed to (settled C1 covers both paths).
      *  No handoff yet = UNKNOWN = never auto-stop. */
-    // One Store per service: rebuilding the keystore-backed prefs every 60s tick
-    // was wasteful and could re-trip a failing keystore (round-3 A7).
-    private val watchdogStore by lazy { com.bingemote.Store(this) }
-
-    private fun servedTargetState(): StreamIdlePolicy.PlayerState {
-        val store = watchdogStore
-        return when (StreamCoordinator.servedTarget) {
-            StreamCoordinator.ServedTarget.ZEPHYR -> {
-                if (store.zephyrToken.isBlank() || store.zephyrHost.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN
-                val j = ZephyrClient.controlStatus(
-                    store.zephyrHost, store.zephyrPort, store.zephyrToken)
-                StreamIdlePolicy.mapState(j.optString("state", ""))
-            }
-            StreamCoordinator.ServedTarget.VLC -> {
-                if (store.vlcPassword.isBlank()) return StreamIdlePolicy.PlayerState.UNKNOWN
-                StreamIdlePolicy.mapState(com.bingemote.Vlc.status(store.host, store.vlcPort, store.vlcPassword).state)
-            }
-            null -> StreamIdlePolicy.PlayerState.UNKNOWN
-        }
-    }
+    private fun servedTargetState(): StreamIdlePolicy.PlayerState = StreamCoordinator.receiverState()
 
     /** Android 15+: dataSync budget (6h/24h) exhausted. Stop serving cleanly. */
     override fun onTimeout(startId: Int, fgsType: Int) {
@@ -156,9 +139,11 @@ class StreamService : Service() {
         watchdogStop = true
         watchdog?.interrupt()
         server?.stop()
+        StreamCoordinator.servedReceivers.clear()
+        StreamCoordinator.servedTarget = null
         runCatching { wifiLock?.release() }
         runCatching { wakeLock?.release() }
-        StreamServer.cleanCache(this) // cached movie copies never outlive the service (C12)
+        // StreamServer drains owned provider/copy workers before deleting its cache.
         super.onDestroy()
     }
 
