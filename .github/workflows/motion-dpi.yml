@@ -3,6 +3,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: read
 jobs:
   capture:
     runs-on: windows-latest
@@ -41,6 +42,17 @@ jobs:
           $ffmpeg=(Get-Command ffmpeg -ErrorAction Stop).Source
           & $ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=24 -t 120 -an -c:v mpeg4 -q:v 5 motion-fixture.mp4
           if ($LASTEXITCODE -ne 0) { throw 'Fixture generation failed' }
+      - name: Download exact previously tested installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/frozen-installer" | Out-Null
+          gh run download 40793721589 --repo MtndaleRedneck/Zephyr-Dev --name Zephyr-PC-installer --dir "$env:RUNNER_TEMP/frozen-installer"
+      - name: Semantic reinstall continuity on original artifact
+        working-directory: candidate
+        shell: pwsh
+        run: ../harness/scripts/reinstall_semantic_proof.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/motion-dpi/reinstall-console.log"
       - name: Actual running window motion and measured DPI
         working-directory: candidate
         shell: pwsh
