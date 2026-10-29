@@ -19,7 +19,12 @@ namespace ZephyrPlayer.Tests;
 //    using the VolumeService override seam: a failed read must not move the
 //    player's mute. Under the pre-fix code path (player.Mute = GetMute() with
 //    GetMute() == false on failure) these scenarios would unmute the player.
-// Nothing here touches real audio hardware; no hardware proof is claimed.
+//    They assert MainWindow's TRACKED player mute (TrackedPlayerMute), not
+//    libvlc's Mute property: libvlc's read-back returns false whenever no
+//    media is loaded or no audio device exists (found on the CI runner,
+//    run 40964867086), which is exactly why the product tracks the applied
+//    value itself. Nothing here touches real audio hardware; no hardware
+//    proof is claimed.
 public class VolumeMuteTests
 {
     [Fact]
@@ -51,7 +56,7 @@ public class VolumeMuteTests
         Assert.False(MainWindow.MuteAfterRead(true, false));
     }
 
-    private static void Sta(VolumeService volume, Action<MediaPlayer, MainWindow> body)
+    private static void Sta(VolumeService volume, Action<MainWindow> body)
     {
         string? error = null;
         var path = Path.Combine(Path.GetTempPath(), "zephyr-volmute-" + Guid.NewGuid().ToString("N") + ".json");
@@ -63,7 +68,7 @@ public class VolumeMuteTests
                 var libvlc = new LibVLC();
                 var player = new MediaPlayer(libvlc);
                 var w = new MainWindow(libvlc, player, new PlayerSettings(path), volume);
-                body(player, w);
+                body(w);
                 w.Close();
                 System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
             }
@@ -87,11 +92,11 @@ public class VolumeMuteTests
     [Fact]
     public void SharedMute_FailedRead_PreservesPlayerMute()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.Unknown }, (player, w) =>
+        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.Unknown }, w =>
         {
-            player.Mute = true;
+            w.TrackedPlayerMute = true;
             Assert.True(w.SharedMute);   // failed read must not report "unmuted"
-            player.Mute = false;
+            w.TrackedPlayerMute = false;
             Assert.False(w.SharedMute);  // and must not report "muted" either
         });
     }
@@ -99,14 +104,14 @@ public class VolumeMuteTests
     [Fact]
     public void SharedMute_SuccessfulRead_Wins()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.True }, (player, w) =>
+        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.True }, w =>
         {
-            player.Mute = false;
+            w.TrackedPlayerMute = false;
             Assert.True(w.SharedMute);
         });
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.False }, (player, w) =>
+        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.False }, w =>
         {
-            player.Mute = true;
+            w.TrackedPlayerMute = true;
             Assert.False(w.SharedMute);
         });
     }
@@ -114,25 +119,25 @@ public class VolumeMuteTests
     [Fact]
     public void Poll_FailedRead_KeepsPlayerMute_BothPolarities()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.Unknown }, (player, w) =>
+        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.Unknown }, w =>
         {
-            player.Mute = true;
+            w.TrackedPlayerMute = true;
             InvokePoll(w);
-            Assert.True(player.Mute);    // muted stays muted across a failed poll read
-            player.Mute = false;
+            Assert.True(w.TrackedPlayerMute);    // muted stays muted across a failed poll read
+            w.TrackedPlayerMute = false;
             InvokePoll(w);
-            Assert.False(player.Mute);   // unmuted stays unmuted
+            Assert.False(w.TrackedPlayerMute);   // unmuted stays unmuted
         });
     }
 
     [Fact]
     public void Poll_SuccessfulRead_MovesPlayerMute()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.True }, (player, w) =>
+        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.True }, w =>
         {
-            player.Mute = false;
+            w.TrackedPlayerMute = false;
             InvokePoll(w);
-            Assert.True(player.Mute);
+            Assert.True(w.TrackedPlayerMute);
         });
     }
 }
