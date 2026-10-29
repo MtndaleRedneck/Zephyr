@@ -1,11 +1,11 @@
-name: Exact gated artifact semantic reinstall proof
+name: Frozen candidate motion and DPI capture
 on:
   workflow_dispatch:
 permissions:
   contents: read
   actions: read
 jobs:
-  reinstall:
+  capture:
     runs-on: windows-latest
     timeout-minutes: 12
     steps:
@@ -14,36 +14,39 @@ jobs:
           ref: ${{ github.sha }}
           path: harness
           persist-credentials: false
-      - name: Download original hash-bound gated installers, no rebuild
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 490408d3922a2e15a0fe7a878a498a27d071cf57
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+      - name: Record dispatched harness identity
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/exact-artifact" | Out-Null
-          gh run download 40800209071 --repo MtndaleRedneck/Zephyr-Dev --name frozen-pinned-installer-artifacts --dir "$env:RUNNER_TEMP/exact-artifact"
-          if ($LASTEXITCODE -ne 0) { throw 'Exact artifact download failed' }
-      - name: Same gated installer semantic continuity
+          $actual=git -C harness rev-parse HEAD
+          if ($actual -ne "${{ github.sha }}") { throw "Harness identity mismatch" }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/motion-dpi" | Out-Null
+          "harness=$actual candidate=490408d3922a2e15a0fe7a878a498a27d071cf57" | Set-Content "$env:RUNNER_TEMP/motion-dpi/source-identity.txt"
+      - name: Build frozen capture binary only
+        working-directory: candidate
+        run: |
+          git rev-parse HEAD
+          git diff --exit-code
+          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+      - name: Retained synthetic fixture with no runner package dependency
         shell: pwsh
         run: |
-          $dir="$env:RUNNER_TEMP/exact-artifact"
-          $player=(Get-ChildItem $dir -Recurse -Filter 'Zephyr-PC-1.3.0.exe').FullName
-          $helper=(Get-ChildItem $dir -Recurse -Filter 'ZephyrVLCRemote-PC-1.1.0.exe').FullName
-          if ((Get-FileHash $player -Algorithm SHA256).Hash -ne 'ECE0940CF23EDD6D50F83E56B8DDC02D87F9EFBAAD62589226708C85F2608FCA') { throw 'Gated Player installer identity mismatch' }
-          if ((Get-FileHash $helper -Algorithm SHA256).Hash -ne '866C809059323C99DD35421C07BF3106F9DABC62A536E1F9F1D66F6B09A14376') { throw 'Gated helper installer identity mismatch' }
-          $out="$env:RUNNER_TEMP/motion-dpi"
-          New-Item -ItemType Directory -Force $out | Out-Null
-          "harness=${{ github.sha }} application=490408d3922a2e15a0fe7a878a498a27d071cf57 originalArtifact=12865468872 originalRun=40800209071" | Set-Content "$out/source-identity.txt"
-          $env:ZEPHYR_PROOF_INSTALLER=$player
-          $env:ZEPHYR_PROOF_ARTIFACT='12865468872 run40800209071 exact downloaded gated installer'
-          ./harness/scripts/reinstall_semantic_proof.ps1 *>&1 | Tee-Object "$out/reinstall-console.log"
-          $p=Start-Process $helper -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
-          if (!$p.WaitForExit(120000) -or $p.ExitCode -ne 0) { throw 'Gated helper install failed' }
-          $installed=[IO.Path]::GetFullPath("$env:LOCALAPPDATA/Programs/Zephyr VLC Remote/ZephyrVlcRemote.exe")
-          if (!(Test-Path $installed)) { throw 'Installed helper missing' }
-          "helperInstalledSHA256=$((Get-FileHash $installed -Algorithm SHA256).Hash) exactInstallerSHA256=$((Get-FileHash $helper -Algorithm SHA256).Hash) identityOnlyNotBehaviorProof" | Set-Content "$out/helper-installed.txt"
+          Copy-Item harness/scripts/motion-fixture.mp4 candidate/motion-fixture.mp4
+          Get-FileHash candidate/motion-fixture.mp4 -Algorithm SHA256
+      - name: Actual running window motion and measured DPI
+        working-directory: candidate
+        shell: pwsh
+        run: ../harness/scripts/motion_dpi_capture.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/motion-dpi/capture.log"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: exact-gated-artifact-reinstall-proof
+          name: frozen-candidate-motion-dpi
           path: ${{ runner.temp }}/motion-dpi/*
           if-no-files-found: error
