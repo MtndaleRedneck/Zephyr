@@ -3,7 +3,7 @@
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.Drawing,System.Windows.Forms,UIAutomationClient,UIAutomationTypes
 Add-Type -TypeDefinition @'
-using System;using System.Runtime.InteropServices;using System.Drawing;using System.Drawing.Imaging;using System.Diagnostics;using System.Threading;
+using System;using System.Runtime.InteropServices;using System.Diagnostics;using System.Threading;
 public static class MotionProof {
  [StructLayout(LayoutKind.Sequential)]public struct Rect{public int L,T,R,B;}
  [DllImport("user32.dll")]public static extern bool SetProcessDpiAwarenessContext(IntPtr c);
@@ -17,10 +17,21 @@ public static class MotionProof {
  [DllImport("user32.dll")]static extern int DisplayConfigGetDeviceInfo(IntPtr p);
  [DllImport("user32.dll")]static extern int DisplayConfigSetDeviceInfo(IntPtr p);
  public static string Scale(int percent){uint pc,mc;int rc=GetDisplayConfigBufferSizes(2,out pc,out mc);if(rc!=0)throw new Exception("config size "+rc);IntPtr p=Marshal.AllocHGlobal((int)pc*72),m=Marshal.AllocHGlobal((int)mc*64),q=Marshal.AllocHGlobal(32);try{rc=QueryDisplayConfig(2,ref pc,p,ref mc,m,IntPtr.Zero);if(rc!=0||pc==0)throw new Exception("config query "+rc);for(int i=0;i<32;i++)Marshal.WriteByte(q,i,0);Marshal.WriteInt32(q,0,-3);Marshal.WriteInt32(q,4,32);for(int i=0;i<12;i++)Marshal.WriteByte(q,8+i,Marshal.ReadByte(p,i));rc=DisplayConfigGetDeviceInfo(q);if(rc!=0)throw new Exception("DPI query "+rc);int min=Marshal.ReadInt32(q,20),cur=Marshal.ReadInt32(q,24),max=Marshal.ReadInt32(q,28);int target=(percent==150?2:0)+min;if(target>max)throw new Exception("DPI target not supported");Marshal.WriteInt32(q,0,-4);Marshal.WriteInt32(q,4,24);Marshal.WriteInt32(q,20,target);rc=DisplayConfigSetDeviceInfo(q);if(rc!=0)throw new Exception("DPI set "+rc);return "requested="+percent+" minRel="+min+" priorRel="+cur+" targetRel="+target+" maxRel="+max;}finally{Marshal.FreeHGlobal(p);Marshal.FreeHGlobal(m);Marshal.FreeHGlobal(q);}}
- public static void Shot(IntPtr h,string path){Rect r;if(DwmGetWindowAttribute(h,9,out r,16)!=0)throw new Exception("DWM bounds");using(var b=new Bitmap(r.R-r.L,r.B-r.T))using(var g=Graphics.FromImage(b)){g.CopyFromScreen(r.L,r.T,0,0,b.Size);b.Save(path,ImageFormat.Png);}}
- public static void Burst(IntPtr h,int x,int y,string prefix){SetCursorPos(x,y);Thread.Sleep(250);Shot(h,prefix+"-before.png");mouse_event(2,0,0,0,UIntPtr.Zero);mouse_event(4,0,0,0,UIntPtr.Zero);var sw=Stopwatch.StartNew();int late=0;long first=-1;foreach(var ms in new[]{40,130,220,310,400,600}){while(sw.ElapsedMilliseconds<ms)Thread.Sleep(1);long actual=sw.ElapsedMilliseconds;if(first<0)first=actual;Shot(h,prefix+"-"+ms+"ms.png");if(actual-ms>50)late++;Console.WriteLine(prefix+" intendedMs="+ms+" actualMs="+actual+" lateOver50="+(actual-ms>50));}Console.WriteLine(prefix+" firstCaptureOffsetMs="+first+" lateOver50FrameCount="+late);}
+
 }
 '@
+function Shot($hw,$path){
+ $r=[MotionProof+Rect]::new();if([MotionProof]::DwmGetWindowAttribute($hw,9,[ref]$r,16)-ne 0){throw 'DWM bounds missing'}
+ $b=[System.Drawing.Bitmap]::new($r.R-$r.L,$r.B-$r.T);$g=[System.Drawing.Graphics]::FromImage($b)
+ try{$g.CopyFromScreen($r.L,$r.T,0,0,$b.Size);$b.Save($path,[System.Drawing.Imaging.ImageFormat]::Png)}finally{$g.Dispose();$b.Dispose()}
+}
+function Burst($hw,$x,$y,$prefix){
+ [MotionProof]::SetCursorPos($x,$y)|Out-Null;Start-Sleep -Milliseconds 250;Shot $hw "$prefix-before.png"
+ [MotionProof]::mouse_event(2,0,0,0,[UIntPtr]::Zero);[MotionProof]::mouse_event(4,0,0,0,[UIntPtr]::Zero)
+ $sw=[Diagnostics.Stopwatch]::StartNew();$late=0;$first=-1
+ foreach($ms in 40,130,220,310,400,600){while($sw.ElapsedMilliseconds-lt$ms){[Threading.Thread]::Sleep(1)};$actual=$sw.ElapsedMilliseconds;if($first-lt 0){$first=$actual};Shot $hw "$prefix-$($ms)ms.png";if($actual-$ms-gt 50){$late++};Write-Output "$prefix intendedMs=$ms actualMs=$actual lateOver50=$($actual-$ms-gt 50)"}
+ Write-Output "$prefix firstCaptureOffsetMs=$first lateOver50FrameCount=$late"
+}
 [MotionProof]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))|Out-Null
 $exe=(Resolve-Path windows/capture-out/ZephyrPlayer.exe).Path
 $out=Join-Path $env:RUNNER_TEMP 'motion-dpi';New-Item -ItemType Directory -Force $out|Out-Null
@@ -55,7 +66,7 @@ try{
     foreach($id in 'SecondarySkipBackButton','SecondarySkipForwardButton'){
      $btn=FindId $p.Id $id;if(!$btn){throw "$id missing"};$r=$btn.Current.BoundingRectangle
      if($r.Width-le 0-or$r.Height-le 0){throw "$id invisible"}
-     [MotionProof]::Burst($hw,[int]($r.X+$r.Width/2),[int]($r.Y+$r.Height/2),"$out/$scale-$style-$full-$id")
+     Burst $hw ([int]($r.X+$r.Width/2)) ([int]($r.Y+$r.Height/2)) "$out/$scale-$style-$full-$id"
     }
     Stop-Process -Id $p.Id -Force
    }
