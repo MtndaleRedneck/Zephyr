@@ -19,6 +19,8 @@ class TestDocumentsProvider : DocumentsProvider() {
 
     companion object {
         const val AUTHORITY = "com.zephyr.remote.test.documents"
+        val stalledWrites = java.util.concurrent.CopyOnWriteArrayList<ParcelFileDescriptor>()
+        val stalledOpened = java.util.concurrent.atomic.AtomicInteger()
         const val ROOT_ID = "test-root"
         private val DOC_PROJECTION = arrayOf(
             Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME,
@@ -64,5 +66,8 @@ class TestDocumentsProvider : DocumentsProvider() {
         }
 
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor =
-        throw UnsupportedOperationException("content not served by the test provider")
+        if (documentId == "stall") {
+            val pipe = ParcelFileDescriptor.createPipe()
+            stalledWrites.add(pipe[1]); stalledOpened.incrementAndGet(); pipe[0]
+        } else throw UnsupportedOperationException("content not served by the test provider")
 }

@@ -1,23 +1,23 @@
 package com.bingemote
 
 import com.zephyr.remote.ZephyrClient
+import com.zephyr.remote.StreamCoordinator
 
-/**
- * Phone-origin playback goes to the SELECTED target only (protocol.md Source
- * routing): Zephyr PC gets ZephyrClient.play; VLC PC gets the same phone-served
- * URL through VLC's in_play. No fallthrough between targets.
- */
 object StreamTarget {
-    fun play(s: Store, url: String, subs: List<String>) {
-        if (s.selectedSource == Source.ZEPHYR) {
-            val host = s.zephyrEndpoint ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
-            ZephyrClient.play(host, s.zephyrPort, s.zephyrToken, url, subs)
-            com.zephyr.remote.StreamCoordinator.servedTarget = com.zephyr.remote.StreamCoordinator.ServedTarget.ZEPHYR
-        } else {
-            // VLC fetches the phone's URL over LAN; sidecar subtitles ride as
-            // :input-slave item options (VLC 3.0.x httprequests.lua in_play).
-            Vlc.playUri(s.host, s.vlcPort, s.vlcPassword, url, subs)
-            com.zephyr.remote.StreamCoordinator.servedTarget = com.zephyr.remote.StreamCoordinator.ServedTarget.VLC
-        }
+    data class Target(val source: Source, val host: String, val port: Int, val credential: String) {
+        fun state(): com.zephyr.remote.StreamIdlePolicy.PlayerState =
+            if (source == Source.ZEPHYR) com.zephyr.remote.StreamIdlePolicy.mapState(ZephyrClient.controlStatus(host, port, credential).optString("state", ""))
+            else com.zephyr.remote.StreamIdlePolicy.mapState(Vlc.status(host, port, credential).state)
+    }
+    fun capture(s: Store): Target = if (s.selectedSource == Source.ZEPHYR)
+        Target(Source.ZEPHYR, s.zephyrEndpoint ?: throw java.io.IOException("Zephyr PC isn't paired yet."), s.zephyrPort, s.zephyrToken)
+        else Target(Source.VLC, s.host, s.vlcPort, s.vlcPassword)
+    fun play(s: Store, url: String, subs: List<String>) = play(capture(s), url, subs)
+    fun play(target: Target, url: String, subs: List<String>) {
+        // Capture ownership even if the final response is lost. UNKNOWN never authorizes stop.
+        StreamCoordinator.servedReceivers.add(target)
+        StreamCoordinator.servedTarget = if (target.source == Source.ZEPHYR) StreamCoordinator.ServedTarget.ZEPHYR else StreamCoordinator.ServedTarget.VLC
+        if (target.source == Source.ZEPHYR) ZephyrClient.play(target.host, target.port, target.credential, url, subs)
+        else Vlc.playUri(target.host, target.port, target.credential, url, subs)
     }
 }

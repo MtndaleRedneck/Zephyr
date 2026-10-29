@@ -31,6 +31,8 @@ namespace ZephyrPlayer
         private readonly IInputSink? _input;
         private readonly IPlaybackControl? _control;
         private readonly bool _loopbackOnly;
+        private readonly InputLease? _inputLease;
+        private readonly Timer? _inputTimer;
 
         private static readonly System.Collections.Generic.HashSet<string> NamedKeys = new()
             { "enter", "backspace", "escape", "space", "tab", "up", "down", "left", "right" };
@@ -56,6 +58,7 @@ namespace ZephyrPlayer
             _onPair = onPair;
             _settings = settings ?? new PlayerSettings();
             _input = input;
+            if (input != null) { _inputLease = new InputLease(input); _inputTimer = new Timer(_ => { try { _inputLease.Expire(DateTime.UtcNow, _validateToken); } catch { } }, null, 500, 500); }
             _control = control;
             _loopbackOnly = loopbackOnly;
             Port = port;
@@ -260,6 +263,9 @@ namespace ZephyrPlayer
                     var json = System.Text.Json.JsonDocument.Parse(inputBody).RootElement;
                     switch (path)
                     {
+                        case "/input/heartbeat":
+                            _inputLease!.Renew(token, DateTime.UtcNow);
+                            break;
                         case "/input/move":
                             _input.Move(json.GetProperty("dx").GetSingle(), json.GetProperty("dy").GetSingle());
                             break;
@@ -270,7 +276,7 @@ namespace ZephyrPlayer
                                 await Reply(ctx, 400, "{\"error\":\"unknown button\"}");
                                 return;
                             }
-                            _input.Button(button, json.GetProperty("down").GetBoolean());
+                            _inputLease!.Button(token, button, json.GetProperty("down").GetBoolean(), DateTime.UtcNow);
                             break;
                         case "/input/scroll":
                             _input.Scroll(json.GetProperty("dy").GetSingle());
@@ -370,6 +376,8 @@ namespace ZephyrPlayer
 
         public void Dispose()
         {
+            _inputTimer?.Dispose();
+            _inputLease?.ReleaseAll();
             _cts.Cancel();
             try { _listener.Stop(); } catch { }
         }

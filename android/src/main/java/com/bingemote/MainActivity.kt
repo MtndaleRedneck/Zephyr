@@ -201,9 +201,11 @@ class MainActivity : ComponentActivity() {
         super.onStart()
         if (::remote.isInitialized && store.setupDone) remote.start()
         MediaControls.sync(this, store)
+        com.zephyr.remote.ZephyrClient.startInputLeases()
     }
 
     override fun onStop() {
+        com.zephyr.remote.ZephyrClient.stopInputLeases()
         if (::remote.isInitialized) remote.stop()
         // A drag can be latched when the app backgrounds (call, screen timeout): release the
         // PC's left button so it doesn't stay held down while he's away.

@@ -51,8 +51,9 @@ internal static class PlaybackSourcePolicy
         return Regex.IsMatch(uri.AbsolutePath, subtitle ? @"^/s/[a-zA-Z0-9_-]{1,128}/[0-9]+/sub/[0-9]+$" : @"^/s/[a-zA-Z0-9_-]{1,128}/[0-9]+$");
     }
 
-    private static string ResolvePath(string path)
+    internal static string ResolvePath(string path, int depth = 0)
     {
+        if (depth > 32) throw new IOException("Link cycle");
         var root = Path.GetPathRoot(path)!;
         var current = root;
         foreach(var segment in path.Substring(root.Length).Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
@@ -60,7 +61,12 @@ internal static class PlaybackSourcePolicy
             current = Path.Combine(current, segment);
             FileSystemInfo info = Directory.Exists(current) ? new DirectoryInfo(current) : new FileInfo(current);
             if ((info.Attributes & FileAttributes.ReparsePoint) != 0 && info.LinkTarget != null)
-                current = info.ResolveLinkTarget(true)?.FullName ?? throw new IOException("Unresolved link");
+            {
+                current = info.ResolveLinkTarget(false)?.FullName ?? throw new IOException("Unresolved link");
+                // Reject a remote target before walking any child of it.
+                if (current.StartsWith(@"\\")) throw new IOException("Remote link");
+                current = ResolvePath(current, depth + 1);
+            }
         }
         return Path.GetFullPath(current);
     }

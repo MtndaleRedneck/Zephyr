@@ -15,6 +15,7 @@
     <Compile Include="..\ZephyrPlayer\Library.cs" Link="Library.cs" />
     <Compile Include="..\ZephyrPlayer\PairingGate.cs" Link="PairingGate.cs" />
     <Compile Include="..\ZephyrPlayer\PlayerSettings.cs" Link="PlayerSettings.cs" />
+    <Compile Include="..\ZephyrPlayer\InputLease.cs" Link="InputLease.cs" />
     <Compile Include="..\ZephyrPlayer\InputSender.cs" Link="InputSender.cs" />
     <Compile Include="..\ZephyrPlayer\IPlaybackControl.cs" Link="IPlaybackControl.cs" />
   </ItemGroup>

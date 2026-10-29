@@ -18,6 +18,19 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void CorruptSettings_ArePreservedAndNeverOverwrittenByDefaults() {
+            var s = new PlayerSettings(_path); s.LastVolume = 37; s.LibraryFolder = "movies";
+            Assert.True(File.Exists(_path + ".bak"));
+            var good = File.ReadAllText(_path); File.WriteAllText(_path, "{broken");
+            Assert.Equal(37, s.LastVolume);
+            var warnings = 0; s.WriteFailed += (_, __) => warnings++;
+            s.LastVolume = 70; s.LastVolume = 71;
+            Assert.Equal(1, warnings);
+            Assert.Equal("{broken", File.ReadAllText(_path));
+            File.WriteAllText(_path, good); s.LastVolume = 70;
+            Assert.Equal("movies", new PlayerSettings(_path).LibraryFolder);
+        }
+        [Fact]
         public void ButtonFlash_DefaultOn_ChoicePersists()
         {
             var s = new PlayerSettings(_path);
