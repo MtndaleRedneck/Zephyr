@@ -206,10 +206,13 @@ function Measure-Bar($path) {
     # seekRun=86%. The bar gate is golden>=2 (half the control) + seekRun>=40; a
     # post-autohide frame scores golden=0. The control gate matches (>=2 / >=40).
     # The bar body occupies roughly the bottom third (about y 0.64-0.95 in an 800x500
-    # capture; the golden ElapsedText ~0.67, the seek track ~0.72). A 0.75+ band missed
-    # BOTH signatures (round-7 review C). 0.55 keeps full margin while the seek-run's
-    # near-gray requirement still rejects the test pattern's own content.
-    $band = Load-Band $path 0.55 1.0
+    # capture; the golden ElapsedText ~0.67, the seek track ~0.72-0.82). A 0.75+ band
+    # missed BOTH signatures (round-7 review C). 0.55 keeps full margin while the
+    # seek-run's near-gray requirement still rejects the test pattern's own content.
+    # The band stops at 0.93: below that sits window chrome / the taskbar top
+    # separator - a full-width RGB(190,190,190) line there satisfies the near-gray
+    # rule and scored seekRun=100% over a genuinely hidden bar (run 40960360181).
+    $band = Load-Band $path 0.55 0.93
     $golden = 0; $goldenBand = [int]($band.W * 0.24); $bestRun = 0
     for ($y = 0; $y -lt $band.H; $y++) {
         $run = 0
@@ -223,8 +226,15 @@ function Measure-Bar($path) {
             $isGold = [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40
             $isOrange = $r -gt 227 -and [math]::Abs($g - 149) -lt 28 -and $b -lt 40
             if ($x -lt $goldenBand -and ($isGold -or $isOrange)) { $golden++ }
-            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 65 -and $r -lt 235) { $run++; if ($run -gt $bestRun) { $bestRun = $run } } else { $run = 0 }
+            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 65 -and $r -lt 235) { $run++ } else {
+                # Only runs bounded on BOTH sides by non-matching pixels count.
+                # A run touching a row edge is full-bleed chrome (taskbar
+                # separator, window border), never the inset seek track.
+                if ($run -gt 0 -and ($x - $run) -gt 0 -and $run -gt $bestRun) { $bestRun = $run }
+                $run = 0
+            }
         }
+        # A run still open at the right edge touched it: reject (chrome, not track).
     }
     return @($golden, [int](100.0 * $bestRun / $band.W))
 }
