@@ -200,7 +200,7 @@ namespace ZephyrPlayer
             // the bar follows so both places show the same number.
             if (_volume.Available)
             {
-                _player.Mute = _volume.GetMute();
+                _player.Mute = VolumeService.MuteAfterPoll(_player.Mute, _volume.GetMuteOrNull());
                 var master = _volume.GetMaster();
                 if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
                 {
@@ -368,7 +368,7 @@ namespace ZephyrPlayer
         }
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
-        public bool SharedMute => _volume.Available ? _volume.GetMute() : _player.Mute;
+        public bool SharedMute => VolumeService.MuteAfterPoll(_player.Mute, _volume.GetMuteOrNull());
         public string CurrentMovieTitle => MovieTitle.Text;
 
         private void ApplyPlayerGain()

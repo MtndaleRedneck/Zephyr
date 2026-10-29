@@ -15,6 +15,9 @@ async Task Down(string b){var r=await c.PostAsync("/input/button",new StringCont
 await Down("left");await Task.Delay(9000);Assert.Contains("left:False",sink.Events);
 await Down("right");valid=false;await Task.Delay(1100);Assert.Contains("right:False",sink.Events);
 }
+[Fact] public void ClosedLeaseRejectsLatePressAndHeartbeat() { var s=new Sink();var l=new InputLease(s);var n=DateTime.UtcNow;l.Button("A","left",true,n);l.Close();l.Button("A","left",true,n);l.Renew("A",n);l.Close();Assert.Equal(new[]{"left:True","left:False"},s.Events); }
+[Theory][InlineData(true,null,true)][InlineData(false,null,false)][InlineData(true,false,false)][InlineData(false,true,true)]
+public void MutePollPreservesStateOnFailure(bool current,bool? observed,bool expected) => Assert.Equal(expected,VolumeService.MuteAfterPoll(current,observed));
 [Fact] public void LostConnection_ReleasesAtDeadline_AndCannotBeReleasedByOtherPhone(){var s=new Sink();var l=new InputLease(s);var n=DateTime.UtcNow;l.Button("A","left",true,n);l.Button("B","left",false,n);Assert.Single(s.Events);l.Expire(n.AddSeconds(7),_=>true);Assert.Single(s.Events);l.Expire(n.AddSeconds(9),_=>true);Assert.Equal("left:False",s.Events[1]);}
 [Fact] public void OwnerHeartbeatKeepsDrag_RevocationAndShutdownRelease(){var s=new Sink();var l=new InputLease(s);var n=DateTime.UtcNow;l.Button("A","right",true,n);l.Renew("B",n.AddSeconds(7));l.Expire(n.AddSeconds(9),_=>true);Assert.Equal(2,s.Events.Count);l.Button("A","left",true,n);l.Renew("A",n.AddSeconds(7));l.Expire(n.AddSeconds(9),_=>true);Assert.Equal(3,s.Events.Count);l.Expire(n.AddSeconds(10),_=>false);Assert.Equal(4,s.Events.Count);l.Button("A","right",true,n);l.ReleaseAll();Assert.Equal("right:False",s.Events[^1]);}
 }}

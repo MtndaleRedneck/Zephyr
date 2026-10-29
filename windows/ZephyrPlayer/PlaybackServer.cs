@@ -376,10 +376,10 @@ namespace ZephyrPlayer
 
         public void Dispose()
         {
-            _inputTimer?.Dispose();
-            _inputLease?.ReleaseAll();
             _cts.Cancel();
             try { _listener.Stop(); } catch { }
+            _inputTimer?.Dispose();
+            _inputLease?.Close();
         }
     }
 }

@@ -5,6 +5,7 @@ import com.zephyr.remote.StreamCoordinator
 
 object StreamTarget {
     data class Target(val source: Source, val host: String, val port: Int, val credential: String) {
+        override fun toString() = "Target(source=$source, host=$host, port=$port, credential=<redacted>)"
         fun state(): com.zephyr.remote.StreamIdlePolicy.PlayerState =
             if (source == Source.ZEPHYR) com.zephyr.remote.StreamIdlePolicy.mapState(ZephyrClient.controlStatus(host, port, credential).optString("state", ""))
             else com.zephyr.remote.StreamIdlePolicy.mapState(Vlc.status(host, port, credential).state)

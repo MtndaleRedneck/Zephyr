@@ -162,16 +162,28 @@ object ZephyrClient {
     private val leaseTimer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "zephyr-input-lease").apply { isDaemon = true } }
     init { leaseTimer.scheduleWithFixedDelay({ heldButtons.values.toSet().forEach { runCatching { it() } } }, 2, 2, TimeUnit.SECONDS) }
     private val leaseGate = Any()
+    private val inputOrder = Any()
     @Volatile private var leaseActive = true
-    fun startInputLeases() { synchronized(leaseGate) { leaseActive = true } }
+    fun startInputLeases() { synchronized(leaseGate) { leaseEpoch.incrementAndGet(); leaseActive = true } }
     private val leaseEpoch = java.util.concurrent.atomic.AtomicLong()
     fun stopInputLeases() { synchronized(leaseGate) { leaseActive = false; leaseEpoch.incrementAndGet(); heldButtons.clear() } }
     fun inputButton(host: String, port: Int, token: String, button: String, down: Boolean) {
         val epoch = leaseEpoch.get()
         val key = "$host:$port:$token:$button"
-        if (!down) heldButtons.remove(key)
-        post(host, port, token, "/input/button", JSONObject().put("button", button).put("down", down))
-        synchronized(leaseGate) { if (down && leaseActive && epoch == leaseEpoch.get()) heldButtons[key] = { heartbeatClient.newCall(authReq(host, port, token, "/input/heartbeat").post("{}".toRequestBody("application/json".toMediaType())).build()).execute().use { if (it.code == 401) heldButtons.keys.removeAll { k -> k.startsWith("$host:$port:$token:") } } } }
+        synchronized(inputOrder) {
+            if (down && synchronized(leaseGate) { !leaseActive || epoch != leaseEpoch.get() }) return
+            if (!down) heldButtons.remove(key)
+            post(host, port, token, "/input/button", JSONObject().put("button", button).put("down", down))
+            val accepted = synchronized(leaseGate) {
+                if (down && leaseActive && epoch == leaseEpoch.get()) {
+                    heldButtons[key] = { heartbeatClient.newCall(authReq(host, port, token, "/input/heartbeat").post("{}".toRequestBody("application/json".toMediaType())).build()).execute().use { if (it.code == 401) heldButtons.keys.removeAll { k -> k.startsWith("$host:$port:$token:") } } }
+                    true
+                } else false
+            }
+            // A leave during the HTTP request must undo the late press before
+            // any newer button request can run. The main thread never waits here.
+            if (down && !accepted) post(host, port, token, "/input/button", JSONObject().put("button", button).put("down", false))
+        }
     }
     fun inputScroll(host: String, port: Int, token: String, dy: Double) =
         post(host, port, token, "/input/scroll", JSONObject().put("dy", dy))
