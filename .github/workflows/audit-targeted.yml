@@ -1,11 +1,17 @@
 name: Audit targeted follow-up
 on:
   workflow_dispatch:
+    inputs:
+      android_only:
+        description: Skip already-proven Windows checks
+        type: boolean
+        default: false
 permissions:
   contents: read
   actions: read
 jobs:
   installer-checks:
+    if: ${{ !inputs.android_only }}
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
