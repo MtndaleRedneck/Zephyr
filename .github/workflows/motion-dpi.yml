@@ -1,0 +1,53 @@
+name: Frozen candidate motion and DPI capture
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 490408d3922a2e15a0fe7a878a498a27d071cf57
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: 8.0.x
+      - name: Record dispatched harness identity
+        shell: pwsh
+        run: |
+          $actual=git -C harness rev-parse HEAD
+          if ($actual -ne "${{ github.sha }}") { throw "Harness identity mismatch" }
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/motion-dpi" | Out-Null
+          "harness=$actual candidate=490408d3922a2e15a0fe7a878a498a27d071cf57" | Set-Content "$env:RUNNER_TEMP/motion-dpi/source-identity.txt"
+      - name: Build frozen capture binary only
+        working-directory: candidate
+        run: |
+          git rev-parse HEAD
+          git diff --exit-code
+          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+      - name: Fixture without package manager dependency
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          $ffmpeg=(Get-Command ffmpeg -ErrorAction Stop).Source
+          & $ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=640x360:rate=24 -t 120 -an -c:v mpeg4 -q:v 5 motion-fixture.mp4
+          if ($LASTEXITCODE -ne 0) { throw 'Fixture generation failed' }
+      - name: Actual running window motion and measured DPI
+        working-directory: candidate
+        shell: pwsh
+        run: ../harness/scripts/motion_dpi_capture.ps1 *>&1 | Tee-Object "$env:RUNNER_TEMP/motion-dpi/capture.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: frozen-candidate-motion-dpi
+          path: ${{ runner.temp }}/motion-dpi/*
+          if-no-files-found: error
