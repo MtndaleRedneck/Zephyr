@@ -233,8 +233,8 @@ jobs:
           if (-not $entry) { throw 'legacy leg: expected the 1.1.0 HKLM uninstall entry to STILL EXIST after a setup-declined upgrade' }
           $us = [string]$entry.UninstallString
           Write-Output "legacy HKLM UninstallString: $us"
-          # Identity: the entry must target the shared unins000.exe, REWRITTEN by the
-          # upgrade (newer than the 1.1.0 install) - not 1.1.0's own engine.
+          # Identity: the entry must target the shared unins000.exe. Engine bytes
+          # may be unchanged; actual behavior below is the safety verdict.
           $target = $us.Trim() -replace '^"', '' -replace '".*$', '' -replace '\s+/.*$', ''
           if (-not (Test-Path $target)) { throw "legacy leg: entry target missing: $target" }
           $stampNew = (Get-Item $target).LastWriteTimeUtc
