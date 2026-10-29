@@ -51,6 +51,62 @@ class StreamServerAndroidTest {
     }
 
     @Test
+    fun abandoned100LargeSeeks_recoverAndStillLoadSubtitle() {
+        val context=InstrumentationRegistry.getInstrumentation().targetContext
+        val large=File(context.cacheDir,"abandoned-seeks.bin")
+        java.io.RandomAccessFile(large,"rw").use { it.setLength(16L*1024*1024) }
+        val sub=File(context.cacheDir,"abandoned-seeks.srt").apply { writeText("1\n00:00:00,000 --> 00:00:03,000\nHello\n") }
+        try {
+            val url=server.addMovie(Uri.fromFile(large),"large",listOf(Uri.fromFile(sub)))
+            repeat(100) { i ->
+                val c=URL(url).openConnection() as HttpURLConnection;c.setRequestProperty("Range","bytes=${i*1000}-");c.connectTimeout=3000;c.readTimeout=3000
+                try { assertEquals(206,c.responseCode);assertTrue(c.inputStream.read(ByteArray(1024))>0) } finally { c.disconnect() }
+            }
+            assertArrayEquals(sub.readBytes(),get("$url/sub/0").third)
+            val until=android.os.SystemClock.elapsedRealtime()+5000
+            while(server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<until)Thread.sleep(10)
+            assertEquals(0,server.openStreams.get())
+        } finally {large.delete();sub.delete()}
+    }
+
+    @Test
+    fun rapid100SeeksAndSubtitle_realSocketsPreserveBytes() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val sub = File(context.cacheDir, "rapid-seek.srt").apply { writeText("1\n00:00:00,000 --> 00:00:03,000\nHello\n") }
+        try {
+            val url = server.addMovie(Uri.fromFile(file), "movie", listOf(Uri.fromFile(sub)))
+            repeat(100) { i ->
+                val start = i * 7 % 900
+                val (code, _, body) = get(url, "bytes=$start-${start+16}")
+                assertEquals(206, code); assertArrayEquals(bytes.copyOfRange(start,start+17),body)
+                if (i % 10 == 0) assertArrayEquals(sub.readBytes(),get("$url/sub/0").third)
+            }
+        } finally { sub.delete() }
+    }
+
+    @Test
+    fun oversizedHeader_refusedWithoutServing() {
+        val u = URL(movieUrl)
+        java.net.Socket(u.host, u.port).use { socket ->
+            socket.soTimeout = 3000
+            socket.getOutputStream().write(("GET ${u.path} HTTP/1.1\r\nX-Large: " + "x".repeat(9000) + "\r\n\r\n").toByteArray())
+            assertEquals(-1, socket.getInputStream().read())
+        }
+        org.junit.Assert.assertFalse(server.servedAny)
+    }
+
+    @Test
+    fun connectionCap_doesNotCreateUnboundedWorkers() {
+        val u = URL(movieUrl)
+        val sockets = (1..12).map { java.net.Socket(u.host, u.port) }
+        try {
+            Thread.sleep(250)
+            assertTrue(server.openStreams.get() <= 4)
+            org.junit.Assert.assertFalse(server.servedAny)
+        } finally { sockets.forEach { it.close() } }
+    }
+
+    @Test
     fun fullGet_200_allBytes() {
         val (code, headers, body) = get(movieUrl)
         assertEquals(200, code)

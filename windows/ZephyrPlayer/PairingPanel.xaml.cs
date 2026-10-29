@@ -162,12 +162,14 @@ namespace ZephyrPlayer
             WarningPanel.Visibility = Visibility.Visible;
             var ip = ConnectionState.PrimaryIPv4();
             ThisPcText.Text = ip != null ? "This PC: " + ip : "This PC: address unavailable";
+            ResetPairingsButton.Visibility = _store.CanResetUnreadable ? Visibility.Visible : Visibility.Collapsed;
             if (_store.IsBroken)
             {
+                if(!_store.CanResetUnreadable){StatusDot.Fill=WarnOrange;StatusText.Text="Saved pairings are temporarily unavailable or in use. Close the other app and reopen this screen. Nothing was changed.";return;}
                 // N5 fail-closed surfaced plainly: the pairings file could not be read,
                 // nothing was deleted, and new pairing stays off until it is fixed.
                 StatusDot.Fill = WarnOrange;
-                StatusText.Text = "Your saved pairings could not be read, so pairing is paused. Nothing was deleted or changed. Close and reopen the Player; if it still says this, send feedback from Settings and we will help.";
+                StatusText.Text = "Saved pairings could not be read. Pairing is paused and nothing was deleted. You can reset pairings below; every phone will need to pair again.";
             }
             else if (ip == null)
             {
@@ -190,6 +192,14 @@ namespace ZephyrPlayer
                 StatusText.Text = "";
                 WarningPanel.Visibility = Visibility.Collapsed;
             }
+        }
+
+        private void OnResetPairings(object sender,RoutedEventArgs e)
+        {
+            if(!_store.CanResetUnreadable)return;
+            if(MessageBox.Show(Window.GetWindow(this),"Reset all saved pairings? Every paired phone will be removed and must pair again. The unreadable file will be kept privately for recovery.","Reset pairings",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No)!=MessageBoxResult.Yes)return;
+            try{_store.ResetUnreadablePairings();PairButton.IsEnabled=true;RefreshPhones();RefreshStatus();}
+            catch{StatusText.Text="Pairings could not be reset. Nothing was changed; try closing and reopening the Player.";}
         }
 
         private void OnRemovePhone(object sender, RoutedEventArgs e)

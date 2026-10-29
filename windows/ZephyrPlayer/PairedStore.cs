@@ -12,9 +12,8 @@ namespace ZephyrPlayer
     /// no file = no paired phones = every /play gets 401.
     /// Format: 1.2.0 stores entries {token, name} so the Pairing screen can list
     /// "My phone" with Remove. The 1.1.0 file was a plain JSON string array of
-    /// tokens; it still reads (each token becomes "My phone") and is rewritten in
-    /// the new shape only when the list actually changes - an upgrade never
-    /// touches the file, so pairing survives with nothing to re-pair.
+    /// tokens; it still reads (each token becomes "My phone") and is atomically migrated after a successful read to protected-token entries.
+    /// Tokens and names survive the upgrade without re-pairing.
     /// </summary>
     public sealed class PairedStore
     {
@@ -31,6 +30,9 @@ namespace ZephyrPlayer
         /// writes refuse (never replace an unreadable store with a partial one - that
         /// would silently unpair every phone in it).</summary>
         private bool _broken;
+        private bool _transientReadFailure;
+        private long _nextReadRetry;
+        public bool CanResetUnreadable {get {lock(_sync)return _broken&&!_transientReadFailure;}}
         /// <summary>The store file exists but could not be read: reads show unpaired and
         /// writes refuse. Surfaced as a plain line on the Pairing screen (review N5).</summary>
         public bool IsBroken { get { lock (_sync) return _broken; } }
@@ -119,7 +121,29 @@ namespace ZephyrPlayer
             Changed?.Invoke(this, EventArgs.Empty);
         }
 
-        private List<Entry> EntriesLocked() => _cache ??= Read();
+        /// <summary>Only the explicit confirmed recovery UI calls this. Preserve the
+        /// unreadable original under a random same-profile name, never auto reset.</summary>
+        internal string ResetUnreadablePairings()
+        {
+            string quarantine;
+            lock(_sync)
+            {
+                _=EntriesLocked();
+                if(!_broken||_transientReadFailure)throw new InvalidOperationException("Pairings are readable or temporarily unavailable; recovery reset is not available.");
+                quarantine=_path+".quarantine-"+Guid.NewGuid().ToString("N");
+                File.Move(_path,quarantine);
+                try{_broken=false;PersistLocked(new List<Entry>());_cache=new List<Entry>();_lastSeen.Clear();}
+                catch{_broken=true;try{if(File.Exists(_path))File.Delete(_path);File.Move(quarantine,_path);}catch{}throw;}
+            }
+            Changed?.Invoke(this,EventArgs.Empty);
+            return quarantine;
+        }
+
+        private List<Entry> EntriesLocked()
+        {
+            if(_transientReadFailure && Environment.TickCount64>=_nextReadRetry){_transientReadFailure=false;_broken=false;_cache=null;}
+            return _cache??=Read();
+        }
 
         /// <summary>Transactional: memory advances ONLY after the write lands. A
         /// failed write throws a plain InvalidOperationException, so a phantom
@@ -130,7 +154,7 @@ namespace ZephyrPlayer
             try
             {
                 Directory.CreateDirectory(System.IO.Path.GetDirectoryName(_path)!);
-                var stored = entries.Select(e => new StoredEntry(e.Token, e.Name, e.PairedAt)).ToArray();
+                var stored = entries.Select(e => new StoredEntry(Dpapi.Wrap(e.Token), e.Name, e.PairedAt)).ToArray();
                 var tmp = _path + ".tmp";
                 File.WriteAllText(tmp, System.Text.Json.JsonSerializer.Serialize(stored));
                 if (File.Exists(_path)) File.Replace(tmp, _path, null);
@@ -151,8 +175,6 @@ namespace ZephyrPlayer
 
         private List<Entry> Read()
         {
-            for (var attempt = 0; ; attempt++)
-            {
             try
             {
                 if (!File.Exists(_path)) return new List<Entry>();
@@ -164,27 +186,30 @@ namespace ZephyrPlayer
                     if (el.ValueKind == System.Text.Json.JsonValueKind.String)
                     {
                         // 1.1.0 shape: a bare token string.
-                        var t = el.GetString();
+                        var t = Dpapi.Unwrap(el.GetString() ?? "") ?? throw new InvalidDataException("Pairing protection could not be opened");
                         if (!string.IsNullOrEmpty(t)) entries.Add(new Entry(t, "My phone"));
                     }
                     else if (el.ValueKind == System.Text.Json.JsonValueKind.Object)
                     {
-                        var t = el.TryGetProperty("token", out var tp) ? tp.GetString() : null;
+                        var t = Dpapi.Unwrap(el.TryGetProperty("token", out var tp) ? tp.GetString() ?? "" : "") ?? throw new InvalidDataException("Pairing protection could not be opened");
                         var n = el.TryGetProperty("name", out var np) ? np.GetString() : null;
                         DateTime? pairedAt = el.TryGetProperty("pairedAt", out var pp) && pp.ValueKind == System.Text.Json.JsonValueKind.String && pp.TryGetDateTime(out var pd) ? pd : null;
                         if (!string.IsNullOrEmpty(t)) entries.Add(new Entry(t, string.IsNullOrWhiteSpace(n) ? "My phone" : n, pairedAt));
                     }
                 }
+                if (entries.Count > 0 && doc.RootElement.EnumerateArray().Any(el => el.ValueKind == System.Text.Json.JsonValueKind.String || (el.TryGetProperty("token", out var token) && !(token.GetString() ?? "").StartsWith("dpapi:", StringComparison.Ordinal))))
+                {
+                    try { PersistLocked(entries); }
+                    catch(InvalidOperationException) { /* Valid read remains authoritative; next ordinary write retries protection. */ }
+                }
                 return entries;
             }
-            catch (IOException) when (attempt < 2)
+            catch(Exception ex) when(ex is IOException or UnauthorizedAccessException)
             {
-                // A scanner or backup holding the file briefly is transient: retry a
-                // couple of times before declaring the store broken (round-3 P4).
-                System.Threading.Thread.Sleep(120);
+                _broken=true;_transientReadFailure=true;_nextReadRetry=Environment.TickCount64+3000;
+                return new List<Entry>();
             }
             catch { _broken = true; return new List<Entry>(); } // unreadable store = nothing paired, never fail-open; writes refuse below
-            }
         }
 
     }

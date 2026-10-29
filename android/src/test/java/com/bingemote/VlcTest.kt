@@ -140,7 +140,9 @@ class UpdaterTest {
         val release = """{"tag_name":"zephyr-android-v1.1.0","assets":[{"name":"Zephyr-Android-1.1.0.apk","browser_download_url":"$url","size":1000}]}"""
         assertEquals(Updater.CheckOutcome.NoRelease, Updater.classifyFeed("[]", "1.0.0"))
         assertEquals(Updater.CheckOutcome.UpToDate, Updater.classifyFeed("[$release]", "1.1.0"))
-        assertTrue(Updater.classifyFeed("[$release]", "1.0.0") is Updater.CheckOutcome.Newer)
+        assertEquals(Updater.CheckOutcome.Unavailable, Updater.classifyFeed("[$release]", "1.0.0"))
+        val digested = release.replace("\"size\":1000", "\"size\":1000,\"digest\":\"sha256:${"b".repeat(64)}\"")
+        assertTrue(Updater.classifyFeed("[$digested]", "1.0.0") is Updater.CheckOutcome.Newer)
         assertEquals(Updater.CheckOutcome.Unavailable, Updater.classifyFeed("bad json", "1.0.0"))
         assertEquals(null, Updater.parseRelease(release.replace("Zephyr-Dev", "BingeMote"), "1.0.0"))
         assertEquals(null, Updater.parseRelease(release.replace("Zephyr-Android-1.1.0.apk", "BingeMote-Android-1.1.0.apk"), "1.0.0"))
@@ -165,5 +167,12 @@ class UpdaterTest {
         assertFalse(Updater.isNewer("1.0.0", "1.0.0"))
         assertFalse(Updater.isNewer("1.0.0", "1.0.1"))
         assertFalse(Updater.isNewer("junk", "1.0.0"))
+    }
+    @org.junit.Test fun missingDigest_neverReusesCachedApk() {
+        val file = java.io.File.createTempFile("update-test", ".apk")
+        try {
+            file.writeBytes(byteArrayOf(1,2,3))
+            org.junit.Assert.assertFalse(Updater.cachedMatchesOffer(file, UpdateInfo("9.0", emptyList(), "https://github.com/fake", 3, null)))
+        } finally { file.delete() }
     }
 }

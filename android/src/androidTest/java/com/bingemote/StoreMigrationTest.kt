@@ -10,6 +10,15 @@ import org.junit.Test
  * stale keys, and the new cancel-style setting defaults to Ring only. */
 class StoreMigrationTest {
     @Test
+    fun encryptedStoreRetains64HexTokenAcrossReopen() {
+        val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+        val token = "a7".repeat(32)
+        Store(ctx).zephyrToken = token
+        assertEquals(token, Store(ctx).zephyrToken)
+        org.junit.Assert.assertFalse(Store(ctx).secureStoreBroken)
+    }
+
+    @Test
     fun removedTogglesAreClearedAndStyleDefaultsToRing() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)

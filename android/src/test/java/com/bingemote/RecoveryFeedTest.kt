@@ -4,7 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class RecoveryFeedTest {
-    private fun release(tag: String, version: String) = """{"tag_name":"$tag","draft":false,"prerelease":false,"body":"- BingeMote recovery","assets":[{"name":"Zephyr-Android-$version.apk","browser_download_url":"https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/$tag/Zephyr-Android-$version.apk","size":1000}]}"""
+    private fun release(tag: String, version: String) = """{"tag_name":"$tag","draft":false,"prerelease":false,"body":"- BingeMote recovery","assets":[{"name":"Zephyr-Android-$version.apk","browser_download_url":"https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/$tag/Zephyr-Android-$version.apk","size":1000,"digest":"sha256:${"b".repeat(64)}"}]}"""
 
     @Test fun exact_shipped_parser_is_anchored_and_accepts_only_bridge() {
         val bridge = release("android-v1.12.0", "1.12.0")

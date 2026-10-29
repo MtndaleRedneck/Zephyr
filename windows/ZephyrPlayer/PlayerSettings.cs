@@ -79,6 +79,12 @@ namespace ZephyrPlayer
             set { if (Array.IndexOf(IconStyles, value) < 0) return; Write(d => d with { IconStyle = value }); }
         }
 
+        public bool ButtonFlash
+        {
+            get { lock (_lock) return Read().ButtonFlash ?? true; }
+            set { Write(d => d with { ButtonFlash = value }); }
+        }
+
         public bool ShowSpeed
         {
             get { lock (_lock) return Read().ShowSpeed ?? false; }
@@ -123,7 +129,8 @@ namespace ZephyrPlayer
             int? PrimarySkipSeconds = null,
             int? SecondarySkipSeconds = null,
             string? LibrarySort = null,
-            bool? FoldersFirst = null);
+            bool? FoldersFirst = null,
+            bool? ButtonFlash = null);
 
         private Data Read()
         {
