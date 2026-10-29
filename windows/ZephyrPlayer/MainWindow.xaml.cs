@@ -34,6 +34,8 @@ namespace ZephyrPlayer
         private readonly LibVLC _libvlc;
         private readonly MediaPlayer _player;
         private SafeMediaSource? _safeSource;
+        private readonly SecondarySkipHighlight _secondaryBackHighlight=new(){Width=54,Height=46,Backward=true,IsHitTestVisible=false};
+        private readonly SecondarySkipHighlight _secondaryForwardHighlight=new(){Width=54,Height=46,IsHitTestVisible=false};
         private readonly PlayerSettings _settings;
         private readonly VolumeService _volume;
         private readonly DispatcherTimer _idleTimer = new();
@@ -65,6 +67,8 @@ namespace ZephyrPlayer
         public MainWindow(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
         {
             InitializeComponent();
+            ((Canvas)SecondarySkipBackIcon.Parent).Children.Add(_secondaryBackHighlight);
+            ((Canvas)SecondarySkipForwardIcon.Parent).Children.Add(_secondaryForwardHighlight);
             WindowChrome.ApplyDarkTitleBar(this);
             _libvlc = libvlc;
             _player = player;
@@ -299,7 +303,8 @@ namespace ZephyrPlayer
             if (_player.Length <= 0) return;
             _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
             // Rotate only the ring/arc; the duration label stays upright.
-            if (spin != null)
+            var secondary=spin==SecondaryBackSpin||spin==SecondaryForwardSpin;
+            if (spin != null && !secondary)
             {
                 spin.BeginAnimation(RotateTransform.AngleProperty, null);
                 spin.Angle = 0;
@@ -308,7 +313,12 @@ namespace ZephyrPlayer
                 anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
                 spin.BeginAnimation(RotateTransform.AngleProperty, anim);
             }
-            if (_settings.ButtonFlash) Flash(backward, spin == SecondaryBackSpin || spin == SecondaryForwardSpin);
+            if(secondary)
+            {
+                var highlight=backward?_secondaryBackHighlight:_secondaryForwardHighlight;
+                if(_settings.ButtonFlash)highlight.Start(((SolidColorBrush)(backward?SecondarySkipBackIcon:SecondarySkipForwardIcon).Stroke).Color);else highlight.Stop();
+            }
+            else if (_settings.ButtonFlash) Flash(backward,false);
         }
 
         private void Flash(bool backward, bool secondary)
@@ -480,6 +490,7 @@ namespace ZephyrPlayer
 
         public void ApplyBarStyle()
         {
+            _secondaryBackHighlight.Stop();_secondaryForwardHighlight.Stop();
             var style = _settings.BarColorStyle;
             var ring = style is "orange" or "twotone" ? Orange : RingDefault;
             var label = style is "orange" or "inverse" ? Orange : RingDefault;

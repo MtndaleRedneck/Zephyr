@@ -99,8 +99,10 @@ namespace ZephyrPlayer.Tests
                 await stream.WriteAsync(Encoding.ASCII.GetBytes("POST /pair HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{"));
                 using var deadline = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(15));
                 var data = new byte[4096];
-                var n = await stream.ReadAsync(data.AsMemory(), deadline.Token);
-                Assert.True(n == 0 || Encoding.ASCII.GetString(data, 0, n).Contains("408"), "stalled request must time out or disconnect");
+                try {
+                    var n = await stream.ReadAsync(data.AsMemory(), deadline.Token);
+                    Assert.True(n == 0 || Encoding.ASCII.GetString(data, 0, n).Contains("408"), "stalled request must time out or disconnect");
+                } catch(System.IO.IOException) {Assert.False(deadline.IsCancellationRequested,"server did not close within deadline");}
             }
         }
         [Fact]
