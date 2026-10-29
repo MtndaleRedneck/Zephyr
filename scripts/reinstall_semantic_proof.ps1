@@ -18,6 +18,8 @@ try{
  $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value;$p=Start-Process $installed -ArgumentList '--install-firewall',$sid -PassThru -Wait;if($p.ExitCode-ne 0){throw 'Firewall setup failed'}
  [IO.File]::WriteAllText($settings,'{"SkipBackSeconds":10,"SkipForwardSeconds":60,"LastVolume":47}')
  [IO.File]::WriteAllText($pairs,'["local-smoke-token"]')
+ if([IO.File]::ReadAllText($pairs)-ne '["local-smoke-token"]'){throw 'Legacy plaintext positive fixture missing before install'}
+ 'PREINSTALL: exact legacy plaintext array confirmed'|Add-Content "$out/reinstall-proof.txt"
  $settingsHash=(Get-FileHash $settings).Hash
  Install 'replacement';Start-Sleep -Seconds 5
  $running=@(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue|Where-Object Path -eq $installed);if($running.Count-eq 0){throw 'Installer did not relaunch installed app'}
@@ -28,6 +30,8 @@ try{
  Add-Type -AssemblyName System.Security.Cryptography.ProtectedData
  $bytes=[Convert]::FromBase64String($entries[0].token.Substring(6));$clear=[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($bytes,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser))
  if($clear-ne 'local-smoke-token'){throw 'DPAPI token semantics changed'}
+ $protectedHash=(Get-FileHash $pairs).Hash
  StopApp;Start-Process $installed;AssertAuth
+ if((Get-FileHash $pairs).Hash-ne$protectedHash){throw 'Second launch rewrote protected pairing file'}
  'PASS: same exact frozen installer replacement auto-relaunch; settings byte-identical; legacy token migrated to protected-at-rest token with same value; authorized200/wrongtoken401/unauthenticated401 before and after independent restart. No re-pair.'|Tee-Object -FilePath "$out/reinstall-proof.txt" -Append
 }finally{StopApp}
