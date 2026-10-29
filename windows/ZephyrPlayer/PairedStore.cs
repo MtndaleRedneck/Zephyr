@@ -187,15 +187,18 @@ namespace ZephyrPlayer
                     {
                         // 1.1.0 shape: a bare token string.
                         var t = Dpapi.Unwrap(el.GetString() ?? "") ?? throw new InvalidDataException("Pairing protection could not be opened");
-                        if (!string.IsNullOrEmpty(t)) entries.Add(new Entry(t, "My phone"));
+                        if (string.IsNullOrWhiteSpace(t)) throw new InvalidDataException("Empty pairing token");
+                        entries.Add(new Entry(t, "My phone"));
                     }
                     else if (el.ValueKind == System.Text.Json.JsonValueKind.Object)
                     {
                         var t = Dpapi.Unwrap(el.TryGetProperty("token", out var tp) ? tp.GetString() ?? "" : "") ?? throw new InvalidDataException("Pairing protection could not be opened");
                         var n = el.TryGetProperty("name", out var np) ? np.GetString() : null;
                         DateTime? pairedAt = el.TryGetProperty("pairedAt", out var pp) && pp.ValueKind == System.Text.Json.JsonValueKind.String && pp.TryGetDateTime(out var pd) ? pd : null;
-                        if (!string.IsNullOrEmpty(t)) entries.Add(new Entry(t, string.IsNullOrWhiteSpace(n) ? "My phone" : n, pairedAt));
+                        if (string.IsNullOrWhiteSpace(t)) throw new InvalidDataException("Missing pairing token");
+                        entries.Add(new Entry(t, string.IsNullOrWhiteSpace(n) ? "My phone" : n, pairedAt));
                     }
+                    else throw new InvalidDataException("Invalid pairing record");
                 }
                 if (entries.Count > 0 && doc.RootElement.EnumerateArray().Any(el => el.ValueKind == System.Text.Json.JsonValueKind.String || (el.TryGetProperty("token", out var token) && !(token.GetString() ?? "").StartsWith("dpapi:", StringComparison.Ordinal))))
                 {

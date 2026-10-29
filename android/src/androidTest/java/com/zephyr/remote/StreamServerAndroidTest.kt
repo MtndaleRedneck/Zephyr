@@ -50,6 +50,60 @@ class StreamServerAndroidTest {
         return Triple(code, c.headerFields, body)
     }
 
+    @Test fun stalledProviderStopReturnsAndWorkersDrain() {
+        val context = InstrumentationRegistry.getInstrumentation().context
+        server.stop(); server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0); server.start()
+        val uri = android.provider.DocumentsContract.buildDocumentUri(TestDocumentsProvider.AUTHORITY, "stall")
+        val url = server.addMovie(uri, "stall.mkv")
+        val client = kotlin.concurrent.thread { runCatching { get(url) } }
+        val deadline = android.os.SystemClock.elapsedRealtime() + 5000
+        while (TestDocumentsProvider.stalledOpened.get() < 2 && android.os.SystemClock.elapsedRealtime() < deadline) Thread.sleep(10)
+        assertTrue("copy provider was opened", TestDocumentsProvider.stalledOpened.get() >= 2)
+        val before = android.os.SystemClock.elapsedRealtime(); server.stop()
+        assertTrue("stop must return promptly", android.os.SystemClock.elapsedRealtime() - before < 2000)
+        client.join(5000); assertTrue("stalled client ended", !client.isAlive)
+        // A hostile provider might ignore close. End its producer too; no cache may land.
+        TestDocumentsProvider.stalledWrites.forEach { runCatching { it.close() } }; TestDocumentsProvider.stalledWrites.clear()
+        val until = android.os.SystemClock.elapsedRealtime()+5000
+        while (server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<until) Thread.sleep(10)
+        assertEquals(0, server.openStreams.get())
+        assertTrue(context.cacheDir.listFiles().orEmpty().none { it.name.endsWith(".part") && it.name.startsWith("stream-") })
+    }
+    @Test fun stalledWriterIsClosedByDeadline() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val large = File(context.cacheDir, "stalled-writer.bin")
+        java.io.RandomAccessFile(large,"rw").use { it.setLength(128L*1024*1024) }
+        val url = URL(server.addMovie(Uri.fromFile(large), "large"))
+        val sock = java.net.Socket(); sock.receiveBufferSize=1024; sock.connect(java.net.InetSocketAddress(url.host,url.port))
+        sock.getOutputStream().write("GET ${url.path} HTTP/1.1\r\nHost: localhost\r\n\r\n".toByteArray())
+        try {
+            Thread.sleep(200)
+            val until=android.os.SystemClock.elapsedRealtime()+65000
+            while(server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<until) Thread.sleep(100)
+            assertEquals("stalled writer released",0,server.openStreams.get())
+        } finally {sock.close();large.delete()}
+    }
+    @Test fun restartPurgesStaleCacheAndKeepsOtherCache() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val stale = File(context.cacheDir, "stream-old-dead.part").apply { writeText("old") }
+        val unrelated = File(context.cacheDir, "unrelated.txt").apply { writeText("keep") }
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0)
+        server.start()
+        assertTrue(!stale.exists()); assertTrue(unrelated.exists()); unrelated.delete()
+    }
+    @Test fun rangeErrorsAndUnsupportedRanges_realSockets() {
+        for (range in listOf("bytes=1000-", "bytes=900-800")) {
+            val (code, headers, body) = get(movieUrl, range)
+            assertEquals(416, code); assertEquals(0, body.size)
+            assertTrue(headers.entries.any { it.key.equals("Content-Range", true) && it.value.contains("bytes */1000") })
+        }
+        for (range in listOf("items=0-9", "bytes=-9", "bytes=0-9,20-30", "bytes=garbage")) {
+            val (code, _, body) = get(movieUrl, range)
+            assertEquals(200, code); assertArrayEquals(bytes, body)
+        }
+    }
+
     @Test
     fun abandoned100LargeSeeks_recoverAndStillLoadSubtitle() {
         val context=InstrumentationRegistry.getInstrumentation().targetContext
