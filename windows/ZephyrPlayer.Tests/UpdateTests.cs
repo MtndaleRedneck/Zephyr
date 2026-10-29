@@ -59,6 +59,13 @@ namespace ZephyrPlayer.Tests
             (digest != null ? ",\"digest\":\"sha256:" + digest + "\"" : "") + "}]}";
 
         [Fact]
+        public void MissingDigest_NotOffered()
+        {
+            Feed("["+Release("player-v9.0.0","Zephyr-PC-9.0.0.exe")+"]");
+            Assert.Equal("unverified_release",UpdateCheck.CheckOutcomeOrThrow("1.0.0",_base+"/releases"));
+            Assert.Null(UpdateState.AvailableOffer);
+        }
+        [Fact]
         public void NewerPlayerTag_WithExe_Wins()
         {
             Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe", new string('a', 64)) + "]");
@@ -99,7 +106,7 @@ namespace ZephyrPlayer.Tests
             Assert.Equal("no_release", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
             Feed("[" + Release("player-v1.0.0", "Zephyr-PC-1.0.0.exe") + "]");
             Assert.Equal("up_to_date", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
-            Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe") + "]");
+            Feed("[" + Release("player-v1.2.0", "Zephyr-PC-1.2.0.exe", new string('b',64)) + "]");
             Assert.Equal("available: 1.2.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
             // Installed AHEAD of the feed (unpublished build) is its own state - never "latest published".
             Assert.Equal("ahead_of_feed", UpdateCheck.CheckOutcomeOrThrow("1.3.0", _base + "/releases"));
@@ -138,7 +145,7 @@ namespace ZephyrPlayer.Tests
             _statusCode = 302;
             _redirectLocation = "https://untrusted.invalid/payload.exe";
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                SelfUpdate.Download("1.2.0", _base + "/exe", null, hostAllowed: h => h == "127.0.0.1"));
+                SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: h => h == "127.0.0.1"));
             Assert.Contains("not trusted", ex.Message);
         }
 
@@ -174,6 +181,21 @@ namespace ZephyrPlayer.Tests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 SelfUpdate.Download("1.2.0", _base + "/exe", new string('b', 64), hostAllowed: _ => true));
             Assert.False(System.IO.File.Exists(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Zephyr-PC-1.2.0.exe")));
+        }
+
+        [Fact]
+        public async Task Download_MissingDigest_FailsClosed()
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => SelfUpdate.Download("1.2.0", _base + "/exe", null, hostAllowed: _ => true));
+        }
+        [Fact]
+        public async Task Launch_RechecksChangedFile()
+        {
+            _exeBytes = Encoding.UTF8.GetBytes("verified installer");
+            var hex = Convert.ToHexString(SHA256.HashData(_exeBytes));
+            var path = await SelfUpdate.Download("1.2.0", _base + "/exe", hex, hostAllowed: _ => true);
+            System.IO.File.WriteAllText(path, "tampered");
+            Assert.Throws<InvalidOperationException>(() => SelfUpdate.OpenVerifiedForLaunch(path));
         }
 
         [Fact]

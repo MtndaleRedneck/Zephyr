@@ -1,5 +1,6 @@
 namespace ZephyrPlayer
 {
+    public interface IAsyncPlaybackControl { System.Threading.Tasks.Task PlayAsync(string url,long? positionSeconds,string[] subtitles); }
     public interface IPlaybackControl
     {
         void Play(string url, long? positionSeconds, string[] subtitles);

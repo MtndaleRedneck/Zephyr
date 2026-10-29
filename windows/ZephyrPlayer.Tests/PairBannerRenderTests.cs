@@ -17,6 +17,26 @@ namespace ZephyrPlayer.Tests
     public class PairingWindowRenderTests
     {
         [Fact]
+        public void BrokenPairingRecovery_RendersExplicitResetWithoutChangingStore()
+        {
+            Exception? error=null;var thread=new Thread(()=>{
+                var dir=System.IO.Path.Combine(System.IO.Path.GetTempPath(),Guid.NewGuid().ToString("N"));System.IO.Directory.CreateDirectory(dir);
+                try{
+                    var path=System.IO.Path.Combine(dir,"paired.json");System.IO.File.WriteAllText(path,"broken{");var store=new PairedStore(path);_=store.Entries();
+                    var gate=new PairingGate();var panel=new PairingPanel(gate,store,_=>{});var window=new Window{Content=panel,Width=600,Height=700};
+                    try{
+                        window.Show();window.UpdateLayout();
+                        Assert.Equal(Visibility.Visible,((Button)panel.FindName("ResetPairingsButton")!).Visibility);
+                        Assert.False(((Button)panel.FindName("PairButton")!).IsEnabled);
+                        var image=new RenderTargetBitmap(600,700,96,96,PixelFormats.Pbgra32);image.Render(window);
+                        var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(image));
+                        using var output=System.IO.File.Create(System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP")??System.IO.Path.GetTempPath(),"pc-pairing-recovery-render.png"));png.Save(output);
+                        Assert.Equal("broken{",System.IO.File.ReadAllText(path));Assert.True(store.IsBroken);
+                    }finally{window.Close();}
+                }catch(Exception ex){error=ex;}finally{System.IO.Directory.Delete(dir,true);System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();}
+            });thread.SetApartmentState(ApartmentState.STA);thread.Start();Assert.True(thread.Join(30000));if(error!=null)throw error;
+        }
+        [Fact]
         public void PairingWindow_RendersOffscreen()
         {
             string? error = null;
@@ -115,8 +135,8 @@ namespace ZephyrPlayer.Tests
                     var bar = w.ControlBar;
                     // Structural assertions, independent of pixel counts: the required
                     // elements exist with readable labels, and CC/full are vectors, not text.
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
                     Assert.Equal("0:00", ((TextBlock)w.FindName("ElapsedText")!).Text);
                     Assert.Equal("0:00 total", ((TextBlock)w.FindName("TotalText")!).Text);
                     Assert.Equal("-0:00", ((TextBlock)w.FindName("RemainingText")!).Text);

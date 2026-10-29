@@ -14,6 +14,10 @@ namespace ZephyrVlcRemote;
 internal sealed class HttpServer : IDisposable
 {
     private readonly HttpListener _listener = new();
+    private readonly SemaphoreSlim _requests = new(16);
+    private readonly SemaphoreSlim _pairs = new(4);
+    private readonly SemaphoreSlim _sockets = new(8);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string,byte> _socketTokens = new();
     private Thread? _thread;
     private volatile bool _running;
 
@@ -33,7 +37,15 @@ internal sealed class HttpServer : IDisposable
             HttpListenerContext ctx;
             try { ctx = _listener.GetContext(); }
             catch { break; }
-            Task.Run(async () => await Handle(ctx));
+            var path = ctx.Request.Url?.AbsolutePath?.TrimEnd('/') ?? "";
+            var pair = path == "/pair";
+            if (!pair && !Authorized(ctx.Request)) { ctx.Response.StatusCode=401;ctx.Response.Close();continue; }
+            var ws = path == "/ws";
+            var token = ctx.Request.Headers["X-Zephyr-VLC-Remote-Token"] ?? "";
+            var slots = pair ? _pairs : ws ? _sockets : _requests;
+            if (!slots.Wait(0)) { ctx.Response.StatusCode=503;ctx.Response.Close();continue; }
+            if (ws && !_socketTokens.TryAdd(token,0)) {slots.Release();ctx.Response.StatusCode=429;ctx.Response.Close();continue;}
+            Task.Run(async () => { try { await Handle(ctx); } finally { slots.Release();if(ws)_socketTokens.TryRemove(token,out _); } });
         }
     }
 
@@ -503,10 +515,24 @@ internal sealed class HttpServer : IDisposable
     private static string ReadBody(HttpListenerRequest req)
     {
         if (req.ContentLength64 > 64 * 1024) throw new InvalidDataException("Request too large");
-        using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
-        var s = reader.ReadToEnd();
-        if (s.Length > 64 * 1024) throw new InvalidDataException("Request too large");
-        return s;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var buffer = new MemoryStream();
+        var bytes = new byte[4096];
+        while (true)
+        {
+            var read = req.InputStream.ReadAsync(bytes.AsMemory(), timeout.Token).AsTask();
+            if (Task.WhenAny(read, Task.Delay(Timeout.Infinite, timeout.Token)).GetAwaiter().GetResult() != read)
+            {
+                req.InputStream.Close();
+                _ = read.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                throw new OperationCanceledException();
+            }
+            var n = read.GetAwaiter().GetResult();
+            if (n == 0) break;
+            if (buffer.Length + n > 64 * 1024) throw new InvalidDataException("Request too large");
+            buffer.Write(bytes, 0, n);
+        }
+        return Encoding.UTF8.GetString(buffer.ToArray());
     }
 
     private static void Reply(HttpListenerResponse res, int code, string json)

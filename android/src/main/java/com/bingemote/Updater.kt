@@ -119,6 +119,7 @@ object Updater {
         }
         val published = newest
         if (published == null) CheckOutcome.NoRelease
+        else if (isNewer(published.versionName, current) && published.sha256 == null) CheckOutcome.Unavailable
         else if (isNewer(published.versionName, current)) CheckOutcome.Newer(published)
         else CheckOutcome.UpToDate
     } catch (e: Exception) { CheckOutcome.Unavailable }
@@ -136,6 +137,7 @@ object Updater {
 
     /** Downloads the APK, following only HTTPS redirects inside github.com and githubusercontent.com. Throws [Failure]. */
     fun download(ctx: Context, info: UpdateInfo, progress: (Float) -> Unit, cancelled: () -> Boolean): File {
+        if (info.sha256 == null || !Regex("[0-9a-fA-F]{64}").matches(info.sha256)) throw Failure("The release has no valid checksum, so it was not downloaded.")
         clean(ctx)
         val dir = updateDir(ctx); dir.mkdirs()
         val out = File(dir, "Zephyr-update.apk")
@@ -165,7 +167,7 @@ object Updater {
                 }
             } }
             if (total != info.size) throw Failure("The download was incomplete.")
-            if (info.sha256 != null && toHex(md.digest()) != info.sha256) throw Failure("The file did not match the published checksum, so it was deleted.")
+            if (toHex(md.digest()) != info.sha256) throw Failure("The file did not match the published checksum, so it was deleted.")
             return out
         } catch (e: Failure) { out.delete(); throw e }
         catch (e: Exception) { out.delete(); throw Failure("The download failed. Check your connection and try again.") }
@@ -194,7 +196,7 @@ object Updater {
      *  when published, the same digest (teardown 9a - a stale file must never install). */
     fun cachedMatchesOffer(f: File, info: UpdateInfo): Boolean {
         if (!f.exists() || f.length() != info.size) return false
-        return info.sha256 == null || try { sha256(f) == info.sha256 } catch (e: Exception) { false }
+        return info.sha256 != null && try { sha256(f) == info.sha256 } catch (e: Exception) { false }
     }
 
     /** Confirms the file is this app, newer, and signed with the same key as the installed copy. Throws [Failure]. */

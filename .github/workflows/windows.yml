@@ -31,13 +31,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
 
       - name: Publish helper exe (with the CI-only pairing hook)
-        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/out
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/out
 
       # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
       - name: Install VLC (for the movies launch test)
@@ -46,14 +46,14 @@ jobs:
         run: choco install ffmpeg --no-progress -y
 
       - name: Publish the clean release exe (no CI hooks - the build that ships)
-        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
 
       # The installer is built ONLY from the clean release build - the hooked test exe
       # (out/) never reaches an artifact. The e2e proves the installed build ignores
       # ZEPHYR_VLC_REMOTE_PAIR_CODE before any runtime test runs.
       - name: Build the installer from the clean release build
         run: |
-          choco install innosetup --no-progress -y
+          choco install innosetup --version=6.6.1 --no-progress -y
           $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
@@ -61,7 +61,7 @@ jobs:
       - name: Upload helper installer artifact
         # The E2E legs install and pair-test this exact installer; keep it as a
         # run artifact so the tested build can be delivered without a rebuild.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Zephyr-VLC-Remote-installer
           path: windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe
@@ -70,7 +70,7 @@ jobs:
 
       - name: Render the helper window for layout review (CI only)
         run: |
-          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
           $shots = @(
             @('window', 'window.png'),
             @('pairing-expired', 'window-pairing-expired.png'),
@@ -99,7 +99,7 @@ jobs:
       # focus from real keyboard focus. Behavior proof for the N9-7 template fix.
       - name: Render the Player permission dialogs with real states (CI only)
         run: |
-          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrPlayer/shot
+          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrPlayer/shot
           foreach ($m in 'explain','hover','pressed','focus','note') {
             # Same GUI-wait fix as the helper loop above; on failure the hook's own
             # diag file names the exact step/exception.
@@ -123,7 +123,7 @@ jobs:
 
       - name: Upload the window shot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Zephyr-VLC-Remote-window
           path: |
@@ -172,8 +172,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
       - name: Build Zephyr Player
@@ -203,7 +203,7 @@ jobs:
           --logger "trx;LogFileName=zvr-tests.trx"
       - name: Upload test diagnostics (TRX + hang dumps)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-test-diagnostics
           path: |
@@ -219,20 +219,24 @@ jobs:
       - name: Publish single-file exe
         if: always()
         timeout-minutes: 8
-        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+      - name: Verify bundled native VLC inventory against resolved package
+        if: always()
+        shell: pwsh
+        run: scripts/verify_native_inventory.ps1 -Published windows/out -Version 3.0.24
       - name: Build installer (Inno Setup)
         if: always()
         timeout-minutes: 8
         shell: pwsh
         run: |
-          choco install innosetup --no-progress -y
+          choco install innosetup --version=6.6.1 --no-progress -y
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
       - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
         if: always()
         timeout-minutes: 8
-        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
       - name: Player hook compile-out proof (shipped exe has no CI seams)
         # Same byte-true scan as the helper's (round-12): the tray diag env read was
         # the one seam found outside a hook; the scan keeps that class from returning.
@@ -242,7 +246,7 @@ jobs:
           $latin = [Text.Encoding]::GetEncoding(28591)
           $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/out/ZephyrPlayer.exe"))
           $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/capture-out/ZephyrPlayer.exe"))
-          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot') {
+          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot', 'ci-capture-token', 'ZEPHYR_CI_CAPTURE') {
             $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
               $n = $latin.GetString($enc.GetBytes($needle))
@@ -790,7 +794,7 @@ jobs:
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           Write-Output 'LEGACY HKLM ENTRY: targets the shared post-upgrade unins000.exe; the foreign reservation survived byte-identical and every blind legacy id was skipped through this path too.'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: windows-ui-evidence
@@ -799,6 +803,7 @@ jobs:
             ${{ runner.temp }}/pc-mouse-recovery.txt
             ${{ runner.temp }}/pc-cycle-*.png
             ${{ runner.temp }}/pc-pairing-render.png
+            ${{ runner.temp }}/pc-pairing-recovery-render.png
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
             ${{ runner.temp }}/pc-tray-menu.png
@@ -828,7 +833,7 @@ jobs:
             ${{ runner.temp }}/uninstall-t6b.log
           if-no-files-found: warn
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: Zephyr-PC-installer

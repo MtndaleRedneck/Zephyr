@@ -21,6 +21,8 @@ namespace ZephyrPlayer
     {
         public const int DefaultPort = 47823; // distinct from BingeMote helper's port
         private readonly HttpListener _listener = new HttpListener();
+        private readonly SemaphoreSlim _requests = new(16);
+        private readonly SemaphoreSlim _pairRequests = new(4);
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly Func<string, long?, string[], Task> _onPlay;
         private readonly Func<string, bool> _validateToken;
@@ -73,7 +75,17 @@ namespace ZephyrPlayer
                 HttpListenerContext ctx;
                 try { ctx = await _listener.GetContextAsync(); }
                 catch { break; }
-                _ = Task.Run(() => Handle(ctx));
+                if (!TrustedRequest(ctx)) {ctx.Response.StatusCode=403;ctx.Response.Close();continue;}
+                var pair = ctx.Request.HttpMethod == "POST" && ctx.Request.Url?.AbsolutePath == "/pair";
+                if (!pair)
+                {
+                    var auth = ctx.Request.Headers["Authorization"] ?? "";
+                    if (!auth.StartsWith("Bearer ") || !_validateToken(auth.Substring(7)))
+                    { ctx.Response.StatusCode = 401; ctx.Response.Close(); continue; }
+                }
+                var slots = pair ? _pairRequests : _requests;
+                if (!slots.Wait(0)) { ctx.Response.StatusCode = 503; ctx.Response.Close(); continue; }
+                _ = Task.Run(async () => { try { await Handle(ctx); } finally { slots.Release(); } });
             }
         }
 
@@ -89,12 +101,12 @@ namespace ZephyrPlayer
                     await Reply(ctx, 403, "{\"error\":\"not a home network address\"}");
                     return;
                 }
+                if (!TrustedRequest(ctx)) {await Reply(ctx,403,"{\"error\":\"origin or host refused\"}");return;}
                 // Pairing is the ONE unauthenticated route: the phone trades the 6-digit
                 // code on the player screen for a pairing token (protocol.md Pairing).
                 if (ctx.Request.HttpMethod == "POST" && path == "/pair")
                 {
-                    using var pairReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var pairBody = await pairReader.ReadToEndAsync();
+                    var pairBody = await ReadBody(ctx);
                     var code = System.Text.Json.JsonDocument.Parse(pairBody).RootElement.GetProperty("code").GetString() ?? "";
                     var (outcome, newToken) = code.Length == 0 || _onPair == null
                         ? (PairOutcome.NoCode, null)
@@ -139,8 +151,7 @@ namespace ZephyrPlayer
                 }
                 if (ctx.Request.HttpMethod == "POST" && path == "/play")
                 {
-                    using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var body = await reader.ReadToEndAsync();
+                    var body = await ReadBody(ctx);
                     var doc = System.Text.Json.JsonDocument.Parse(body).RootElement;
                     var url = doc.GetProperty("url").GetString();
                     if (url == null) { await Reply(ctx, 400, "{\"error\":\"missing url\"}"); return; }
@@ -148,6 +159,7 @@ namespace ZephyrPlayer
                     var subs = doc.TryGetProperty("subtitles", out var s)
                         ? System.Text.Json.JsonSerializer.Deserialize<string[]>(s.GetRawText()) ?? Array.Empty<string>()
                         : Array.Empty<string>();
+                    if (!PlaybackSourcePolicy.AllowedSet(url, subs, _settings.LibraryFolder, ctx.Request.RemoteEndPoint.Address)) { await Reply(ctx, 400, "{\"error\":\"playback source not allowed\"}"); return; }
                     await _onPlay(url, position, subs);
                     await Reply(ctx, 200, "{\"ok\":true}");
                     return;
@@ -162,8 +174,7 @@ namespace ZephyrPlayer
                 }
                 if (ctx.Request.HttpMethod == "POST" && path == "/library/folder")
                 {
-                    using var folderReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var folderBody = await folderReader.ReadToEndAsync();
+                    var folderBody = await ReadBody(ctx);
                     var folder = System.Text.Json.JsonDocument.Parse(folderBody).RootElement.GetProperty("folder").GetString()?.Trim() ?? "";
                     if (folder.Length > 0)
                     {
@@ -201,8 +212,7 @@ namespace ZephyrPlayer
                     var hasBody = ctx.Request.HasEntityBody;
                     if (hasBody)
                     {
-                        using var controlReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                        var controlBody = await controlReader.ReadToEndAsync();
+                        var controlBody = await ReadBody(ctx);
                         cjson = System.Text.Json.JsonDocument.Parse(controlBody).RootElement;
                     }
                     switch (path)
@@ -215,7 +225,9 @@ namespace ZephyrPlayer
                                 ? System.Text.Json.JsonSerializer.Deserialize<string[]>(cs.GetRawText()) ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             if (url.Length == 0) { await Reply(ctx, 400, "{\"error\":\"no url\"}"); return; }
-                            _control.Play(url, pos, subs);
+                            if (!PlaybackSourcePolicy.AllowedSet(url, subs, _settings.LibraryFolder, ctx.Request.RemoteEndPoint.Address)) { await Reply(ctx, 400, "{\"error\":\"playback source not allowed\"}"); return; }
+                            if(_control is IAsyncPlaybackControl asyncControl) await asyncControl.PlayAsync(url,pos,subs);
+                            else _control.Play(url, pos, subs);
                             break;
                         }
                         case "/control/pause": _control.Pause(); break;
@@ -244,8 +256,7 @@ namespace ZephyrPlayer
                 if (ctx.Request.HttpMethod == "POST" && path.StartsWith("/input/"))
                 {
                     if (_input == null) { await Reply(ctx, 404, "{}"); return; }
-                    using var inputReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var inputBody = await inputReader.ReadToEndAsync();
+                    var inputBody = await ReadBody(ctx);
                     var json = System.Text.Json.JsonDocument.Parse(inputBody).RootElement;
                     switch (path)
                     {
@@ -288,10 +299,49 @@ namespace ZephyrPlayer
                 }
                 await Reply(ctx, 404, "{}");
             }
-            catch (Exception e)
+            catch (BodyLimitException) { await SafeError(ctx, 413, "request too large"); }
+            catch (OperationCanceledException) { await SafeError(ctx, 408, "request timed out"); }
+            catch (Exception) { await SafeError(ctx, 400, "invalid request"); }
+        }
+
+        private static bool TrustedRequest(HttpListenerContext ctx)
+        {
+            if (ctx.Request.Headers["Origin"] != null) return false;
+            if (!IsPrivateAddress(ctx.Request.RemoteEndPoint.Address)) return false;
+            var host=ctx.Request.Url?.Host ?? "";
+            return IPAddress.TryParse(host,out _) || host.Equals("localhost",StringComparison.OrdinalIgnoreCase) || host.Equals(Environment.MachineName,StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed class BodyLimitException : Exception { }
+        private static async Task<string> ReadBody(HttpListenerContext ctx)
+        {
+            const int max = 64 * 1024;
+            if (ctx.Request.ContentLength64 > max) throw new BodyLimitException();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var buffer = new MemoryStream();
+            var bytes = new byte[4096];
+            while (true)
             {
-                await Reply(ctx, 500, "{\"error\":" + System.Text.Json.JsonSerializer.Serialize(e.Message) + "}");
+                var read = ctx.Request.InputStream.ReadAsync(bytes.AsMemory(), timeout.Token).AsTask();
+                if (await Task.WhenAny(read, Task.Delay(Timeout.Infinite, timeout.Token)) != read)
+                {
+                    ctx.Response.StatusCode = 408;
+                    try { ctx.Response.Abort(); } catch { }
+                    try { ctx.Request.InputStream.Close(); } catch { }
+                    _ = read.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                    throw new OperationCanceledException();
+                }
+                var n = await read;
+                if (n == 0) break;
+                if (buffer.Length + n > max) throw new BodyLimitException();
+                buffer.Write(bytes, 0, n);
             }
+            return Encoding.UTF8.GetString(buffer.ToArray());
+        }
+        private static async Task SafeError(HttpListenerContext ctx, int code, string message)
+        {
+            try { await Reply(ctx, code, "{\"error\":\"" + message + "\"}"); }
+            catch { try { ctx.Response.Abort(); } catch { } }
         }
 
         private static async Task Reply(HttpListenerContext ctx, int code, string json)
@@ -308,6 +358,7 @@ namespace ZephyrPlayer
         /// Same rule as the BingeMote helper's HttpServer.IsPrivateAddress.</summary>
         internal static bool IsPrivateAddress(IPAddress ip)
         {
+            if(ip.IsIPv4MappedToIPv6)ip=ip.MapToIPv4();
             if (IPAddress.IsLoopback(ip)) return true;
             if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
             var b = ip.GetAddressBytes();

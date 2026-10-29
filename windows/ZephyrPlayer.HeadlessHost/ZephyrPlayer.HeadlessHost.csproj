@@ -11,6 +11,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="..\ZephyrPlayer\PlaybackServer.cs" Link="PlaybackServer.cs" />
+    <Compile Include="..\ZephyrPlayer\PlaybackSourcePolicy.cs" Link="PlaybackSourcePolicy.cs" />
     <Compile Include="..\ZephyrPlayer\Library.cs" Link="Library.cs" />
     <Compile Include="..\ZephyrPlayer\PairingGate.cs" Link="PairingGate.cs" />
     <Compile Include="..\ZephyrPlayer\PlayerSettings.cs" Link="PlayerSettings.cs" />

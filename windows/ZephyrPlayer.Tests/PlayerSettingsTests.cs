@@ -18,6 +18,14 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void ButtonFlash_DefaultOn_ChoicePersists()
+        {
+            var s = new PlayerSettings(_path);
+            Assert.True(s.ButtonFlash);
+            s.ButtonFlash = false;
+            Assert.False(new PlayerSettings(_path).ButtonFlash);
+        }
+        [Fact]
         public void Library_Sort_Roundtrips_Without_Losing_Older_Settings()
         {
             var settings = new PlayerSettings(_path);

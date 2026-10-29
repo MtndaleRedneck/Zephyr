@@ -78,7 +78,7 @@ namespace ZephyrPlayer.Tests
             using (server)
             {
                 var c = Client(GoodToken);
-                Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/play", Json("{\"url\":\"http://x/m.mkv\",\"position\":42,\"subtitles\":[\"http://x/m.srt\"]}"))).StatusCode);
+                Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/play", Json("{\"url\":\"http://127.0.0.1:8080/s/tok/1\",\"position\":42,\"subtitles\":[\"http://127.0.0.1:8080/s/tok/1/sub/0\"]}"))).StatusCode);
                 Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/pause", Json("{}"))).StatusCode);
                 Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/resume", Json("{}"))).StatusCode);
                 Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/seek", Json("{\"position\":90}"))).StatusCode);
@@ -87,7 +87,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/captions", Json("{\"track\":2}"))).StatusCode);
                 Assert.Equal(HttpStatusCode.OK, (await c.PostAsync("/control/fullscreen", Json("{\"on\":true}"))).StatusCode);
                 Assert.Equal(new[] {
-                    "play http://x/m.mkv 42 [http://x/m.srt]", "pause", "resume", "seek 90",
+                    "play http://127.0.0.1:8080/s/tok/1 42 [http://127.0.0.1:8080/s/tok/1/sub/0]", "pause", "resume", "seek 90",
                     "volume 55", "mute True", "spu 2", "fullscreen True" }, rec.Events);
             }
         }
@@ -272,8 +272,9 @@ namespace ZephyrPlayer.Tests
                 Core.Initialize();
                 using var libvlc = new LibVLC("--no-video");
                 using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
-                using var media = new Media(libvlc, "http://127.0.0.1:48123/clip.mp4", FromType.FromLocation);
-                media.AddSlave(MediaSlaveType.Subtitle, 0, "http://127.0.0.1:48123/clip.srt");
+                using var safe = new SafeMediaSource(libvlc, "http://127.0.0.1:48123/clip.mp4");
+                safe.AddSubtitle("http://127.0.0.1:48123/clip.srt");
+                var media = safe.Media;
                 Assert.True(player.Play(media), "libVLC refused to start the media");
                 Assert.True(SpinWait(() => player.State == VLCState.Playing, 8000),
                     "never reached Playing (state: " + player.State + ")");

@@ -24,6 +24,7 @@ namespace ZephyrPlayer
             "no_release" => "No published player installer available yet.",
             "up_to_date" => "You're up to date.",
             "ahead_of_feed" => "No newer version is available.",
+            "unverified_release" => "This update has no verified checksum. It was not offered for installation.",
             _ when outcome.StartsWith("available: ") => "Update available: " + outcome.Substring(11),
             _ when outcome.StartsWith("failed:") => "Could not check for updates. Try again later.",
             _ => "Update status unavailable."
@@ -56,6 +57,7 @@ namespace ZephyrPlayer
             var cmp = Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version"));
             if (cmp > 0)
             {
+                if (published.Value.Sha256 == null) return "unverified_release";
                 UpdateState.AvailableOffer = new UpdateState.Offer(published.Value.Version, published.Value.ExeUrl, published.Value.Sha256);
                 return "available: " + published.Value.Version;
             }
