@@ -51,6 +51,7 @@ namespace ZephyrPlayer
         // call, so plugging headphones or switching Windows' output is followed at
         // once instead of writes landing on the stale device from app start.
         private int _disposed;
+        private DateTime _lastActivationFailLog = DateTime.MinValue;
 
         // Read-only ABI probe for ordinary Windows CI. No volume setting is changed.
         internal static (int enumerateHr, bool collection, int defaultHr, bool device) ProbeComSlots()
@@ -86,7 +87,19 @@ namespace ZephyrPlayer
                 Marshal.ThrowExceptionForHR(hr);
                 return (IAudioEndpointVolume)obj;
             }
-            catch { return null; } // no audio device (headless CI) - fail soft
+            catch (Exception ex)
+            {
+                // Fail soft (headless CI has no endpoint), but keep the failure
+                // observable: exception type + HRESULT only, throttled so the
+                // per-call activation path cannot spam the log. No secrets.
+                var now = DateTime.UtcNow;
+                if (now - _lastActivationFailLog >= TimeSpan.FromSeconds(30))
+                {
+                    _lastActivationFailLog = now;
+                    System.Diagnostics.Trace.TraceWarning("Windows audio endpoint activation failed: " + ex.GetType().Name + " 0x" + ex.HResult.ToString("X8"));
+                }
+                return null;
+            }
             finally { if (device != null) Marshal.ReleaseComObject(device); if (enumerator != null) Marshal.ReleaseComObject(enumerator); }
         }
 
@@ -115,14 +128,36 @@ namespace ZephyrPlayer
             finally { Marshal.ReleaseComObject(ep); }
         }
 
-        public bool GetMute()
+        /// <summary>Maps one endpoint mute read to a tri-state: null = the read
+        /// FAILED (unknown), never "unmuted". Callers must keep their previous
+        /// state on null. Pinned by VolumeMuteTests.</summary>
+        internal static bool? MuteFromRead(int hr, int mute) => hr == 0 ? (bool?)(mute != 0) : null;
+
+        /// <summary>Test seam (InternalsVisibleTo): forces TryGetMute's outcome
+        /// without a real endpoint so call-site behavior on a failed read is
+        /// testable headless. None = normal COM path.</summary>
+        internal enum ForcedMute { None, True, False, Unknown }
+        internal ForcedMute ForcedMuteOverride = ForcedMute.None;
+
+        /// <summary>Windows master mute, or null when the state is UNKNOWN (no
+        /// endpoint, failed HRESULT, or exception). A failed read must never be
+        /// read as "unmuted".</summary>
+        public bool? TryGetMute()
         {
+            if (ForcedMuteOverride == ForcedMute.True) return true;
+            if (ForcedMuteOverride == ForcedMute.False) return false;
+            if (ForcedMuteOverride == ForcedMute.Unknown) return null;
             var ep = ActivateDefault();
-            if (ep == null) return false;
-            try { return ep.GetMute(out var m) == 0 && m != 0; }
-            catch { return false; }
+            if (ep == null) return null;
+            try { return ep.GetMute(out var m) == 0 ? MuteFromRead(0, m) : null; }
+            catch { return null; }
             finally { Marshal.ReleaseComObject(ep); }
         }
+
+        /// <summary>Legacy convenience: false when unknown. New callers that
+        /// carry their own state must use TryGetMute so a failed read does not
+        /// silently unmute.</summary>
+        public bool GetMute() => TryGetMute() ?? false;
 
         public void SetMaster(int volume)
         {

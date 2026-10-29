@@ -47,11 +47,14 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private val clients = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
     @Volatile private var running = false
 
-    /** Serializes close() against every raw-descriptor use. A watchdog or stop()
-     *  close can never slip between a worker obtaining the descriptor number and
-     *  its read, so descriptor reuse can never feed bytes from the wrong file.
-     *  All uses poll with a short timeout and re-check the flags, so close()
-     *  never waits more than one poll cycle on a stuck provider. */
+    /** Serializes close() against every raw-descriptor use: while a worker holds
+     *  the guard for one poll/read cycle, close() waits, so OUR close cannot slip
+     *  between the worker obtaining the descriptor number and that cycle's use
+     *  (descriptor reuse from our own close cannot feed bytes from the wrong file).
+     *  Bounds: a ready poll does NOT bound the following Os.read - on a seekable
+     *  SAF/FUSE provider the read itself can still block, and while it does, the
+     *  close waits on the guard, and the serial drain/token/permit cleanup behind
+     *  that close waits with it (known residual, not eliminated here). */
     private class Guarded<T : java.io.Closeable>(val inner: T) {
         private val gate = Object()
         @Volatile var closed = false; private set
@@ -278,9 +281,11 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                         ginput.deadlineAt = android.os.SystemClock.elapsedRealtime() + 60_000
                                         object : java.io.FilterInputStream(input) {
                                             override fun read(b: ByteArray, off: Int, len: Int): Int {
-                                                // Poll a non-seekable pipe instead of entering an uninterruptible read.
-                                                // Each poll/read holds the guard briefly, so a deadline close can
-                                                // interpose between cycles and can never recycle the fd mid-read.
+                                                // Poll a non-seekable pipe instead of entering a blind read.
+                                                // Each poll/read holds the guard for one cycle, so a deadline close
+                                                // can only interpose between cycles; it cannot recycle the fd while
+                                                // a cycle uses it. The ready poll bounds the WAIT for readability,
+                                                // not the read that follows it (see Guarded).
                                                 while (running) {
                                                     val ready = ginput.use {
                                                         val poll = android.system.StructPollfd().apply { this.fd = copyFd.fileDescriptor; events = android.system.OsConstants.POLLIN.toShort() }
@@ -340,9 +345,11 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         val buf = ByteArray(64 * 1024)
         var left = end - start + 1
         while (left > 0) {
-            // Poll, then read: never an uninterruptible read on a stuck provider.
-            // Each cycle holds the guard briefly, so a deadline/stop close waits at
-            // most one poll cycle and can never recycle the fd mid-read.
+            // Poll, then read: the poll bounds the WAIT for readability on a stuck
+            // provider; it does not bound the Os.read that follows - a seekable
+            // SAF/FUSE read can still block after a ready poll, and a deadline/stop
+            // close then waits on the guard for that read (known residual). Our
+            // close cannot recycle the fd while a cycle holds the guard.
             val n = run {
                 while (running) {
                     val ready = guarded.use { pfd ->

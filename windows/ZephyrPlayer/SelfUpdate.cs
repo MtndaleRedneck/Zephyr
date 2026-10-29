@@ -16,8 +16,10 @@ namespace ZephyrPlayer
     {
         private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> Verified = new();
         private static readonly HttpClient Http = new(new HttpClientHandler { AllowAutoRedirect = false });
-        /// <summary>Hard cap on one installer download (the real installer is far
-        /// under this): a broken or hostile feed must never fill the disk.</summary>
+        /// <summary>Hard cap on one installer download: a broken or hostile feed
+        /// must never fill the disk. Margin evidence: the 1.4.0 Zephyr Player installer
+        /// is 164,212,234 bytes (~157 MiB, CI artifact 12934174344); the cap is
+        /// ~3.4x that, so growth headroom is real but bounded.</summary>
         internal static long MaxInstallerBytes = 512L * 1024 * 1024;
 
         internal static void CleanOldDownloads()
