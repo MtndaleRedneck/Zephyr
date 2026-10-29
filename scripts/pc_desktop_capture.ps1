@@ -48,6 +48,7 @@ public static class ZWU32 {
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out ZRECT r);
+    [DllImport("user32.dll")] public static extern bool SystemParametersInfo(int uAction, int uParam, ref ZRECT lpvParam, int fuWinIni);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, System.IntPtr w, System.IntPtr l);
@@ -274,10 +275,16 @@ function Close-PairingWindow($proc) {
     }
 }
 function FitWindow($hWnd) {
-    # Whole window inside the virtual screen, top-left aligned, no clipping.
-    # HWND_TOPMOST (-1): the runner taskbar otherwise overlaps the window's
-    # bottom strip and lands in UI evidence.
-    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, $vs.Width, $vs.Height, 0) | Out-Null
+    # Whole window inside the WORK AREA (screen minus taskbar), top-left aligned:
+    # no part of the player - including the bottom control row - sits under the
+    # taskbar, and no taskbar pixels (its top separator is a full-width light-gray
+    # line) land in the evidence. 10px bottom margin keeps the window's invisible
+    # DWM border off the taskbar edge; window-height variance previously decided
+    # whether that separator fell inside the measured band (runs 40893158780 vs
+    # 40960360181). HWND_TOPMOST (-1) kept so nothing else overlaps either.
+    $wa = [ZRECT]::new()
+    [ZWU32]::SystemParametersInfo(0x0030 <# SPI_GETWORKAREA #>, 0, [ref]$wa, 0) | Out-Null
+    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), $wa.Left, $wa.Top, ($wa.Right - $wa.Left), ($wa.Bottom - $wa.Top - 10), 0) | Out-Null
     Start-Sleep -Milliseconds 700
 }
 function Wait-MainWindow($proc, $seconds) {
