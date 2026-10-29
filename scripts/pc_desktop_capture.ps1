@@ -241,13 +241,26 @@ function ClickAt($xf, $yf) {
 function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
 function Close-PairingWindow($proc) {
     # A fresh profile auto-shows the pairing screen over Home; close it so the
-    # Home captures show the grid itself. WM_CLOSE keeps this a real UI close.
-    $settings = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Settings')
-    if ($settings -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($settings, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null; Start-Sleep -Milliseconds 400 }
-    $pw = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player - Pair your phone')
-    if ($pw -ne [System.IntPtr]::Zero) {
-        [ZWU32]::PostMessage($pw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
-        Start-Sleep -Milliseconds 600
+    # captures show the grid itself. WM_CLOSE keeps this a real UI close.
+    # The first-run Settings window can appear AFTER this runs (it is created on
+    # the dispatcher, not necessarily before the player HWND exists), so a single
+    # find-and-close can miss it and leave it covering the player for the whole
+    # leg. Poll: wait for it to appear if it is going to, close every surface
+    # that shows, and return only once none remains - or when none ever came.
+    $seen = $false
+    for ($i = 0; $i -lt 16; $i++) {
+        $settings = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Settings')
+        $pw = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player - Pair your phone')
+        if ($settings -eq [System.IntPtr]::Zero -and $pw -eq [System.IntPtr]::Zero) {
+            if ($seen) { return }          # was open, now closed and stayed closed
+            if ($i -ge 7) { return }       # never appeared within ~3.5s: nothing to close
+            Start-Sleep -Milliseconds 500
+            continue
+        }
+        $seen = $true
+        if ($settings -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($settings, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
+        if ($pw -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($pw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
+        Start-Sleep -Milliseconds 500
     }
 }
 function FitWindow($hWnd) {
