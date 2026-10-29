@@ -16,6 +16,19 @@ namespace ZephyrPlayer.Tests
         public PairedStoreTests() => Directory.CreateDirectory(_dir);
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
+        [Theory]
+        [InlineData("[{\"name\":\"missing\"}]")]
+        [InlineData("[{\"token\":null}]")]
+        [InlineData("[{\"token\":\"\"}]")]
+        [InlineData("[23]")]
+        [InlineData("[{\"token\":\"valid\"},{\"name\":\"bad\"}]")]
+        public void MalformedRecords_PreserveWholeStoreAndRefuseAuthentication(string original) {
+            File.WriteAllText(FilePath, original); var store = new PairedStore(FilePath);
+            Assert.False(store.IsPaired("valid")); Assert.True(store.IsBroken);
+            Assert.Throws<InvalidOperationException>(() => store.Add("new"));
+            Assert.Throws<InvalidOperationException>(() => store.Remove("valid"));
+            Assert.Equal(original, File.ReadAllText(FilePath));
+        }
         [Fact]
         public void LockedStore_200BogusBearerChecksDoNotSleepOrRereadPerRequest()
         {

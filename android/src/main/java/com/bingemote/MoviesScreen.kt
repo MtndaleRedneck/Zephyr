@@ -103,6 +103,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
      * exists; true = resume; false = start over. */
     fun startPlay(relPath: String, resume: Boolean?) {
         if (starting) return
+        val receiver = try { StreamTarget.capture(remote.store) } catch (e: Exception) { error = e.message; return }
         starting = true
         scope.launch(Dispatchers.IO) {
             try {
@@ -233,6 +234,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
             error = "Not paired with the Zephyr Player yet."
             return
         }
+        val receiver = try { StreamTarget.capture(remote.store) } catch (e: Exception) { error = plainPlayerError(e, "Couldn't start the stream."); return }
         starting = true
         scope.launch(Dispatchers.IO) {
             try {
@@ -240,7 +242,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 try {
                     val movieUri = Uri.parse(item.uri)
                     val (url, subs) = StreamCoordinator.handoff(bound, movieUri, item.name, phoneSubs[item.uri] ?: emptyList())
-                    StreamTarget.play(remote.store, url, subs)
+                    StreamTarget.play(receiver, url, subs)
                 } finally {
                     StreamCoordinator.release(context, bound)
                 }
