@@ -235,10 +235,14 @@ namespace ZephyrPlayer
             { SavePlaybackProgress(); _lastHistorySave = DateTime.UtcNow; }
             // Volume tie, other direction: if Windows' volume changed elsewhere,
             // the bar follows so both places show the same number.
+            // Mute is applied WITHOUT the Available gate: TryGetMute self-guards
+            // (null when the endpoint is gone or the read failed, and null keeps
+            // the tracked mute), so a flaky Available probe cannot disengage the
+            // tie or clobber the state.
+            _playerMute = MuteAfterRead(_playerMute, _volume.TryGetMute());
+            _player.Mute = _playerMute;
             if (_volume.Available)
             {
-                _playerMute = MuteAfterRead(_playerMute, _volume.TryGetMute());
-                _player.Mute = _playerMute;
                 var master = _volume.GetMaster();
                 if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
                 {
