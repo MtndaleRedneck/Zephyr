@@ -94,6 +94,25 @@ namespace ZephyrPlayer
         /// line is about 26 px on a 667 px picture (3.9 %), so M = 62 %.</summary>
         public static int SubtitleTextScale(string size) => size switch { "S" => 50, "L" => 78, _ => 62 };
 
+        public static string SubtitleSizeName(string size) => size == "S" ? "Small" : size == "L" ? "Large" : "Medium";
+
+        /// <summary>Title of the restart popup shown when the subtitle size changes
+        /// (Instinct CP2 round 4: the approved restart-to-take-effect fallback).</summary>
+        public const string SubtitleRestartTitle = "Subtitle size saved";
+
+        /// <summary>The restart popup's words. libVLC 3 reads the size only when Zephyr
+        /// creates its LibVLC at app start (SubtitleSizePathTests), and closing the window
+        /// keeps Zephyr running in the tray, so only Quit from the tray icon and opening
+        /// Zephyr again applies it. Nothing about the playing movie changes.</summary>
+        public static string SubtitleRestartNotice(string size) =>
+            "Subtitle size is saved as " + SubtitleSizeName(size) + ".\n\n"
+            + "The new size takes effect only after a full restart of Zephyr Player. "
+            + "The subtitles on screen stay the size they are now.\n\n"
+            + "To restart: right-click the Zephyr Player icon in the system tray (next to the clock), "
+            + "choose Quit Zephyr Player, then open Zephyr Player again.\n\n"
+            + "Closing the window is not enough, because Zephyr Player keeps running in the tray.\n\n"
+            + "Your movie keeps playing. Zephyr will not restart or reopen it.";
+
         /// <summary>The LibVLC creation options for the subtitle look. libVLC 3 reads
         /// them when it is created; none of them can change on a playing movie.
         /// --sub-margin lifts subtitles above the bar (libVLC 3 has no live subtitle

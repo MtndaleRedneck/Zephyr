@@ -1440,6 +1440,55 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-popup-subtitles.png"
     $addRow = Cp2FindId 'AddSubtitleRow'
     Cp2Gate ($okC -and $uC.popup -eq 'subtitles' -and $addRow -ne $null) "subtitles pop-up: opened by a real click (only it open: popup=$($uC.popup)), with the 'Add subtitle file...' row (cp2-popup-subtitles.png)"
+
+    # --- CP2 round 4: subtitle SIZE during playback = save + restart popup. A real click
+    # on the L chip while Night Drive plays: the popup must show, nothing that plays may be
+    # touched (same start, still Playing, time moving), and the choice must be saved. ---
+    $stSz0 = Cp1Status; $uSz0 = Cp2Ui
+    $elL = Cp2FindId 'SubSizeL'
+    $okSz = $false
+    if ($elL -ne $null) { $bL = $elL.Current.BoundingRectangle; Cp1ClickPoint ($bL.X + $bL.Width / 2) ($bL.Y + $bL.Height / 2); $okSz = $true } else { Cp2Log "SubSizeL chip not found via UIA" }
+    $dlgH = [System.IntPtr]::Zero
+    for ($i = 0; $i -lt 24 -and $dlgH -eq [System.IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 250; $dlgH = [ZWU32]::FindByTitle($pC.Id, 'Subtitle size saved') }
+    Start-Sleep -Milliseconds 700
+    Cp1DesktopGrab "$env:RUNNER_TEMP/cp2-r4-subtitle-restart-popup-desktop.png"
+    if ($dlgH -ne [System.IntPtr]::Zero) { $null = CaptureWindow $dlgH "$env:RUNNER_TEMP/cp2-r4-subtitle-restart-popup.png" }
+    $uSz1 = Cp2Ui; $stSz1 = Cp1Status
+    $popText = $null
+    if ($dlgH -ne [System.IntPtr]::Zero) {
+        try {
+            $tcond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text)
+            $tel = [System.Windows.Automation.AutomationElement]::FromHandle($dlgH).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $tcond)
+            if ($tel -ne $null) { $popText = $tel.Current.Name }
+        } catch { Cp2Log "popup text read failed: $($_.Exception.Message)" }
+    }
+    Start-Sleep -Milliseconds 1500
+    $stSz2 = Cp1Status
+    $savedSz = Get-Content (Join-Path $cfgDir 'settings.json') -Raw -ErrorAction SilentlyContinue
+    Cp2Log "subtitle size popup: title [Subtitle size saved] hwnd $dlgH; text [$popText]"
+    Cp2Log "subtitle size popup: before state=$($stSz0.state) time=$($stSz0.time) start_count=$($uSz0.start_count) url=$($uSz0.last_start_url) size=$($uSz0.subtitle_size); during state=$($stSz1.state) time=$($stSz1.time) start_count=$($uSz1.start_count) url=$($uSz1.last_start_url) size=$($uSz1.subtitle_size) in_use=$($uSz1.subtitle_size_in_use) notices=$($uSz1.subtitle_restart_notices) open=$($uSz1.restart_notice_open); 1.5 s later state=$($stSz2.state) time=$($stSz2.time)"
+    Cp2Gate ($okSz -and $dlgH -ne [System.IntPtr]::Zero -and $uSz1.restart_notice_open -and $uSz1.subtitle_restart_notices -eq 1 -and $popText -like '*only after a full restart*' -and $popText -like '*Quit Zephyr Player*' -and $popText -like '*Closing the window is not enough*') "subtitle size L during playback: the restart popup shows (cp2-r4-subtitle-restart-popup.png, cp2-r4-subtitle-restart-popup-desktop.png)"
+    Cp2Gate ($stSz1.state -eq 'Playing' -and $stSz2.state -eq 'Playing' -and [int]$stSz2.time -gt [int]$stSz0.time -and $uSz1.start_count -eq $uSz0.start_count -and $uSz1.last_start_url -eq $uSz0.last_start_url -and $uSz1.subtitle_size_in_use -eq 'M') "subtitle size change touches no playback: still Playing, time $($stSz0.time) -> $($stSz2.time) s, start_count $($uSz0.start_count) -> $($uSz1.start_count), same source, LibVLC size still $($uSz1.subtitle_size_in_use)"
+    Cp2Gate ($uSz1.subtitle_size -eq 'L' -and ($savedSz -replace '\s', '') -like '*"SubtitleSize":"L"*') "subtitle size L saved to settings.json"
+    if ($dlgH -ne [System.IntPtr]::Zero) {
+        $okBtn = $null
+        try {
+            $ocond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'OK')
+            $okBtn = [System.Windows.Automation.AutomationElement]::FromHandle($dlgH).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $ocond)
+        } catch { }
+        if ($okBtn -ne $null) { $bO = $okBtn.Current.BoundingRectangle; Cp1ClickPoint ($bO.X + $bO.Width / 2) ($bO.Y + $bO.Height / 2) } else { [ZCP1]::Key(0x0D) }
+    }
+    $uSz3 = Cp2WaitUi { param($u) -not $u.restart_notice_open } 3000
+    $stSz3 = Cp1Status
+    Cp2Gate (-not $uSz3.restart_notice_open -and [ZWU32]::FindByTitle($pC.Id, 'Subtitle size saved') -eq [System.IntPtr]::Zero -and $stSz3.state -eq 'Playing' -and $uSz3.start_count -eq $uSz0.start_count) "restart popup closed by its OK; the movie is still playing (state=$($stSz3.state), start_count $($uSz3.start_count))"
+    # Put the size back to the one in use (M): no popup for that, settings back to M.
+    $null = Cp1ClickElement $shellH 'CaptionsButton'
+    $null = Cp2WaitUi { param($u) $u.popup -eq 'subtitles' } 3000
+    $elM = Cp2FindId 'SubSizeM'
+    if ($elM -ne $null) { $bM = $elM.Current.BoundingRectangle; Cp1ClickPoint ($bM.X + $bM.Width / 2) ($bM.Y + $bM.Height / 2) }
+    Start-Sleep -Milliseconds 800
+    $uSz4 = Cp2Ui
+    Cp2Gate ($uSz4.subtitle_size -eq 'M' -and $uSz4.subtitle_restart_notices -eq 1 -and [ZWU32]::FindByTitle($pC.Id, 'Subtitle size saved') -eq [System.IntPtr]::Zero) "choosing M (the size in use) again: saved M, no second popup (notices=$($uSz4.subtitle_restart_notices))"
     [ZCP1]::Key(0x1B)  # Esc
     $uX = Cp2WaitUi { param($u) $u.popup -eq $null } 2000
     Cp2Gate ($uX -and $uX.popup -eq $null -and -not $uX.fullscreen) "Esc closed the pop-up (popup=$($uX.popup)) and stayed windowed"
