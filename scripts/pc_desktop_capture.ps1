@@ -698,7 +698,8 @@ foreach ($f in $cp1Folders) {
 }
 $cp1Videos = 'Tears of Steel.mp4','His Girl Friday.mp4','Charade.mp4','Night of the Living Dead.mp4','Sintel.mp4','Big Buck Bunny.mp4','Detour.mp4','Metropolis.mp4'
 foreach ($v in $cp1Videos) { Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $cp1Lib $v) }
-Copy-Item "windows/ZephyrPlayer.Tests/fixtures/clip.srt" (Join-Path $cp1Lib 'Big Buck Bunny.srt')
+# One cue for the whole clip, so the capture shows it whenever it lands.
+[IO.File]::WriteAllText((Join-Path $cp1Lib 'Big Buck Bunny.srt'), "1`r`n00:00:00,000 --> 00:59:00,000`r`nZephyr subtitle proof`r`n")
 $cp1Thumbs = Join-Path $env:RUNNER_TEMP 'cp1-thumbs'
 New-Item -ItemType Directory -Force $cp1Thumbs | Out-Null
 $srcs = 'testsrc=size=320x200:rate=1','smptebars=size=320x200:rate=1','mandelbrot=size=320x200:rate=1','rgbtestsrc=size=320x200:rate=1','cellauto=size=320x200:rate=1','life=size=320x200:rate=1:mold=10','testsrc2=size=320x200:rate=1','yuvtestsrc=size=320x200:rate=1'
@@ -748,7 +749,10 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $subsOn = $false
     foreach ($i in 1..20) { $st = Cp1Status; if ($st -and $st.spu -ge 0 -and $st.spuTracks.Count -ge 1) { $subsOn = $true; break }; Start-Sleep -Milliseconds 500 }
     Cp1Gate $subsOn "local sidecar subtitle listed and selected (spu=$($st.spu) tracks=$(($st.spuTracks | ForEach-Object { "$($_.id):$($_.name)" }) -join ','))"
-    WakeControls
+    # The bar covers the bottom band where subtitles render: park the cursor
+    # outside and let the bar hide before the subtitle capture.
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+    Start-Sleep -Milliseconds 4500
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-3-subtitles.png"
 
     # Keyboard after a bar click: REAL click on the 10s skip-back button, then REAL keys.
