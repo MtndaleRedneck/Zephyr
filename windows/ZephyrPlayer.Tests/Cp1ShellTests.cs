@@ -166,7 +166,12 @@ namespace ZephyrPlayer.Tests
                     PumpUntil(() => overlayWindow!.IsVisible, "overlay never shown with the player view");
                     Assert.Equal(handle, shell.Handle);
                     Assert.Equal(rect, new Rect(shell.Left, shell.Top, shell.ActualWidth, shell.ActualHeight));
-                    Assert.False(home.IsLoaded); // swapped out, not hidden behind
+                    // CP1 repair 3: the library stays drawn UNDER the player (inert) until
+                    // the player's start settles; no start runs here, so it is still held.
+                    Assert.Same(view, shell.CurrentView);
+                    Assert.Same(home, shell.HeldUnderView);
+                    Assert.False(home.IsHitTestVisible);
+                    Assert.Same(shell, Window.GetWindow(home)); // same window, never a second one
 
                     // Library again (Back): same handle and geometry, overlay gone.
                     view.HideOverlayWindow();
@@ -214,6 +219,131 @@ namespace ZephyrPlayer.Tests
                     shell.Close();
                 }
             }, 90000);
+        }
+
+
+        // ---------- CP1 repair round 2: no blank frame at a view switch ----------
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr SendMessageW(IntPtr h, int msg, IntPtr w, IntPtr l);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr h);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr h, IntPtr dc);
+
+        private static IntPtr HostBrush(ShellWindow shell, IntPtr host)
+        {
+            var dc = GetDC(host);
+            try { return SendMessageW(shell.Handle, 0x0138 /* WM_CTLCOLORSTATIC */, dc, host); }
+            finally { ReleaseDC(host, dc); }
+        }
+
+        /// <summary>Instinct review 2, item 3 (two all-black content frames at the
+        /// switches in run 41026623817). library -> player: the library stays drawn
+        /// under the player, and the native video host paints the library's picture
+        /// (never black), until the player's own start has content (its Playing).
+        /// Back: the library is laid out and the host holds its picture BEFORE the
+        /// movie stops and the overlay hides; then the player leaves. Back pressed
+        /// while a start is still loading leaves nothing behind.</summary>
+        [Fact]
+        public void ViewSwitch_LibraryStaysDrawnUntilPlayerHasContent_BackLaysOutLibraryBeforeStop()
+        {
+            Sta(() =>
+            {
+                Core.Initialize();
+                using var libvlc = new LibVLC("--no-video", "--aout=dummy");
+                using var player = new MediaPlayer(libvlc);
+                var dir = Path.Combine(Path.GetTempPath(), "zephyr-cp1-switch-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));
+                var store = new PairedStore(Path.Combine(dir, "paired.json"));
+                var shell = new ShellWindow(settings);
+                var home = new HomeView(settings, store, _ => { }, () => { }, loadDurations: false);
+                var view = new PlayerView(libvlc, player, settings);
+                var clip = new Uri(Path.Combine(AppContext.BaseDirectory, "fixtures", "clip.mp4")).AbsoluteUri;
+                shell.ShowView(home);
+                shell.Show();
+                Pump(400);
+                var notes = new System.Text.StringBuilder();
+                try
+                {
+                    // 1. library -> player; the start is held in preparation so the
+                    // in-between state can be read.
+                    using var gate = new ManualResetEventSlim(false);
+                    view.PrepareOverride = (u, s, tok) => { gate.Wait(tok); return view.PrepareSource(u, s, tok); };
+                    shell.ShowView(view);
+                    var start = view.PlayFromUrlAsync(clip, null, Array.Empty<string>());
+                    Assert.Same(view, shell.CurrentView);
+                    Assert.Same(home, shell.HeldUnderView);
+                    Assert.True(shell.VideoHostHeld, "the video host was not given the library's picture");
+                    PumpUntil(() => view.IsLoaded, "player view never loaded");
+                    Pump(300);
+                    Assert.True(home.IsLoaded, "the library left the screen before the player had content");
+                    Assert.Equal(2, shell.ViewHostChildCount);
+                    Assert.False(home.IsHitTestVisible);
+                    Assert.True(view.IsLoadingShown);
+                    var host = shell.VideoHostHandle();
+                    Assert.NotEqual(IntPtr.Zero, host);
+                    var heldBrush = HostBrush(shell, host);
+                    Assert.NotEqual(ShellWindow.BlackBrush, heldBrush);
+                    notes.Append($"held: current=player heldUnder=library children={shell.ViewHostChildCount} libraryLoaded={home.IsLoaded} hostBrush=library-picture(0x{heldBrush.ToInt64():X}) loading={view.IsLoadingShown}; ");
+
+                    gate.Set();
+                    PumpUntil(() => start.IsCompleted, "start never completed", 15000);
+                    start.GetAwaiter().GetResult();
+                    PumpUntil(() => player.State == VLCState.Playing && !view.IsLoadingShown, "clip never played", 15000);
+                    PumpUntil(() => shell.HeldUnderView == null, "the library was never released after the player's own Playing");
+                    Pump(200);
+                    Assert.False(home.IsLoaded);
+                    Assert.Equal(1, shell.ViewHostChildCount);
+                    Assert.False(shell.VideoHostHeld);
+                    Assert.Equal(ShellWindow.BlackBrush, HostBrush(shell, host));
+                    notes.Append($"after Playing: heldUnder=none children={shell.ViewHostChildCount} libraryLoaded={home.IsLoaded} hostBrush=black; ");
+
+                    // 2. Back: library first, then stop.
+                    bool laidOut = false, hostHeldAtStop = false, playingAtStop = false;
+                    shell.ShowView(home, () =>
+                    {
+                        laidOut = home.IsLoaded && home.ActualWidth > 0 && home.ActualHeight > 0;
+                        hostHeldAtStop = shell.VideoHostHeld;
+                        playingAtStop = player.State == VLCState.Playing;
+                        view.StopPlaybackSource();
+                        view.HideOverlayWindow();
+                    });
+                    Assert.True(laidOut, "the library was not laid out before the movie stopped");
+                    Assert.True(hostHeldAtStop, "the video host did not hold the library's picture when the movie stopped");
+                    Assert.True(playingAtStop, "the movie stopped before the library was ready");
+                    Assert.Same(home, shell.CurrentView);
+                    PumpUntil(() => !view.IsLoaded, "player view still in the tree after Back");
+                    Assert.Equal(1, shell.ViewHostChildCount);
+                    Assert.False(shell.VideoHostHeld);
+                    Assert.True(home.IsHitTestVisible);
+                    notes.Append($"Back: libraryLaidOutBeforeStop={laidOut} hostHeldAtStop={hostHeldAtStop} moviePlayingUntilThen={playingAtStop} children={shell.ViewHostChildCount}; ");
+
+                    // 3. Back while the start is still loading.
+                    using var gate2 = new ManualResetEventSlim(false);
+                    view.PrepareOverride = (u, s, tok) => { gate2.Wait(tok); return view.PrepareSource(u, s, tok); };
+                    shell.ShowView(view);
+                    var start2 = view.PlayFromUrlAsync(clip, null, Array.Empty<string>());
+                    PumpUntil(() => view.IsLoaded, "player view did not reload");
+                    Assert.Same(home, shell.HeldUnderView);
+                    shell.ShowView(home, () => { view.StopPlaybackSource(); view.HideOverlayWindow(); });
+                    gate2.Set();
+                    PumpUntil(() => start2.IsCompleted, "loading start never completed after Back", 15000);
+                    Pump(300);
+                    Assert.Same(home, shell.CurrentView);
+                    Assert.Null(shell.HeldUnderView);
+                    Assert.Equal(1, shell.ViewHostChildCount);
+                    Assert.True(home.IsHitTestVisible);
+                    Assert.False(shell.VideoHostHeld);
+                    Assert.NotEqual(VLCState.Playing, player.State);
+                    notes.Append($"Back while loading: current=library children={shell.ViewHostChildCount} hostHeld={shell.VideoHostHeld} state={player.State}");
+                    try { File.WriteAllText(Path.Combine(OutDir, "cp1-unit-view-switch.txt"), notes.ToString()); } catch { }
+                }
+                finally
+                {
+                    view.ReleasePlayback();
+                    shell.Close();
+                    try { Directory.Delete(dir, true); } catch { }
+                }
+            }, 120000);
         }
 
         // ---------- remembered geometry ----------

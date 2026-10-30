@@ -200,7 +200,7 @@ namespace ZephyrPlayer.Tests
             {
                 WithPlayer((view, player, _) =>
                 {
-                    view.NativeStartTimeout = TimeSpan.FromSeconds(4); // backstop if libVLC reports nothing
+                    view.NativeStallWindow = TimeSpan.FromSeconds(4); // backstop if libVLC reports nothing
                     var start = view.PlayFromUrlAsync(new Uri(broken).AbsoluteUri, null, Array.Empty<string>());
                     PumpUntil(() => start.IsCompleted, "start did not complete");
                     PumpUntil(() => view.IsLoadingErrorShown, "native failure left the loading panel on its spinner", 15000);
@@ -368,6 +368,203 @@ namespace ZephyrPlayer.Tests
         }
 
         private static byte[] Concat(byte[] a, byte[] b) { var r = new byte[a.Length + b.Length]; Buffer.BlockCopy(a, 0, r, 0, a.Length); Buffer.BlockCopy(b, 0, r, a.Length, b.Length); return r; }
+
+
+        // ---------- CP1 repair round 2: generation-safe native callbacks ----------
+
+        private static void PumpFor(int ms)
+        {
+            var until = Environment.TickCount64 + ms;
+            PumpUntil(() => Environment.TickCount64 > until, "pump", ms + 2000);
+        }
+
+        /// <summary>Instinct review 2, item 1. A previous start's Playing, EncounteredError,
+        /// EndReached and Buffering callbacks, delivered late (queued on the dispatcher by
+        /// libVLC's thread) across a newer start - during its preparation AND after its
+        /// handoff - never clear the newer spinner, never show an error for it, and never
+        /// stop the newer media. The callbacks are the previous start's OWN attach-time
+        /// handlers (RaiseNativeEvent invokes the delegates libVLC holds).</summary>
+        [Fact]
+        public void StalePreviousStart_NativeCallbacks_NeverTouchNewerStart()
+        {
+            using var slow = new DribbleServer(slowSeconds: 7);
+            WithPlayer((view, player, _) =>
+            {
+                var first = view.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>());
+                PumpUntil(() => first.IsCompleted, "first start did not complete");
+                first.GetAwaiter().GetResult();
+                PumpUntil(() => player.State == VLCState.Playing && !view.IsLoadingShown, "first start did not play");
+                var old = view.CurrentNativeStart!;
+                Assert.NotNull(old);
+                Assert.False(old.Waiting);
+                var oldMedia = view.CurrentMedia;
+
+                // Newer start from a slow phone: Opening... while the old movie still runs.
+                var next = view.PlayFromUrlAsync(slow.Url, null, Array.Empty<string>());
+                Assert.True(view.IsLoadingShown);
+                foreach (var kind in new[] { "playing", "error", "ended", "buffering" }) view.RaiseNativeEvent(old, kind, 100);
+                PumpFor(600);
+                var duringPrep = $"loading={view.IsLoadingShown} error={view.IsLoadingErrorShown} detail=[{view.LoadingDetailText}] failure={view.LastStartFailure ?? "none"} state={player.State} sameOldMedia={ReferenceEquals(oldMedia, view.CurrentMedia)}";
+                Assert.True(view.IsLoadingShown, "old Playing cleared the newer start's spinner during preparation");
+                Assert.False(view.IsLoadingErrorShown, "old error/end showed an error for the newer start");
+                Assert.Equal("Opening...", view.LoadingDetailText);
+                Assert.Null(view.LastStartFailure);
+
+                // After the handoff: the newer media is libVLC's, buffering slowly.
+                PumpUntil(() => !ReferenceEquals(view.CurrentNativeStart, old) && view.CurrentNativeStart != null, "newer start was never handed to libVLC", 20000);
+                var newer = view.CurrentNativeStart!;
+                var newerMedia = view.CurrentMedia;
+                Assert.Same(newer.Source.Media, newerMedia);
+                Assert.True(newer.Waiting);
+                foreach (var kind in new[] { "playing", "error", "ended", "buffering" }) view.RaiseNativeEvent(old, kind, 100);
+                PumpFor(600);
+                var afterHandoff = $"loading={view.IsLoadingShown} error={view.IsLoadingErrorShown} failure={view.LastStartFailure ?? "none"} newerWaiting={newer.Waiting} sameNewerMedia={ReferenceEquals(newerMedia, view.CurrentMedia)} state={player.State}";
+                Assert.True(newer.Waiting, "a stale callback completed the newer start");
+                Assert.Same(newer, view.CurrentNativeStart);
+                Assert.Same(newerMedia, view.CurrentMedia);
+                Assert.True(view.IsLoadingShown, "old Playing cleared the newer start's spinner after the handoff");
+                Assert.False(view.IsLoadingErrorShown);
+                Assert.Null(view.LastStartFailure);
+
+                // The newer start completes on its OWN Playing.
+                PumpUntil(() => player.State == VLCState.Playing && !view.IsLoadingShown, "newer slow start never played", 40000);
+                Assert.Null(view.LastStartFailure);
+                Assert.Same(newerMedia, view.CurrentMedia);
+                // And the old handlers stay inert after it played.
+                foreach (var kind in new[] { "error", "ended" }) view.RaiseNativeEvent(old, kind);
+                PumpFor(400);
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.Same(newerMedia, view.CurrentMedia);
+                Assert.Null(view.LastStartFailure);
+                Note("stale-native-callbacks", $"during preparation: {duringPrep}; after handoff: {afterHandoff}; final: state={player.State} loading={view.IsLoadingShown} failure={view.LastStartFailure ?? "none"} sameNewerMedia={ReferenceEquals(newerMedia, view.CurrentMedia)}");
+            });
+        }
+
+        // ---------- CP1 repair round 2: start contract on real signals ----------
+
+        /// <summary>Instinct review 2, item 2. A valid phone movie that dribbles in far
+        /// longer than the stall window (and longer than the old blind 20 s cap's
+        /// test value) keeps making progress and is NOT stopped: it plays.</summary>
+        [Fact]
+        public void SlowPhoneSource_KeepsDelivering_IsNotStopped_AndPlays()
+        {
+            using var slow = new DribbleServer(slowSeconds: 12);
+            WithPlayer((view, player, _) =>
+            {
+                view.NativeStallWindow = TimeSpan.FromSeconds(2);
+                view.NativeStallPoll = TimeSpan.FromMilliseconds(250);
+                var t0 = Environment.TickCount64;
+                var start = view.PlayFromUrlAsync(slow.Url, null, Array.Empty<string>());
+                PumpUntil(() => start.IsCompleted, "slow start never handed off", 30000);
+                start.GetAwaiter().GetResult();
+                var a = view.CurrentNativeStart!;
+                PumpUntil(() => player.State == VLCState.Playing && !view.IsLoadingShown || view.IsLoadingErrorShown, "slow start neither played nor failed", 60000);
+                var elapsed = Environment.TickCount64 - t0;
+                Note("slow-source-plays", $"stallWindow=2s elapsedToPlaying={elapsed} ms state={player.State} failure={view.LastStartFailure ?? "none"} progressMarks={a.ProgressMarks} lastProgress=[{a.LastProgress}] bytesDelivered={a.Source.BytesDelivered} served={slow.BytesServed} requests={slow.Requests}");
+                Assert.False(view.IsLoadingErrorShown, "a slow but valid source was stopped: " + view.LastStartFailure);
+                Assert.Null(view.LastStartFailure);
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.True(elapsed > 5 * 2000, $"the source was not actually slow ({elapsed} ms)");
+                Assert.True(a.ProgressMarks > 3);
+            });
+        }
+
+        /// <summary>The backstop: a source that stops delivering entirely (connection held
+        /// open, no bytes) fails after the stall window with the error surface.</summary>
+        [Fact]
+        public void NoProgress_ForStallWindow_FailsStart_WithError()
+        {
+            using var stalled = new DribbleServer(slowSeconds: 0, stallAfter: 8192);
+            WithPlayer((view, player, _) =>
+            {
+                view.NativeStallWindow = TimeSpan.FromSeconds(2);
+                view.NativeStallPoll = TimeSpan.FromMilliseconds(200);
+                var t0 = Environment.TickCount64;
+                var start = view.PlayFromUrlAsync(stalled.Url, null, Array.Empty<string>());
+                PumpUntil(() => start.IsCompleted, "stalled start never handed off", 20000);
+                PumpUntil(() => view.IsLoadingErrorShown, "a source with no progress never failed", 20000);
+                var elapsed = Environment.TickCount64 - t0;
+                Note("no-progress-fails", $"stallWindow=2s failedAfter={elapsed} ms why={view.LastStartFailure} detail=[{view.LoadingDetailText}] state={player.State}");
+                Assert.Equal(PlayerView.NativeFailedMessage, view.LoadingDetailText);
+                Assert.StartsWith("native-", view.LastStartFailure);
+                Assert.Null(view.CurrentMedia);
+            });
+        }
+
+        [Fact]
+        public void StallWindow_Default_Is45Seconds_ThreePhoneReadDeadlines()
+        {
+            Assert.Equal(TimeSpan.FromSeconds(45), PlayerView.DefaultNativeStallWindow);
+        }
+
+        /// <summary>A phone server with Range support that serves clip.mp4 slowly: for
+        /// the first [slowSeconds] after its first request every response dribbles
+        /// 256 bytes per 250 ms (a slow but live phone), then full speed. With
+        /// [stallAfter], once that many bytes were served in all, every response sends
+        /// its headers and one byte, then nothing more while holding its connection
+        /// open (a phone that went quiet).</summary>
+        private sealed class DribbleServer : IDisposable
+        {
+            private readonly HttpListener _listener = new();
+            private readonly byte[] _file = File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "clip.mp4"));
+            private readonly CancellationTokenSource _stop = new();
+            private long _firstRequest = -1, _served; private int _requests;
+            public long BytesServed => Interlocked.Read(ref _served);
+            public int Requests => Volatile.Read(ref _requests);
+            public string Url { get; }
+            public DribbleServer(int slowSeconds, int stallAfter = -1)
+            {
+                var probe = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0); probe.Start();
+                var port = ((IPEndPoint)probe.LocalEndpoint).Port; probe.Stop();
+                Url = $"http://127.0.0.1:{port}/s/tok/1";
+                _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+                _listener.Start();
+                _ = Task.Run(async () =>
+                {
+                    while (_listener.IsListening)
+                    {
+                        HttpListenerContext ctx;
+                        try { ctx = await _listener.GetContextAsync(); } catch { break; }
+                        _ = Task.Run(() => Serve(ctx, slowSeconds, stallAfter));
+                    }
+                });
+            }
+            private async Task Serve(HttpListenerContext ctx, int slowSeconds, int stallAfter)
+            {
+                Interlocked.Increment(ref _requests);
+                Interlocked.CompareExchange(ref _firstRequest, Environment.TickCount64, -1);
+                try
+                {
+                    long start = 0, end = _file.Length - 1;
+                    var range = ctx.Request.Headers["Range"];
+                    var m = range == null ? null : System.Text.RegularExpressions.Regex.Match(range, @"bytes=(\d+)-(\d*)");
+                    if (m != null && m.Success) { start = long.Parse(m.Groups[1].Value); if (m.Groups[2].Value.Length > 0) end = Math.Min(end, long.Parse(m.Groups[2].Value)); }
+                    if (start > end) { ctx.Response.StatusCode = 416; ctx.Response.Close(); return; }
+                    ctx.Response.StatusCode = m != null && m.Success ? 206 : 200;
+                    ctx.Response.ContentType = "video/mp4";
+                    ctx.Response.Headers["Accept-Ranges"] = "bytes";
+                    if (ctx.Response.StatusCode == 206) ctx.Response.Headers["Content-Range"] = $"bytes {start}-{end}/{_file.Length}";
+                    ctx.Response.ContentLength64 = end - start + 1;
+                    ctx.Response.SendChunked = false;
+                    var output = ctx.Response.OutputStream;
+                    var pos = start; var sent = 0L;
+                    while (pos <= end && !_stop.IsCancellationRequested)
+                    {
+                        if (stallAfter >= 0 && sent > 0 && Interlocked.Read(ref _served) >= stallAfter) { await Task.Delay(Timeout.Infinite, _stop.Token); break; }
+                        var slowPhase = Environment.TickCount64 - Interlocked.Read(ref _firstRequest) < slowSeconds * 1000L;
+                        var n = (int)Math.Min(end - pos + 1, slowPhase ? 256 : 64 * 1024);
+                        if (stallAfter >= 0) n = (int)Math.Max(1, Math.Min(n, stallAfter - Interlocked.Read(ref _served)));
+                        await output.WriteAsync(_file.AsMemory((int)pos, n), _stop.Token);
+                        await output.FlushAsync(_stop.Token);
+                        pos += n; sent += n; Interlocked.Add(ref _served, n);
+                        if (slowPhase) await Task.Delay(250, _stop.Token);
+                    }
+                }
+                catch { }
+                finally { try { ctx.Response.Close(); } catch { } }
+            }
+            public void Dispose() { _stop.Cancel(); try { _listener.Close(); } catch { } }
+        }
 
         /// <summary>A phone server that refuses every movie request (404).</summary>
         private sealed class RefusingServer : IDisposable

@@ -363,10 +363,16 @@ namespace ZephyrPlayer
         {
             if (_shell == null || _player == null || _home == null) return;
             _player.SavePlaybackProgress();
-            _player.StopPlaybackSource();
             if (_player.IsFullscreen) _player.SetFullscreen(false);
-            _player.HideOverlayWindow();
-            _shell.ShowView(_home);
+            // CP1 repair 3: the library is laid out under the player and the video host
+            // shows its picture BEFORE the movie stops and the overlay goes, so nothing
+            // black is uncovered on the way back (ShellWindow.ShowView).
+            var player = _player;
+            _shell.ShowView(_home, () =>
+            {
+                player.StopPlaybackSource();
+                player.HideOverlayWindow();
+            });
         }
 
         /// <summary>Window X: never quits (tray). If a movie is up: save progress, stop

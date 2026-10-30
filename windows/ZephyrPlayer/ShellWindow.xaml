@@ -70,6 +70,9 @@
                 </StackPanel>
             </Grid>
         </Border>
-        <ContentControl x:Name="ViewHost" Grid.Row="1" Focusable="False" IsTabStop="False"/>
+        <!-- Views stack here. Normally one child; during a library<->player switch the
+             outgoing library stays drawn under the incoming view until the switch has
+             something to show (see ShellWindow.ShowView). -->
+        <Grid x:Name="ViewHost" Grid.Row="1" Focusable="False"/>
     </Grid>
 </Window>
