@@ -49,7 +49,7 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 20
         shell: pwsh
-        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '24' }}
+        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '60' }}
       - name: Upload trace
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
