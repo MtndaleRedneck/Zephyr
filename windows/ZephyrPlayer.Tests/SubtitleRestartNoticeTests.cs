@@ -81,7 +81,7 @@ namespace ZephyrPlayer.Tests
                         var starts = view.StartCount;
                         var seekFraction = view.LastSeekFraction;
                         var timeBefore = player.Time;
-                        log.AppendLine($"before: state {player.State}, time {timeBefore} ms, generation {generation}, starts {starts}, saved size {settings.SubtitleSize}, LibVLC size {view.LibVlcSubtitleSize}");
+                        log.AppendLine($"before: state {player.State}, time {timeBefore} ms, native media {mediaHandle}, native player {playerHandle}, generation {generation}, starts {starts}, saved size {settings.SubtitleSize}, LibVLC size {view.LibVlcSubtitleSize}");
 
                         Click(view, "CaptionsButton");
                         Click(view, "SubSizeL");
@@ -100,7 +100,8 @@ namespace ZephyrPlayer.Tests
 
                         // Nothing that plays was touched: same media object and native handle,
                         // same MediaPlayer, no new start, no seek, still playing and moving on.
-                        Assert.Same(media, player.Media);
+                        // (LibVLCSharp hands out a new wrapper per Media read; the native
+                        // libvlc_media_t is the identity.)
                         Assert.Equal(mediaHandle, player.Media!.NativeReference);
                         Assert.Equal(playerHandle, player.NativeReference);
                         Assert.Equal(generation, view.PlayGeneration);
@@ -109,7 +110,7 @@ namespace ZephyrPlayer.Tests
                         PumpUntil(() => player.Time > timeBefore + 300, "playback did not keep moving after the size change");
                         Assert.Equal(VLCState.Playing, player.State);
                         Assert.Equal("M", view.LibVlcSubtitleSize); // the LibVLC still carries M
-                        log.AppendLine($"after L: popups {shown.Count}, state {player.State}, time {player.Time} ms, same media {ReferenceEquals(media, player.Media)}, generation {view.PlayGeneration}, starts {view.StartCount}, seek fraction {view.LastSeekFraction}");
+                        log.AppendLine($"after L: popups {shown.Count}, state {player.State}, time {player.Time} ms, same native media {player.Media!.NativeReference == mediaHandle}, generation {view.PlayGeneration}, starts {view.StartCount}, seek fraction {view.LastSeekFraction}");
 
                         // Saved: the file on disk carries L.
                         Assert.Equal("L", settings.SubtitleSize);
@@ -135,7 +136,7 @@ namespace ZephyrPlayer.Tests
                         Pump(200);
                         Assert.Equal(2, shown.Count);
                         Assert.Equal(PlayerBarLogic.SubtitleRestartNotice("S"), shown[1].Text);
-                        Assert.Same(media, player.Media);
+                        Assert.Equal(mediaHandle, player.Media!.NativeReference);
                         Assert.Equal(starts, view.StartCount);
                         Assert.Equal(VLCState.Playing, player.State);
                         log.AppendLine($"L again: no popup; M (in use): no popup; S: popup {shown.Count}; still same media, starts {view.StartCount}, state {player.State}");
