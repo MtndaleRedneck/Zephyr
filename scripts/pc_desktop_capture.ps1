@@ -1011,7 +1011,10 @@ if ($shellH -ne [System.IntPtr]::Zero) {
         # A real mouse click (a UIA Invoke would block this script inside the modal dialog).
         $mb = $menuItem.Current.BoundingRectangle
         Cp1ClickPoint ($mb.X + $mb.Width / 2) ($mb.Y + $mb.Height / 2)
-        foreach ($try in 1..20) {
+        # Up to 18 s: the runner's FIRST Windows file dialog can take longer than 6 s to
+        # appear (run 41090198992: it appeared after the old 6 s wait and stayed open,
+        # failing every later CP1 leg).
+        foreach ($try in 1..60) {
             $dlgLine = @([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match 'class=\[#32770\]' }) | Select-Object -First 1
             if ($dlgLine) { $dlgH = [System.IntPtr]::new([int64]($dlgLine -split ' ')[0]); break }
             Start-Sleep -Milliseconds 300
