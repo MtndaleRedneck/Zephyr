@@ -1,19 +1,13 @@
 # Zephyr
 
-A phone remote and an integrated PC movie player.
+<img src="android/src/main/res/drawable-nodpi/app_logo.png" width="128" alt="Zephyr icon">
 
-- **Zephyr** on Android controls Zephyr Player or VLC, with separate PC connections.
-- **Zephyr Player** on the PC plays movies with the VLC engine built in.
-- Browse movies on your PC or stream movies and subtitles from your phone.
+A phone remote and a PC movie player that work together.
 
 ## Install
 
-Get the Android app and PC installer from the repository's Releases page.
-Open Zephyr Player, then follow the phone app's setup to pair using its six-digit code.
-Keep the phone and PC on the same Wi-Fi.
+1. Download the Android app and the PC installer from [Releases](https://github.com/MtndaleRedneck/Zephyr/releases).
+2. Open Zephyr Player on the PC, then pair from the phone app with the six-digit code.
+3. Keep the phone and PC on the same Wi-Fi.
 
-Already using VLC with BingeMote? That connection stays separate. In the phone app's
-Settings, tap VLC PC to set up the existing BingeMote helper, or Zephyr PC to pair
-with the integrated player.
-
-Both apps check for their own updates. Feedback is available in Settings.
+Both apps check for their own updates. Already using BingeMote with VLC? That connection stays separate; set it up under VLC PC in the phone app's Settings.
