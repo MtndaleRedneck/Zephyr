@@ -119,6 +119,8 @@ namespace ZephyrPlayer
             });
             _player.Playing += (_, __) => Dispatcher.BeginInvoke(() =>
             {
+                _awaitingPlaying = false;
+                _nativeStartWatch.Stop();
                 EndLoading();
                 TryAutoSelectSidecar();
                 if (IsLoaded) { _idleTimer.Stop(); _idleTimer.Start(); } // resume the hide countdown
@@ -126,10 +128,19 @@ namespace ZephyrPlayer
             });
             _player.ESSelected += (_, __) => Dispatcher.BeginInvoke(RefreshCaptionsUi);
             _player.ESAdded += (_, ev) => { if (ev.Type == TrackType.Text) Dispatcher.BeginInvoke(TryAutoSelectSidecar); };
+            // Native start failure: the decoder reports an error, or the movie ends,
+            // before Playing ever arrives, or Playing never arrives at all. Each one
+            // completes the loading state with the existing error surface.
+            _player.EncounteredError += (_, __) => { var g = System.Threading.Volatile.Read(ref _nativeStartGeneration); Dispatcher.BeginInvoke(() => FailNativeStart(g, "native-error")); };
+            _player.EndReached += (_, __) => { var g = System.Threading.Volatile.Read(ref _nativeStartGeneration); Dispatcher.BeginInvoke(() => FailNativeStart(g, "native-ended")); };
+            _nativeStartWatch.Interval = TimeSpan.FromSeconds(20);
+            _nativeStartWatch.Tick += (_, __) => FailNativeStart(_nativeStartGeneration, "native-timeout");
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
 
-            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(ApplyBarStyle);
+            // Settings changes apply live: bar style AND the Boost (decoder gain) at the
+            // current slider value, on the playing movie - never a reopen.
+            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
             _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved"));
 
             // Remembered volume restored on open: the player's own 0-100 %, with the
@@ -164,6 +175,7 @@ namespace ZephyrPlayer
         public void StopPlaybackSource()
         {
             ++_playGeneration; _preparation?.Cancel();
+            _awaitingPlaying = false; _nativeStartWatch.Stop();
             EndLoading();
             _autoSelectSidecar = false;
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
@@ -173,16 +185,79 @@ namespace ZephyrPlayer
             // never stall stop/cleanup on the UI.
             if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(old));
         }
+        internal const string OpenFailedMessage = "Could not open this movie safely. Check the file or phone connection.";
+        internal const string NativeFailedMessage = "This movie could not be played. Check the file or phone connection.";
+
+        /// <summary>Local (library) start. Failure handling lives in the shared
+        /// PlayFromUrlAsync path, so nothing is left to do here.</summary>
         public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles)
         {
             try { await PlayFromUrlAsync(url,positionSeconds,subtitles); }
-            catch (OperationCanceledException) { }
-            catch { MovieTitle.Text="Could not open this movie safely. Check the file or phone connection."; ShowLoadingError(MovieTitle.Text); }
+            catch { }
         }
+
+        /// <summary>The one playback start for library, /play and /control/play.
+        /// A failure of the CURRENT start ends loading and shows the error surface
+        /// before the exception reaches the caller (PlaybackServer answers 400/408).
+        /// A start that was superseded or stopped never touches the newer state.</summary>
         public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
         {
             var generation=++_playGeneration;
+            try { await StartPlaybackAsync(generation,url,positionSeconds,subtitles); }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                await Dispatcher.InvokeAsync(()=>FailStart(generation,ex));
+                throw;
+            }
+        }
+
+        /// <summary>Test seams (InternalsVisibleTo): replace source preparation, and
+        /// read why the last start failed ("preparation", "timeout", "native-error",
+        /// "native-ended", "native-timeout"; null after a start that played).</summary>
+        internal Func<string,string[],System.Threading.CancellationToken,SafeMediaSource>? PrepareOverride;
+        internal string? LastStartFailure { get; private set; }
+        internal int PlayGeneration => _playGeneration;
+        internal object? CurrentMedia => _safeSource?.Media;
+        internal TimeSpan NativeStartTimeout { get => _nativeStartWatch.Interval; set => _nativeStartWatch.Interval = value; }
+
+        internal SafeMediaSource PrepareSource(string url,string[] subtitles,System.Threading.CancellationToken token)
+        {
+            var ready=new SafeMediaSource(_libvlc,url,token);
+            try { ready.AddSubtitles(subtitles,token); ready.PreparationComplete(); return ready; }
+            catch { ready.Dispose(); throw; }
+        }
+
+        private void FailStart(int generation,Exception ex)
+        {
+            // An older request that fails after a newer start began is not ours to show.
+            if (generation!=_playGeneration) return;
+            _awaitingPlaying=false; _nativeStartWatch.Stop();
+            LastStartFailure = ex is TimeoutException ? "timeout" : "preparation";
+            var message = ex is TimeoutException ? ex.Message : OpenFailedMessage;
+            MovieTitle.Text=message;
+            ShowLoadingError(message);
+        }
+
+        // Native start tracking: set when a prepared movie is handed to libVLC,
+        // cleared by Playing, a stop, or a failure.
+        private readonly DispatcherTimer _nativeStartWatch = new();
+        private int _nativeStartGeneration;
+        private bool _awaitingPlaying;
+
+        private void FailNativeStart(int generation,string why)
+        {
+            if (!_awaitingPlaying || generation!=_playGeneration) return;
+            _awaitingPlaying=false; _nativeStartWatch.Stop();
+            StopPlaybackSource(); // the failed media goes; any older completion is invalidated
+            LastStartFailure=why;
+            MovieTitle.Text=NativeFailedMessage;
+            ShowLoadingError(NativeFailedMessage);
+        }
+
+        private async System.Threading.Tasks.Task StartPlaybackAsync(int generation,string url,long? positionSeconds,string[] subtitles)
+        {
             _preparation?.Cancel();
+            LastStartFailure=null;
             BeginLoading(url);
             // Local movie with its own sidecar subtitles: shown by default, like VLC.
             // Phone starts keep libVLC's own default.
@@ -190,20 +265,16 @@ namespace ZephyrPlayer
             using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
             _preparation=timeout;
             SafeMediaSource source;
-            try {source=await System.Threading.Tasks.Task.Run(() => {
-                var ready=new SafeMediaSource(_libvlc,url,timeout.Token);
-                try {
-                       ready.AddSubtitles(subtitles,timeout.Token);
-                       ready.PreparationComplete();return ready;}
-                catch {ready.Dispose();throw;}
-            });}
+            var prepare=PrepareOverride;
+            try {source=await System.Threading.Tasks.Task.Run(() => prepare!=null ? prepare(url,subtitles,timeout.Token) : PrepareSource(url,subtitles,timeout.Token));}
             catch(OperationCanceledException) when(generation==_playGeneration) {throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
             finally {await Dispatcher.InvokeAsync(()=>{if(ReferenceEquals(_preparation,timeout))_preparation=null;});}
             await Dispatcher.InvokeAsync(()=>CompletePreparedPlayback(source,generation,timeout.IsCancellationRequested,url,positionSeconds));
         }
         private void CompletePreparedPlayback(SafeMediaSource source,int generation,bool canceled,string url,long? positionSeconds)
         {
-            if(generation!=_playGeneration || canceled) {source.Dispose();throw new OperationCanceledException("Playback preparation was canceled or superseded.");}
+            if(generation!=_playGeneration) {source.Dispose();throw new OperationCanceledException("Playback preparation was superseded or stopped.");}
+            if(canceled) {source.Dispose();throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
             SavePlaybackProgress();
             _currentSource = url;
             var localTitle = PlaybackHistory.LocalPath(url);
@@ -218,6 +289,9 @@ namespace ZephyrPlayer
             _player.Stop();
             _player.Media=null;
             _safeSource = source;
+            _nativeStartGeneration = generation;
+            _awaitingPlaying = true;
+            _nativeStartWatch.Stop(); _nativeStartWatch.Start();
             _player.Play(source.Media);
             _player.Mute = _playerMute; // libVLC resets mute on a new Media
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
@@ -460,9 +534,22 @@ namespace ZephyrPlayer
         /// doubling). Exposed for tests.</summary>
         internal static int GainFor(double slider, int boostPct) => (int)(Math.Clamp(slider, 0, 100) * boostPct / 100.0);
 
+        // The decoder gain as last APPLIED (libVLC's Volume read-back is -1 with no
+        // audio output, e.g. on CI), kept in step with every assignment.
+        private int _appliedGain = -1;
+        /// <summary>Test seam: the gain last handed to the decoder.</summary>
+        internal int AppliedPlayerGain => _appliedGain;
+
         private void ApplyPlayerGain()
         {
-            _player.Volume = GainFor(VolumeSlider.Value, _settings.VolumeBoostMaxPct);
+            _appliedGain = GainFor(VolumeSlider.Value, _settings.VolumeBoostMaxPct);
+            _player.Volume = _appliedGain;
+        }
+
+        private void OnSettingsChanged()
+        {
+            ApplyBarStyle();
+            ApplyPlayerGain(); // Boost (VolumeBoostMaxPct) reaches the playing movie now
         }
 
         private void OnMute(object sender, RoutedEventArgs e) => SetMuteTied(!_playerMute);
@@ -681,6 +768,10 @@ namespace ZephyrPlayer
 
         /// <summary>True while the loading panel covers the video.</summary>
         public bool IsLoadingShown => LoadingPanel.Visibility == Visibility.Visible;
+        /// <summary>Test seams: the loading panel's detail line, and whether it shows
+        /// the error surface (spinner gone, Back button shown).</summary>
+        internal string LoadingDetailText => LoadingDetail.Text;
+        internal bool IsLoadingErrorShown => IsLoadingShown && Spinner.Visibility != Visibility.Visible && LoadingBackButton.Visibility == Visibility.Visible;
 
         /// <summary>Phone-initiated pause/resume shows the bar once (review blocker 3).</summary>
         public void ShowBarOnce()

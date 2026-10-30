@@ -94,18 +94,7 @@ internal sealed class SafeMediaSource : IDisposable
         if (stream.Length > 2*1024*1024) throw new InvalidDataException("Subtitle too large");
         var raw = new MemoryStream();
         stream.CopyTo(raw);
-        string text;
-        try
-        {
-            using var reader = new StreamReader(new MemoryStream(raw.ToArray()), new UTF8Encoding(false,true), true);
-            text = reader.ReadToEnd().TrimStart('\uFEFF');
-        }
-        catch (DecoderFallbackException) when (new Uri(source).IsFile)
-        {
-            // Local .srt files are often saved in a Windows code page, not UTF-8:
-            // read them as Latin-1 rather than refusing the user's own file.
-            text = Encoding.Latin1.GetString(raw.ToArray());
-        }
+        var text = DecodeSubtitle(raw.ToArray(), new Uri(source).IsFile);
         cancellation.ThrowIfCancellationRequested();
         text=text.TrimStart();
         var ext = SubtitleExtension(text);
@@ -113,6 +102,34 @@ internal sealed class SafeMediaSource : IDisposable
         Directory.CreateDirectory(dir); var path=Path.Combine(dir,"subtitle"+ext);
         File.WriteAllText(path,text,new UTF8Encoding(false)); lock(_subtitles) _subtitles.Add(path);
         return path;
+    }
+    /// <summary>Subtitle text decoding. Accepted: UTF-8 (with or without BOM), and
+    /// UTF-16 LE/BE or UTF-32 LE with a BOM. A LOCAL file that is none of those is read as
+    /// Windows-1252 (the code page most Windows-saved .srt files use: 0x80 is the
+    /// euro sign, 0x93/0x94 curly quotes), never as Latin-1. Phone subtitles stay
+    /// strict: anything that is not valid UTF-8/UTF-16-with-BOM is refused.</summary>
+    internal static string DecodeSubtitle(byte[] raw, bool localFile)
+    {
+        if (raw.Length >= 4 && raw[0]==0xFF && raw[1]==0xFE && raw[2]==0 && raw[3]==0)
+            return new UTF32Encoding(false,true,true).GetString(raw, 4, raw.Length-4);
+        if (raw.Length >= 2 && ((raw[0]==0xFF && raw[1]==0xFE) || (raw[0]==0xFE && raw[1]==0xFF)))
+        {
+            Encoding utf16 = raw[0]==0xFF ? new UnicodeEncoding(false,true,true) : new UnicodeEncoding(true,true,true);
+            return utf16.GetString(raw, 2, raw.Length-2);
+        }
+        var bom = raw.Length >= 3 && raw[0]==0xEF && raw[1]==0xBB && raw[2]==0xBF ? 3 : 0;
+        try { return new UTF8Encoding(false,true).GetString(raw, bom, raw.Length-bom).TrimStart('\uFEFF'); }
+        catch (DecoderFallbackException) when (localFile && bom == 0)
+        {
+            return Windows1252.GetString(raw);
+        }
+    }
+    private static readonly Encoding Windows1252 = CreateWindows1252();
+    private static Encoding CreateWindows1252()
+    {
+        // .NET (Core) ships only UTF/ASCII/Latin-1 until the code-pages provider is registered.
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        return Encoding.GetEncoding(1252);
     }
     /// <summary>Local sidecars for a local movie (P0-3): "&lt;movie&gt;.srt/.ass/.ssa/.vtt"
     /// first, then "&lt;movie&gt;.*.srt" style language variants, from the movie's own

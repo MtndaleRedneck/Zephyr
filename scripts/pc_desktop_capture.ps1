@@ -632,6 +632,140 @@ public static class ZCP1 {
     public static void Key(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); keybd_event(vk, 0, 2, UIntPtr.Zero); }
 }
 '@
+# Flash sampling (CP1 repair): a background sampler reads every visible top-level
+# window of the process about every 50 ms during library->player and Back, plus a
+# 48x30 point grid of the screen under the shell rect. A frame counts against "no
+# flash" when the shell is not visible, a second titled/large Zephyr window is
+# visible, or the shell area is one flat colour (a blank shell). This is SAMPLING:
+# the result is "no flash observed in N sampled frames", never a proof.
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Text;
+using System.Threading;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class ZFlash {
+    [StructLayout(LayoutKind.Sequential)] public struct R { public int L, T, Rt, B; }
+    [StructLayout(LayoutKind.Sequential)] public struct BIH { public uint biSize; public int biWidth, biHeight; public ushort biPlanes, biBitCount; public uint biCompression, biSizeImage; public int biX, biY; public uint biClrUsed, biClrImportant; }
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out R r);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, StringBuilder sb, int max);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder sb, int max);
+    [DllImport("user32.dll")] static extern IntPtr GetDC(IntPtr h);
+    [DllImport("user32.dll")] static extern int ReleaseDC(IntPtr h, IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleBitmap(IntPtr dc, int w, int h);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+    [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+    [DllImport("gdi32.dll")] static extern int SetStretchBltMode(IntPtr dc, int mode);
+    [DllImport("gdi32.dll")] static extern bool StretchBlt(IntPtr d, int x, int y, int w, int h, IntPtr s, int sx, int sy, int sw, int sh, uint rop);
+    [DllImport("gdi32.dll")] static extern int GetDIBits(IntPtr dc, IntPtr bmp, uint start, uint lines, byte[] bits, ref BIH bi, uint usage);
+    const int GW = 48, GH = 30; const uint SRCCOPY = 0x00CC0020, CAPTUREBLT = 0x40000000;
+
+    static Thread _t; static volatile bool _run; static uint _pid; static IntPtr _shell; static string _dir, _phase;
+    static readonly List<string> _frames = new List<string>();
+    static int _n, _shellHidden, _second, _blank, _popups, _saved; static long _t0, _tLast;
+
+    // w x h pixels of the screen at (x,y), 32-bit BGRA, top-down.
+    static byte[] Grab(int x, int y, int sw, int sh, int w, int h) {
+        IntPtr scr = GetDC(IntPtr.Zero), mem = CreateCompatibleDC(scr), bmp = CreateCompatibleBitmap(scr, w, h), old = SelectObject(mem, bmp);
+        try {
+            SetStretchBltMode(mem, 3); // COLORONCOLOR: nearest pixel, a true point grid
+            StretchBlt(mem, 0, 0, w, h, scr, x, y, sw, sh, SRCCOPY | CAPTUREBLT);
+            SelectObject(mem, old);
+            var bi = new BIH { biSize = 40, biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32 };
+            var bits = new byte[w * h * 4];
+            GetDIBits(mem, bmp, 0, (uint)h, bits, ref bi, 0);
+            return bits;
+        } finally { DeleteObject(bmp); DeleteDC(mem); ReleaseDC(IntPtr.Zero, scr); }
+    }
+    static void SaveBmp(string path, byte[] bits, int w, int h) {
+        using (var f = new BinaryWriter(File.Create(path))) {
+            int size = 54 + bits.Length;
+            f.Write((ushort)0x4D42); f.Write(size); f.Write(0); f.Write(54);
+            f.Write(40); f.Write(w); f.Write(-h); f.Write((ushort)1); f.Write((ushort)32); f.Write(0); f.Write(bits.Length); f.Write(2835); f.Write(2835); f.Write(0); f.Write(0);
+            f.Write(bits);
+        }
+    }
+    public static void Start(uint pid, IntPtr shell, string dir, string phase) {
+        _pid = pid; _shell = shell; _dir = dir; _phase = phase;
+        lock (_frames) { _frames.Clear(); }
+        _n = _shellHidden = _second = _blank = _popups = _saved = 0;
+        _run = true; _t0 = Environment.TickCount64; _tLast = _t0;
+        _t = new Thread(Loop) { IsBackground = true }; _t.Start();
+    }
+    static void Loop() {
+        while (_run) {
+            long now = Environment.TickCount64;
+            try { Sample(now - _t0); } catch (Exception e) { lock (_frames) _frames.Add((now - _t0) + "ms sampler error " + e.GetType().Name); }
+            _tLast = Environment.TickCount64;
+            int wait = 50 - (int)(_tLast - now); if (wait > 0) Thread.Sleep(wait);
+        }
+    }
+    static void Sample(long t) {
+        var wins = new List<string>(); bool shellVis = false; int second = 0, popups = 0; R sr = new R();
+        EnumWindows((h, l) => {
+            uint wp; GetWindowThreadProcessId(h, out wp);
+            if (wp != _pid || !IsWindowVisible(h)) return true;
+            R r; GetWindowRect(h, out r);
+            if (r.Rt - r.L <= 0 || r.B - r.T <= 0) return true;
+            var tt = new StringBuilder(256); GetWindowTextW(h, tt, 256);
+            var title = tt.ToString();
+            string kind;
+            if (h == _shell) { shellVis = true; sr = r; kind = "shell"; }
+            else if (title == "LibVLCSharp.WPF") kind = "overlay";
+            else {
+                long area = (long)(r.Rt - r.L) * (r.B - r.T);
+                if (title.Length > 0 || area >= 200L * 200L) { second++; kind = "SECOND"; } else { popups++; kind = "popup"; }
+            }
+            wins.Add(kind + ":" + h.ToInt64() + "[" + title + "](" + r.L + "," + r.T + "," + r.Rt + "," + r.B + ")");
+            return true;
+        }, IntPtr.Zero);
+        string pix = "";
+        bool blank = false;
+        if (shellVis) {
+            int sw = sr.Rt - sr.L, sh = sr.B - sr.T;
+            var g = Grab(sr.L, sr.T, sw, sh, GW, GH);
+            var counts = new Dictionary<int, int>(); int best = 0, bestKey = 0;
+            for (int i = 0; i < GW * GH; i++) {
+                int k = ((g[i*4+2] >> 3) << 10) | ((g[i*4+1] >> 3) << 5) | (g[i*4] >> 3);
+                int c; counts.TryGetValue(k, out c); counts[k] = ++c; if (c > best) { best = c; bestKey = k; }
+            }
+            double frac = best / (double)(GW * GH);
+            blank = frac >= 0.995;
+            pix = string.Format(" flat={0:0.000} mode=#{1:X2}{2:X2}{3:X2}", frac, (bestKey >> 10) << 3, ((bestKey >> 5) & 31) << 3, (bestKey & 31) << 3);
+            if (blank && _saved < 6) {
+                var full = Grab(sr.L, sr.T, sw, sh, sw, sh);
+                SaveBmp(Path.Combine(_dir, "cp1-flash-" + _phase + "-blank-" + t + "ms.bmp"), full, sw, sh); _saved++;
+            }
+        }
+        _n++; if (!shellVis) _shellHidden++; if (second > 0) _second++; if (blank) _blank++; if (popups > 0) _popups++;
+        lock (_frames) _frames.Add(t + "ms" + (shellVis ? "" : " SHELL-NOT-VISIBLE") + (blank ? " BLANK" : "") + pix + " | " + string.Join(" ; ", wins));
+    }
+    public static string Stop() {
+        _run = false; if (_t != null) _t.Join(3000);
+        long span = _tLast - _t0;
+        lock (_frames) { var all = new List<string> { "== phase " + _phase + " ==" }; all.AddRange(_frames); File.AppendAllLines(Path.Combine(_dir, "cp1-flash-frames.txt"), all); }
+        return string.Format("{0}: {1} frames over {2} ms (~{3} ms apart); shell not visible: {4}; second Zephyr window: {5}; blank (flat) shell: {6}; small untitled popups (tooltips): {7}",
+            _phase, _n, span, _n > 0 ? span / _n : 0, _shellHidden, _second, _blank, _popups);
+    }
+    public static int Frames { get { return _n; } }
+    public static int Bad { get { return _shellHidden + _second + _blank; } }
+}
+'@
+$cp1FlashTotal = 0; $cp1FlashBad = 0
+Remove-Item "$env:RUNNER_TEMP/cp1-flash-*" -ErrorAction SilentlyContinue
+function Cp1FlashStart($phase) { [ZFlash]::Start([uint32]$pC.Id, $shellH, $env:RUNNER_TEMP, $phase) }
+function Cp1FlashStop() {
+    $line = [ZFlash]::Stop()
+    $script:cp1FlashTotal += [ZFlash]::Frames; $script:cp1FlashBad += [ZFlash]::Bad
+    Cp1Log "flash sample $line"
+}
 $cp1Note = "$env:RUNNER_TEMP/cp1-note.txt"
 $cp1Fail = New-Object System.Collections.Generic.List[string]
 function Cp1Log($s) { Write-Host "CP1: $s"; $s | Add-Content $cp1Note }
@@ -733,9 +867,12 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     Cp1Log ("windows after launch: " + ((([ZCP1]::Visible($pC.Id)) -join ' | ')))
 
     # Library -> player by a REAL double-click on a tile.
+    Cp1FlashStart 'library-to-player'
     $ok = Cp1DoubleClickTile $shellH 'Big Buck Bunny'
     $playing = $false
     foreach ($i in 1..30) { $st = Cp1Status; if ($st -and $st.state -eq 'Playing') { $playing = $true; break }; Start-Sleep -Milliseconds 500 }
+    Start-Sleep -Milliseconds 1000
+    Cp1FlashStop
     Cp1Gate $playing "double-click on a library tile started playback (state=$($st.state))"
     [ZWU32]::SetCursorPos(5, 5) | Out-Null
     $playerH = [ZWU32]::FindByTitle($pC.Id, 'Zephyr Player')
@@ -778,9 +915,11 @@ if ($shellH -ne [System.IntPtr]::Zero) {
 
     # Player -> library with the bar's Back (home) button: same window, overlay gone.
     WakeControls
+    Cp1FlashStart 'back-to-library'
     $clickedHome = Cp1ClickElement $shellH 'HomeButton'
     [ZWU32]::SetCursorPos(5, 5) | Out-Null   # no hover tooltip popups in the window count
     Start-Sleep -Seconds 2
+    Cp1FlashStop
     $libH = [ZWU32]::FindByTitle($pC.Id, 'Zephyr Player')
     $vis = [ZCP1]::Visible($pC.Id)
     Cp1Log ("windows after Back: " + ($vis -join ' | '))
@@ -789,8 +928,11 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-4-library-again.png"
 
     # Play again, then the window X while playing: to the tray, nothing left on screen.
+    Cp1FlashStart 'library-to-player-again'
     $null = Cp1DoubleClickTile $shellH 'Big Buck Bunny'
     foreach ($i in 1..30) { $st = Cp1Status; if ($st -and $st.state -eq 'Playing') { break }; Start-Sleep -Milliseconds 500 }
+    Start-Sleep -Milliseconds 1000
+    Cp1FlashStop
     WakeControls
     $visPlay = [ZCP1]::Visible($pC.Id)
     Cp1Log ("windows before X (playing=$($st.state)): " + ($visPlay -join ' | '))
@@ -815,6 +957,12 @@ if ($shellH -ne [System.IntPtr]::Zero) {
 StopZephyr
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $null, 'Process')
 Cp1Log ("CP1 verdict: " + $(if ($cp1Fail.Count -eq 0) { 'ALL PASS' } else { "FAILED: " + ($cp1Fail -join '; ') }))
+# Flash sampling is reported, not gated: it is a sample, not a proof.
+foreach ($bmp in (Get-ChildItem "$env:RUNNER_TEMP/cp1-flash-*.bmp" -ErrorAction SilentlyContinue)) {
+    try { $img = [System.Drawing.Image]::FromFile($bmp.FullName); $img.Save(($bmp.FullName -replace '\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Remove-Item $bmp.FullName } catch { }
+}
+if ($cp1FlashTotal -gt 0 -and $cp1FlashBad -eq 0) { Cp1Log "flash verdict: no flash observed in $cp1FlashTotal sampled frames (sampling only, not a proof; raw frames in cp1-flash-frames.txt)" }
+else { Cp1Log "flash verdict: $cp1FlashBad of $cp1FlashTotal sampled frames flagged (shell not visible, a second Zephyr window, or a flat shell; see cp1-flash-frames.txt and any cp1-flash-*.png)" }
 # Back to a clean first-run state for the legacy legs below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $cfgDir 'paired.json') -Force -ErrorAction SilentlyContinue
