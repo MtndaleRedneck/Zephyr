@@ -30,9 +30,7 @@ Zephyr Player (PC)
    Source: https://code.videolan.org/videolan/LibVLCSharp
 
    Zephyr's complete source code is in this repository, so you can rebuild
-   Zephyr Player with a modified copy of libVLC or LibVLCSharp. If you want
-   the exact source of the libVLC or LibVLCSharp version in your copy of
-   Zephyr Player, open an issue on this repository and it will be provided.
+   Zephyr Player with a modified copy of libVLC or LibVLCSharp.
 
 3. H.NotifyIcon and H.NotifyIcon.Wpf
    Copyright (c) 2020 havendv
