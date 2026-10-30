@@ -189,8 +189,24 @@ namespace ZephyrPlayer
         [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
 
+        // The player's video host is a native "static" child of this window (LibVLCSharp
+        // VideoView). Until libVLC's own video window paints into it, Windows paints it
+        // in the light system button-face grey: CI flash sampling (run 41019817391) saw
+        // one light frame in the player switch. Black is the only right colour behind
+        // a movie, so this window answers the child's colour query with black.
+        private const int WM_CTLCOLORSTATIC = 0x0138;
+        [DllImport("gdi32.dll")] private static extern IntPtr GetStockObject(int index);
+        [DllImport("gdi32.dll")] private static extern uint SetBkColor(IntPtr hdc, uint color);
+        internal static readonly IntPtr BlackBrush = GetStockObject(4 /* BLACK_BRUSH */);
+
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
         {
+            if (msg == WM_CTLCOLORSTATIC)
+            {
+                SetBkColor(wParam, 0x000000);
+                handled = true;
+                return BlackBrush;
+            }
             if (msg != WM_GETMINMAXINFO) return IntPtr.Zero;
             var monitor = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
             if (monitor == IntPtr.Zero) return IntPtr.Zero;
