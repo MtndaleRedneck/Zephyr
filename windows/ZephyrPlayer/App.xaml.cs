@@ -348,6 +348,9 @@ namespace ZephyrPlayer
         private void ShowPlayer()
         {
             if (_shell == null || _player == null) return;
+            // Settings is owned by the shell, so it would sit over the movie: a
+            // playback start (phone pick right after pairing, or a tile) closes it.
+            try { _settingsWin?.Close(); } catch { }
             if (!_shell.IsVisible) _shell.Show();
             if (_shell.WindowState == WindowState.Minimized) _shell.WindowState = WindowState.Normal;
             _shell.ShowView(_player);

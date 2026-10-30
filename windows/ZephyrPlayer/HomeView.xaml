@@ -26,7 +26,7 @@
                             <Border x:Name="Bg" Height="36" CornerRadius="8" Padding="14,0" Background="Transparent">
                                 <ContentPresenter VerticalAlignment="Center"/>
                             </Border>
-                            <Border x:Name="Underline" Height="3" CornerRadius="1.5" Background="#FF9500" VerticalAlignment="Bottom" Margin="14,0,14,-8" Visibility="Collapsed"/>
+                            <Border x:Name="Underline" Height="3" CornerRadius="1.5" Background="#FF9500" VerticalAlignment="Bottom" Margin="14,0,14,0" Visibility="Collapsed"/>
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#0BFFFFFF"/><Setter Property="Foreground" Value="#E6E6EB"/></Trigger>

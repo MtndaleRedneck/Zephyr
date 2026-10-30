@@ -75,8 +75,20 @@ internal sealed class SafeMediaSource : IDisposable
         cancellation.ThrowIfCancellationRequested();
         using var stream = Open(source,cancellation);
         if (stream.Length > 2*1024*1024) throw new InvalidDataException("Subtitle too large");
-        using var reader = new StreamReader(stream, new UTF8Encoding(false,true), true);
-        var text = reader.ReadToEnd().TrimStart('\uFEFF');
+        var raw = new MemoryStream();
+        stream.CopyTo(raw);
+        string text;
+        try
+        {
+            using var reader = new StreamReader(new MemoryStream(raw.ToArray()), new UTF8Encoding(false,true), true);
+            text = reader.ReadToEnd().TrimStart('\uFEFF');
+        }
+        catch (DecoderFallbackException) when (new Uri(source).IsFile)
+        {
+            // Local .srt files are often saved in a Windows code page, not UTF-8:
+            // read them as Latin-1 rather than refusing the user's own file.
+            text = Encoding.Latin1.GetString(raw.ToArray());
+        }
         cancellation.ThrowIfCancellationRequested();
         text=text.TrimStart();
         var ext = SubtitleExtension(text);

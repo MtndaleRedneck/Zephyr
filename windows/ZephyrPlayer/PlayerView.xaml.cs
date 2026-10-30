@@ -192,7 +192,16 @@ namespace ZephyrPlayer
             SafeMediaSource source;
             try {source=await System.Threading.Tasks.Task.Run(() => {
                 var ready=new SafeMediaSource(_libvlc,url,timeout.Token);
-                try {foreach(var sub in subtitles)ready.AddSubtitle(sub,timeout.Token);ready.PreparationComplete();return ready;}
+                try {
+                       foreach(var sub in subtitles)
+                       {
+                           // A local sidecar is a bonus: an unreadable one is skipped,
+                           // never a reason to refuse the movie. Phone subtitles keep
+                           // the strict behaviour.
+                           try {ready.AddSubtitle(sub,timeout.Token);}
+                           catch(Exception) when(PlaybackHistory.LocalPath(sub)!=null && !timeout.IsCancellationRequested) {}
+                       }
+                       ready.PreparationComplete();return ready;}
                 catch {ready.Dispose();throw;}
             });}
             catch(OperationCanceledException) when(generation==_playGeneration) {throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
