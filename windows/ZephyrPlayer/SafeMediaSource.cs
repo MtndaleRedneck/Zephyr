@@ -187,6 +187,7 @@ internal sealed class SafeMediaSource : IDisposable
         catch (RegexMatchTimeoutException) { throw new InvalidDataException("Subtitle could not be checked in time"); }
     }
     internal void Abort() => _input.Abort();
+    internal long BytesDelivered => _input.BytesDelivered;
     public void Dispose()
     {
         if(Interlocked.Exchange(ref _disposed,1)!=0)return;
@@ -212,8 +213,12 @@ internal sealed class SafeCallbackInput : MediaInput
     }
     public override int Read(IntPtr buffer,uint length)
     {
-        try {lock(_gate){if(_closing)return -1;var n=_stream.Read(_bytes,0,(int)Math.Min(length,(uint)_bytes.Length));System.Runtime.InteropServices.Marshal.Copy(_bytes,0,buffer,n);return n;}}catch{return -1;}
+        try {lock(_gate){if(_closing)return -1;var n=_stream.Read(_bytes,0,(int)Math.Min(length,(uint)_bytes.Length));System.Runtime.InteropServices.Marshal.Copy(_bytes,0,buffer,n);if(n>0)Interlocked.Add(ref _delivered,n);return n;}}catch{return -1;}
     }
+    private long _delivered;
+    /// <summary>Bytes handed to libVLC so far: the native start's progress signal
+    /// (a slow phone keeps this moving; a hung decoder does not).</summary>
+    internal long BytesDelivered => Interlocked.Read(ref _delivered);
     public override bool Seek(ulong offset)
     {
         try {lock(_gate){if(_closing||offset>long.MaxValue)return false;_stream.Seek((long)offset,SeekOrigin.Begin);return true;}}catch{return false;}

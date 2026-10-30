@@ -632,14 +632,20 @@ public static class ZCP1 {
     public static void Key(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); keybd_event(vk, 0, 2, UIntPtr.Zero); }
 }
 '@
-# Flash sampling (CP1 repair): a background sampler reads every visible top-level
-# window of the process about every 50 ms during library->player and Back, plus a
-# 48x30 point grid of the screen under the shell rect. A frame counts against "no
-# flash" when the shell is not visible, a second titled/large Zephyr window is
-# visible, the shell area is one flat colour (a blank shell), or a quarter or more
-# of it is one light colour (the app is dark throughout). Transition frames are
-# saved as PNGs (bounded) so they can be looked at. This is SAMPLING:
-# the result is "no flash observed in N sampled frames", never a proof.
+# Flash sampling (CP1 repair, client-area rule since round 2): a background sampler
+# reads every visible top-level window of the process about every 50 ms during the
+# view switches, and grabs the shell's CONTENT area at full size: the client area
+# below the 32 px caption bar (the dark caption can no longer make a blank content
+# area look non-blank - round 1's whole-window 0.995 rule read an all-black client
+# area as 0.967 and missed it). A frame is FLAGGED when the shell is not visible, a
+# second titled/large Zephyr window is visible, the content area is BLANK (fewer
+# than 0.05% of its pixels differ from its most common colour by more than 24 in
+# any channel - an all-black or all-one-colour frame; any real screen, the loading
+# panel with its spinner/title/bar included, has far more), or a quarter or more of
+# it is one LIGHT colour. Every flagged frame is saved as a PNG together with the
+# frame before and the frame after it. Flagged frames are a CP1 GATE (the verdict
+# cannot read ALL PASS with one in the log). Still SAMPLING at ~50 ms: zero flagged
+# frames means none observed, never a proof.
 Add-Type -TypeDefinition @'
 using System;
 using System.IO;
@@ -673,6 +679,13 @@ public static class ZFlash {
     static readonly List<string> _frames = new List<string>();
     static int _n, _shellHidden, _second, _blank, _bright, _popups, _saved, _changes; static long _t0, _tLast;
     static int _prevMode = -1; static double _prevFrac = -1;
+    static int _flaggedFrames;
+    static byte[] _prevBits; static int _prevW, _prevH; static long _prevT; static bool _prevSaved, _saveNext;
+    [StructLayout(LayoutKind.Sequential)] public struct P { public int X, Y; }
+    [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr h, out R r);
+    [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h, ref P p);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+    const double BlankFrac = 0.0005; const int Tol = 24, CaptionDip = 32;
 
     // w x h pixels of the screen at (x,y), 32-bit BGRA, top-down.
     static byte[] Grab(int x, int y, int sw, int sh, int w, int h) {
@@ -695,10 +708,15 @@ public static class ZFlash {
             f.Write(bits);
         }
     }
+    static void SaveFrame(string tag, long t, byte[] bits, int w, int h) {
+        if (_saved >= 40) return;
+        SaveBmp(Path.Combine(_dir, "cp1-flash-" + _phase + "-" + t.ToString("D5") + "ms-" + tag + ".bmp"), bits, w, h); _saved++;
+    }
     public static void Start(uint pid, IntPtr shell, string dir, string phase) {
         _pid = pid; _shell = shell; _dir = dir; _phase = phase;
         lock (_frames) { _frames.Clear(); }
         _n = _shellHidden = _second = _blank = _bright = _popups = _saved = _changes = 0; _prevMode = -1; _prevFrac = -1;
+        _prevBits = null; _prevSaved = false; _saveNext = false; _flaggedFrames = 0;
         _run = true; _t0 = Environment.TickCount64; _tLast = _t0;
         _t = new Thread(Loop) { IsBackground = true }; _t.Start();
     }
@@ -732,46 +750,68 @@ public static class ZFlash {
         string pix = "";
         bool blank = false, bright = false;
         if (shellVis) {
-            int sw = sr.Rt - sr.L, sh = sr.B - sr.T;
-            // One full-size grab per frame: the grid is read from it and a saved frame
-            // is exactly the frame that was judged (no second, later grab).
-            var full = Grab(sr.L, sr.T, sw, sh, sw, sh);
+            // CONTENT area: the client rect below the caption bar (WindowChrome draws the
+            // caption inside the client area, 32 DIP tall; full screen has none).
+            R cr; GetClientRect(_shell, out cr); var o0 = new P(); ClientToScreen(_shell, ref o0);
+            double scale = Math.Max(1, GetDpiForWindow(_shell)) / 96.0;
+            int cap = (int)Math.Round(CaptionDip * scale);
+            int cx = o0.X, cy = o0.Y + cap, cw = cr.Rt - cr.L, ch = cr.B - cr.T - cap;
+            if (cw < 16 || ch < 16) { cx = sr.L; cy = sr.T; cw = sr.Rt - sr.L; ch = sr.B - sr.T; }
+            // One full-size grab per frame: the rules read it and a saved frame is
+            // exactly the frame that was judged.
+            var px = Grab(cx, cy, cw, ch, cw, ch);
             var counts = new Dictionary<int, int>(); int best = 0, bestKey = 0;
             for (int i = 0; i < GW * GH; i++) {
-                int px = ((i % GW) * sw + sw / 2) / GW, py = ((i / GW) * sh + sh / 2) / GH, o = (py * sw + px) * 4;
-                int k = ((full[o+2] >> 3) << 10) | ((full[o+1] >> 3) << 5) | (full[o] >> 3);
+                int gx = ((i % GW) * cw + cw / 2) / GW, gy = ((i / GW) * ch + ch / 2) / GH, o = (gy * cw + gx) * 4;
+                int k = ((px[o+2] >> 3) << 10) | ((px[o+1] >> 3) << 5) | (px[o] >> 3);
                 int c; counts.TryGetValue(k, out c); counts[k] = ++c; if (c > best) { best = c; bestKey = k; }
             }
             double frac = best / (double)(GW * GH);
-            int mr = (bestKey >> 10) << 3, mg = ((bestKey >> 5) & 31) << 3, mb = (bestKey & 31) << 3;
-            blank = frac >= 0.995;
+            // Exact dominant colour: the true pixel value under the most common grid bucket.
+            int mr = -1, mg = 0, mb = 0;
+            for (int i = 0; i < GW * GH && mr < 0; i++) {
+                int gx = ((i % GW) * cw + cw / 2) / GW, gy = ((i / GW) * ch + ch / 2) / GH, o = (gy * cw + gx) * 4;
+                int k = ((px[o+2] >> 3) << 10) | ((px[o+1] >> 3) << 5) | (px[o] >> 3);
+                if (k == bestKey) { mr = px[o+2]; mg = px[o+1]; mb = px[o]; }
+            }
+            long differ = 0, total = (long)cw * ch;
+            for (int o = 0; o < px.Length; o += 4) {
+                if (Math.Abs(px[o+2] - mr) > Tol || Math.Abs(px[o+1] - mg) > Tol || Math.Abs(px[o] - mb) > Tol) differ++;
+            }
+            double content = differ / (double)total;
+            blank = content < BlankFrac;
             // The app is dark throughout (library, loading panel, video letterbox): a
-            // quarter or more of the shell in one LIGHT colour is a bright flash.
+            // quarter or more of the content in one LIGHT colour is a bright flash.
             bright = frac >= 0.25 && mr >= 0xC0 && mg >= 0xC0 && mb >= 0xC0;
             bool change = _prevMode >= 0 && (bestKey != _prevMode || Math.Abs(frac - _prevFrac) > 0.15);
             if (change) _changes++;
-            pix = string.Format(" flat={0:0.000} mode=#{1:X2}{2:X2}{3:X2}", frac, mr, mg, mb);
-            // Save the transition frames and every flagged one (bounded), so a person
-            // can look at exactly what the sampler saw.
-            if ((blank || bright || change) && _saved < 10) {
-                var tag = blank ? "blank" : bright ? "bright" : "change";
-                SaveBmp(Path.Combine(_dir, "cp1-flash-" + _phase + "-" + t.ToString("D5") + "ms-" + tag + ".bmp"), full, sw, sh); _saved++;
-                pix += " saved";
-            }
+            pix = string.Format(" content=({0},{1},{2}x{3}) mode=#{4:X2}{5:X2}{6:X2} flat={7:0.000} differing={8:0.0000}", cx, cy, cw, ch, mr, mg, mb, frac, content);
+            // Saved: every flagged frame with the frame before and after it, plus the
+            // colour transitions (bounded), so a person can look at what was judged.
+            bool flagged = blank || bright;
+            if (flagged) {
+                if (_prevBits != null && !_prevSaved) SaveFrame("before", _prevT, _prevBits, _prevW, _prevH);
+                SaveFrame(blank ? "BLANK" : "BRIGHT", t, px, cw, ch); pix += " saved"; _saveNext = true;
+            } else if (_saveNext) { SaveFrame("after", t, px, cw, ch); pix += " saved"; _saveNext = false; }
+            else if (change && _saved < 30) { SaveFrame("change", t, px, cw, ch); pix += " saved"; }
+            _prevSaved = pix.EndsWith(" saved"); _prevBits = px; _prevW = cw; _prevH = ch; _prevT = t;
             _prevMode = bestKey; _prevFrac = frac;
         }
         _n++; if (!shellVis) _shellHidden++; if (second > 0) _second++; if (blank) _blank++; if (bright) _bright++; if (popups > 0) _popups++;
+        if (!shellVis || second > 0 || blank || bright) _flaggedFrames++;
         lock (_frames) _frames.Add(t + "ms" + (shellVis ? "" : " SHELL-NOT-VISIBLE") + (blank ? " BLANK" : "") + (bright ? " BRIGHT" : "") + pix + " | " + string.Join(" ; ", wins));
     }
     public static string Stop() {
         _run = false; if (_t != null) _t.Join(3000);
         long span = _tLast - _t0;
         lock (_frames) { var all = new List<string> { "== phase " + _phase + " ==" }; all.AddRange(_frames); File.AppendAllLines(Path.Combine(_dir, "cp1-flash-frames.txt"), all); }
-        return string.Format("{0}: {1} frames over {2} ms (~{3} ms apart); shell not visible: {4}; second Zephyr window: {5}; blank (flat) shell: {6}; bright (light) flash: {7}; small untitled popups (tooltips): {8}; colour transitions: {9}",
-            _phase, _n, span, _n > 0 ? span / _n : 0, _shellHidden, _second, _blank, _bright, _popups, _changes);
+        return string.Format("{0}: {1} frames over {2} ms (~{3} ms apart); FLAGGED {4} = shell not visible {5}, second Zephyr window {6}, BLANK client area {7}, light flash {8}; small untitled popups (tooltips, not flagged): {9}; colour transitions: {10}",
+            _phase, _n, span, _n > 0 ? span / _n : 0, Bad, _shellHidden, _second, _blank, _bright, _popups, _changes);
     }
     public static int Frames { get { return _n; } }
-    public static int Bad { get { return _shellHidden + _second + _blank + _bright; } }
+    public static int Bad { get { return _flaggedFrames; } }
+    public static int BlankFrames { get { return _blank; } }
+    public static int BrightFrames { get { return _bright; } }
 }
 '@
 $cp1FlashTotal = 0; $cp1FlashBad = 0
@@ -836,6 +876,19 @@ function Cp1DesktopGrab($path) {
 
 Remove-Item $cp1Note -ErrorAction SilentlyContinue
 Cp1Log "virtual screen $($vs.Width)x$($vs.Height)"
+# Phone servers for the round-2 legs: 8902 dribbles the movie (about 10 KB/s for the
+# first 10 s after its first request, then full speed); 8903 serves a movie whose mp4
+# header passes preparation but whose body the decoder cannot use.
+$brokenRoot = Join-Path $env:RUNNER_TEMP 'broken'
+New-Item -ItemType Directory -Force (Join-Path $brokenRoot 's/tok') | Out-Null
+$brokenBytes = New-Object byte[] (256 * 1024)
+(New-Object System.Random 7).NextBytes($brokenBytes)
+[byte[]]$ftyp = 0,0,0,0x18,0x66,0x74,0x79,0x70,0x69,0x73,0x6F,0x6D,0,0,2,0,0x69,0x73,0x6F,0x6D,0x69,0x73,0x6F,0x32
+[Array]::Copy($ftyp, $brokenBytes, $ftyp.Length)
+[IO.File]::WriteAllBytes((Join-Path $brokenRoot 's/tok/1'), $brokenBytes)
+$srvSlow = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER_TEMP","8902","10","1024" -PassThru -WindowStyle Hidden
+$srvBroken = Start-Process python -ArgumentList "scripts/range_server.py","$brokenRoot","8903" -PassThru -WindowStyle Hidden
+Start-Sleep -Seconds 2
 # Library fixture shaped like render 01: folders first, then videos; the first
 # video carries a same-name .srt sidecar.
 $cp1Lib = Join-Path $env:RUNNER_TEMP 'Movies'
@@ -929,6 +982,74 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     [ZCP1]::Key(0x20)
     Start-Sleep -Milliseconds 500
 
+    # Add-subtitle file picker, REAL UI (round 2, item 5): click the bar's subtitles
+    # button, click "Add subtitle file..." in its pop-up, type a fixture .srt into the
+    # Windows file dialog and press Enter; the new track must attach and be selected.
+    $pickDir = Join-Path $env:RUNNER_TEMP 'picker'
+    New-Item -ItemType Directory -Force $pickDir | Out-Null
+    $pickSrt = Join-Path $pickDir 'Picker Fixture.srt'
+    [IO.File]::WriteAllText($pickSrt, "1`r`n00:00:00,000 --> 00:59:00,000`r`nPicked through the file dialog`r`n")
+    $stP0 = Cp1Status
+    $tracks0 = @($stP0.spuTracks).Count
+    WakeControls
+    $capClicked = Cp1ClickElement $shellH 'CaptionsButton'
+    $menuItem = $null
+    $nameCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Add subtitle file...')
+    foreach ($try in 1..12) {
+        foreach ($rh in [ZCP1]::VisibleHandles($pC.Id)) {
+            try { $menuItem = [System.Windows.Automation.AutomationElement]::FromHandle($rh).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond) } catch { $menuItem = $null }
+            if ($menuItem -ne $null) { break }
+        }
+        if ($menuItem -ne $null) { break }
+        Start-Sleep -Milliseconds 300
+    }
+    $pickNote = "captions button clicked=$capClicked; menu item found=$($menuItem -ne $null)"
+    $dlgH = [System.IntPtr]::Zero
+    if ($menuItem -ne $null) {
+        # A real mouse click (a UIA Invoke would block this script inside the modal dialog).
+        $mb = $menuItem.Current.BoundingRectangle
+        Cp1ClickPoint ($mb.X + $mb.Width / 2) ($mb.Y + $mb.Height / 2)
+        foreach ($try in 1..20) {
+            $dlgLine = @([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match 'class=\[#32770\]' }) | Select-Object -First 1
+            if ($dlgLine) { $dlgH = [System.IntPtr]::new([int64]($dlgLine -split ' ')[0]); break }
+            Start-Sleep -Milliseconds 300
+        }
+    }
+    $pickNote += "; file dialog=" + $(if ($dlgH -ne [System.IntPtr]::Zero) { ([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match '#32770' }) -join ' ' } else { 'not found' })
+    $typed = $false
+    if ($dlgH -ne [System.IntPtr]::Zero) {
+        try {
+            $dlgEl = [System.Windows.Automation.AutomationElement]::FromHandle($dlgH)
+            $combo = Find-ByAutoId $dlgEl '1148'
+            $editCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+            $edit = if ($combo -ne $null) { $combo.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $editCond) } else { $null }
+            if ($edit -eq $null) { $edit = $dlgEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $editCond) }
+            if ($edit -ne $null) {
+                $edit.SetFocus()
+                $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($pickSrt)
+                Start-Sleep -Milliseconds 400
+                [ZCP1]::Key(0x0D)  # Enter = Open
+                $typed = $true
+            }
+        } catch { $pickNote += "; dialog automation error: $($_.Exception.Message)" }
+        Start-Sleep -Milliseconds 800
+        if (@([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match '#32770' }).Count -gt 0) { $pickNote += "; dialog still open, pressing Escape"; [ZCP1]::Key(0x1B); Start-Sleep -Milliseconds 500 }
+    }
+    $attached = $false
+    foreach ($i in 1..20) {
+        $stP1 = Cp1Status
+        if ($stP1 -and @($stP1.spuTracks).Count -eq ($tracks0 + 1)) {
+            $newId = (@($stP1.spuTracks) | Select-Object -Last 1).id
+            if ($stP1.spu -eq $newId) { $attached = $true; break }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    $pickNote += "; typed=$typed; tracks before=$tracks0 [$((@($stP0.spuTracks) | ForEach-Object { "$($_.id):$($_.name)" }) -join ',')] after=$(@($stP1.spuTracks).Count) [$((@($stP1.spuTracks) | ForEach-Object { "$($_.id):$($_.name)" }) -join ',')] spu=$($stP1.spu)"
+    Cp1Log "picker: $pickNote"
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-9-picker-attached.png"
+    Cp1Gate $attached "Add-subtitle file picker (real dialog): picked $([IO.Path]::GetFileName($pickSrt)), a new subtitle track attached and selected"
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+
     # Player -> library with the bar's Back (home) button: same window, overlay gone.
     WakeControls
     Cp1FlashStart 'back-to-library'
@@ -942,6 +1063,50 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $stB = Cp1Status
     Cp1Gate ($clickedHome -and $libH -eq $shellH -and $vis.Count -eq 1) "Back returned to the library in the same shell (hwnd $libH, visible windows=$($vis.Count), state=$($stB.state))"
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-4-library-again.png"
+
+    # Slow phone source (round 2, items 2 and 5): /play from a phone server that
+    # dribbles the movie (about 10 KB/s for its first 10 s). The loading spinner must
+    # show, and the slow but valid movie must NOT be stopped: it plays.
+    $hdrC = @{ Authorization = "Bearer ci-capture-token" }
+    Cp1FlashStart 'phone-slow-start'
+    $tSlow = [Environment]::TickCount64
+    $slowResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdrC -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8902/s/tok/1"}') -SkipHttpErrorCheck -TimeoutSec 60
+    $slowAnswerMs = [Environment]::TickCount64 - $tSlow
+    Start-Sleep -Milliseconds 700
+    $stSlowLoading = Cp1Status
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-7-slow-phone-spinner.png"
+    $slowPlayed = $false
+    foreach ($i in 1..120) { $stS = Cp1Status; if ($stS -and $stS.state -eq 'Playing') { $slowPlayed = $true; break }; Start-Sleep -Milliseconds 500 }
+    $slowMs = [Environment]::TickCount64 - $tSlow
+    Start-Sleep -Milliseconds 800
+    Cp1FlashStop
+    Cp1Log "slow phone start: /play answered $($slowResp.StatusCode) after $slowAnswerMs ms; status while loading: $($stSlowLoading | ConvertTo-Json -Compress -Depth 4); Playing after $slowMs ms; final state=$($stS.state) title=[$($stS.title)]"
+    Cp1Gate ($slowResp.StatusCode -eq 200 -and $slowPlayed) "slow phone source (dribbled) was not stopped and played after $slowMs ms (spinner frame cp1-7-slow-phone-spinner.png)"
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-7b-slow-phone-playing.png"
+
+    # Late PC-side failure (round 2, item 2): /play of a movie whose header passes
+    # preparation but which the decoder cannot start. /play answers after the movie
+    # is handed to the decoder, so the failure comes later, on the PC only. Record
+    # exactly what the phone can see afterwards: /control/status.
+    $tLate = [Environment]::TickCount64
+    $lateResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdrC -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8903/s/tok/1"}') -SkipHttpErrorCheck -TimeoutSec 60
+    Cp1Log "late failure: /play answered HTTP $($lateResp.StatusCode) after $([Environment]::TickCount64 - $tLate) ms, body=[$($lateResp.Content)]"
+    $lastLine = ''
+    foreach ($i in 1..24) {
+        $stL = Cp1Status
+        $line = if ($stL) { $stL | Select-Object state, time, length, title, volume, spu | ConvertTo-Json -Compress } else { 'no answer' }
+        if ($line -ne $lastLine) { Cp1Log ("late failure: +$([Environment]::TickCount64 - $tLate) ms /control/status " + $line); $lastLine = $line }
+        Start-Sleep -Milliseconds 500
+    }
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-8-late-failure.png"
+    Cp1Gate ($stL -and $stL.state -ne 'Playing') "late PC-side failure: the decoder never played it; the phone's /control/status reads state=$($stL.state) title=[$($stL.title)] (no failed-start HTTP answer on this path: /play said $($lateResp.StatusCode))"
+    # Back to the library from the error panel's own button.
+    $backOk = Cp1ClickElement $shellH 'LoadingBackButton'
+    if (-not $backOk) { $backOk = Cp1ClickElement $shellH 'HomeButton' }
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+    Start-Sleep -Seconds 2
+    $visLB = [ZCP1]::Visible($pC.Id)
+    Cp1Gate ($backOk -and $visLB.Count -eq 1) "error panel's Back returned to the library (visible windows=$($visLB.Count))"
 
     # Play again, then the window X while playing: to the tray, nothing left on screen.
     Cp1FlashStart 'library-to-player-again'
@@ -972,13 +1137,17 @@ if ($shellH -ne [System.IntPtr]::Zero) {
 }
 StopZephyr
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $null, 'Process')
-Cp1Log ("CP1 verdict: " + $(if ($cp1Fail.Count -eq 0) { 'ALL PASS' } else { "FAILED: " + ($cp1Fail -join '; ') }))
-# Flash sampling is reported, not gated: it is a sample, not a proof.
+# Flash sampling is GATED since round 2: a flagged frame (blank client area, light
+# flash, hidden shell, second window) is a FAIL line, so the verdict below cannot
+# read ALL PASS while the frame log holds one. Zero flagged frames is still only
+# "none observed in N sampled frames", not a proof.
+Cp1Gate ($cp1FlashTotal -gt 0 -and $cp1FlashBad -eq 0) "flash sampler: $cp1FlashBad of $cp1FlashTotal sampled frames flagged (client-area rule; see cp1-flash-frames.txt)"
+Cp1Log ("CP1 verdict: " + $(if ($cp1Fail.Count -eq 0) { "ALL GATES PASS, including the flash sampler (0 flagged of $cp1FlashTotal frames)" } else { "FAILED: " + ($cp1Fail -join '; ') }))
 foreach ($bmp in (Get-ChildItem "$env:RUNNER_TEMP/cp1-flash-*.bmp" -ErrorAction SilentlyContinue)) {
     try { $img = [System.Drawing.Image]::FromFile($bmp.FullName); $img.Save(($bmp.FullName -replace '\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Remove-Item $bmp.FullName } catch { }
 }
-if ($cp1FlashTotal -gt 0 -and $cp1FlashBad -eq 0) { Cp1Log "flash verdict: no flash observed in $cp1FlashTotal sampled frames (sampling only, not a proof; raw frames in cp1-flash-frames.txt)" }
-else { Cp1Log "flash verdict: $cp1FlashBad of $cp1FlashTotal sampled frames flagged (shell not visible, a second Zephyr window, a flat shell, or a light flash; see cp1-flash-frames.txt and cp1-flash-*.png)" }
+if ($cp1FlashTotal -gt 0 -and $cp1FlashBad -eq 0) { Cp1Log "flash verdict: 0 of $cp1FlashTotal sampled frames flagged by the client-area rule (blank or all-one-colour content, light flash, hidden shell, second window); sampling at ~50 ms, not a proof; raw frames in cp1-flash-frames.txt" }
+else { Cp1Log "flash verdict: $cp1FlashBad of $cp1FlashTotal sampled frames FLAGGED by the client-area rule (blank or all-one-colour content, light flash, hidden shell, second window); each saved as cp1-flash-*-BLANK/BRIGHT.png with its before/after frames; see cp1-flash-frames.txt" }
 # Back to a clean first-run state for the legacy legs below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $cfgDir 'paired.json') -Force -ErrorAction SilentlyContinue

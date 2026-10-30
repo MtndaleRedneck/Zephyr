@@ -117,24 +117,23 @@ namespace ZephyrPlayer
             TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
                 _idleTimer.Stop(); // never auto-hide while paused
             });
+            // Any Playing (also a resume after pause). It never touches the loading
+            // state: only the start that is waiting for its OWN Playing ends loading
+            // (see NativeStart below), so an old movie's Playing cannot clear a newer
+            // start's spinner.
             _player.Playing += (_, __) => Dispatcher.BeginInvoke(() =>
             {
-                _awaitingPlaying = false;
-                _nativeStartWatch.Stop();
-                EndLoading();
                 TryAutoSelectSidecar();
                 if (IsLoaded) { _idleTimer.Stop(); _idleTimer.Start(); } // resume the hide countdown
                 RefreshCaptionsUi();
             });
             _player.ESSelected += (_, __) => Dispatcher.BeginInvoke(RefreshCaptionsUi);
             _player.ESAdded += (_, ev) => { if (ev.Type == TrackType.Text) Dispatcher.BeginInvoke(TryAutoSelectSidecar); };
-            // Native start failure: the decoder reports an error, or the movie ends,
-            // before Playing ever arrives, or Playing never arrives at all. Each one
-            // completes the loading state with the existing error surface.
-            _player.EncounteredError += (_, __) => { var g = System.Threading.Volatile.Read(ref _nativeStartGeneration); Dispatcher.BeginInvoke(() => FailNativeStart(g, "native-error")); };
-            _player.EndReached += (_, __) => { var g = System.Threading.Volatile.Read(ref _nativeStartGeneration); Dispatcher.BeginInvoke(() => FailNativeStart(g, "native-ended")); };
-            _nativeStartWatch.Interval = TimeSpan.FromSeconds(20);
-            _nativeStartWatch.Tick += (_, __) => FailNativeStart(_nativeStartGeneration, "native-timeout");
+            // Native start: Playing / EncounteredError / EndReached / Buffering handlers
+            // are attached per start (AttachNativeStart), never here, so each one is
+            // tied to the media it was attached for.
+            _stallWatch.Interval = TimeSpan.FromSeconds(1);
+            _stallWatch.Tick += (_, __) => CheckNativeStall();
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
 
@@ -175,7 +174,7 @@ namespace ZephyrPlayer
         public void StopPlaybackSource()
         {
             ++_playGeneration; _preparation?.Cancel();
-            _awaitingPlaying = false; _nativeStartWatch.Stop();
+            DetachNativeStart();
             EndLoading();
             _autoSelectSidecar = false;
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
@@ -218,7 +217,27 @@ namespace ZephyrPlayer
         internal string? LastStartFailure { get; private set; }
         internal int PlayGeneration => _playGeneration;
         internal object? CurrentMedia => _safeSource?.Media;
-        internal TimeSpan NativeStartTimeout { get => _nativeStartWatch.Interval; set => _nativeStartWatch.Interval = value; }
+        /// <summary>No progress at all for this long while a start waits for Playing
+        /// fails it (see CheckNativeStall for why 45 s).</summary>
+        internal TimeSpan NativeStallWindow { get; set; } = DefaultNativeStallWindow;
+        internal static readonly TimeSpan DefaultNativeStallWindow = TimeSpan.FromSeconds(45);
+        internal TimeSpan NativeStallPoll { get => _stallWatch.Interval; set => _stallWatch.Interval = value; }
+        internal NativeStart? CurrentNativeStart => _nativeStart;
+        /// <summary>Test seam: deliver a native event to a start's OWN attach-time
+        /// handler, exactly as libVLC's event thread would (the handler only queues
+        /// work on the dispatcher). kind: playing, error, ended, buffering, opening.</summary>
+        internal void RaiseNativeEvent(NativeStart start, string kind, float cache = 0)
+        {
+            switch (kind)
+            {
+                case "playing": start.OnPlaying?.Invoke(_player, EventArgs.Empty); break;
+                case "error": start.OnError?.Invoke(_player, EventArgs.Empty); break;
+                case "ended": start.OnEnded?.Invoke(_player, EventArgs.Empty); break;
+                case "opening": start.OnOpening?.Invoke(_player, EventArgs.Empty); break;
+                case "buffering": start.OnBuffering?.Invoke(_player, (MediaPlayerBufferingEventArgs)Activator.CreateInstance(typeof(MediaPlayerBufferingEventArgs), System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null, new object[] { cache }, null)!); break;
+                default: throw new ArgumentException(kind);
+            }
+        }
 
         internal SafeMediaSource PrepareSource(string url,string[] subtitles,System.Threading.CancellationToken token)
         {
@@ -231,23 +250,143 @@ namespace ZephyrPlayer
         {
             // An older request that fails after a newer start began is not ours to show.
             if (generation!=_playGeneration) return;
-            _awaitingPlaying=false; _nativeStartWatch.Stop();
             LastStartFailure = ex is TimeoutException ? "timeout" : "preparation";
             var message = ex is TimeoutException ? ex.Message : OpenFailedMessage;
             MovieTitle.Text=message;
             ShowLoadingError(message);
         }
 
-        // Native start tracking: set when a prepared movie is handed to libVLC,
-        // cleared by Playing, a stop, or a failure.
-        private readonly DispatcherTimer _nativeStartWatch = new();
-        private int _nativeStartGeneration;
-        private bool _awaitingPlaying;
+        // ---------- native start: one record per media handed to libVLC ----------
 
-        private void FailNativeStart(int generation,string why)
+        /// <summary>One native start: the media handed to libVLC for one generation and
+        /// the event handlers attached FOR it at handoff. libVLC raises its events on
+        /// its own thread; each handler captured this record when it was attached, so
+        /// an event queued by an earlier start (Playing, error, end, buffering) carries
+        /// the earlier record and is ignored once a newer start exists. Nothing reads
+        /// "the current generation" at event time.</summary>
+        internal sealed class NativeStart
         {
-            if (!_awaitingPlaying || generation!=_playGeneration) return;
-            _awaitingPlaying=false; _nativeStartWatch.Stop();
+            internal NativeStart(int generation, SafeMediaSource source) { Generation = generation; Source = source; }
+            internal int Generation { get; }
+            internal SafeMediaSource Source { get; }
+            /// <summary>True from handoff until its own Playing, a failure, or a stop.</summary>
+            internal bool Waiting = true;
+            internal bool Attached;
+            internal long LastBytes;
+            internal float LastCache = -1;
+            internal long LastProgressTick;
+            internal string LastProgress = "handoff";
+            internal int ProgressMarks;
+            internal EventHandler<EventArgs>? OnPlaying, OnError, OnEnded, OnOpening;
+            internal EventHandler<MediaPlayerBufferingEventArgs>? OnBuffering;
+        }
+        private NativeStart? _nativeStart;
+        private readonly DispatcherTimer _stallWatch = new();
+
+        private void AttachNativeStart(NativeStart a)
+        {
+            a.OnPlaying = (_, __) => Dispatcher.BeginInvoke(() => OnNativePlaying(a));
+            a.OnError = (_, __) => Dispatcher.BeginInvoke(() => FailNativeStart(a, "native-error"));
+            a.OnEnded = (_, __) => Dispatcher.BeginInvoke(() => FailNativeStart(a, "native-ended"));
+            a.OnOpening = (_, __) => Dispatcher.BeginInvoke(() => MarkNativeProgress(a, "opening"));
+            a.OnBuffering = (_, e) => { var cache = e.Cache; Dispatcher.BeginInvoke(() => { if (cache != a.LastCache) { a.LastCache = cache; MarkNativeProgress(a, "buffering " + cache.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%"); } }); };
+            _player.Playing += a.OnPlaying;
+            _player.EncounteredError += a.OnError;
+            _player.EndReached += a.OnEnded;
+            _player.Opening += a.OnOpening;
+            _player.Buffering += a.OnBuffering;
+            a.Attached = true;
+            a.LastProgressTick = Environment.TickCount64;
+            a.LastBytes = a.Source.BytesDelivered;
+            _nativeStart = a;
+            _stallWatch.Stop(); _stallWatch.Start();
+        }
+
+        /// <summary>Its handlers leave libVLC's event lists. An event libVLC already
+        /// dispatched still reaches the handler, which carries this record and finds
+        /// it no longer waiting.</summary>
+        private void DetachNativeHandlers(NativeStart a)
+        {
+            a.Waiting = false;
+            if (!a.Attached) return;
+            a.Attached = false;
+            // The delegates themselves are kept: a late delivery (or the test seam)
+            // still runs them, and they find their record no longer waiting.
+            _player.Playing -= a.OnPlaying;
+            _player.EncounteredError -= a.OnError;
+            _player.EndReached -= a.OnEnded;
+            _player.Opening -= a.OnOpening;
+            _player.Buffering -= a.OnBuffering;
+        }
+
+        private void DetachNativeStart()
+        {
+            _stallWatch.Stop();
+            var a = _nativeStart; _nativeStart = null;
+            if (a != null) DetachNativeHandlers(a);
+        }
+
+        /// <summary>This start's own Playing. It ends loading only when it is still the
+        /// newest start; a start that played while a newer one is preparing leaves the
+        /// newer spinner up.</summary>
+        private void OnNativePlaying(NativeStart a)
+        {
+            if (!a.Waiting || !ReferenceEquals(a, _nativeStart)) return;
+            _stallWatch.Stop();
+            DetachNativeHandlers(a);
+            if (a.Generation != _playGeneration) return;
+            LastStartFailure = null;
+            EndLoading();
+            StartSettled?.Invoke();
+        }
+
+        /// <summary>The newest start shows its own content now: its first Playing, or
+        /// the error panel. The shell releases the library it kept drawn underneath.</summary>
+        public event Action? StartSettled;
+
+        /// <summary>While the shell keeps the library drawn underneath (library ->
+        /// player), this view's own surfaces are transparent so WPF shows the library,
+        /// not black, until the start settles.</summary>
+        internal void SetSwitchTransparent(bool on)
+        {
+            Background = on ? Brushes.Transparent : Brushes.Black;
+            Video.Background = on ? Brushes.Transparent : Brushes.Black;
+        }
+
+        private void MarkNativeProgress(NativeStart a, string what)
+        {
+            if (!a.Waiting || !ReferenceEquals(a, _nativeStart)) return;
+            a.LastProgressTick = Environment.TickCount64; a.LastProgress = what; a.ProgressMarks++;
+        }
+
+        /// <summary>The start contract (CP1 repair 2). A start fails on a real signal
+        /// only: libVLC's EncounteredError, EndReached before Playing, or NO progress
+        /// at all for NativeStallWindow (45 s). Progress = this source handed libVLC
+        /// more bytes, or libVLC reported Opening or a new Buffering percent for this
+        /// start. A slow phone that keeps delivering is never stopped, however long it
+        /// takes. Why 45 s: a phone read that delivers nothing for 15 s already fails
+        /// in PeerRangeStream (its per-read deadline), and libVLC reports that read
+        /// failure as an error or an end - the real signal, at about 15 s. The stall
+        /// window is only the backstop for libVLC itself going quiet (asking for no
+        /// bytes and reporting nothing), so it is three per-read deadlines: it can
+        /// never fire before the source's own deadline could have. libVLC's default
+        /// caching is 0.3 s (file) / 1 s (network), so a healthy decoder that has
+        /// bytes asks for more far inside that window.</summary>
+        private void CheckNativeStall()
+        {
+            var a = _nativeStart;
+            if (a == null || !a.Waiting) { _stallWatch.Stop(); return; }
+            var bytes = a.Source.BytesDelivered;
+            if (bytes != a.LastBytes) { a.LastBytes = bytes; MarkNativeProgress(a, "bytes " + bytes); return; }
+            if (Environment.TickCount64 - a.LastProgressTick >= (long)NativeStallWindow.TotalMilliseconds)
+                FailNativeStart(a, "native-stalled");
+        }
+
+        private void FailNativeStart(NativeStart a, string why)
+        {
+            // Only the start this handler was attached for, only while it waits, and
+            // only while no newer start exists (a newer preparation replaces it anyway).
+            if (!a.Waiting || !ReferenceEquals(a, _nativeStart) || a.Generation != _playGeneration) return;
             StopPlaybackSource(); // the failed media goes; any older completion is invalidated
             LastStartFailure=why;
             MovieTitle.Text=NativeFailedMessage;
@@ -285,13 +424,15 @@ namespace ZephyrPlayer
             ApplyPlayerGain();
             _player.Mute = _playerMute;
             var replaced = _safeSource;
+            // The previous start's handlers leave BEFORE its media stops, and this
+            // start's are attached after: no event of the old media is ever seen by a
+            // handler of this one.
+            DetachNativeStart();
             replaced?.Abort();
             _player.Stop();
             _player.Media=null;
             _safeSource = source;
-            _nativeStartGeneration = generation;
-            _awaitingPlaying = true;
-            _nativeStartWatch.Stop(); _nativeStartWatch.Start();
+            AttachNativeStart(new NativeStart(generation, source));
             _player.Play(source.Media);
             _player.Mute = _playerMute; // libVLC resets mute on a new Media
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
@@ -764,6 +905,11 @@ namespace ZephyrPlayer
             LoadingDetail.Text = message;
             LoadingBackButton.Visibility = Visibility.Visible;
             LoadingPanel.Visibility = Visibility.Visible;
+            // The error panel is this start's content: settled once the overlay has had
+            // a few frames to draw it (a fast failure can come before its first frame).
+            var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            settle.Tick += (_, __) => { settle.Stop(); if (IsLoadingErrorShown) StartSettled?.Invoke(); };
+            settle.Start();
         }
 
         /// <summary>True while the loading panel covers the video.</summary>

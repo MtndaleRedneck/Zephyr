@@ -42,18 +42,175 @@ namespace ZephyrPlayer
         }
 
         /// <summary>The view currently on screen (library or player).</summary>
-        public FrameworkElement? CurrentView => ViewHost.Content as FrameworkElement;
+        public FrameworkElement? CurrentView => _current;
+        private FrameworkElement? _current;
+        /// <summary>The library kept drawn under an incoming player until its start has
+        /// something on screen (its own Playing, or the error panel).</summary>
+        private FrameworkElement? _heldUnder;
+        internal FrameworkElement? HeldUnderView => _heldUnder;
+        internal int ViewHostChildCount => ViewHost.Children.Count;
 
         /// <summary>The native handle (stable for the window's life; CI asserts it).</summary>
         public IntPtr Handle => new WindowInteropHelper(this).Handle;
 
-        /// <summary>Swap the view in place. The old view leaves the visual tree (its
-        /// Unloaded runs), the window itself never hides, moves or resizes.</summary>
-        public void ShowView(FrameworkElement view)
+        /// <summary>Swap the view in place; the window itself never hides, moves or
+        /// resizes. CP1 repair 3 (the view-transition blink: two all-black content
+        /// frames, library->player ~688 ms and Back ~406 ms, run 41026623817): the
+        /// outgoing view is never taken off screen before the incoming one has
+        /// something to show.
+        /// - library -> player: the player is added OVER the library with a
+        ///   transparent background, and the library stays drawn under it until the
+        ///   player's start settles (its own Playing, or the error panel). The video
+        ///   host is a native child window that WPF cannot draw over or under, so it
+        ///   paints a picture of the library (not black) for the same span.
+        /// - player -> library (Back): the library is laid out UNDER the player first
+        ///   and the video host is repainted with its picture; only then does
+        ///   [beforeOldLeaves] stop the movie and hide the overlay, and the player
+        ///   leaves. Whatever is uncovered on the way is the library.
+        /// The old view leaves the visual tree (its Unloaded runs) as before.</summary>
+        public void ShowView(FrameworkElement view, Action? beforeOldLeaves = null)
         {
-            if (ReferenceEquals(ViewHost.Content, view)) return;
-            ViewHost.Content = view;
+            var old = _current;
+            if (ReferenceEquals(old, view)) { beforeOldLeaves?.Invoke(); return; }
+            if (old is PlayerView && view is not PlayerView)
+            {
+                // Back. The library may still be held under the player (Back pressed
+                // while the start was loading): it is already in the tree.
+                if (!ViewHost.Children.Contains(view)) ViewHost.Children.Insert(0, view);
+                view.IsHitTestVisible = true;
+                _heldUnder = null;
+                view.UpdateLayout();
+                HoldVideoHost(view);
+                beforeOldLeaves?.Invoke();
+                // The movie's own video window is gone now: the host's whole client
+                // paints the library picture (it clips its children, so the paint
+                // above could not reach under the video window).
+                RepaintVideoHost();
+                if (old is PlayerView p) p.SetSwitchTransparent(false);
+                ViewHost.Children.Remove(old);
+                _current = view;
+                ReleaseVideoHost();
+                return;
+            }
+            if (old != null && view is PlayerView player && old is not PlayerView)
+            {
+                // library -> player: the library stays drawn under the player.
+                old.IsHitTestVisible = false;
+                HoldVideoHost(old);
+                player.SetSwitchTransparent(true);
+                if (!ViewHost.Children.Contains(player)) ViewHost.Children.Add(player);
+                _heldUnder = old;
+                _current = player;
+                beforeOldLeaves?.Invoke();
+                player.StartSettled -= OnPlayerStartSettled;
+                player.StartSettled += OnPlayerStartSettled;
+                return;
+            }
+            beforeOldLeaves?.Invoke();
+            ViewHost.Children.Clear();
+            _heldUnder = null;
+            ViewHost.Children.Add(view);
+            _current = view;
         }
+
+        /// <summary>The incoming player now shows its own content (first frame or the
+        /// error panel): the held library leaves, the video host goes back to black.</summary>
+        private void OnPlayerStartSettled()
+        {
+            if (_current is not PlayerView player) return;
+            player.StartSettled -= OnPlayerStartSettled;
+            var held = _heldUnder; _heldUnder = null;
+            player.SetSwitchTransparent(false);
+            if (held != null && !ReferenceEquals(held, _current))
+            {
+                held.IsHitTestVisible = true;
+                ViewHost.Children.Remove(held);
+            }
+            ReleaseVideoHost();
+        }
+
+        // ---------- the native video host during a switch ----------
+
+        private IntPtr _holdBrush, _holdBitmap;
+        internal bool VideoHostHeld => _holdBrush != IntPtr.Zero;
+
+        /// <summary>The video host (LibVLCSharp's native "static" child) paints [view]'s
+        /// picture instead of black until ReleaseVideoHost.</summary>
+        private void HoldVideoHost(FrameworkElement view)
+        {
+            try
+            {
+                var w = view.ActualWidth; var h = view.ActualHeight;
+                if (w < 1 || h < 1) return;
+                var m = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
+                int pw = (int)Math.Ceiling(w * m.M11), ph = (int)Math.Ceiling(h * m.M22);
+                var dv = new DrawingVisual();
+                using (var dc = dv.RenderOpen())
+                    dc.DrawRectangle(new VisualBrush(view) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top, ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(0, 0, w, h) }, null, new Rect(0, 0, w, h));
+                var rtb = new RenderTargetBitmap(pw, ph, 96 * m.M11, 96 * m.M22, PixelFormats.Pbgra32);
+                rtb.Render(dv);
+                var pixels = new byte[pw * ph * 4];
+                rtb.CopyPixels(pixels, pw * 4, 0);
+                var bi = new BITMAPINFOHEADER { biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(), biWidth = pw, biHeight = -ph, biPlanes = 1, biBitCount = 32 };
+                var bmp = CreateDIBSection(IntPtr.Zero, ref bi, 0, out var bits, IntPtr.Zero, 0);
+                if (bmp == IntPtr.Zero) return;
+                Marshal.Copy(pixels, 0, bits, pixels.Length);
+                var brush = CreatePatternBrush(bmp);
+                if (brush == IntPtr.Zero) { DeleteObject(bmp); return; }
+                FreeHold();
+                _holdBitmap = bmp; _holdBrush = brush;
+                RepaintVideoHost();
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("video host hold failed: " + ex.GetType().Name); }
+        }
+
+        private void ReleaseVideoHost()
+        {
+            if (_holdBrush == IntPtr.Zero) return;
+            FreeHold();
+            RepaintVideoHost();
+        }
+
+        private void FreeHold()
+        {
+            var brush = _holdBrush; var bmp = _holdBitmap;
+            _holdBrush = _holdBitmap = IntPtr.Zero;
+            if (brush != IntPtr.Zero) DeleteObject(brush);
+            if (bmp != IntPtr.Zero) DeleteObject(bmp);
+        }
+
+        /// <summary>The native video host child, if the player has created one.</summary>
+        internal IntPtr VideoHostHandle()
+        {
+            var host = IntPtr.Zero;
+            var me = Handle;
+            if (me == IntPtr.Zero) return host;
+            EnumChildWindows(me, (h, _) =>
+            {
+                var sb = new System.Text.StringBuilder(32); GetClassNameW(h, sb, 32);
+                if (sb.ToString().Equals("Static", StringComparison.OrdinalIgnoreCase) && GetParent(h) == me) { host = h; return false; }
+                return true;
+            }, IntPtr.Zero);
+            return host;
+        }
+
+        private void RepaintVideoHost()
+        {
+            var host = VideoHostHandle();
+            // Its own client only (no RDW_ALLCHILDREN: libVLC's video window inside it
+            // keeps its picture), painted now rather than at the next message pump.
+            if (host != IntPtr.Zero) RedrawWindow(host, IntPtr.Zero, IntPtr.Zero, 0x0001 /*INVALIDATE*/ | 0x0004 /*ERASE*/ | 0x0100 /*UPDATENOW*/);
+        }
+
+        [StructLayout(LayoutKind.Sequential)] private struct BITMAPINFOHEADER { public uint biSize; public int biWidth, biHeight; public ushort biPlanes, biBitCount; public uint biCompression, biSizeImage; public int biXPelsPerMeter, biYPelsPerMeter; public uint biClrUsed, biClrImportant; }
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreatePatternBrush(IntPtr bitmap);
+        [DllImport("gdi32.dll")] private static extern bool DeleteObject(IntPtr obj);
+        private delegate bool EnumChildProc(IntPtr h, IntPtr l);
+        [DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumChildProc cb, IntPtr l);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassNameW(IntPtr h, System.Text.StringBuilder sb, int max);
+        [DllImport("user32.dll")] private static extern IntPtr GetParent(IntPtr h);
+        [DllImport("user32.dll")] private static extern bool RedrawWindow(IntPtr h, IntPtr rect, IntPtr region, uint flags);
 
         public bool IsFullscreen => _fullscreen;
 
@@ -205,7 +362,8 @@ namespace ZephyrPlayer
             {
                 SetBkColor(wParam, 0x000000);
                 handled = true;
-                return BlackBrush;
+                // During a view switch: the outgoing library's picture (ShowView).
+                return _holdBrush != IntPtr.Zero ? _holdBrush : BlackBrush;
             }
             if (msg != WM_GETMINMAXINFO) return IntPtr.Zero;
             var monitor = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
