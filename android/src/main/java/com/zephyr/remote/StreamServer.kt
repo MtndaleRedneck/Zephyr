@@ -499,6 +499,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                     maxBytes = MAX_CACHE_COPY_BYTES, minFree = MIN_FREE_BYTES, cancelled = { !running || !req.isActive },
                                     // Fully-read AND validated before the commit CAS (M1/Tab).
                                     expectedBytes = { expectedBytes },
+                                    // R3/Tab: clean EOF beyond a stale positive declaration is accepted;
+                                    // log a FIXED message - no URI, name or byte counts (a size can
+                                    // fingerprint content).
+                                    onStaleDeclared = { _, _ -> android.util.Log.w("StreamServer", "provider streamed past its declared length; accepted clean EOF") },
                                     // Atomic commit-vs-abandon ownership (M1/Tab):
                                     // the rename runs only while still ACTIVE.
                                     commit = { t, f -> req.withCommit { t.renameTo(f) } ?: false },
