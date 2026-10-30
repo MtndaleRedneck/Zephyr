@@ -402,7 +402,7 @@ namespace ZephyrPlayer.Tests
                     Color At(int x, int y) { var i = (y * w + x) * 4; return Color.FromRgb(px[i + 2], px[i + 1], px[i]); }
                     bool Near(Color c, byte r, byte g, byte bb, int tol = 6) => Math.Abs(c.R - r) <= tol && Math.Abs(c.G - g) <= tol && Math.Abs(c.B - bb) <= tol;
                     Assert.True(Near(At(900, 26), 0x0A, 0x0A, 0x0C), "app bar is not #0A0A0C: " + At(900, 26));
-                    Assert.True(Near(At(1500, 88), 0x06, 0x06, 0x07), "window background is not #060607: " + At(1500, 88));
+                    Assert.True(Near(At(1572, 700), 0x06, 0x06, 0x07), "window background (grid gutter) is not #060607: " + At(1572, 700));
                     // Selected "Movies" pill: 3 px #FF9500 underline at the app bar's bottom edge.
                     var underline = 0;
                     for (var y = 44; y < 54; y++) for (var x = 14; x < 140; x++) { var c = At(x, y); if (c.R > 230 && c.G > 120 && c.G < 170 && c.B < 40) underline++; }

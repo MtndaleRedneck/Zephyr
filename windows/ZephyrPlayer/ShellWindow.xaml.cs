@@ -134,8 +134,10 @@ namespace ZephyrPlayer
                     return new Rect(s.Left, s.Top, w, h);
                 }
             }
-            var dw = Math.Min(1600, Math.Floor(workArea.Width * 0.94));
-            var dh = Math.Min(1000, Math.Floor(workArea.Height * 0.94));
+            // Render 01's 1600x1000 whenever it fits with a small margin (a 1080p
+            // monitor's 1040 px work area takes the full 1000); smaller screens get 94%.
+            var dw = workArea.Width >= 1600 + 48 ? 1600 : Math.Floor(workArea.Width * 0.94);
+            var dh = workArea.Height >= 1000 + 24 ? 1000 : Math.Floor(workArea.Height * 0.94);
             return new Rect(workArea.Left + Math.Floor((workArea.Width - dw) / 2), workArea.Top + Math.Floor((workArea.Height - dh) / 2), dw, dh);
         }
 
