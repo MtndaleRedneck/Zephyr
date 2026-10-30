@@ -118,6 +118,15 @@ namespace ZephyrPlayer
             set { Write(d => d with { FoldersFirst = value }); }
         }
 
+        /// <summary>The shell window's last restored bounds and maximized flag, as
+        /// "left,top,width,height,max" in device-independent pixels; "" when never saved.
+        /// Shared by every view (library and player): one window, one geometry.</summary>
+        public string ShellBounds
+        {
+            get { lock (_lock) return Read().ShellBounds ?? ""; }
+            set { Write(d => d with { ShellBounds = value }); }
+        }
+
         private record Data(
             string? LibraryFolder,
             int? VolumeBoostMaxPct,
@@ -132,7 +141,8 @@ namespace ZephyrPlayer
             int? SecondarySkipSeconds = null,
             string? LibrarySort = null,
             bool? FoldersFirst = null,
-            bool? ButtonFlash = null);
+            bool? ButtonFlash = null,
+            string? ShellBounds = null);
 
         private bool _readFailed;
         private Data? _lastGood;

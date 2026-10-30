@@ -59,10 +59,10 @@ namespace ZephyrPlayer.Tests
                     using var vlc = new LibVLC("--no-video", "--aout=dummy");
                     using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
                     var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));
-                    var window = new MainWindow(vlc, player, settings, new VolumeService());
+                    var window = new PlayerView(vlc, player, settings, new VolumeService());
                     try
                     {
-                        // Same engine consumed by MainWindow's real skip handlers.
+                        // Same engine consumed by PlayerView's real skip handlers.
                         using var media = new Media(vlc, wav, FromType.FromPath);
                         Assert.True(player.Play(media), "libVLC refused the real media fixture");
                         Await(() => player.State == VLCState.Playing && player.Length >= 479000,
@@ -89,7 +89,7 @@ namespace ZephyrPlayer.Tests
                                     step.Name + " expected " + expected + "ms, got " + player.Time + "ms");
                                 Assert.Equal(VLCState.Paused, player.State);
                                 if(step.Name.StartsWith("Secondary",StringComparison.Ordinal)) {
-                                    var field=typeof(MainWindow).GetField(step.Delta<0?"_secondaryBackHighlight":"_secondaryForwardHighlight",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!;
+                                    var field=typeof(PlayerView).GetField(step.Delta<0?"_secondaryBackHighlight":"_secondaryForwardHighlight",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic)!;
                                     var highlight=(SecondarySkipHighlight)field.GetValue(window)!;
                                     Assert.True(highlight.HasAnimatedProperties,"secondary click did not start traveling highlight");
                                     var label=(TextBlock)window.FindName(step.Delta<0?"SecondarySkipBackLabel":"SecondarySkipForwardLabel")!;
@@ -104,7 +104,7 @@ namespace ZephyrPlayer.Tests
                             }
                         }
                     }
-                    finally { player.Stop(); window.Close(); }
+                    finally { player.Stop(); window.ReleasePlayback(); }
                 }
                 catch (Exception ex) { error = ex; }
                 finally { Dispatcher.CurrentDispatcher.InvokeShutdown(); }

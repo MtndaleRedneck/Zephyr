@@ -12,19 +12,19 @@ using LibVLCSharp.Shared;
 
 namespace ZephyrPlayer
 {
-    /// <summary>Production control: every player touch on the window's dispatcher.</summary>
+    /// <summary>Production control: every player touch on the player view's dispatcher.</summary>
     public sealed class MainWindowPlaybackControl : IPlaybackControl, IAsyncPlaybackControl
     {
-        private readonly MainWindow _window;
+        private readonly PlayerView _window;
         private readonly MediaPlayer _player;
         private readonly Action? _showForPlayback;
 
-        /// <summary>[showForPlayback] hides Home and shows the player window - the same
-        /// shell handoff /play does. Without it, /control/play would start playback while
+        /// <summary>[showForPlayback] puts the shell on the player view - the same
+        /// handoff /play does. Without it, /control/play would start playback while
         /// the app keeps showing Home (the video lands in a detached output window):
         /// protocol.md documents /control/play with the same payload as /play, so any
         /// caller that starts a URL expects to SEE it.</summary>
-        public MainWindowPlaybackControl(MainWindow window, MediaPlayer player, Action? showForPlayback = null)
+        public MainWindowPlaybackControl(PlayerView window, MediaPlayer player, Action? showForPlayback = null)
         {
             _window = window;
             _player = player;
@@ -48,7 +48,7 @@ namespace ZephyrPlayer
         public void Seek(long positionSeconds) => OnUi(() => { if (_player.Length > 0) _player.Time = positionSeconds * 1000; _window.ShowBarOnce(); });
         public void SetVolume(int volume) => OnUi(() => _window.SetVolumeTied(volume));
         public void Mute(bool mute) => OnUi(() => _window.SetMuteTied(mute));
-        public void SetSpu(int trackId) => OnUi(() => _player.SetSpu(trackId));
+        public void SetSpu(int trackId) => OnUi(() => _window.SelectSubtitle(trackId));
         public void SetFullscreen(bool on) => OnUi(() => _window.SetFullscreen(on));
 
         public string StatusJson() => OnUi(() => JsonSerializer.Serialize(new
@@ -63,7 +63,8 @@ namespace ZephyrPlayer
             spu = _player.Spu,
             // The phone's subtitle sheet needs the track LIST, not just the
             // current id (teardown C2): id + name per track.
-            spuTracks = (_player.SpuDescription ?? Array.Empty<LibVLCSharp.Shared.Structures.TrackDescription>())
+            // libVLC's id -1 "Disable" entry is Off, not a track (P0-3).
+            spuTracks = PlayerView.RealTracks(_player.SpuDescription)
                 .Select(t => new { id = t.Id, name = t.Name }).ToArray(),
             fullscreen = _window.IsFullscreen,
             update_available = UpdateState.AvailableVersion,

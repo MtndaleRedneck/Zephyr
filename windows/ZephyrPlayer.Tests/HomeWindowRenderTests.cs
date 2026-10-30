@@ -10,18 +10,18 @@ using Xunit;
 namespace ZephyrPlayer.Tests
 {
     /// <summary>
-    /// HomeWindow is constructed at app startup but had no test coverage - a
-    /// ctor failure there kills the real exe before any window exists (the
-    /// 1.2.0 CI capture/smoke gap). Same offscreen pattern as the pairing
-    /// render test: real ctor, Show/Hide, populated-library assertions,
-    /// RenderTargetBitmap evidence, pixel signature.
+    /// The library view (HomeView, hosted by the one ShellWindow in 2.0) is
+    /// constructed at app startup - a ctor failure there kills the real exe
+    /// before any window exists (the 1.2.0 CI capture/smoke gap). Same offscreen
+    /// pattern as the pairing render test: real ctor, hosted Show/Hide,
+    /// populated-library assertions, RenderTargetBitmap evidence, pixel signature.
     /// </summary>
     public class HomeWindowRenderTests
     {
         [Theory]
         [InlineData(false)]
         [InlineData(true)]
-        public void HomeWindow_RendersOffscreen_WithLibrary(bool durations)
+        public void HomeView_RendersOffscreen_WithLibrary(bool durations)
         {
             string? error = null;
             var t = new Thread(() =>
@@ -38,8 +38,9 @@ namespace ZephyrPlayer.Tests
                     settings.LibraryFolder = lib;
                     var store = new PairedStore(Path.Combine(dir, "paired.json"));
 
-                    var w = new HomeWindow(settings, store, _ => { }, () => { }, loadDurations: durations);
-                    w.Show(); w.Hide(); // drives Loaded/Refresh like startup does
+                    var w = new HomeView(settings, store, _ => { }, () => { }, loadDurations: durations);
+                    var host = new Window { Content = w, Width = 940, Height = 700, Left = -20000, Top = -20000, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual };
+                    host.Show(); host.Hide(); // drives Loaded/Refresh like startup does
 
                     var emptyState = (UIElement)w.FindName("EmptyState")!;
                     var libraryView = (UIElement)w.FindName("LibraryView")!;
@@ -47,7 +48,7 @@ namespace ZephyrPlayer.Tests
                     var crumbs = (ItemsControl)w.FindName("Breadcrumb")!;
                     Assert.Equal(Visibility.Collapsed, emptyState.Visibility);
                     Assert.Equal(Visibility.Visible, libraryView.Visibility);
-                    Assert.Equal(3, list.Items.Count); // Kids folder + Demo Reel.mp4
+                    Assert.Equal(3, list.Items.Count); // Kids folder + two episodes
                     Assert.True(crumbs.Items.Count >= 1);
 
                     // Real per-file history drives the badge/progress, not a fixed mock label.
@@ -60,10 +61,11 @@ namespace ZephyrPlayer.Tests
 
                     // Empty-folder state flips correctly when nothing is set.
                     var settings2 = new PlayerSettings(Path.Combine(dir, "settings2.json"));
-                    var w2 = new HomeWindow(settings2, store, _ => { }, () => { }, loadDurations: durations);
-                    w2.Show(); w2.Hide();
+                    var w2 = new HomeView(settings2, store, _ => { }, () => { }, loadDurations: durations);
+                    var host2 = new Window { Content = w2, Width = 940, Height = 700, Left = -20000, Top = -20000, ShowInTaskbar = false, WindowStartupLocation = WindowStartupLocation.Manual };
+                    host2.Show(); host2.Hide();
                     Assert.Equal(Visibility.Visible, ((UIElement)w2.FindName("EmptyState")!).Visibility);
-                    w2.Close();
+                    host2.Close();
 
                     // Render offscreen as CI evidence.
                     var root = (FrameworkElement)w.Content;
@@ -92,7 +94,7 @@ namespace ZephyrPlayer.Tests
                     Assert.True(lit > 4000, $"lit pixels {lit} - home grid not rendered");
                     // Finish native metadata work before tearing down its owning STA.
                     Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
-                    w.Close();
+                    host.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
                 catch (Exception e) { error = e.ToString(); }

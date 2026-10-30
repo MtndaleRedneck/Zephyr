@@ -15,7 +15,7 @@ namespace ZephyrPlayer
     /// </summary>
     public partial class FeedbackPanel : System.Windows.Controls.UserControl
     {
-        private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues";
+        private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr/issues";
         // The dedicated Zephyr feedback form (created + verified public by the
         // coordinator, Oct 26). The shared BingeMote form is NEVER used. The
         // "Reply email" field (entry.1538046022) is never prefilled - the user

@@ -35,11 +35,18 @@ namespace ZephyrPlayer
 
     internal static class UpdateCheck
     {
-        private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30";
+        /// <summary>Canonical repository (renamed from Zephyr-Dev on 2026-10-30; the owner
+        /// accepted that installed 1.4 builds keep checking the old name).</summary>
+        internal const string Repo = "MtndaleRedneck/Zephyr";
+        internal const string Api = "https://api.github.com/repos/" + Repo + "/releases?per_page=30";
         /// <summary>Phone, helper and player release separately; this only looks at player-v* tags.</summary>
         private const string TagPrefix = "player-v";
         private const string AssetPrefix = "Zephyr-PC";
-        public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases";
+        public const string ReleasePage = "https://github.com/" + Repo + "/releases";
+
+        /// <summary>The only production asset URL accepted: the canonical repo's own
+        /// release download for this exact tag and file name.</summary>
+        internal static string ExpectedAssetUrl(string tag, string name) => $"https://github.com/{Repo}/releases/download/{tag}/{name}";
 
         /// <summary>The published version newer than [current] shipping the installer, else null. Never throws.</summary>
         public static (string Version, string ExeUrl, string? Sha256)? LatestNewerThan(string current)
@@ -107,7 +114,7 @@ namespace ZephyrPlayer
                     var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                     if (name != $"{AssetPrefix}-{version}.exe") continue;
                     var url = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
-                    var expected = $"https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/{tag}/{name}";
+                    var expected = ExpectedAssetUrl(tag, name);
                     // Loopback feed tests may use a loopback asset; production never can.
                     bool testAsset = apiOverride != null && Uri.TryCreate(apiOverride, UriKind.Absolute, out var apiUri) && apiUri.IsLoopback
                         && Uri.TryCreate(url, UriKind.Absolute, out var assetUri) && assetUri.IsLoopback;

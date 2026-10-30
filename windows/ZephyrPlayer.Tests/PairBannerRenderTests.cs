@@ -129,7 +129,7 @@ namespace ZephyrPlayer.Tests
                     // independent of which style ships as the default.
                     var settings = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-" + Guid.NewGuid().ToString("N") + ".json"));
                     settings.BarColorStyle = "original";
-                    var w = new MainWindow(libvlc, player, settings, new VolumeService());
+                    var w = new PlayerView(libvlc, player, settings, new VolumeService());
                     // Plain-element render only: the full window blanks offscreen
                     // (VideoView airspace, see PairBannerRenderTests).
                     var bar = w.ControlBar;
@@ -174,14 +174,14 @@ namespace ZephyrPlayer.Tests
                     // Threshold encodes the settled 13pt captions (~44 pure-gold px on the 96dpi runner render; 0-ish would mean not rendered).
                     Assert.True(gold > 30, $"gold elapsed-text pixels {gold} - control bar not rendered");
                     Assert.True(white > 30, $"white remaining-text pixels {white} - control bar not rendered");
-                    w.Close();
+                    w.ReleasePlayback();
 
                     // The SHIPPING default (no pick stored): the bar must render with the
                     // orange elapsed/total/remaining text. Same offscreen render, orange
                     // pixel count - visual proof of the default, not just a brush assert.
                     var settingsDefault = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-def-" + Guid.NewGuid().ToString("N") + ".json"));
                     Assert.Equal("orange", settingsDefault.BarColorStyle); // unset default
-                    var w2 = new MainWindow(libvlc, player, settingsDefault, new VolumeService());
+                    var w2 = new PlayerView(libvlc, player, settingsDefault, new VolumeService());
                     var bar2 = w2.ControlBar;
                     bar2.Opacity = 1;
                     bar2.Measure(new Size(800, 200));
@@ -210,7 +210,7 @@ namespace ZephyrPlayer.Tests
                         if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #FF9500
                     }
                     Assert.True(orangePx > 30, $"orange elapsed-text pixels {orangePx} - default control bar not rendered in the shipping style");
-                    w2.Close();
+                    w2.ReleasePlayback();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
                 catch (Exception e) { error = e.ToString(); }

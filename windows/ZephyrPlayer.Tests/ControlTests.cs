@@ -211,7 +211,7 @@ namespace ZephyrPlayer.Tests
         }
 
         /// <summary>
-        /// Product subtitle path: MainWindow.PlayFromUrl attaches phone-served
+        /// Product subtitle path: PlayerView.PlayFromUrl attaches phone-served
         /// subtitles with Media.AddSlave over an http MRL. This proves the engine
         /// the app embeds (libVLC) fetches and registers an http subtitle slave,
         /// serving both files from a real in-process HTTP server with Range
