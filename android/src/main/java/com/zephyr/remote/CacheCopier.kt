@@ -37,10 +37,10 @@ internal object CacheCopier {
         try {
             if (freeSpace() < minFree) throw NoSpace()
             val inp = open() ?: throw java.io.IOException("no stream")
+            var total = 0L
             inp.use { i ->
                 tmp.outputStream().use { o ->
                     val buf = ByteArray(64 * 1024)
-                    var total = 0L
                     var n = i.read(buf)
                     while (n >= 0) {
                         if (cancelled()) throw java.io.InterruptedIOException("copy stopped")
