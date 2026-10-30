@@ -767,7 +767,7 @@ internal static class Program
 
     internal static string MachineLabel() => Environment.MachineName;
 
-    /// <summary>"1.3.1" - the running build, for the Updates card and feedback reports.</summary>
+    /// <summary>"1.0.1" - the running build, for the Updates card and feedback reports.</summary>
 #if PAIR_CODE_HOOK
         // CI only: capture one of the modal dialogs exactly as constructed (same
         // DWM-composed PrintWindow path as the window shots).
@@ -2529,12 +2529,44 @@ internal static class NoteDialog
     }
 }
 
+/// <summary>Where "Feedback & bugs" sends people: Zephyr's own GitHub issues and Zephyr's own
+/// feedback form (the same form Zephyr Android and Zephyr Player use). The BingeMote form is
+/// never used here. The form's "Reply email" field (entry.1538046022) is never prefilled.</summary>
+internal static class FeedbackLinks
+{
+    internal const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr/issues/new";
+    internal const string BugFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLSdzwHtL4OAUFpffzp0WqLq99AfY0QIHrl-CPjFLTp4nL1ThuA/viewform";
+    private const string EntryMessage = "entry.574867238";   // Your message
+    private const string EntrySentFrom = "entry.2130527520"; // Sent from
+    private const string EntrySource = "entry.764416810";    // Source selected
+    private const string EntryAppVer = "entry.2049802033";   // App version
+
+    internal static string FormUrl(string msg, string version, string os) =>
+        BugFormUrl + "?usp=pp_url" +
+        "&" + EntryMessage + "=" + Uri.EscapeDataString(msg) +
+        "&" + EntrySentFrom + "=" + Uri.EscapeDataString("Windows PC") +
+        "&" + EntrySource + "=" + Uri.EscapeDataString("Zephyr VLC Remote") +
+        "&" + EntryAppVer + "=" + Uri.EscapeDataString(version + " (" + os + ")");
+
+    internal static string IssueUrl(string msg, string version, string os)
+    {
+        var title = "Feedback: " + (msg.Length <= 60 ? msg : msg.Substring(0, 57) + "...");
+        // Trim the message, never the body: the version lines always survive a long report.
+        string Body(string m) => m + "\n\nZephyr VLC Remote PC version: " + version + "\nWindows version: " + os;
+        var url = RepoIssues + "?title=" + Uri.EscapeDataString(title) + "&body=" + Uri.EscapeDataString(Body(msg));
+        while (url.Length > 8000 && msg.Length > 280)
+        {
+            msg = msg.Substring(0, msg.Length / 2).Trim();
+            url = RepoIssues + "?title=" + Uri.EscapeDataString(title) + "&body=" + Uri.EscapeDataString(Body(msg));
+        }
+        return url;
+    }
+}
+
 /// <summary>The Feedback & bugs dialog. Sends through the same two channels as the phone's
 /// feedback page: a public GitHub issue or a private form. The preview shows exactly what goes out.</summary>
 internal sealed class FeedbackDialog : Form
 {
-    private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues/new";
-    private const string BugFormUrl = "https://docs.google.com/forms/d/e/1FAIpQLSeD1ytVTxoA0GgftLr5wSu2kZm1yxRwCHcOV4Pb100Lm6hLcQ/viewform";
 
     private readonly TextBox _message;
     private readonly HelperWindow.RoundedPanel _messageFrame;
@@ -2808,30 +2840,9 @@ internal sealed class FeedbackDialog : Form
         }
     }
 
-    private string IssueUrl()
-    {
-        var msg = Clean(_message.Text, 4000);
-        var title = "Feedback: " + (msg.Length <= 60 ? msg : msg.Substring(0, 57) + "...");
-        // Trim the message, never the body: the version lines always survive a long report.
-        string Body(string m) => m + "\n\nZephyr VLC Remote PC version: " + Program.VersionText + "\nWindows version: " + OsVersion();
-        var url = RepoIssues + "?title=" + Uri.EscapeDataString(title) + "&body=" + Uri.EscapeDataString(Body(msg));
-        while (url.Length > 8000 && msg.Length > 280)
-        {
-            msg = Clean(msg, msg.Length / 2);
-            url = RepoIssues + "?title=" + Uri.EscapeDataString(title) + "&body=" + Uri.EscapeDataString(Body(msg));
-        }
-        return url;
-    }
+    private string IssueUrl() => FeedbackLinks.IssueUrl(Clean(_message.Text, 4000), Program.VersionText, OsVersion());
 
-    private string FormUrl()
-    {
-        var msg = Clean(_message.Text, 3000);
-        return BugFormUrl +
-            "?entry.1980878269=" + Uri.EscapeDataString(msg) +
-            "&entry.857472167=" + Uri.EscapeDataString("PC") +
-            "&entry.2017214675=" + Uri.EscapeDataString(OsVersion()) +
-            "&entry.446486963=" + Uri.EscapeDataString(Program.VersionText);
-    }
+    private string FormUrl() => FeedbackLinks.FormUrl(Clean(_message.Text, 3000), Program.VersionText, OsVersion());
 
     private static void OpenUrl(string url)
     {
