@@ -2,7 +2,15 @@ name: Back switch trace
 
 # Zephyr Player 2.0 CP2 round 5: the real Back path repeated with the app's own ordering
 # trace and an outside screen sampler on one clock. Evidence only; gates nothing.
+# Runs on a push to zephyr-2.0 that touches the player, this file or its script
+# (a workflow that exists only on this branch cannot be dispatched).
 on:
+  push:
+    branches: [zephyr-2.0]
+    paths:
+      - '.github/workflows/back-switch-trace.yml'
+      - 'scripts/back_switch_trace.ps1'
+      - 'windows/ZephyrPlayer/**'
   workflow_dispatch:
     inputs:
       reps:
