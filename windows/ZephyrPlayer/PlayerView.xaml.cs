@@ -204,7 +204,7 @@ namespace ZephyrPlayer
             ++_playGeneration; _preparation?.Cancel();
             DetachNativeStart();
             EndLoading();
-            _opening = false;
+            SetOpening(false);
             DropPendingSettle();
             _autoSelectSidecar = false;
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
@@ -423,7 +423,7 @@ namespace ZephyrPlayer
             a.CompletedBy = what;
             if (a.Generation != _playGeneration) return;
             LastStartFailure = null;
-            _opening = false;
+            SetOpening(false);
             EndLoading();
             UpdatePosition();
             RaiseStartSettled();
@@ -579,6 +579,12 @@ namespace ZephyrPlayer
             AttachNativeStart(new NativeStart(generation, source));
             _player.Play(source.Media);
             _player.Mute = _playerMute; // libVLC resets mute on a new Media
+            // The speed the bar shows (_rate) carries across starts. libVLC 3 keeps the
+            // rate on the MediaPlayer and a new input inherits it; if this player ever
+            // reports another rate for the new media, the decoder is set back to what
+            // the bar shows (no reopen). RateAtHandoff records what libVLC reported.
+            RateAtHandoff = _player.Rate;
+            if (Math.Abs(RateAtHandoff - (float)_rate) > 0.001f) { _player.SetRate((float)_rate); RateReapplyCount++; }
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
             if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
@@ -765,7 +771,11 @@ namespace ZephyrPlayer
 
         // ---------- seek: click-to-seek and drag (item 50) ----------
 
-        private void OnSeekDown(object sender, MouseButtonEventArgs e) => _seeking = true;
+        private void OnSeekDown(object sender, MouseButtonEventArgs e)
+        {
+            if (_opening) { _seeking = false; return; } // Opening: no seek reaches the old movie
+            _seeking = true;
+        }
 
         /// <summary>IsMoveToPointEnabled (ZSeekSlider) moves the thumb to the clicked point
         /// on mouse-down; the seek itself happens here, on release (click or drag end).</summary>
@@ -773,17 +783,29 @@ namespace ZephyrPlayer
         {
             if (!_seeking) return;
             _seeking = false;
+            if (_opening) return;
             CommitSeek();
         }
 
         private void CommitSeek()
         {
-            if (_player.Length <= 0) return;
+            // During Opening the media libVLC holds is the OLD movie (or the new one not
+            // yet showing): nothing is written to it and the zeroed timeline stays.
+            if (_opening || _player.Length <= 0) return;
             LastSeekFraction = SeekBar.Value / 1000.0;
             _player.Position = (float)LastSeekFraction;
             var t = (long)(LastSeekFraction * _player.Length);
             ElapsedText.Text = Format(t);
             RemainingText.Text = "-" + Format(Math.Max(0, _player.Length - t));
+        }
+
+        /// <summary>The phone's seek (/control/seek). Refused while a new start opens, for
+        /// the same reason as the bar: the media libVLC holds then is the old movie.</summary>
+        internal bool SeekFromPhone(long positionSeconds)
+        {
+            if (_opening || _player.Length <= 0) return false;
+            _player.Time = positionSeconds * 1000;
+            return true;
         }
 
         /// <summary>Test seam: the fraction the last click/drag seek handed to libVLC.</summary>
@@ -792,6 +814,8 @@ namespace ZephyrPlayer
         private void OnSeekValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             // While the thumb is held, the elapsed label previews where it will land.
+            // Opening: the new start's timeline stays at zero whatever moved the thumb.
+            if (_opening) { if (SeekBar.Value != 0) SeekBar.Value = 0; return; }
             if (!_seeking || _player is null || _player.Length <= 0) return;
             ElapsedText.Text = Format((long)(SeekBar.Value / 1000.0 * _player.Length));
         }
@@ -818,8 +842,9 @@ namespace ZephyrPlayer
 
         private void Skip(int deltaSeconds, RotateTransform? spin, bool backward)
         {
-            // Nothing loaded = nothing to skip: no time change, no spin, no flash.
-            if (_player.Length <= 0) return;
+            // Nothing loaded = nothing to skip: no time change, no spin, no flash. During
+            // Opening the loaded media is the old movie: same answer.
+            if (_opening || _player.Length <= 0) return;
             _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
             var secondary = spin == SecondaryBackSpin || spin == SecondaryForwardSpin;
             var effects = new System.Collections.Generic.List<string>();
@@ -1040,6 +1065,11 @@ namespace ZephyrPlayer
             RefreshSpeedUi();
         }
 
+        /// <summary>Test seams: libVLC's rate read right after the latest media handoff,
+        /// and how many handoffs had to set the bar's rate again.</summary>
+        internal float RateAtHandoff { get; private set; } = 1f;
+        internal int RateReapplyCount { get; private set; }
+
         /// <summary>The rate last handed to libVLC (its read-back needs a playing input).</summary>
         internal double CurrentRate => _rate;
 
@@ -1086,6 +1116,8 @@ namespace ZephyrPlayer
         /// <summary>Test seam: the clock the sleep timer reads.</summary>
         internal Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
         internal SleepTimerState Sleep => _sleep;
+        /// <summary>Test seam: whether the 1-second sleep tick is running.</summary>
+        internal bool SleepTickRunning => _sleepTick.IsEnabled;
         /// <summary>Test seam: how many times the sleep timer paused the movie / saw its end.</summary>
         internal int SleepPausedCount { get; private set; }
         internal int MediaEndedCount { get; private set; }
@@ -1241,7 +1273,10 @@ namespace ZephyrPlayer
             RefreshSubtitleSizeUi();
             var name = size == "S" ? "Small" : size == "L" ? "Large" : "Medium";
             // U4: libVLC 3 has no live text-size change; never re-open the movie for it.
-            ShowOsd("Subtitle size: " + name + ". It applies the next time Zephyr starts.");
+            // Measured (SubtitleSizePathTests): the size is read only when the LibVLC
+            // instance is created; per-media options and a new MediaPlayer do not change
+            // it. Closing the window keeps Zephyr (and its LibVLC) running in the tray.
+            ShowOsd("Subtitle size: " + name + ". It applies after you quit Zephyr Player (tray menu) and open it again.");
         }
 
         private void RefreshSubtitleSizeUi()
@@ -1312,7 +1347,7 @@ namespace ZephyrPlayer
             HideError();
             // Carry-forward (a): the Opening state shows the NEW start - its title, an
             // empty timeline - never the previous movie's time/duration or an old error.
-            _opening = true;
+            SetOpening(true);
             ResetTimeline();
             MovieTitle.Text = title;
             LoadingTitle.Text = title;
@@ -1322,6 +1357,22 @@ namespace ZephyrPlayer
             var spin = new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(900)) { RepeatBehavior = RepeatBehavior.Forever };
             SpinnerTurn.BeginAnimation(RotateTransform.AngleProperty, spin);
         }
+
+        /// <summary>Opening belongs to the NEW start: until its content shows, an older
+        /// movie may still be playing underneath (it is replaced only at handoff), so no
+        /// seek of any kind may reach libVLC - it would move the OLD movie while the bar
+        /// shows the new title on a zeroed timeline (Instinct CP2 review 1). The seek bar
+        /// takes no input (its template has no disabled look), a held drag is dropped,
+        /// and every seek path also checks the flag.</summary>
+        private void SetOpening(bool on)
+        {
+            _opening = on;
+            if (on) _seeking = false;
+            if (SeekBar != null) SeekBar.IsEnabled = !on;
+        }
+
+        /// <summary>Test seam: whether the seek bar takes input right now.</summary>
+        internal bool SeekBarEnabled => SeekBar.IsEnabled;
 
         private void EndLoading()
         {

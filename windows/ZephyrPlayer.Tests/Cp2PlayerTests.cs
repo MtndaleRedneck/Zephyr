@@ -449,5 +449,213 @@ namespace ZephyrPlayer.Tests
             using var app = App.CreateLibVlc(new PlayerSettings(Path.Combine(Path.GetTempPath(), "zephyr-cp2-vlc-" + Guid.NewGuid().ToString("N") + ".json")));
             Assert.NotNull(app);
         }
+
+        // ---------- CP2 repair round (Instinct CP2 review 1) ----------
+
+        private static string ClipMkvUrl => new Uri(Path.Combine(AppContext.BaseDirectory, "fixtures", "clip.mkv")).AbsoluteUri;
+
+        /// <summary>The seek bar's own registered handlers, driven the way WPF drives them
+        /// for a press and release on the track (OnSeekDown / OnSeekUp).</summary>
+        private static void Press(Slider seek, RoutedEvent ev)
+        {
+            var args = new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left) { RoutedEvent = ev, Source = seek };
+            seek.RaiseEvent(args);
+        }
+
+        [Fact]
+        public void Opening_HeldNewStart_NoSeekReachesTheOldMovie_AndTheZeroTimelineStays()
+        {
+            const string phoneUrl = "http://127.0.0.1:9/s/held/1";
+            using var gate = new ManualResetEventSlim(false);
+            WithPlayer((view, player, settings, host) =>
+            {
+                view.PrepareOverride = (url, subs, token) =>
+                {
+                    // The new start's preparation is HELD; once released it gets a real
+                    // (second) fixture, so the same seek path can be checked afterwards.
+                    if (url == phoneUrl) { gate.Wait(20000); return view.PrepareSource(ClipMkvUrl, subs, token); }
+                    return view.PrepareSource(url, subs, token);
+                };
+                var seek = El<Slider>(view, "SeekBar");
+                // 1. The OLD movie plays, with its own time and duration on the bar.
+                var first = view.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>());
+                PumpUntil(() => first.IsCompleted && player.State == VLCState.Playing && !view.IsLoadingShown, "old clip did not play");
+                PumpUntil(() => El<TextBlock>(view, "TotalText").Text == "0:06 total", "bar never showed the old clip's duration");
+                Assert.True(view.SeekBarEnabled);
+                var oldMedia = view.CurrentMedia;
+                // 2. A new phone start opens and is held in preparation: the old movie keeps
+                //    playing underneath (it is only replaced at handoff).
+                var next = view.PlayFromUrlAsync(phoneUrl, null, Array.Empty<string>());
+                Pump(600);
+                Assert.True(view.IsOpening);
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.Same(oldMedia, view.CurrentMedia);
+                Assert.False(view.SeekBarEnabled); // real mouse input cannot reach the track
+                var before = player.Time;
+                // 3a. Press on the track, the thumb moved to 75 % (what IsMoveToPointEnabled
+                //     does on a press), release: the real OnSeekDown / ValueChanged / OnSeekUp.
+                Press(seek, UIElement.PreviewMouseDownEvent);
+                seek.Value = 750;
+                var elapsedWhileHeld = El<TextBlock>(view, "ElapsedText").Text;
+                Press(seek, UIElement.PreviewMouseUpEvent);
+                // 3b. A press-release with the thumb where it is (value 0).
+                Press(seek, UIElement.PreviewMouseDownEvent);
+                Press(seek, UIElement.PreviewMouseUpEvent);
+                // 3c. The skip buttons (the Left/Right keys call the same handlers) and the
+                //     phone's /control/seek.
+                Click(view, "SkipForwardButton");
+                Click(view, "SkipBackButton");
+                Click(view, "SecondarySkipForwardButton");
+                var control = new MainWindowPlaybackControl(view, player);
+                control.Seek(5);
+                Pump(400);
+                var after = player.Time;
+                Assert.Equal(-1, view.LastSeekFraction); // nothing was handed to libVLC
+                Assert.True(after >= before - 250 && after <= before + 1500, $"the old movie was moved by a seek during Opening: {before} ms -> {after} ms");
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.Same(oldMedia, view.CurrentMedia);
+                // The new start's title and zero timeline are intact.
+                Assert.Equal("0:00", elapsedWhileHeld);
+                Assert.Equal(0, seek.Value);
+                Assert.Equal("0:00", El<TextBlock>(view, "ElapsedText").Text);
+                Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
+                Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
+                Assert.Equal("Movie from your phone", view.CurrentMovieTitle);
+                Assert.Equal("Movie from your phone", El<TextBlock>(view, "MovieTitle").Text);
+                Assert.True(view.IsOpening);
+                var during = $"opening held over the playing old clip: old time {before} ms -> {after} ms after a 75 % track press/release, a value-0 press/release, skip +10 s, skip -10 s, skip +30 s and phone seek 5 s; last_seek_fraction={view.LastSeekFraction}; seek bar enabled={view.SeekBarEnabled}; bar elapsed/remaining/total=[{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}] [{El<TextBlock>(view, "TotalText").Text}] value={seek.Value}; title=[{view.CurrentMovieTitle}]; old media still playing={ReferenceEquals(oldMedia, view.CurrentMedia) && player.State == VLCState.Playing}";
+                // 4. Release the new start: it plays, the bar takes input again, and the SAME
+                //    event path now seeks the new movie.
+                gate.Set();
+                PumpUntil(() => next.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "held start never played", 15000);
+                Assert.NotSame(oldMedia, view.CurrentMedia);
+                Assert.True(view.SeekBarEnabled);
+                PumpUntil(() => El<TextBlock>(view, "TotalText").Text == "0:06 total", "bar never showed the new clip's duration");
+                Press(seek, UIElement.PreviewMouseDownEvent);
+                seek.Value = 750;
+                Press(seek, UIElement.PreviewMouseUpEvent);
+                Assert.Equal(0.75, view.LastSeekFraction, 3);
+                PumpUntil(() => player.Time >= 4000, "the same seek path did not move the new movie (time " + player.Time + " ms)");
+                Note("r2-opening-seek-guard", during + $"\nafter release: new movie playing, seek bar enabled={view.SeekBarEnabled}; the same press/75 %/release seeked it: last_seek_fraction={view.LastSeekFraction}, time {player.Time} ms of {player.Length} ms");
+            });
+        }
+
+        [Fact]
+        public void Speed_AfterASecondStart_DecoderRunsAtTheRateTheBarShows()
+        {
+            WithPlayer((view, player, settings, host) =>
+            {
+                double ClockRate(int ms)
+                {
+                    var t0 = player.Time; var w0 = Environment.TickCount64;
+                    Pump(ms);
+                    var t1 = player.Time; var w1 = Environment.TickCount64;
+                    return (t1 - t0) / (double)Math.Max(1, w1 - w0);
+                }
+                var first = view.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>());
+                PumpUntil(() => first.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "first clip did not play");
+                var baseline = ClockRate(1200); // the decoder clock at 1x on this runner
+                // 1.5x on the first movie, through the real chip.
+                Click(view, "SpeedButton");
+                var chips = El<System.Windows.Controls.Primitives.UniformGrid>(view, "SpeedChips");
+                var c15 = (Button)chips.Children[4];
+                c15.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, c15));
+                Assert.Equal(1.5, view.CurrentRate);
+                PumpUntil(() => Math.Abs(player.Rate - 1.5f) < 0.01, "libVLC rate is " + player.Rate);
+                var reappliedBefore = view.RateReapplyCount;
+                // A SECOND media start (a different file, the shared start path).
+                var second = view.PlayFromUrlAsync(ClipMkvUrl, null, Array.Empty<string>());
+                PumpUntil(() => second.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "second clip did not play");
+                var atHandoff = view.RateAtHandoff;
+                var reapplied = view.RateReapplyCount - reappliedBefore;
+                var label = El<TextBlock>(view, "SpeedLabel").Text;
+                var rateNow = player.Rate;
+                var clock = ClockRate(1500);
+                var ratio = clock / baseline;
+                Note("r2-speed-second-start", $"first start 1x: decoder clock {baseline:0.000} media-ms per wall-ms. Chip 1.5x on the first movie -> libVLC rate {1.5f}. Second start (clip.mkv): libVLC rate read at handoff {atHandoff:0.###} (before any reapply); reapplied at handoff {reapplied} time(s); bar shows [{label}] CurrentRate {view.CurrentRate}; libVLC rate while playing {rateNow:0.###}; decoder clock {clock:0.000} = {ratio:0.00}x the 1x baseline.");
+                Assert.Equal(1.5, view.CurrentRate);
+                Assert.Equal(PlayerBarLogic.FormatRate(1.5), label);
+                Assert.True(Math.Abs(rateNow - 1.5f) < 0.01, "libVLC rate after the second start is " + rateNow);
+                Assert.True(ratio > 1.25, $"the decoder clock after the second start runs at {ratio:0.00}x the 1x baseline; the bar shows 1.5x");
+            });
+        }
+
+        [Fact]
+        public void SleepTimer_AcrossBackAndReturn_CurrentLifecycle()
+        {
+            WithPlayer((view, player, settings, host) =>
+            {
+                var t0 = DateTime.UtcNow; var now = t0;
+                view.Clock = () => now;
+                // "Back" and "tray close" reach the player view through App.LeavePlayer, whose
+                // view-side calls are exactly these (tray close adds HideOverlayWindow again
+                // and hides the shell).
+                void Back() { view.SavePlaybackProgress(); view.StopPlaybackSource(); view.HideOverlayWindow(); view.HideOverlayWindow(); }
+                void StartClip()
+                {
+                    var s = view.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>());
+                    PumpUntil(() => s.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "clip did not play");
+                }
+                var log = new System.Text.StringBuilder();
+                // The 1-second DispatcherTimer normally runs SleepTick; if this test pump
+                // does not get to it in 2.5 s, SleepTick is called directly (as the other
+                // sleep tests do) and the log says so.
+                string Due(int count)
+                {
+                    var until = Environment.TickCount64 + 2500;
+                    while (view.SleepPausedCount < count && Environment.TickCount64 < until) Pump(50);
+                    if (view.SleepPausedCount >= count) return "the running 1 s tick fired it";
+                    view.SleepTick();
+                    return "fired by a direct SleepTick() call";
+                }
+                // A. A 15-minute timer, Back at minute 2, a new movie at minute 10.
+                StartClip();
+                view.SetSleep(15);
+                now = t0.AddMinutes(2);
+                Back();
+                log.AppendLine($"A. 15 min timer set, Back at +2:00: timer active={view.Sleep.IsActive} minutes={view.Sleep.Minutes} tick running={view.SleepTickRunning} remaining={view.Sleep.Remaining(now)}");
+                Assert.True(view.Sleep.IsActive);
+                Assert.Equal(15, view.Sleep.Minutes);
+                Assert.True(view.SleepTickRunning);
+                now = t0.AddMinutes(10);
+                StartClip();
+                Pump(1200);
+                var badge = El<TextBlock>(view, "SleepLabel").Text;
+                log.AppendLine($"   new movie started at +10:00: badge [{badge}] (the same deadline), paused count {view.SleepPausedCount}");
+                Assert.Equal("5m", badge);
+                now = t0.AddMinutes(15).AddSeconds(1);
+                var howA = Due(1);
+                Assert.Equal(1, view.SleepPausedCount);
+                PumpUntil(() => player.State == VLCState.Paused, "the new movie was not paused: " + player.State);
+                log.AppendLine($"   at +15:01 the carried timer fired on the NEW movie ({howA}): state={player.State} why={view.LastSleepFire} timer now active={view.Sleep.IsActive}");
+                Assert.Equal("timer", view.LastSleepFire);
+                Assert.False(view.Sleep.IsActive);
+                // B. A timer that comes due while the library shows.
+                player.SetPause(false);
+                PumpUntil(() => player.State == VLCState.Playing, "clip did not resume");
+                now = t0.AddMinutes(20);
+                view.SetSleep(15);
+                Back();
+                now = t0.AddMinutes(36);
+                var tickInLibrary = view.SleepTickRunning;
+                var howB = Due(2);
+                Assert.Equal(2, view.SleepPausedCount);
+                Assert.True(tickInLibrary);
+                log.AppendLine($"B. 15 min timer, Back, due at +35:00 while the library shows (tick running after Back={tickInLibrary}; {howB}): fired={view.LastSleepFire} with no media (player state {player.State}), timer now active={view.Sleep.IsActive}, tick running={view.SleepTickRunning}; nothing was playing to pause");
+                Assert.False(view.Sleep.IsActive);
+                Assert.False(view.SleepTickRunning);
+                Assert.NotEqual(VLCState.Playing, player.State);
+                // C. "End of this movie", Back, a new movie: it fires at THAT movie's end.
+                StartClip();
+                view.SetSleep(SleepTimerState.EndOfMovie);
+                Back();
+                Assert.True(view.Sleep.IsEndOfMovie);
+                StartClip();
+                PumpUntil(() => view.SleepPausedCount == 3, "end-of-movie timer did not fire on the next movie's end", 15000);
+                log.AppendLine($"C. 'End of this movie', Back, new movie: timer still 'End' after Back; fired at the NEW movie's end ({view.LastSleepFire}); timer now active={view.Sleep.IsActive}");
+                Assert.Equal("end", view.LastSleepFire);
+                Note("r2-sleep-across-back", log.ToString());
+            });
+        }
     }
 }

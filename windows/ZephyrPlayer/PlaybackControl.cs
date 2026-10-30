@@ -45,7 +45,7 @@ namespace ZephyrPlayer
         }).Task.Unwrap();
         public void Pause() => OnUi(() => { _player.SetPause(true); _window.ShowBarOnce(); });
         public void Resume() => OnUi(() => { _player.SetPause(false); _window.ShowBarOnce(); });
-        public void Seek(long positionSeconds) => OnUi(() => { if (_player.Length > 0) _player.Time = positionSeconds * 1000; _window.ShowBarOnce(); });
+        public void Seek(long positionSeconds) => OnUi(() => { _window.SeekFromPhone(positionSeconds); _window.ShowBarOnce(); });
         public void SetVolume(int volume) => OnUi(() => _window.SetVolumeTied(volume));
         public void Mute(bool mute) => OnUi(() => _window.SetMuteTied(mute));
         public void SetSpu(int trackId) => OnUi(() => _window.SelectSubtitle(trackId));
