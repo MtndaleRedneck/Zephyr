@@ -116,6 +116,15 @@ function Get-SubMeasure($png, $prefix) {
     if (-not $line) { Log "measure failed for ${png}: $raw"; return $null }
     try { return ($line | ConvertFrom-Json) } catch { Log "measure output unreadable for ${png}: $raw"; return $null }
 }
+function Grab-Measure($png, $prefix) {
+    for ($k = 0; $k -lt 4; $k++) {
+        Grab $png
+        $mm = Get-SubMeasure $png $prefix
+        if ($mm -and $mm.baseline_to_picture_bottom -ne $null) { return $mm }
+        Start-Sleep -Milliseconds 350
+    }
+    return $mm
+}
 function Park() { $s = ScreenSize; [SU]::SetCursorPos($s[0] - 1, [int]($s[1] / 2)) | Out-Null }
 function Record($player, $leg, $mode, $m, $extra) {
     $o = [ordered]@{ player = $player; leg = $leg; mode = $mode; screen = (ScreenSize) -join 'x' }
@@ -152,7 +161,14 @@ Log "harness: $harnessExe"
 
 # ---------- clips: one flat colour, embedded (muxed) SubRip track flagged default ----------
 $srt = Join-Path $env:RUNNER_TEMP 'subref.srt'
-[IO.File]::WriteAllText($srt, "1`r`n00:00:00,500 --> 00:02:00,000`r`nZEPHYR SUBTITLE TEST`r`n")
+# One cue per second, back to back, same words: every player redraws the line after any
+# window resize, so no frame shows a line rendered for an earlier window size.
+$sb = New-Object System.Text.StringBuilder
+for ($k = 0; $k -lt 120; $k++) {
+    $t0 = [TimeSpan]::FromSeconds($k); $t1 = [TimeSpan]::FromSeconds($k + 1)
+    [void]$sb.Append("$($k + 1)`r`n$($t0.ToString('hh\:mm\:ss')),000 --> $($t1.ToString('hh\:mm\:ss')),000`r`nZEPHYR SUBTITLE TEST`r`n`r`n")
+}
+[IO.File]::WriteAllText($srt, $sb.ToString())
 $srv = Join-Path $env:RUNNER_TEMP 'subref-srv/s/tok'
 New-Item -ItemType Directory -Force $srv | Out-Null
 $clips = @{}
@@ -161,7 +177,7 @@ foreach ($c in @(@{ n = '720'; s = '1280x720'; id = '1' }, @{ n = '1080'; s = '1
     & $ffmpeg -y -f lavfi -i "color=c=0x3366AA:s=$($c.s):r=25" -i $srt -t 120 -map 0:v -map 1:s -c:v libx264 -preset ultrafast -tune stillimage -pix_fmt yuv420p -c:s srt -disposition:s:0 default -metadata:s:s:0 language=eng $f 2>$null
     Copy-Item $f (Join-Path $srv $c.id) -Force
     $clips[$c.n] = @{ file = $f; url = "http://127.0.0.1:8911/s/tok/$($c.id)" }
-    Log "clip $($c.n): $f ($((Get-Item $f).Length) bytes), 120 s of #3366AA $($c.s) with one embedded SubRip line 'ZEPHYR SUBTITLE TEST' (0.5 s - 2 min, default track)"
+    Log "clip $($c.n): $f ($((Get-Item $f).Length) bytes), 120 s of #3366AA $($c.s) with an embedded SubRip track (default) showing 'ZEPHYR SUBTITLE TEST' as 120 back-to-back 1 s cues"
 }
 $server = Start-Process python -ArgumentList "scripts/range_server.py", (Join-Path $env:RUNNER_TEMP 'subref-srv'), "8911" -PassThru -WindowStyle Hidden
 
@@ -212,8 +228,7 @@ function Leg-Vlc($leg, $clip, [switch]$Fullscreen) {
     Park
     if (-not $Fullscreen) { Topmost $h }
     $png = Join-Path $out "vlc-$leg-screen.png"
-    Grab $png
-    $m = Get-SubMeasure $png (Join-Path $out "vlc-$leg")
+    $m = Grab-Measure $png (Join-Path $out "vlc-$leg")
     $cr = ClientRect $h
     Record 'VLC desktop' $leg $(if ($Fullscreen) { 'fullscreen' } else { 'windowed' }) $m @{ vlc_window_client = ($cr -join ','); vlc_version = $vi.ProductVersion }
     $p | Stop-Process -Force; Start-Sleep -Seconds 2
@@ -228,8 +243,7 @@ function Leg-Harness($name, $leg, $clip, $x, $y, $w, $hgt, $opts) {
     for ($i = 0; $i -lt 60; $i++) { Start-Sleep -Milliseconds 500; try { $st = Get-Content $state -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $st = $null }; if ($st -and $st.time_ms -ge 8000) { break } }
     Start-Sleep -Milliseconds 500
     $png = Join-Path $out "libvlc-$name-$leg-screen.png"
-    Grab $png
-    $m = Get-SubMeasure $png (Join-Path $out "libvlc-$name-$leg")
+    $m = Grab-Measure $png (Join-Path $out "libvlc-$name-$leg")
     Record "libVLC $name" $leg 'borderless window' $m @{ harness_state = $st }
     $p | Stop-Process -Force; Start-Sleep -Seconds 1
 }
@@ -264,8 +278,7 @@ function Leg-Zephyr($leg, $clip, $cw, $ch, [switch]$Fullscreen) {
     for ($fit = 0; $fit -lt 4; $fit++) {
         Park; Start-Sleep -Milliseconds 4500
         Topmost $h
-        Grab $png
-        $m = Get-SubMeasure $png (Join-Path $out "zephyr-$leg")
+        $m = Grab-Measure $png (Join-Path $out "zephyr-$leg")
         if ($Fullscreen -or -not $m -or -not $m.picture_size) { break }
         # Zephyr's own title row sits inside the client area, so the video host is
         # shorter than the client: grow the window until the PICTURE is cw x ch.
