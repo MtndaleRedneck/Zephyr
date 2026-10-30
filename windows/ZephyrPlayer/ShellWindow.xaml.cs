@@ -605,6 +605,9 @@ namespace ZephyrPlayer
         private const int WM_CTLCOLORSTATIC = 0x0138;
         [DllImport("gdi32.dll")] private static extern IntPtr GetStockObject(int index);
         [DllImport("gdi32.dll")] private static extern uint SetBkColor(IntPtr hdc, uint color);
+        [DllImport("gdi32.dll")] private static extern bool GetDCOrgEx(IntPtr hdc, out POINT org);
+        [DllImport("gdi32.dll")] private static extern bool SetBrushOrgEx(IntPtr hdc, int x, int y, IntPtr prev);
+        [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr h, ref POINT p);
         internal static readonly IntPtr BlackBrush = GetStockObject(4 /* BLACK_BRUSH */);
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -613,7 +616,24 @@ namespace ZephyrPlayer
             {
                 SetBkColor(wParam, 0x000000);
                 handled = true;
-                if (SwitchTrace.On) SwitchTrace.Mark("host.paint", _holdBrush != IntPtr.Zero ? "library-picture" : "black");
+                string org = "";
+                if (_holdBrush != IntPtr.Zero)
+                {
+                    // The picture's top-left belongs at the host's top-left. GDI tiles a
+                    // pattern brush from the DC's brush origin, and the DC the host paints
+                    // with does not always start at the host's corner: CP2 round 5 run
+                    // 41114710721 read the screen and saw the library picture shifted up by
+                    // the host's offset in the window (7 of 24 Backs). The brush origin is
+                    // set so the pattern starts exactly at the host's client corner.
+                    var p0 = new POINT(); ClientToScreen(lParam, ref p0);
+                    if (GetDCOrgEx(wParam, out var dcOrg))
+                    {
+                        int dx = p0.X - dcOrg.X, dy = p0.Y - dcOrg.Y;
+                        SetBrushOrgEx(wParam, dx, dy, IntPtr.Zero);
+                        org = $" dc-offset={dx},{dy}";
+                    }
+                }
+                if (SwitchTrace.On) SwitchTrace.Mark("host.paint", _holdBrush != IntPtr.Zero ? "library-picture" + org : "black");
                 // During a view switch: the outgoing library's picture (ShowView).
                 return _holdBrush != IntPtr.Zero ? _holdBrush : BlackBrush;
             }
