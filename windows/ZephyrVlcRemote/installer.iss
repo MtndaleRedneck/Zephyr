@@ -32,6 +32,8 @@ WizardStyle=modern
 
 [Files]
 Source: "{#MySourceDir}\ZephyrVlcRemote.exe"; DestDir: "{app}"; Flags: ignoreversion
+; License notices for the bundled open-source parts.
+Source: "..\..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
 ; The installer owns the autostart entry so uninstall removes it; the app rewrites the same value.

@@ -1,5 +1,7 @@
 # Zephyr phone <-> PC protocol (draft, v0)
 
+> Old dev notes, written while Zephyr was first being built. Some lines below (such as "TBD", "not implemented yet" and "until ... is wired") are out of date.
+
 The wire contract the Android app and Windows apps share. A future TV app
 implements the same contract. Versioned independently of app versions; additive
 changes only within a major version.
