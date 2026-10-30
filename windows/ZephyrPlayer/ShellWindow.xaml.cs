@@ -204,8 +204,10 @@ namespace ZephyrPlayer
                 done = true;
                 CompositionTarget.Rendering -= onFrame;
                 fallback.Stop();
-                // ContextIdle: after the Render pass that follows the second frame.
-                Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => CompleteLeave(gen)));
+                // Background: below Render and Loaded, so after the render pass that
+                // follows the second frame (and still reached by a test pump that drains
+                // only down to Background).
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => CompleteLeave(gen)));
             }
             // Two Rendering callbacks: the first frame after the switch has been handed
             // to the compositor. The timer covers a hidden shell (tray close), which
