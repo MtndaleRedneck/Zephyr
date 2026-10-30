@@ -53,6 +53,12 @@ public static class ZWU32 {
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, System.IntPtr w, System.IntPtr l);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out ZRECT r, int size);
+    [DllImport("dwmapi.dll", EntryPoint="DwmGetWindowAttribute")] static extern int DwmGetWindowAttributeInt(IntPtr hWnd, int attr, out int v, int size);
+    public static bool HwndVisible(IntPtr h) { return IsWindowVisible(h); }
+    // DWMWA_CLOAKED (14): 0 = rendering; 1/2/4 = cloaked (app/shell/inherited).
+    // A cloaked window keeps sane frame/window rects but renders NOTHING, so a
+    // screen grab of its rect shows whatever is behind it (run 40989952680 mode).
+    public static int DwmCloaked(IntPtr h) { int v = -1; DwmGetWindowAttributeInt(h, 14, out v, 4); return v; }
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int max);
@@ -114,6 +120,13 @@ $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 function CaptureWindow($hWnd, $path) {
     # Crop to the app's own window rect: no runner chrome in UI evidence.
     if ($hWnd -eq [System.IntPtr]::Zero) { Write-Host "::error::no window handle for $path - capture skipped"; return "0 x 0" }
+    # Rendering guards: a hidden or DWM-cloaked window keeps SANE frame/window
+    # rects but paints nothing - CopyFromScreen then grabs desktop + whatever
+    # window is behind it, which is exactly the 40989952680 evidence-corruption
+    # mode (offset player, clipped chrome/bar, desktop in frame). Fail closed.
+    if (-not [ZWU32]::HwndVisible($hWnd)) { throw "CaptureWindow: hwnd $hWnd is not visible for $path - capture would grab other on-screen content" }
+    $cloakState = [ZWU32]::DwmCloaked($hWnd)
+    if ($cloakState -gt 0) { throw "CaptureWindow: hwnd $hWnd is DWM-cloaked ($cloakState) for $path - its rects are stale and the grab would show other content" }
     # CopyFromScreen grabs whatever is ON SCREEN in the rect: re-assert topmost
     # immediately before the grab, or the runner console / taskbar (also topmost)
     # lands in the evidence and covers the bar (67b6ee4 controls capture).
