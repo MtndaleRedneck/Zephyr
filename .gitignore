@@ -7,3 +7,6 @@ windows/Output/
 .kotlin/
 **/build/
 local.properties
+*.keystore
+*.jks
+keystore.properties

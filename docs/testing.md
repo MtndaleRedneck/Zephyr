@@ -1,5 +1,7 @@
 # Verification map (what "tested" means here, per feature)
 
+> Old dev notes from before the first release. Some limits below (such as "before the first release") are out of date.
+
 Rule: green counts only on the exact commit, on the CI run that built it.
 No green is inherited across changed source. Prior Windows runtime proof: 6a5231c. Final candidate source still requires its own exact-commit CI results.
 
