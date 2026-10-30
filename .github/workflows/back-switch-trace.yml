@@ -37,7 +37,15 @@ jobs:
       - name: Publish hooked capture build (CI-only seams, never shipped)
         timeout-minutes: 10
         run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+      - name: Back handoff tests (targeted, the view-switch and caption tests beside them)
+        timeout-minutes: 15
+        shell: pwsh
+        run: |
+          dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter "FullyQualifiedName~BackHandoffTests|FullyQualifiedName~ViewSwitch_LibraryStaysDrawnUntilPlayerHasContent|FullyQualifiedName~Caption_IsBlackOverThePlayer" --logger "trx;LogFileName=back-handoff.trx" --results-directory "$env:RUNNER_TEMP/backtrace/tests" --blame-hang --blame-hang-timeout 5m
+          Copy-Item "$env:RUNNER_TEMP/cp2-unit-r5-*.txt" "$env:RUNNER_TEMP/backtrace/tests/" -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP/cp1-unit-view-switch.txt" "$env:RUNNER_TEMP/backtrace/tests/" -ErrorAction SilentlyContinue
       - name: Back switch trace
+        if: ${{ !cancelled() }}
         timeout-minutes: 20
         shell: pwsh
         run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '60' }}
