@@ -461,6 +461,16 @@ namespace ZephyrPlayer
             StartSettled?.Invoke();
         }
         private void DropPendingSettle() { _settlePending = false; _settleGeneration++; }
+        private System.Threading.Tasks.TaskCompletionSource<bool>? _overlayFirstFrame;
+        /// <summary>Completes once the overlay window has drawn its first frame (at most
+        /// 1 s), or at once when it already has or this view is not on screen.</summary>
+        private System.Threading.Tasks.Task WaitOverlayFirstFrameAsync() => Dispatcher.Invoke(() =>
+        {
+            HookOverlayKeys();
+            if (_overlayRendered || PresentationSource.FromVisual(this) == null) return System.Threading.Tasks.Task.CompletedTask;
+            _overlayFirstFrame ??= new System.Threading.Tasks.TaskCompletionSource<bool>(System.Threading.Tasks.TaskCreationOptions.RunContinuationsAsynchronously);
+            return (System.Threading.Tasks.Task)System.Threading.Tasks.Task.WhenAny(_overlayFirstFrame.Task, System.Threading.Tasks.Task.Delay(1000));
+        });
         /// <summary>Test seam: the overlay window has drawn its first frame.</summary>
         internal bool OverlayRendered => _overlayRendered;
 
@@ -534,6 +544,13 @@ namespace ZephyrPlayer
             try {source=await System.Threading.Tasks.Task.Run(() => prepare!=null ? prepare(url,subtitles,timeout.Token) : PrepareSource(url,subtitles,timeout.Token));}
             catch(OperationCanceledException) when(generation==_playGeneration) {throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
             finally {await Dispatcher.InvokeAsync(()=>{if(ReferenceEquals(_preparation,timeout))_preparation=null;});}
+            // libVLC's own video window (black until the first picture) goes up inside the
+            // video host as soon as the media is handed over, OVER the library picture the
+            // shell holds there. The overlay window's loading panel must be drawn first, or
+            // a fast local start shows bare black (CI run 41052665982: the vout window was
+            // up at +516 ms, the overlay's first frame at +672 ms). First start only: the
+            // overlay window is created once per view.
+            await WaitOverlayFirstFrameAsync();
             await Dispatcher.InvokeAsync(()=>CompletePreparedPlayback(source,generation,timeout.IsCancellationRequested,url,positionSeconds));
         }
         private void CompletePreparedPlayback(SafeMediaSource source,int generation,bool canceled,string url,long? positionSeconds)
@@ -707,6 +724,7 @@ namespace ZephyrPlayer
             overlay.ContentRendered += (_, __) =>
             {
                 _overlayRendered = true;
+                _overlayFirstFrame?.TrySetResult(true);
                 // One more pass so the frame is on screen before the library leaves.
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushStartSettled));
             };
