@@ -46,10 +46,6 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private val watchdog = Executors.newSingleThreadScheduledExecutor()
     private val clients = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
     private val requests = java.util.concurrent.ConcurrentHashMap.newKeySet<RequestState>()
-    /** Providers abandoned at their deadline whose close has not completed yet.
-     *  Caps new streams (503) so repeated provider hangs cannot spawn unbounded
-     *  parked workers. Internal for the instrumented cap test. */
-    internal val abandonedStreams = java.util.concurrent.atomic.AtomicInteger(0)
     /** Test seam: provider inactivity deadline in ms (production default 60 s). */
     @Volatile internal var providerDeadlineMs: Long = 60_000
     @Volatile private var running = false
@@ -62,7 +58,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
      *  SAF/FUSE provider the read itself can still block, and while it does, the
      *  close waits on the guard. The REQUEST no longer waits with it (M1: the
      *  deadline abandons the request without the guard); only the parked provider
-     *  thread/FD remains until the read returns, bounded by MAX_ABANDONED. */
+     *  thread/FD remains until the read returns, holding its process-wide
+     *  provider-budget permit (which bounds such parked providers). */
     private class Guarded<T : java.io.Closeable>(val inner: T) {
         private val gate = Object()
         @Volatile var closed = false; private set
@@ -91,20 +88,44 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         }
     }
 
+    /** Thrown when the process-wide provider budget is exhausted mid-serve
+     *  (the copy path's second open): mapped to a clear 503, never queued. */
+    private class ProviderBudgetExhausted : Exception()
+
     /** M1: per-request lifecycle arbitration. Exactly one of normal end (finish),
      *  provider-deadline abandonment (abandon), or stop wins the once-only release
-     *  of the request's socket / open-stream count / permits - and that release
+     *  of the request's socket / open-stream count / deadline bookkeeping - and that release
      *  never touches a provider guard, so a provider parked in an uninterruptible
      *  SAF/FUSE read cannot keep the request's socket, the open-stream count, or
      *  (through the idle policy reaching zero active) the service's wake/Wi-Fi
      *  locks. The parked provider thread/FD stays until the provider returns
-     *  (declared residual), bounded by MAX_ABANDONED. */
+     *  (declared residual), holding a process-wide provider-budget permit. */
     internal class RequestState(val client: Socket, val peer: String, private val release: (RequestState) -> Unit) {
-        internal companion object { const val ACTIVE = 0; const val ABANDONED = 1; const val DONE = 2 }
-        private val state = java.util.concurrent.atomic.AtomicInteger(ACTIVE)
-        val isActive: Boolean get() = state.get() == ACTIVE
-        fun abandon(): Boolean = if (state.compareAndSet(ACTIVE, ABANDONED)) { release(this); true } else false
-        fun finish(): Boolean = if (state.compareAndSet(ACTIVE, DONE)) { release(this); true } else false
+        /** Two INDEPENDENT arbitration points (M1/Tab), deliberately not one state
+         *  machine: cache-commit ownership and request cleanup must not wait on
+         *  each other. */
+        private val released = java.util.concurrent.atomic.AtomicBoolean(false)
+        /** 0 OPEN, 1 COMMIT_WON, 2 CLOSED. */
+        private val commitGate = java.util.concurrent.atomic.AtomicInteger(0)
+        val isActive: Boolean get() = !released.get()
+        /** Exactly-once logical release (socket/count/locks). Never waits: if a
+         *  commit won the gate first, its rename finishes independently while the
+         *  deadline/stop still releases immediately. */
+        fun abandon(): Boolean = if (released.compareAndSet(false, true)) {
+            commitGate.compareAndSet(0, 2)
+            release(this); true
+        } else false
+        fun finish(): Boolean = if (released.compareAndSet(false, true)) {
+            commitGate.compareAndSet(0, 2)
+            release(this); true
+        } else false
+        /** Atomic commit-vs-abandon ownership: the rename runs only if this CAS
+         *  wins while the request is neither abandoned nor finished. Returns null
+         *  when refused - the caller deletes the temp file and treats the copy as
+         *  uncommitted. A won commit finishes its (bounded) rename even if
+         *  abandonment lands meanwhile. */
+        fun <R> withCommit(block: () -> R): R? =
+            if (commitGate.compareAndSet(0, 1)) block() else null
     }
 
     val baseUrl: String get() = "http://${wifiAddr.hostAddress}:${socket?.localPort ?: port}/s/$token"
@@ -131,16 +152,11 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 if (now >= res.deadlineAt) {
                     // M1: abandon the REQUEST first, without the provider guard.
                     // Even when the worker is parked in an uninterruptible read
-                    // (so the close below waits), its socket/count/permits release
+                    // (so the close below waits), its socket/count/locks release
                     // now, the idle policy can reach zero active, and the service's
-                    // wake/Wi-Fi locks release. Capacity returns when the parked
-                    // provider's close finally completes.
-                    res.request?.let { req ->
-                        if (req.abandon()) {
-                            abandonedStreams.incrementAndGet()
-                            res.onClosedOnce { abandonedStreams.decrementAndGet() }
-                        }
-                    }
+                    // wake/Wi-Fi locks release. The provider's budget permit
+                    // returns only when its close actually completes.
+                    res.request?.let { req -> req.abandon() }
                     if (res.closeQueued.compareAndSet(false, true)) {
                         try { pool.execute { providers.remove(res); res.close() } }
                         catch (e: java.util.concurrent.RejectedExecutionException) { providers.remove(res); res.close() }
@@ -160,17 +176,18 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 runCatching { client.soTimeout = 60_000 }
                 clients.add(client)
                 openStreams.incrementAndGet()
-                val req = RequestState(client, peer, ::releaseOnce)
+                val req = RequestState(client, peer, ::releaseLogical)
                 requests.add(req)
                 try {
                     pool.execute {
-                        // Once-only: if a deadline/stop abandoned this request
-                        // first, finish() is a no-op - nothing releases twice.
+                        // Logical release is once-only (a deadline/stop abandonment
+                        // wins over finish); the resource release below is also
+                        // exactly once - here, at the worker's real exit.
                         try { runCatching { handle(client, req) } }
-                        finally { req.finish(); requests.remove(req) }
+                        finally { req.finish(); releaseResources(req); requests.remove(req) }
                     }
                 } catch (e: java.util.concurrent.RejectedExecutionException) {
-                    req.finish(); requests.remove(req)
+                    req.finish(); releaseResources(req); requests.remove(req)
                 }
             }
         }
@@ -180,16 +197,26 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         perPeer.computeIfPresent(peer) { _, count -> if (count.decrementAndGet() == 0) null else count }
     }
 
-    /** The once-only request release (M1): client socket, open-stream count,
-     *  peer count, permit. Runs on whichever side wins the arbitration - worker
-     *  end, provider deadline, or stop - and never waits on a provider guard. */
-    private fun releaseOnce(req: RequestState) {
+    /** The once-only LOGICAL request release (M1): client socket, open-stream
+     *  count (the count the idle policy - and so the service locks - follows),
+     *  deadline bookkeeping. Runs on whichever side wins the arbitration - worker
+     *  end, provider deadline, or stop - and never waits on a provider guard.
+     *  Deliberately does NOT release the admission permit/peer slot: those stay
+     *  held until the worker's real read AND provider close return. */
+    private fun releaseLogical(req: RequestState) {
         clients.remove(req.client)
         clientDeadlines.remove(req.client)
         openStreams.decrementAndGet()
+        runCatching { req.client.close() }
+    }
+
+    /** Resource release: admission permit + peer slot. Exactly once per request,
+     *  at the worker's real exit (its read AND its provider close have returned) -
+     *  never at abandonment, so a parked provider keeps holding what it pins and
+     *  admission cannot over-subscribe real resources. */
+    private fun releaseResources(req: RequestState) {
         releasePeer(req.peer)
         permits.release()
-        runCatching { req.client.close() }
     }
 
     fun stop() {
@@ -209,7 +236,17 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
             // here, never on the caller (service shutdown / UI) thread.
             providers.forEach { it.close() }
             // Cleanup only after copy workers end; never delete while a worker can rename.
-            while (!pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) { providers.forEach { it.close() } }
+            // Bounded wait: a provider that NEVER returns must not park one drain
+            // thread per stopped session for process lifetime (M1). After the
+            // budget, remaining parked providers are closed by their own workers
+            // when (if) the read returns; the cache is reclaimed by the next
+            // start()'s cleanCache. Abandoned workers cannot commit a rename after
+            // stop (every request was abandoned above), so late deletion is safe.
+            val drainDeadline = android.os.SystemClock.elapsedRealtime() + DRAIN_WAIT_BUDGET_MS
+            while (!pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) {
+                providers.forEach { it.close() }
+                if (android.os.SystemClock.elapsedRealtime() >= drainDeadline) break
+            }
             // A process killed before this point leaves files behind; cleanCache()
             // on the next start() reclaims them.
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-$token-") }?.forEach { it.delete() }
@@ -231,13 +268,23 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
 
     companion object {
         private val activeTokens = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+        /** M1/Tab: PROCESS-WIDE concurrent-provider budget, shared across
+         *  sessions: a parked provider thread/FD survives its own session (it
+         *  stays until the provider returns), so the accounting must too - a
+         *  fresh session must not pretend old parked providers are gone. One
+         *  permit per open provider (probe, copy, or serve), acquired with a
+         *  nonwaiting tryAcquire BEFORE the open and returned only when that
+         *  provider's close actually completes - after its reads end. Exhaustion
+         *  rejects new streams immediately (503), so parked providers cannot
+         *  accumulate without bound process-wide. Media admission
+         *  (mediaPermits = 8) is capped by this budget. Internal for tests. */
+        internal val providerBudget = java.util.concurrent.Semaphore(8)
         /** Cap for one non-seekable file copied into cache (teardown C12). */
         const val MAX_CACHE_COPY_BYTES = 8L * 1024 * 1024 * 1024
-        /** M1: at most this many providers may be parked past their deadline
-         *  before new streams are refused with 503 (clear rejection instead of
-         *  unbounded parked workers). Engineering choice: 4 pins at most 4
-         *  threads + 4 provider FDs for a single-client (VLC) workload. */
-        internal const val MAX_ABANDONED = 4
+        /** M1: how long the stop() drain waits for provider workers before leaving
+         *  the rest to worker-side closes + next-start cleanCache. Bounds the
+         *  drain-thread lifetime across repeated stop/restart cycles. */
+        internal const val DRAIN_WAIT_BUDGET_MS = 300_000L
         /** S9: refuse a cache copy the phone cannot hold (floor for system + VLC). */
         const val MIN_FREE_BYTES = 512L * 1024 * 1024
         /** The request-line gate: anything that is not "GET <path> ..." is refused
@@ -301,9 +348,6 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 ?: return reply(client, 404, ByteArray(0), "text/plain")
             else -> return reply(client, 404, ByteArray(0), "text/plain")
         }
-        // M1: repeated provider hangs park at most MAX_ABANDONED workers; further
-        // streams are refused clearly instead of spawning unbounded parked workers.
-        if (abandonedStreams.get() >= MAX_ABANDONED) return reply(client, 503, ByteArray(0), "text/plain")
         if (!mediaPermits.tryAcquire()) return reply(client, 503, ByteArray(0), "text/plain")
         try { client.soTimeout = 60_000; serve(client, uri, range, req) }
         finally { mediaPermits.release() }
@@ -317,10 +361,18 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         if (!running) { cancellations.remove(signal); return }
         val openDeadline = try { watchdog.schedule({ signal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS) }
             catch (e: java.util.concurrent.RejectedExecutionException) { cancellations.remove(signal); return }
-        val pfd: ParcelFileDescriptor = try { openDescriptor(uri, signal) } finally { openDeadline.cancel(false); cancellations.remove(signal) }
-            ?: return reply(client, 404, ByteArray(0), "text/plain")
-        if (!running) { pfd.close(); return }
+        // Process-wide provider budget: nonwaiting admission BEFORE the provider
+        // open; the permit returns only when this provider's close completes -
+        // after its reads end (own-worker close on the normal path). Never at
+        // request abandonment: a parked provider keeps holding what it pins.
+        if (!providerBudget.tryAcquire()) return reply(client, 503, ByteArray(0), "text/plain")
+        val pfd: ParcelFileDescriptor = try { openDescriptor(uri, signal) }
+            catch (e: Throwable) { providerBudget.release(); throw e }
+            finally { openDeadline.cancel(false); cancellations.remove(signal) }
+            ?: run { providerBudget.release(); return reply(client, 404, ByteArray(0), "text/plain") }
+        if (!running) { pfd.close(); providerBudget.release(); return }
         val guarded = Guarded(pfd)
+        guarded.onClosedOnce { providerBudget.release() }
         providers.add(guarded)
         if (!running) { providers.remove(guarded); guarded.close(); return }
         guarded.deadlineAt = android.os.SystemClock.elapsedRealtime() + providerDeadlineMs
@@ -353,11 +405,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                         val copySignal = android.os.CancellationSignal(); cancellations.add(copySignal)
                                         val copyOpenDeadline = try { watchdog.schedule({ copySignal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS) }
                                             catch (e: java.util.concurrent.RejectedExecutionException) { cancellations.remove(copySignal); throw java.io.InterruptedIOException() }
-                                        val copyFd = try { openDescriptor(uri, copySignal) } finally { copyOpenDeadline.cancel(false); cancellations.remove(copySignal) }
-                                            ?: throw java.io.IOException("no provider")
-                                        if (!running) { copyFd.close(); throw java.io.InterruptedIOException() }
+                                        if (!providerBudget.tryAcquire()) throw ProviderBudgetExhausted()
+                                        val copyFd = try { openDescriptor(uri, copySignal) }
+                                            catch (e: Throwable) { providerBudget.release(); throw e }
+                                            finally { copyOpenDeadline.cancel(false); cancellations.remove(copySignal) }
+                                            ?: run { providerBudget.release(); throw java.io.IOException("no provider") }
+                                        if (!running) { copyFd.close(); providerBudget.release(); throw java.io.InterruptedIOException() }
                                         val input = ParcelFileDescriptor.AutoCloseInputStream(copyFd)
                                         val ginput = Guarded<java.io.InputStream>(input)
+                                        ginput.onClosedOnce { providerBudget.release() }
                                         providers.add(ginput)
                                         if (!running) { providers.remove(ginput); ginput.close(); throw java.io.InterruptedIOException() }
                                         ginput.deadlineAt = android.os.SystemClock.elapsedRealtime() + providerDeadlineMs
@@ -389,7 +445,12 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                     tmp = tmp, final = cached,
                                     freeSpace = { context.cacheDir.usableSpace },
                                     maxBytes = MAX_CACHE_COPY_BYTES, minFree = MIN_FREE_BYTES, cancelled = { !running || !req.isActive },
+                                    // Atomic commit-vs-abandon ownership (M1/Tab):
+                                    // the rename runs only while still ACTIVE.
+                                    commit = { t, f -> req.withCommit { t.renameTo(f) } ?: false },
                                 )
+                            } catch (e: ProviderBudgetExhausted) {
+                                return reply(client, 503, ByteArray(0), "text/plain")
                             } catch (e: CacheCopier.NoSpace) {
                                 return reply(client, 507, ByteArray(0), "text/plain")
                             } catch (e: CacheCopier.TooLarge) {
