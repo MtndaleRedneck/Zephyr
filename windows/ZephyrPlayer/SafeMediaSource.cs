@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -61,6 +62,14 @@ internal sealed class SafeMediaSource : IDisposable
     }
     internal void AddSubtitle(string source,CancellationToken cancellation = default)
     {
+        var path=StageSubtitle(source,cancellation);
+        Media.AddSlave(MediaSlaveType.Subtitle,0,new Uri(path).AbsoluteUri);
+    }
+    /// <summary>Validate a subtitle source (phone sidecar, local sidecar next to the
+    /// movie, or a file the user picked) and write a strict, bounded private copy.
+    /// Returns the private copy's path; it is deleted with this source.</summary>
+    internal string StageSubtitle(string source,CancellationToken cancellation = default)
+    {
         // Phone sidecars carry no filename extension. Detect a supported text
         // format from contents and write a strict, bounded private local file.
         cancellation.ThrowIfCancellationRequested();
@@ -73,8 +82,39 @@ internal sealed class SafeMediaSource : IDisposable
         var ext = SubtitleExtension(text);
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZephyrPlayer","Subtitles",Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir); var path=Path.Combine(dir,"subtitle"+ext);
-        File.WriteAllText(path,text,new UTF8Encoding(false)); _subtitles.Add(path);
-        Media.AddSlave(MediaSlaveType.Subtitle,0,new Uri(path).AbsoluteUri);
+        File.WriteAllText(path,text,new UTF8Encoding(false)); lock(_subtitles) _subtitles.Add(path);
+        return path;
+    }
+    /// <summary>Local sidecars for a local movie (P0-3): "&lt;movie&gt;.srt/.ass/.ssa/.vtt"
+    /// first, then "&lt;movie&gt;.*.srt" style language variants, from the movie's own
+    /// folder, as file URIs. Remote sources have none. Bounded and never throws.</summary>
+    internal static string[] LocalSidecars(string movieUrl)
+    {
+        try
+        {
+            var uri = new Uri(movieUrl);
+            if (!uri.IsFile) return Array.Empty<string>();
+            var movie = uri.LocalPath;
+            var dir = Path.GetDirectoryName(movie);
+            if (dir == null || !Directory.Exists(dir)) return Array.Empty<string>();
+            var stem = Path.GetFileNameWithoutExtension(movie);
+            var exts = new[] { ".srt", ".ass", ".ssa", ".vtt" };
+            var exact = new System.Collections.Generic.List<string>();
+            var variants = new System.Collections.Generic.List<string>();
+            foreach (var file in Directory.EnumerateFiles(dir).Take(4000))
+            {
+                var name = Path.GetFileName(file);
+                var ext = Path.GetExtension(name);
+                if (Array.IndexOf(exts, ext.ToLowerInvariant()) < 0) continue;
+                var baseName = Path.GetFileNameWithoutExtension(name);
+                if (baseName.Equals(stem, StringComparison.OrdinalIgnoreCase)) exact.Add(file);
+                else if (baseName.StartsWith(stem + ".", StringComparison.OrdinalIgnoreCase)) variants.Add(file);
+            }
+            exact.Sort((a, b) => Array.IndexOf(exts, Path.GetExtension(a).ToLowerInvariant()).CompareTo(Array.IndexOf(exts, Path.GetExtension(b).ToLowerInvariant())));
+            variants.Sort(StringComparer.OrdinalIgnoreCase);
+            return exact.Concat(variants).Take(8).Select(f => new Uri(f).AbsoluteUri).ToArray();
+        }
+        catch { return Array.Empty<string>(); }
     }
     internal static string SubtitleExtension(string text)
     {
@@ -93,13 +133,20 @@ internal sealed class SafeMediaSource : IDisposable
         var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZephyrPlayer","Subtitles");
         try {foreach(var dir in Directory.GetDirectories(root)) if(Directory.GetLastWriteTimeUtc(dir)<DateTime.UtcNow.AddDays(-1)){try{Directory.Delete(dir,true);}catch{}}}catch{}
     }
-    private static bool Matches(string text,string pattern) => Regex.IsMatch(text,pattern,RegexOptions.NonBacktracking,TimeSpan.FromMilliseconds(250));
+    private static bool Matches(string text,string pattern)
+    {
+        // A pathological input (for example megabytes of blank lines) can run past
+        // the match budget on a slow machine: that is a refusal, not a crash.
+        try { return Regex.IsMatch(text,pattern,RegexOptions.NonBacktracking,TimeSpan.FromMilliseconds(250)); }
+        catch (RegexMatchTimeoutException) { throw new InvalidDataException("Subtitle could not be checked in time"); }
+    }
     internal void Abort() => _input.Abort();
     public void Dispose()
     {
         if(Interlocked.Exchange(ref _disposed,1)!=0)return;
         _input.Abort(); Media.ParseStop(); Media.Dispose(); _input.Dispose(); _stream.Dispose();
-        foreach(var path in _subtitles) { try { Directory.Delete(Path.GetDirectoryName(path)!,true); } catch { } }
+        string[] staged; lock(_subtitles) staged=_subtitles.ToArray();
+        foreach(var path in staged) { try { Directory.Delete(Path.GetDirectoryName(path)!,true); } catch { } }
     }
 }
 

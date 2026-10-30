@@ -610,9 +610,10 @@ if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($pla
 # excluded by the title match. The player window is the "Zephyr Player" window
 # that is NOT the home window.
 function Find-PlayerWindow($procId, $homeHwnd) {
-    foreach ($h in [ZWU32]::FindAllByTitle($procId, 'Zephyr Player')) {
-        if ($h -ne $homeHwnd) { return $h }
-    }
+    # 2.0: ONE shell window hosts the library and the player, so the player IS the
+    # "Zephyr Player" window (the same handle as Home). It is only visible once
+    # playback put it on screen (a tray-closed shell is hidden).
+    foreach ($h in [ZWU32]::FindAllByTitle($procId, 'Zephyr Player')) { return $h }
     return [System.IntPtr]::Zero
 }
 $hwBar = [System.IntPtr]::Zero
@@ -887,6 +888,238 @@ WakeControls
 $sz6 = CaptureWindow $hw4 "$env:RUNNER_TEMP/pc-playing-controls-fullscreen.png"
 Prove-MouseRecovery $hw4 'fullscreen'
 StopZephyr
+
+# ===================== 2.0 Checkpoint 1 evidence (one shell window) =====================
+# CP1 legs, judged on the real exe with real input:
+#  cp1-1-home.png            library view in the ONE shell window (render 01 layout)
+#  cp1-2-playing.png         double-click a library tile: the SAME window swaps to the player
+#  cp1-3-subtitles.png       local sidecar subtitle (Big Buck Bunny.srt) shown (status: spu on a real track)
+#  cp1-4-library-again.png   Back: the SAME window swaps to the library; overlay gone
+#  cp1-5-after-tray-close.png  window X while playing: process alive, NO visible window
+#                            (no bar, no overlay) - full desktop grab
+#  cp1-6-restored.png        relaunch restores the same shell (library), same handle
+# Keyboard: a REAL click on a bar button, then REAL Up/Down keys must move the
+# player's own volume by 5 (read back from /control/status).
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public struct ZCP1RECT { public int Left, Top, Right, Bottom; }
+public static class ZCP1 {
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out ZCP1RECT r);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int max);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, System.Text.StringBuilder sb, int max);
+    [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    delegate bool EnumProc(IntPtr h, IntPtr l);
+    // Every VISIBLE top-level window of the process with a non-empty rect, titled or
+    // not (LibVLCSharp's overlay window has no title).
+    public static System.Collections.Generic.List<string> Visible(uint pid) {
+        var list = new System.Collections.Generic.List<string>();
+        EnumWindows((h, l) => {
+            GetWindowThreadProcessId(h, out uint wp);
+            if (wp != pid || !IsWindowVisible(h)) return true;
+            ZCP1RECT r; GetWindowRect(h, out r);
+            if (r.Right - r.Left <= 0 || r.Bottom - r.Top <= 0) return true;
+            var t = new System.Text.StringBuilder(256); GetWindowTextW(h, t, 256);
+            var c = new System.Text.StringBuilder(256); GetClassNameW(h, c, 256);
+            list.Add(h.ToInt64() + " title=[" + t + "] class=[" + c + "] rect=(" + r.Left + "," + r.Top + "," + r.Right + "," + r.Bottom + ")");
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+    public static System.Collections.Generic.List<IntPtr> VisibleHandles(uint pid) {
+        var list = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows((h, l) => {
+            GetWindowThreadProcessId(h, out uint wp);
+            if (wp == pid && IsWindowVisible(h)) list.Add(h);
+            return true;
+        }, IntPtr.Zero);
+        return list;
+    }
+    public static void Key(byte vk) { keybd_event(vk, 0, 0, UIntPtr.Zero); System.Threading.Thread.Sleep(40); keybd_event(vk, 0, 2, UIntPtr.Zero); }
+}
+'@
+$cp1Note = "$env:RUNNER_TEMP/cp1-note.txt"
+$cp1Fail = New-Object System.Collections.Generic.List[string]
+function Cp1Log($s) { Write-Host "CP1: $s"; $s | Add-Content $cp1Note }
+function Cp1Gate($ok, $s) { if ($ok) { Cp1Log "PASS $s" } else { Cp1Log "FAIL $s"; $cp1Fail.Add($s) } }
+function Cp1Status() {
+    try { return Invoke-RestMethod -Uri "http://127.0.0.1:47823/control/status" -Headers @{ Authorization = "Bearer ci-capture-token" } -TimeoutSec 5 } catch { return $null }
+}
+function Cp1ClickPoint($x, $y, [switch]$Double) {
+    [ZWU32]::SetCursorPos([int]$x, [int]$y) | Out-Null
+    Start-Sleep -Milliseconds 250
+    $n = if ($Double) { 2 } else { 1 }
+    for ($k = 0; $k -lt $n; $k++) {
+        [ZWU32]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 50
+        [ZWU32]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 90
+    }
+    Start-Sleep -Milliseconds 600
+}
+function Cp1ClickElement($hwnd, $id) {
+    # The bar lives in LibVLCSharp's overlay window (a separate top-level window
+    # owned by the shell): search the shell first, then every visible window.
+    $el = $null
+    $roots = @($hwnd) + @([ZCP1]::VisibleHandles($pC.Id) | Where-Object { $_ -ne $hwnd })
+    foreach ($rh in $roots) {
+        try { $rootE = [System.Windows.Automation.AutomationElement]::FromHandle($rh); $el = Find-ByAutoId $rootE $id } catch { $el = $null }
+        if ($el -ne $null) { break }
+    }
+    if ($el -eq $null) { Cp1Log "element $id not found via UIA"; return $false }
+    $b = $el.Current.BoundingRectangle
+    if ($b.Width -le 0) { Cp1Log "element $id has no bounds"; return $false }
+    Cp1ClickPoint ($b.X + $b.Width / 2) ($b.Y + $b.Height / 2)
+    return $true
+}
+function Cp1DoubleClickTile($hwnd, $name) {
+    $rootE = [System.Windows.Automation.AutomationElement]::FromHandle($hwnd)
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
+    $el = $rootE.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    if ($el -eq $null) { Cp1Log "tile text [$name] not found via UIA"; return $false }
+    $b = $el.Current.BoundingRectangle
+    # The name sits under the thumbnail: double-click the thumbnail above it.
+    Cp1ClickPoint ($b.X + 20) ($b.Y - 40) -Double
+    return $true
+}
+function Cp1DesktopGrab($path) {
+    $bmpD = New-Object System.Drawing.Bitmap $vs.Width, $vs.Height
+    $gD = [System.Drawing.Graphics]::FromImage($bmpD)
+    $gD.CopyFromScreen($vs.Left, $vs.Top, 0, 0, $bmpD.Size)
+    $bmpD.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
+    $gD.Dispose(); $bmpD.Dispose()
+}
+
+Remove-Item $cp1Note -ErrorAction SilentlyContinue
+Cp1Log "virtual screen $($vs.Width)x$($vs.Height)"
+# Library fixture shaped like render 01: folders first, then videos; the first
+# video carries a same-name .srt sidecar.
+$cp1Lib = Join-Path $env:RUNNER_TEMP 'Movies'
+Remove-Item $cp1Lib -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $cp1Lib | Out-Null
+$cp1Folders = 'Action','Classics','Comedy','Horror','Kids','Noir','Silent era','Thrillers','New downloads'
+foreach ($f in $cp1Folders) {
+    New-Item -ItemType Directory -Force (Join-Path $cp1Lib $f) | Out-Null
+    if ($f -ne 'New downloads') { Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $cp1Lib "$f/$f feature.mp4") }
+}
+$cp1Videos = 'Tears of Steel.mp4','His Girl Friday.mp4','Charade.mp4','Night of the Living Dead.mp4','Sintel.mp4','Big Buck Bunny.mp4','Detour.mp4','Metropolis.mp4'
+foreach ($v in $cp1Videos) { Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $cp1Lib $v) }
+Copy-Item "windows/ZephyrPlayer.Tests/fixtures/clip.srt" (Join-Path $cp1Lib 'Big Buck Bunny.srt')
+$cp1Thumbs = Join-Path $env:RUNNER_TEMP 'cp1-thumbs'
+New-Item -ItemType Directory -Force $cp1Thumbs | Out-Null
+$srcs = 'testsrc=size=320x200:rate=1','smptebars=size=320x200:rate=1','mandelbrot=size=320x200:rate=1','rgbtestsrc=size=320x200:rate=1','cellauto=size=320x200:rate=1','life=size=320x200:rate=1:mold=10','testsrc2=size=320x200:rate=1','yuvtestsrc=size=320x200:rate=1'
+$ti = 0
+foreach ($n in ($cp1Folders + $cp1Videos)) {
+    if ($n -eq 'New downloads') { continue }
+    & $ffmpeg -y -f lavfi -i $srcs[$ti % $srcs.Count] -frames:v 1 (Join-Path $cp1Thumbs "$n.png") 2>$null
+    $ti++
+}
+$cfgDir = Join-Path $env:APPDATA 'ZephyrPlayer'
+New-Item -ItemType Directory -Force $cfgDir | Out-Null
+$cp1LibJson = $cp1Lib -replace '\\','\\'
+[IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$cp1LibJson`"}")
+'[{"token":"cp1-fixture","name":"Pixel 8"}]' | Set-Content (Join-Path $cfgDir 'paired.json')
+Remove-Item (Join-Path $cfgDir 'playback-history.json') -ErrorAction SilentlyContinue
+[Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', '1', 'Process')
+[Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $cp1Thumbs, 'Process')
+[ZWU32]::SetCursorPos(5, 5) | Out-Null
+$pC = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
+$shellH = Wait-MainWindow $pC 20
+Close-PairingWindow $pC
+Cp1Gate ($shellH -ne [System.IntPtr]::Zero) "shell window up (hwnd $shellH)"
+if ($shellH -ne [System.IntPtr]::Zero) {
+    # Render 01 is 1600x1000; on a smaller runner screen, fit the work area.
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $cw = [math]::Min(1600, $wa.Width); $ch = [math]::Min(1000, $wa.Height)
+    [ZWU32]::SetWindowPos($shellH, [System.IntPtr]::Zero, $wa.Left + [int](($wa.Width - $cw) / 2), $wa.Top + [int](($wa.Height - $ch) / 2), $cw, $ch, $SWP_NOZORDER) | Out-Null
+    [ZWU32]::SetForegroundWindow($shellH) | Out-Null
+    Start-Sleep -Seconds 3
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-1-home.png"
+    Cp1Log ("windows after launch: " + ((([ZCP1]::Visible($pC.Id)) -join ' | ')))
+
+    # Library -> player by a REAL double-click on a tile.
+    $ok = Cp1DoubleClickTile $shellH 'Big Buck Bunny'
+    $playing = $false
+    foreach ($i in 1..30) { $st = Cp1Status; if ($st -and $st.state -eq 'Playing') { $playing = $true; break }; Start-Sleep -Milliseconds 500 }
+    Cp1Gate $playing "double-click on a library tile started playback (state=$($st.state))"
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+    $playerH = [ZWU32]::FindByTitle($pC.Id, 'Zephyr Player')
+    $titled = [ZWU32]::FindAllByTitle($pC.Id, 'Zephyr Player').Count
+    Cp1Gate (($playerH -eq $shellH) -and ($titled -eq 1)) "player opened IN the same shell window (hwnd $playerH vs $shellH, titled windows=$titled)"
+    WakeControls
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-2-playing.png"
+    Cp1Log ("windows while playing: " + ((([ZCP1]::Visible($pC.Id)) -join ' | ')))
+
+    # Subtitles: the local sidecar is attached and shown.
+    $subsOn = $false
+    foreach ($i in 1..20) { $st = Cp1Status; if ($st -and $st.spu -ge 0 -and $st.spuTracks.Count -ge 1) { $subsOn = $true; break }; Start-Sleep -Milliseconds 500 }
+    Cp1Gate $subsOn "local sidecar subtitle listed and selected (spu=$($st.spu) tracks=$(($st.spuTracks | ForEach-Object { "$($_.id):$($_.name)" }) -join ','))"
+    WakeControls
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-3-subtitles.png"
+
+    # Keyboard after a bar click: REAL click on the 10s skip-back button, then REAL keys.
+    $st0 = Cp1Status
+    $clicked = Cp1ClickElement $shellH 'SkipBackButton'
+    # No SetForegroundWindow here: the keys go wherever the real click left focus.
+    [ZCP1]::Key(0x28)  # Down
+    Start-Sleep -Milliseconds 400
+    [ZCP1]::Key(0x28)  # Down
+    Start-Sleep -Milliseconds 600
+    $st1 = Cp1Status
+    [ZCP1]::Key(0x26)  # Up
+    Start-Sleep -Milliseconds 600
+    $st2 = Cp1Status
+    Cp1Gate ($clicked -and $st0 -and $st1 -and $st2 -and ($st1.volume -eq [math]::Max(0, $st0.volume - 10)) -and ($st2.volume -eq [math]::Min(100, $st1.volume + 5))) "after a real bar click, Down/Down/Up moved the player volume $($st0.volume) -> $($st1.volume) -> $($st2.volume) (decoder gain $($st2.decoder_gain))"
+    # Space after the bar click must pause the player (focus never stayed on the button).
+    [ZCP1]::Key(0x20)
+    Start-Sleep -Milliseconds 800
+    $st3 = Cp1Status
+    Cp1Gate ($st3 -and $st3.state -eq 'Paused') "Space after a bar click paused the player (state=$($st3.state))"
+    [ZCP1]::Key(0x20)
+    Start-Sleep -Milliseconds 500
+
+    # Player -> library with the bar's Back (home) button: same window, overlay gone.
+    WakeControls
+    $clickedHome = Cp1ClickElement $shellH 'HomeButton'
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null   # no hover tooltip popups in the window count
+    Start-Sleep -Seconds 2
+    $libH = [ZWU32]::FindByTitle($pC.Id, 'Zephyr Player')
+    $vis = [ZCP1]::Visible($pC.Id)
+    Cp1Log ("windows after Back: " + ($vis -join ' | '))
+    $stB = Cp1Status
+    Cp1Gate ($clickedHome -and $libH -eq $shellH -and $vis.Count -eq 1) "Back returned to the library in the same shell (hwnd $libH, visible windows=$($vis.Count), state=$($stB.state))"
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-4-library-again.png"
+
+    # Play again, then the window X while playing: to the tray, nothing left on screen.
+    $null = Cp1DoubleClickTile $shellH 'Big Buck Bunny'
+    foreach ($i in 1..30) { $st = Cp1Status; if ($st -and $st.state -eq 'Playing') { break }; Start-Sleep -Milliseconds 500 }
+    WakeControls
+    $visPlay = [ZCP1]::Visible($pC.Id)
+    Cp1Log ("windows before X (playing=$($st.state)): " + ($visPlay -join ' | '))
+    [ZWU32]::PostMessage($shellH, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
+    Start-Sleep -Seconds 2
+    $pC.Refresh()
+    $visGone = [ZCP1]::Visible($pC.Id)
+    $stG = Cp1Status
+    Cp1Log ("windows after X: " + ($visGone -join ' | '))
+    Cp1Gate ((-not $pC.HasExited) -and $visGone.Count -eq 0) "window X while playing: process alive=$(-not $pC.HasExited), visible windows=$($visGone.Count) (bar/overlay gone), playback state=$($stG.state)"
+    Cp1DesktopGrab "$env:RUNNER_TEMP/cp1-5-after-tray-close.png"
+
+    # Relaunch = tray restore through the single-instance signal: the same shell returns.
+    $pR = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
+    Start-Sleep -Seconds 4
+    $resH = [ZWU32]::FindByTitle($pC.Id, 'Zephyr Player')
+    $visR = [ZCP1]::Visible($pC.Id)
+    Cp1Log ("windows after restore: " + ($visR -join ' | '))
+    Cp1Gate ($resH -eq $shellH -and $visR.Count -eq 1) "relaunch restored the same shell window (hwnd $resH vs $shellH, visible=$($visR.Count))"
+    if ($resH -ne [System.IntPtr]::Zero) { $null = CaptureWindow $resH "$env:RUNNER_TEMP/cp1-6-restored.png" }
+}
+StopZephyr
+[Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $null, 'Process')
+Cp1Log ("CP1 verdict: " + $(if ($cp1Fail.Count -eq 0) { 'ALL PASS' } else { "FAILED: " + ($cp1Fail -join '; ') }))
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
 netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
@@ -933,4 +1166,5 @@ $barGateFailed = $false
 if (-not ($vidOkAuto -and -not $barOnAuto)) { Write-Host "::error::autohide leg failed (video=$vidAutoPx golden=$($mAuto[0]) seekRun=$($mAuto[1])%) - the bar must hide on the idle timer while video keeps playing"; $barGateFailed = $true }
 if (-not $barOnPaused) { Write-Host "::error::paused leg failed (golden=$($mPaused[0]) seekRun=$($mPaused[1])%) - a paused movie must keep the bar"; $barGateFailed = $true }
 if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cursor leg failed (video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])%) - a still cursor over the video must not pin the bar"; $barGateFailed = $true }
-if ($incomplete -or $barGateFailed) { exit 1 }
+if ($cp1Fail.Count -gt 0) { Write-Host "::error::CP1 evidence gates failed: $($cp1Fail -join '; ')" }
+if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0) { exit 1 }

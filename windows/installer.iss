@@ -23,6 +23,10 @@ PrivilegesRequired=lowest
 OutputBaseFilename=Zephyr-PC-{#MyAppVersion}
 UninstallDisplayIcon={app}\ZephyrPlayer.exe
 SetupIconFile=ZephyrPlayer\assets\icon.ico
+; 2.0 (P0-6): ask Explorer to refresh its icon cache at the end of setup
+; (SHChangeNotify SHCNE_ASSOCCHANGED) so an upgrade over 1.x shows the new
+; Zephyr icon on the shortcuts and taskbar without a sign-out.
+ChangesAssociations=yes
 CloseApplications=yes
 RestartApplications=no
 WizardStyle=modern

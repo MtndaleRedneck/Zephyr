@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows.Input;
 using System.Windows;
@@ -11,7 +12,9 @@ using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace ZephyrPlayer
 {
-    public partial class MainWindow : Window
+    /// <summary>The player VIEW hosted by the one ShellWindow (2.0). It is never a
+    /// top-level window: leaving it means the shell swaps it out of the tree.</summary>
+    public partial class PlayerView : UserControl
     {
         private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
         private static readonly SolidColorBrush Orange = new(Brand.Orange);
@@ -22,7 +25,7 @@ namespace ZephyrPlayer
         // Brushes are shared app-wide; Freeze makes them safe to touch from any
         // thread (each test case runs on its own STA thread - unfrozen statics
         // threw cross-thread Freezable exceptions, CI-observed).
-        static MainWindow()
+        static PlayerView()
         {
             RingDefault.Freeze();
             Orange.Freeze();
@@ -37,7 +40,6 @@ namespace ZephyrPlayer
         private readonly SecondarySkipHighlight _secondaryBackHighlight=new(){Width=54,Height=46,Backward=true,IsHitTestVisible=false};
         private readonly SecondarySkipHighlight _secondaryForwardHighlight=new(){Width=54,Height=46,IsHitTestVisible=false};
         private readonly PlayerSettings _settings;
-        private readonly VolumeService _volume;
         private readonly DispatcherTimer _idleTimer = new();
         private readonly DispatcherTimer _clock = new();
 
@@ -46,7 +48,8 @@ namespace ZephyrPlayer
         [StructLayout(LayoutKind.Sequential)] private struct CursorPoint { public int X; public int Y; }
         [DllImport("user32.dll")] private static extern bool GetCursorPos(out CursorPoint point);
         private CursorPoint? _lastScreenCursor;
-        private WindowState _previousState;
+        private bool _fullscreen;
+        private Window? _overlayWindow;
         private bool _menuOpen;
 
         private bool _seeking;
@@ -59,27 +62,30 @@ namespace ZephyrPlayer
             if (_player.Length > 0 && _player.Time >= 0) _history.Save(_currentSource, _player.Time, _player.Length);
         }
 
-        /// <summary>Fired when the sleep timer ends playback; App lands on Home.</summary>
+        /// <summary>Fired when the sleep timer ends playback; the shell lands on the library.</summary>
         public event Action? SleepFired;
         public event Action? HomeRequested;
         private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
 
-        public MainWindow(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
+        /// <summary>[volume] is accepted for call-site compatibility only: 2.0 volume is
+        /// the player's own (owner decision 2) and never reads or writes Windows'
+        /// master volume.</summary>
+        public PlayerView(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
         {
             InitializeComponent();
             ((Canvas)SecondarySkipBackIcon.Parent).Children.Add(_secondaryBackHighlight);
             ((Canvas)SecondarySkipForwardIcon.Parent).Children.Add(_secondaryForwardHighlight);
-            WindowChrome.ApplyDarkTitleBar(this);
             _libvlc = libvlc;
             _player = player;
             _settings = settings ?? new PlayerSettings();
-            _volume = volume ?? new VolumeService();
-            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
+            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); HookOverlayKeys(); };
+            // Unloaded = the shell swapped this view out (library, tray close). Stop
+            // every timer; LibVLCSharp hides its overlay window on the same event.
+            Unloaded += (_, __) => StopTimers();
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); };
             _cursorWatch.Tick += (_, __) =>
             {
-                if (!IsVisible || !GetCursorPos(out var point)) return;
+                if (!IsVisible || !IsLoaded || !GetCursorPos(out var point)) return;
                 var old = _lastScreenCursor;
                 _lastScreenCursor = point;
                 if (old.HasValue && Math.Abs(point.X - old.Value.X) + Math.Abs(point.Y - old.Value.Y) > 2)
@@ -113,21 +119,35 @@ namespace ZephyrPlayer
             });
             _player.Playing += (_, __) => Dispatcher.BeginInvoke(() =>
             {
-                _idleTimer.Stop(); _idleTimer.Start(); // resume the hide countdown
+                EndLoading();
+                TryAutoSelectSidecar();
+                if (IsLoaded) { _idleTimer.Stop(); _idleTimer.Start(); } // resume the hide countdown
+                RefreshCaptionsUi();
             });
+            _player.ESSelected += (_, __) => Dispatcher.BeginInvoke(RefreshCaptionsUi);
+            _player.ESAdded += (_, ev) => { if (ev.Type == TrackType.Text) Dispatcher.BeginInvoke(TryAutoSelectSidecar); };
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
 
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(ApplyBarStyle);
-            _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => MessageBox.Show(this, "Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved", MessageBoxButton.OK, MessageBoxImage.Warning));
+            _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved"));
 
-            // Remembered volume restored on open. With the
-            // tied-volume behavior, the slider IS Windows' master volume.
+            // Remembered volume restored on open: the player's own 0-100 %, with the
+            // Settings boost (100-200 %) applied on top as extra decoder gain.
             _volumeSync = true;
             VolumeSlider.Value = _settings.LastVolume;
             _volumeSync = false;
+            ApplyPlayerGain();
             ApplyBarStyle();
+            RefreshVolumeUi();
             UpdatePlayPauseGlyph();
+        }
+
+        private void ShowSettingsWarning(string text, string caption)
+        {
+            var owner = Window.GetWindow(this);
+            if (owner != null && owner.IsVisible) MessageBox.Show(owner, text, caption, MessageBoxButton.OK, MessageBoxImage.Warning);
+            else MessageBox.Show(text, caption, MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         private int _playGeneration;
@@ -144,6 +164,8 @@ namespace ZephyrPlayer
         public void StopPlaybackSource()
         {
             ++_playGeneration; _preparation?.Cancel();
+            EndLoading();
+            _autoSelectSidecar = false;
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
             var old = _safeSource; _safeSource = null;
             // Teardown off the caller thread: disposing the media waits on native
@@ -155,12 +177,16 @@ namespace ZephyrPlayer
         {
             try { await PlayFromUrlAsync(url,positionSeconds,subtitles); }
             catch (OperationCanceledException) { }
-            catch { MovieTitle.Text="Could not open this movie safely. Check the file or phone connection."; }
+            catch { MovieTitle.Text="Could not open this movie safely. Check the file or phone connection."; ShowLoadingError(MovieTitle.Text); }
         }
         public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
         {
             var generation=++_playGeneration;
             _preparation?.Cancel();
+            BeginLoading(url);
+            // Local movie with its own sidecar subtitles: shown by default, like VLC.
+            // Phone starts keep libVLC's own default.
+            _autoSelectSidecar = subtitles.Length > 0 && PlaybackHistory.LocalPath(url) != null;
             using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
             _preparation=timeout;
             SafeMediaSource source;
@@ -181,23 +207,17 @@ namespace ZephyrPlayer
             var localTitle = PlaybackHistory.LocalPath(url);
             MovieTitle.Text = localTitle != null ? System.IO.Path.GetFileNameWithoutExtension(localTitle) : "Playing from phone";
             _lastHistorySave = DateTime.MinValue;
-            // Restore the player's remembered loudness when a movie starts:
-            // Windows master = the slider number, libVLC adds the boost on top.
-            if (_volume.Available) _volume.SetMaster(_settings.LastVolume);
+            // The player's own volume (slider 0-100 x boost) and its own mute carry
+            // across the start; Windows' master volume is never touched.
             ApplyPlayerGain();
-            // Preserve the user's mute across the playback start: libVLC resets its
-            // own mute state on a new Media, so carry Windows' truth over BEFORE play
-            // instead of waiting for the next 500 ms poll (a half-second audio blip).
-            var muteAtStart = _volume.TryGetMute();
-            if (muteAtStart.HasValue) { _playerMute = muteAtStart.Value; _player.Mute = _playerMute; }
-            // A failed read (null) keeps the player's previous mute: unknown is
-            // never treated as "unmuted".
+            _player.Mute = _playerMute;
             var replaced = _safeSource;
             replaced?.Abort();
             _player.Stop();
             _player.Media=null;
             _safeSource = source;
             _player.Play(source.Media);
+            _player.Mute = _playerMute; // libVLC resets mute on a new Media
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
             if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
@@ -214,50 +234,19 @@ namespace ZephyrPlayer
             UpdatePlayPauseGlyph();
         }
 
-        /// <summary>Poll/first-play mute application: a failed read (null) keeps
-        /// the player's CURRENT mute; only a successful read moves it. Pinned by
-        /// VolumeMuteTests.</summary>
-        internal static bool MuteAfterRead(bool current, bool? read) => read ?? current;
-
-        // The player's mute as last APPLIED by this window. libvlc's Mute
-        // read-back is unreliable with no media loaded or no audio device (it
-        // returns false regardless of what was set), so preservation on a failed
-        // endpoint read and the SharedMute fallback track this field instead of
-        // reading _player.Mute back. Every assignment below keeps both in step.
+        // The player's own mute as last APPLIED. libvlc's Mute read-back is
+        // unreliable with no media loaded or no audio device (it returns false
+        // regardless of what was set), so this field is the truth the UI and the
+        // phone read. Every assignment below keeps both in step.
         private bool _playerMute;
         /// <summary>Test seam (InternalsVisibleTo): the tracked player mute.</summary>
         internal bool TrackedPlayerMute { get => _playerMute; set => _playerMute = value; }
 
-        private DateTime _lastMasterSave;
         private void UpdatePosition()
         {
             if (DateTime.UtcNow - _lastHistorySave >= TimeSpan.FromSeconds(5))
             { SavePlaybackProgress(); _lastHistorySave = DateTime.UtcNow; }
-            // Volume tie, other direction: if Windows' volume changed elsewhere,
-            // the bar follows so both places show the same number.
-            // Mute is applied WITHOUT the Available gate: TryGetMute self-guards
-            // (null when the endpoint is gone or the read failed, and null keeps
-            // the tracked mute), so a flaky Available probe cannot disengage the
-            // tie or clobber the state.
-            _playerMute = MuteAfterRead(_playerMute, _volume.TryGetMute());
-            _player.Mute = _playerMute;
-            if (_volume.Available)
-            {
-                var master = _volume.GetMaster();
-                if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
-                {
-                    _volumeSync = true;
-                    VolumeSlider.Value = master;
-                    _volumeSync = false;
-                    ApplyPlayerGain();
-                }
-            }
-            if (_volume.Available && DateTime.UtcNow - _lastMasterSave >= TimeSpan.FromSeconds(1))
-            {
-                var master = _volume.GetMaster();
-                if (master >= 0 && _settings.LastVolume != master) _settings.LastVolume = master;
-                _lastMasterSave = DateTime.UtcNow;
-            }
+            // 2.0: no Windows master poll. Volume and mute are the player's own.
             if (!_seeking)
             {
                 var length = _player.Length;
@@ -305,22 +294,72 @@ namespace ZephyrPlayer
         }
 
         private static string ShortSkip(int seconds) => PlayerSettings.FormatSkip(seconds);
-        private void OnPlayerKeyDown(object sender, KeyEventArgs e)
+        /// <summary>The one key map (P0-4). The shell routes its PreviewKeyDown here
+        /// and so does LibVLCSharp's overlay window (where the bar lives), so a
+        /// click on any bar control never strands the keyboard: bar controls are
+        /// Focusable=False and both windows feed this same handler.</summary>
+        public void HandleKey(KeyEventArgs e)
         {
-            ShowBarOnce();
+            if (e.Handled) return;
             if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || _menuOpen) return;
-            switch (e.Key)
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            if ((Keyboard.Modifiers & (ModifierKeys.Alt | ModifierKeys.Control | ModifierKeys.Windows)) != 0) return;
+            ShowBarOnce();
+            switch (key)
             {
                 case Key.Space: OnPlayPause(this, new RoutedEventArgs()); break;
                 case Key.Left: OnSkipBack(this, new RoutedEventArgs()); break;
                 case Key.Right: OnSkipForward(this, new RoutedEventArgs()); break;
+                case Key.Up: StepVolume(+VolumeStep); break;
+                case Key.Down: StepVolume(-VolumeStep); break;
                 case Key.F: SetFullscreen(!IsFullscreen); break;
-                case Key.Escape: if (IsFullscreen) SetFullscreen(false); break;
+                case Key.Escape: if (IsFullscreen) SetFullscreen(false); else return; break;
                 case Key.M: OnMute(this, new RoutedEventArgs()); break;
                 default: return;
             }
             e.Handled = true;
         }
+
+        /// <summary>Up/Down volume step, in slider percent.</summary>
+        internal const int VolumeStep = 5;
+        internal void StepVolume(int delta) => VolumeSlider.Value = Math.Clamp(Math.Round(VolumeSlider.Value) + delta, 0, 100);
+
+        /// <summary>Keys pressed while LibVLCSharp's overlay window has focus (it does
+        /// after any click on the bar) reach the same key map. The overlay window
+        /// exists once its VideoView template is applied; hook it once.</summary>
+        private void HookOverlayKeys()
+        {
+            var overlay = Window.GetWindow(Overlay);
+            if (overlay == null || ReferenceEquals(overlay, Window.GetWindow(this)) || ReferenceEquals(overlay, _overlayWindow)) return;
+            _overlayWindow = overlay;
+            overlay.PreviewKeyDown += (_, e) => { if (IsLoaded) HandleKey(e); };
+        }
+
+        /// <summary>Belt and braces for every leave/hide path: hide LibVLCSharp's
+        /// overlay window right now (Unloaded also hides it, a moment later) and
+        /// stop the timers. Win32 never hides an owned window with its owner.</summary>
+        public void HideOverlayWindow()
+        {
+            StopTimers();
+            var overlay = Window.GetWindow(Overlay);
+            if (overlay != null && !ReferenceEquals(overlay, Window.GetWindow(this))) overlay.Hide();
+        }
+
+        private void StopTimers()
+        {
+            _idleTimer.Stop();
+            _clock.Stop();
+            _cursorWatch.Stop();
+        }
+
+        /// <summary>Test and teardown seam (the old window's Close): stop playback,
+        /// stop timers.</summary>
+        public void ReleasePlayback()
+        {
+            StopTimers();
+            StopPlaybackSource();
+        }
+
         private void OnVideoDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
@@ -388,56 +427,61 @@ namespace ZephyrPlayer
             brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(normal == Brand.Orange ? Colors.WhiteSmoke : Brand.Orange, TimeSpan.FromMilliseconds(110)) { AutoReverse = true });
         }
 
-        // ---------- volume (tied to Windows master; boost from Settings) ----------
+        // ---------- volume: the player's own 0-100 %, boost from Settings ----------
+
+        private const string MutedGlyph = "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17";
+        private const string VolumeGlyphData = "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8";
 
         private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             // XAML sets the slider Value during InitializeComponent, before the
-            // ctor assigns _volume/_settings: a load-time change must be a no-op.
-            if (_volume is null || _settings is null) return;
-            if (_volumeSync) return;
-            var v = (int)Math.Round(VolumeSlider.Value);
-            if (_volume.Available) _volume.SetMaster(v);
-            _settings.LastVolume = v;
+            // ctor assigns _settings: a load-time change must be a no-op.
+            if (_settings is null || _player is null) return;
             ApplyPlayerGain();
+            RefreshVolumeUi();
+            if (_volumeSync) return;
+            _settings.LastVolume = (int)Math.Round(VolumeSlider.Value);
         }
 
-        /// <summary>Phone-driven volume takes the same tied path as the slider.</summary>
+        /// <summary>Phone /control/volume 0-100 maps 1:1 onto the player's own slider.</summary>
         public void SetVolumeTied(int volume)
         {
             VolumeSlider.Value = Math.Clamp(volume, 0, 100);
-            // OnVolumeChanged does the master + gain + save.
+            ShowBarOnce();
         }
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
-        public bool SharedMute => _volume.TryGetMute() ?? _playerMute;
+        public bool SharedMute => _playerMute;
         public string CurrentMovieTitle => MovieTitle.Text;
+
+        /// <summary>Decoder gain = slider x boost (100 % boost = none, 200 % = VLC-style
+        /// doubling). Exposed for tests.</summary>
+        internal static int GainFor(double slider, int boostPct) => (int)(Math.Clamp(slider, 0, 100) * boostPct / 100.0);
 
         private void ApplyPlayerGain()
         {
-            // Slider 0-100 is the shared number; boost is extra libVLC gain on top
-            // (100% boost = none, 200% = VLC-style doubling).
-            _player.Volume = (int)(VolumeSlider.Value * _settings.VolumeBoostMaxPct / 100.0);
+            _player.Volume = GainFor(VolumeSlider.Value, _settings.VolumeBoostMaxPct);
         }
 
-        private void OnMute(object sender, RoutedEventArgs e)
-        {
-            var mute = !_playerMute;
-            _playerMute = mute;
-            _player.Mute = mute;
-            if (_volume.Available) _volume.SetMute(mute);
-            VolumeButton.Opacity = 1.0;
-            VolumeGlyph.Data = Geometry.Parse(mute ? "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17" : "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8");
-        }
+        private void OnMute(object sender, RoutedEventArgs e) => SetMuteTied(!_playerMute);
 
-        /// <summary>Phone-driven mute takes the same tied path.</summary>
+        /// <summary>Mute is the player's own: bar button, M key and the phone all land here.</summary>
         public void SetMuteTied(bool mute)
         {
             _playerMute = mute;
             _player.Mute = mute;
-            if (_volume.Available) _volume.SetMute(mute);
+            RefreshVolumeUi();
+        }
+
+        /// <summary>One place that draws volume state: glyph, "62%" or "Muted",
+        /// and a dimmed slider while muted.</summary>
+        private void RefreshVolumeUi()
+        {
+            if (VolumeLabel == null) return;
             VolumeButton.Opacity = 1.0;
-            VolumeGlyph.Data = Geometry.Parse(mute ? "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17" : "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8");
+            VolumeGlyph.Data = Geometry.Parse(_playerMute ? MutedGlyph : VolumeGlyphData);
+            VolumeLabel.Text = _playerMute ? "Muted" : SharedVolume + "%";
+            VolumeSlider.Opacity = _playerMute ? 0.45 : 1.0;
         }
 
         // ---------- speed + sleep timer (bar toggles, off by default) ----------
@@ -491,15 +535,150 @@ namespace ZephyrPlayer
 
         // ---------- captions / fullscreen ----------
 
+        /// <summary>Real subtitle tracks only: libVLC lists a "Disable" entry with
+        /// id -1 first, which is "Off", not a track (P0-3).</summary>
+        internal static LibVLCSharp.Shared.Structures.TrackDescription[] RealTracks(LibVLCSharp.Shared.Structures.TrackDescription[]? tracks) =>
+            (tracks ?? Array.Empty<LibVLCSharp.Shared.Structures.TrackDescription>()).Where(t => t.Id != -1).ToArray();
+
+        private static string TrackLabel(LibVLCSharp.Shared.Structures.TrackDescription t, int index) =>
+            string.IsNullOrWhiteSpace(t.Name) ? "Track " + (index + 1) : t.Name;
+
+        /// <summary>Subtitles pop-up (P0-3): Off, each real track by name, then
+        /// "Add subtitle file...". The current choice is checked.</summary>
         private void OnCaptions(object sender, RoutedEventArgs e)
         {
-            // Scaffold behavior: cycle subtitle tracks (off -> 1 -> 2 ... -> off).
-            var tracks = _player.SpuDescription;
-            if (tracks == null || tracks.Length == 0) return;
+            var menu = new ContextMenu { PlacementTarget = CaptionsButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Top };
+            menu.Items.Add(new MenuItem { Header = "Subtitles", IsEnabled = false, Opacity = 0.7 });
             var current = _player.Spu;
-            var next = current == -1 ? tracks[0].Id : (current == tracks[^1].Id ? -1 : tracks[Array.FindIndex(tracks, t => t.Id == current) + 1].Id);
-            _player.SetSpu(next);
+            var tracks = RealTracks(_player.SpuDescription);
+            var off = new MenuItem { Header = "Off", IsChecked = current == -1 || tracks.All(t => t.Id != current) };
+            off.Click += (_, __) => SelectSubtitle(-1, "Off");
+            menu.Items.Add(off);
+            for (var i = 0; i < tracks.Length; i++)
+            {
+                var track = tracks[i];
+                var label = TrackLabel(track, i);
+                var item = new MenuItem { Header = label, IsChecked = track.Id == current };
+                item.Click += (_, __) => SelectSubtitle(track.Id, label);
+                menu.Items.Add(item);
+            }
+            menu.Items.Add(new Separator());
+            var add = new MenuItem { Header = "Add subtitle file...", IsEnabled = _safeSource != null };
+            add.Click += (_, __) => AddSubtitleFile();
+            menu.Items.Add(add);
+            _menuOpen = true;
+            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
+            menu.IsOpen = true;
         }
+
+        /// <summary>The same path the pop-up, the phone and tests take.</summary>
+        public void SelectSubtitle(int trackId, string? label = null)
+        {
+            _player.SetSpu(trackId);
+            if (label == null)
+            {
+                var tracks = RealTracks(_player.SpuDescription);
+                var idx = Array.FindIndex(tracks, t => t.Id == trackId);
+                label = trackId == -1 || idx < 0 ? "Off" : TrackLabel(tracks[idx], idx);
+            }
+            ShowOsd("Subtitles: " + label);
+            RefreshCaptionsUi(trackId);
+        }
+
+        private void AddSubtitleFile()
+        {
+            var source = _safeSource;
+            if (source == null) return;
+            var dialog = new Microsoft.Win32.OpenFileDialog
+            {
+                Title = "Add subtitle file",
+                Filter = "Subtitles (*.srt;*.ass;*.ssa;*.vtt)|*.srt;*.ass;*.ssa;*.vtt",
+            };
+            var owner = Window.GetWindow(this);
+            if ((owner != null ? dialog.ShowDialog(owner) : dialog.ShowDialog()) != true) return;
+            try
+            {
+                var staged = source.StageSubtitle(new Uri(dialog.FileName).AbsoluteUri);
+                _player.AddSlave(MediaSlaveType.Subtitle, new Uri(staged).AbsoluteUri, true);
+                ShowOsd("Subtitles: " + System.IO.Path.GetFileNameWithoutExtension(dialog.FileName));
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceWarning("Subtitle file refused: " + ex.GetType().Name);
+                ShowOsd("That subtitle file could not be used");
+            }
+        }
+
+        private bool _autoSelectSidecar;
+        /// <summary>One-shot: the first real subtitle track of a local movie's sidecar
+        /// is selected when libVLC selected none.</summary>
+        private void TryAutoSelectSidecar()
+        {
+            if (!_autoSelectSidecar) return;
+            var tracks = RealTracks(_player.SpuDescription);
+            if (tracks.Length == 0) return;
+            _autoSelectSidecar = false;
+            if (_player.Spu == -1) _player.SetSpu(tracks[0].Id);
+            RefreshCaptionsUi();
+        }
+
+        /// <summary>Orange subtitles button while a track is on (render 02).</summary>
+        private void RefreshCaptionsUi() => RefreshCaptionsUi(_player.Spu);
+        private void RefreshCaptionsUi(int spu)
+        {
+            if (_settings is null) return;
+            var on = spu != -1 && RealTracks(_player.SpuDescription).Any(t => t.Id == spu);
+            var style = _settings.BarColorStyle;
+            Brush normal = style is "orange" or "inverse" ? Orange : RingDefault;
+            var brush = on ? Orange : normal;
+            CaptionsButton.Foreground = brush;
+            ApplyGlyphBrush(CaptionsButton, brush);
+            CaptionsButton.Tag = on ? "on" : "off";
+            CaptionsButton.ToolTip = on ? "Subtitles (on)" : "Subtitles";
+        }
+
+        private void ShowOsd(string text)
+        {
+            OsdText.Text = text;
+            Osd.BeginAnimation(OpacityProperty, null);
+            var fade = new DoubleAnimationUsingKeyFrames();
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(1, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1600))));
+            fade.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(1900))));
+            Osd.BeginAnimation(OpacityProperty, fade);
+        }
+
+        // ---------- loading state ----------
+
+        private void BeginLoading(string url)
+        {
+            var local = PlaybackHistory.LocalPath(url);
+            LoadingTitle.Text = local != null ? System.IO.Path.GetFileNameWithoutExtension(local) : "Movie from your phone";
+            LoadingDetail.Text = "Opening...";
+            LoadingBackButton.Visibility = Visibility.Collapsed;
+            Spinner.Visibility = Visibility.Visible;
+            LoadingPanel.Visibility = Visibility.Visible;
+            var spin = new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(900)) { RepeatBehavior = RepeatBehavior.Forever };
+            SpinnerTurn.BeginAnimation(RotateTransform.AngleProperty, spin);
+        }
+
+        private void EndLoading()
+        {
+            SpinnerTurn.BeginAnimation(RotateTransform.AngleProperty, null);
+            LoadingPanel.Visibility = Visibility.Collapsed;
+        }
+
+        private void ShowLoadingError(string message)
+        {
+            SpinnerTurn.BeginAnimation(RotateTransform.AngleProperty, null);
+            Spinner.Visibility = Visibility.Collapsed;
+            LoadingDetail.Text = message;
+            LoadingBackButton.Visibility = Visibility.Visible;
+            LoadingPanel.Visibility = Visibility.Visible;
+        }
+
+        /// <summary>True while the loading panel covers the video.</summary>
+        public bool IsLoadingShown => LoadingPanel.Visibility == Visibility.Visible;
 
         /// <summary>Phone-initiated pause/resume shows the bar once (review blocker 3).</summary>
         public void ShowBarOnce()
@@ -509,21 +688,27 @@ namespace ZephyrPlayer
             Overlay.Cursor = Cursors.Arrow;
             TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
             _idleTimer.Stop();
-            _idleTimer.Start();
+            if (IsLoaded) _idleTimer.Start();
         }
 
-        public bool IsFullscreen => WindowStyle == WindowStyle.None;
+        public bool IsFullscreen => _fullscreen;
+
+        /// <summary>Raised when the view enters/leaves full screen; the shell owns the
+        /// window chrome and applies it.</summary>
+        public event Action<bool>? FullscreenChanged;
 
         /// <summary>A movie actually in progress (playing or paused) - tray/relaunch
-        /// restore surfaces this window instead of Home. A stopped or ended player
+        /// restore surfaces the player view instead of the library. A stopped or ended player
         /// restores Home, not a dead black frame.</summary>
         public bool IsPlayingMedia => _player.State is VLCState.Playing or VLCState.Paused or VLCState.Buffering or VLCState.Opening;
 
         public void SetFullscreen(bool on)
         {
-            if (on == IsFullscreen) return;
-            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = 1000; ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
-            else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
+            if (on == _fullscreen) return;
+            _fullscreen = on;
+            if (on) { ControlBar.MaxWidth = 1000; ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
+            else { ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
+            FullscreenChanged?.Invoke(on);
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
             ControlBar.BeginAnimation(OpacityProperty, null);
@@ -595,6 +780,7 @@ namespace ZephyrPlayer
 
             SpeedButton.Visibility = _settings.ShowSpeed ? Visibility.Visible : Visibility.Collapsed;
             SleepButton.Visibility = _settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
+            RefreshCaptionsUi();
         }
     }
 }

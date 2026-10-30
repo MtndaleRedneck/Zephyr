@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -14,16 +15,23 @@ using System.Windows.Media.Imaging;
 namespace ZephyrPlayer
 {
     /// <summary>
-    /// Home: the app's resting screen, now an Explorer-style icon grid of the
-    /// designated movies folder (pairing layout): back/up + clickable
-    /// breadcrumb + search box on a toolbar, large folder tiles with a poster
-    /// peeking out of the wireframe folder outline, loose videos as film-strip
-    /// frames around the real Windows shell thumbnail, names under each tile.
-    /// Folders navigate in place; double-clicking a video plays it on the
-    /// player window. The phone can also push playback over /play meanwhile.
+    /// Home / Library (approved render 01), a VIEW inside the one ShellWindow:
+    /// app bar (Movies, phone status, Pair phones, Settings, search), command row
+    /// (Back, Up, Refresh, path, count, sort) and one continuous grid of the
+    /// designated movies folder, folders first. Folders navigate in place;
+    /// double-clicking a video asks the shell to swap to the player view. The
+    /// phone can also push playback over /play meanwhile.
     /// </summary>
-    public partial class HomeWindow : Window
+    public partial class HomeView : UserControl
     {
+        public static readonly DependencyProperty TileWidthProperty = DependencyProperty.Register(nameof(TileWidth), typeof(double), typeof(HomeView), new PropertyMetadata(168.0));
+        public static readonly DependencyProperty ThumbHeightProperty = DependencyProperty.Register(nameof(ThumbHeight), typeof(double), typeof(HomeView), new PropertyMetadata(105.0));
+        /// <summary>Tile width: columns adapt to the width so tiles stay near 168 px
+        /// (8 columns at a 1600 px window, render 01).</summary>
+        public double TileWidth { get => (double)GetValue(TileWidthProperty); set => SetValue(TileWidthProperty, value); }
+        /// <summary>16:10 thumbnail height for the current tile width.</summary>
+        public double ThumbHeight { get => (double)GetValue(ThumbHeightProperty); set => SetValue(ThumbHeightProperty, value); }
+        private readonly Action<string>? _openSettings;
         private readonly PlayerSettings _settings;
         private readonly PairedStore _store;
         private readonly Action<string> _playLocal;
@@ -45,6 +53,9 @@ namespace ZephyrPlayer
             public required string Rel { get; init; }
             public DateTime Created { get; init; }
             public string Detail { get; init; } = "";
+            /// <summary>Tile label: folder name, or the video's name without its extension
+            /// (render 01; the extension is in the detail line).</summary>
+            public string Title => Dir ? Name : Path.GetFileNameWithoutExtension(Name);
             public Visibility FolderVis => Dir ? Visibility.Visible : Visibility.Collapsed;
             public Visibility FileVis => Dir ? Visibility.Collapsed : Visibility.Visible;
             private long _durationMs;
@@ -53,38 +64,70 @@ namespace ZephyrPlayer
             public Visibility DurationVis => !Dir && _durationMs > 0 ? Visibility.Visible : Visibility.Collapsed;
             public double Progress => _durationMs > 0 ? Math.Clamp(1.0 * _positionMs / _durationMs, 0, 1) : 0;
             public Visibility ProgressVis => !Dir && Progress > 0 && Progress < .98 ? Visibility.Visible : Visibility.Collapsed;
+            public Visibility PeekVis => Dir && _peek != null ? Visibility.Visible : Visibility.Collapsed;
             public Visibility WatchedVis => Dir && Name.Equals(".Watched", StringComparison.OrdinalIgnoreCase) ? Visibility.Visible : Visibility.Collapsed;
             public void SetMetadata(long position, long duration)
             { _positionMs = position; _durationMs = duration; PropertyChanged?.Invoke(this, new(null)); }
 
             private ImageSource? _peek;
-            public ImageSource? Peek { get => _peek; set { _peek = value; PropertyChanged?.Invoke(this, new(nameof(Peek))); } }
+            public ImageSource? Peek { get => _peek; set { _peek = value; PropertyChanged?.Invoke(this, new(nameof(Peek))); PropertyChanged?.Invoke(this, new(nameof(PeekVis))); } }
             private ImageSource? _thumb;
             public ImageSource? Thumb { get => _thumb; set { _thumb = value; PropertyChanged?.Invoke(this, new(nameof(Thumb))); } }
             public event PropertyChangedEventHandler? PropertyChanged;
         }
 
-        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true)
+        /// <summary>[openPairing] opens Settings on Paired phones; [openSettings] opens
+        /// Settings on a section (null: the pairing action stands in).</summary>
+        public HomeView(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true, Action<string>? openSettings = null)
         {
             InitializeComponent();
-            WindowChrome.ApplyDarkTitleBar(this);
+            _openSettings = openSettings;
             _loadDurations = loadDurations;
             _settings = settings;
             _store = store;
             _playLocal = playLocal;
             _openPairing = openPairing;
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
-            Activated += (_, __) => { RefreshStatus(); foreach (var entry in _all.Where(e => !e.Dir)) { var item = _history.Get(Path.Combine(_settings.LibraryFolder, entry.Rel.Replace('/', Path.DirectorySeparatorChar))); if (item != null) entry.SetMetadata(item.PositionMs, item.DurationMs); } };
             ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
             var statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             statusTimer.Tick += (_, __) => RefreshStatus();
-            Loaded += (_, __) => statusTimer.Start();
-            Closed += (_, __) => statusTimer.Stop();
+            // Shown again (back from the player, restored from the tray): fresh
+            // resume bars and phone status, like the old window's Activated.
+            Loaded += (_, __) => { statusTimer.Start(); OnShown(); };
+            Unloaded += (_, __) => statusTimer.Stop();
             Refresh();
         }
 
         private string _lastFolder = "";
-        private SettingsWindow? _settingsWin;
+
+        /// <summary>Refresh what can change while the view was away: resume progress
+        /// written by the player and the phone status.</summary>
+        public void OnShown()
+        {
+            RefreshStatus();
+            foreach (var entry in _all.Where(e => !e.Dir))
+            {
+                var item = _history.Get(Path.Combine(_settings.LibraryFolder, entry.Rel.Replace('/', Path.DirectorySeparatorChar)));
+                if (item != null) entry.SetMetadata(item.PositionMs, item.DurationMs);
+            }
+        }
+
+        /// <summary>Columns adapt to the width so tiles stay near 168 px; the content
+        /// area is the list width less 40 + 42 side padding and the 6 px scrollbar.</summary>
+        internal static (int Columns, double Tile) TileLayout(double listWidth)
+        {
+            var avail = Math.Max(160, listWidth - 88);
+            var cols = Math.Max(1, (int)Math.Round((avail + 24) / (167.5 + 24)));
+            while (cols > 1 && (avail - (cols - 1) * 24) / cols < 140) cols--;
+            var tile = Math.Floor((avail - (cols - 1) * 24) / cols);
+            return (cols, tile);
+        }
+
+        private void OnGridSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            var (_, tile) = TileLayout(MovieList.ActualWidth);
+            if (Math.Abs(tile - TileWidth) >= 0.5) { TileWidth = tile; ThumbHeight = Math.Round(tile * 10 / 16.0); }
+        }
 
         /// <summary>Bar/volume/skip changes live-apply elsewhere and must not rebuild the
         /// library view. Only a library-folder change reloads - and reloads to the NEW
@@ -114,25 +157,55 @@ namespace ZephyrPlayer
             RefreshStatus();
         }
 
+        private static readonly SolidColorBrush ConnectedDot = Frozen(Color.FromRgb(0x3F, 0xB9, 0x50));
+        private static readonly SolidColorBrush IdleDot = Frozen(Color.FromRgb(0x5C, 0x5C, 0x66));
+        private static SolidColorBrush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
         public void RefreshStatus()
         {
             var paired = _store.Count;
-            var status = paired > 0
-                ? $"Paired with {paired} phone{(paired == 1 ? "" : "s")} - pick a movie here or from your phone."
-                : "Not paired - open pairing to connect your phone, or play a local file.";
-            // Connection findings surface here too (they live on the Pairing screen).
+            // Connection findings stay NOTICE-ONLY (owner-settled; they also live on
+            // the Pairing screen). The healthy state shows no strip at all (render 01).
+            string? notice = null;
             if (ConnectionState.DiscoveryOff)
-                status += "  ·  Find my PC is off: another app is using it.";
+                notice = "Find my PC is off: another app is using it. Your phone can still connect by this PC's address.";
             else if (ConnectionState.PublicWifiName != null)
-                status += "  ·  Windows is treating this Wi-Fi as public, which can block your phone.";
-            StatusText.Text = status;
-            var active = _store.Entries().FirstOrDefault(e => _store.IsConnected(e.Token));
-            PhoneCardName.Text = active?.Name ?? (paired > 0 ? "Paired phones" : "Pair a phone");
+                notice = "Windows is treating this Wi-Fi as public, which can block your phone.";
+            StatusText.Text = notice ?? "";
+            NoticeBar.Visibility = notice != null ? Visibility.Visible : Visibility.Collapsed;
+            // Phone pill: phone name + green dot + "Connected" (render 01); grey dot otherwise.
+            var entries = _store.Entries().ToList();
+            var active = entries.FirstOrDefault(e => _store.IsConnected(e.Token));
+            PhoneCardName.Text = active?.Name ?? (paired > 0 ? entries[0].Name : "No phone");
             PhoneCardStatus.Text = active != null ? "Connected" : paired > 0 ? "Not connected" : "Not paired";
-            PhoneConnectedDot.Visibility = active != null ? Visibility.Visible : Visibility.Collapsed;
+            PhoneConnectedDot.Fill = active != null ? ConnectedDot : IdleDot;
+            PhoneCard.ToolTip = paired > 0 ? "Paired phones" : "Pair a phone";
         }
 
         // ---------- breadcrumb ----------
+
+        /// <summary>Path parts shown before the library root: the drive, then "..." when
+        /// the root sits deeper (render 01 reads "D: > Movies"). Pure, for tests.</summary>
+        internal static string[] RootPrefix(string folder)
+        {
+            var trimmed = folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var parent = Path.GetDirectoryName(trimmed);
+            if (string.IsNullOrEmpty(parent)) return Array.Empty<string>();
+            var drive = Path.GetPathRoot(trimmed)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) ?? "";
+            var parentTrim = parent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (drive.Length == 0) return new[] { "..." };
+            return parentTrim.Equals(drive, StringComparison.OrdinalIgnoreCase) ? new[] { drive } : new[] { drive, "..." };
+        }
+
+        private System.Windows.Controls.Viewbox Chevron() => new()
+        {
+            Width = 13, Height = 13, Margin = new Thickness(4, 0, 4, 0), VerticalAlignment = VerticalAlignment.Center,
+            Child = new System.Windows.Controls.Canvas
+            {
+                Width = 24, Height = 24,
+                Children = { new System.Windows.Shapes.Path { Data = Geometry.Parse("M 9 6 l 6 6 -6 6"), Stroke = new SolidColorBrush(Color.FromRgb(0x5C, 0x5C, 0x66)), StrokeThickness = 1.6, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round } },
+            },
+        };
 
         private void BuildBreadcrumb(string folder)
         {
@@ -147,15 +220,23 @@ namespace ZephyrPlayer
                 crumbs.Add(new Crumb(part, rel));
             }
             Breadcrumb.Items.Clear();
+            var first = true;
+            foreach (var prefix in RootPrefix(folder))
+            {
+                if (!first) Breadcrumb.Items.Add(Chevron());
+                first = false;
+                Breadcrumb.Items.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = prefix, Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0x9C, 0xA6)), FontSize = 13.5,
+                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0),
+                });
+            }
             for (var i = 0; i < crumbs.Count; i++)
             {
-                if (i > 0) Breadcrumb.Items.Add(new System.Windows.Controls.TextBlock
-                {
-                    Text = ">", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 12,
-                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0),
-                });
+                if (!first) Breadcrumb.Items.Add(Chevron());
+                first = false;
                 var crumb = crumbs[i];
-                var b = new System.Windows.Controls.Button { Content = crumb.Label, Style = (Style)FindResource("CrumbButton") };
+                var b = new System.Windows.Controls.Button { Content = crumb.Label, Style = (Style)FindResource("CrumbButton"), Tag = i == crumbs.Count - 1 ? "current" : null };
                 b.Click += (_, __) => NavigateTo(crumb.Rel, pushHistory: true);
                 Breadcrumb.Items.Add(b);
             }
@@ -185,20 +266,34 @@ namespace ZephyrPlayer
                 DateTime created;
                 try { created = File.GetCreationTimeUtc(path); } catch { created = DateTime.MinValue; }
                 string detail;
-                try { detail = dir ? Directory.EnumerateFiles(path).Count(LibraryIsVideo) + " videos" : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + FileSize(new FileInfo(path).Length); }
+                try { detail = dir ? FolderDetail(path) : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " · " + FileSize(new FileInfo(path).Length); }
                 catch { detail = dir ? "Folder" : "Video"; }
                 var entry = new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail };
                 var saved = dir ? null : _history.Get(path);
                 if (saved != null) entry.SetMetadata(saved.PositionMs, saved.DurationMs);
                 entries.Add(entry);
             }
-            CountText.Text = entries.Count(e => e.Dir) + " folders - " + entries.Count(e => !e.Dir) + " videos";
+            CountText.Text = CountLabel(entries.Count(e => e.Dir), entries.Count(e => !e.Dir));
             _all = entries;
             ApplySearch();
             BackButton.IsEnabled = _backStack.Count > 0;
             UpButton.IsEnabled = rel.Length > 0;
             LoadThumbnails(root, entries);
             if (_loadDurations) LoadDurations(root, entries, _thumbGeneration);
+        }
+
+        /// <summary>"11 folders · 29 videos" (render 01), singular where it reads better.</summary>
+        internal static string CountLabel(int folders, int videos) =>
+            folders + (folders == 1 ? " folder" : " folders") + " · " + videos + (videos == 1 ? " video" : " videos");
+
+        /// <summary>Folder tile subtitle: "24 videos", "Empty", or "3 folders" when the
+        /// folder only holds subfolders. Bounded listing.</summary>
+        private static string FolderDetail(string path)
+        {
+            var videos = Directory.EnumerateFiles(path).Take(10000).Count(LibraryIsVideo);
+            if (videos > 0) return videos + (videos == 1 ? " video" : " videos");
+            var subs = Directory.EnumerateDirectories(path).Take(10000).Count();
+            return subs == 0 ? "Empty" : subs + (subs == 1 ? " folder" : " folders");
         }
 
         /// <summary>First video inside a folder, descending into subfolders when the
@@ -366,10 +461,14 @@ namespace ZephyrPlayer
                 ? ordered.ThenByDescending(e => e.Created).ThenBy(e => e.Name, comparer)
                 : ordered.ThenBy(e => e.Name, comparer);
             MovieList.ItemsSource = ordered.ToList();
-            if (SortButton != null) SortButton.Content = _settings.LibrarySort == "created" ? "Sort: Date created" : "Sort: Name";
+            if (SortLabel != null) SortLabel.Text = SortText(_settings.LibrarySort, _settings.FoldersFirst);
             EmptyFolderText.Text = q.Length == 0 ? "This folder is empty." : "Nothing here matches \"" + q + "\".";
             EmptyFolderText.Visibility = ((IEnumerable<Entry>)MovieList.ItemsSource).Any() ? Visibility.Collapsed : Visibility.Visible;
         }
+
+        /// <summary>Sort button label, "Name · Folders first" (render 01).</summary>
+        internal static string SortText(string sort, bool foldersFirst) =>
+            (sort == "created" ? "Date created" : "Name") + " · " + (foldersFirst ? "Folders first" : "Mixed");
 
         [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
         private static extern int StrCmpLogicalW(string a, string b);
@@ -381,10 +480,16 @@ namespace ZephyrPlayer
         private void OnBrowseFolder(object sender, RoutedEventArgs e)
         {
             var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Choose movies folder", InitialDirectory = _settings.LibraryFolder };
-            if (picker.ShowDialog(this) == true) _settings.LibraryFolder = picker.FolderName;
+            var owner = Window.GetWindow(this);
+            if ((owner != null ? picker.ShowDialog(owner) : picker.ShowDialog()) == true) _settings.LibraryFolder = picker.FolderName;
         }
         private void OnRefresh(object sender, RoutedEventArgs e) => Refresh();
-        private void OnPairing(object sender, RoutedEventArgs e) => OpenSettings("remote");
+        private void OnPairing(object sender, RoutedEventArgs e) => _openPairing();
+        private void OnMovies(object sender, RoutedEventArgs e)
+        {
+            // Movies is the selected view; a click returns to the library root.
+            if (_currentRel.Length > 0) NavigateTo("", pushHistory: true);
+        }
 
         private void OnSort(object sender, RoutedEventArgs e)
         {
@@ -458,19 +563,25 @@ namespace ZephyrPlayer
             Refresh();
         }
 
-        /// <summary>One Settings window at a time, non-modal: an open Settings window
-        /// must not freeze playback controls (review should-fix 6).</summary>
+        /// <summary>Settings is a separate compact window owned by the shell; the App
+        /// keeps one instance (the only Settings entry on this view).</summary>
         private void OnSettings(object sender, RoutedEventArgs e)
         {
-            OpenSettings("volume");
+            if (_openSettings != null) _openSettings("volume"); else _openPairing();
         }
-        public void OpenSettings(string section)
+    }
+
+    /// <summary>Rounded 8 px clip for a video thumbnail of any size (render 01 radius).</summary>
+    public sealed class RoundedClipConverter : System.Windows.Data.IMultiValueConverter
+    {
+        public double Radius { get; set; } = 8;
+        public object Convert(object[] values, Type targetType, object parameter, System.Globalization.CultureInfo culture)
         {
-            if (_settingsWin != null) { _settingsWin.SelectSection(section); _settingsWin.Activate(); return; }
-            _settingsWin = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
-            _settingsWin.Closed += (_, __) => _settingsWin = null;
-            _settingsWin.SelectSection(section);
-            _settingsWin.Show();
+            if (values.Length < 2 || values[0] is not double w || values[1] is not double h || w <= 0 || h <= 0) return Geometry.Empty;
+            var g = new RectangleGeometry(new Rect(0, 0, w, h), Radius, Radius);
+            g.Freeze();
+            return g;
         }
+        public object[] ConvertBack(object value, Type[] targetTypes, object parameter, System.Globalization.CultureInfo culture) => throw new NotSupportedException();
     }
 }

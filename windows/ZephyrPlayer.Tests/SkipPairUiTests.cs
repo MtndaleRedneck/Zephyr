@@ -109,7 +109,7 @@ namespace ZephyrPlayer.Tests
         {
             Sta(path => {
                 Core.Initialize(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
-                var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
+                var window = new PlayerView(vlc, player, new PlayerSettings(path), new VolumeService());
                 var pause = (Grid)window.FindName("PauseGlyph")!;
                 pause.Visibility = Visibility.Visible;
                 pause.Measure(new Size(24,24)); pause.Arrange(new Rect(0,0,24,24)); pause.UpdateLayout();
@@ -131,7 +131,7 @@ namespace ZephyrPlayer.Tests
                 window.ControlBar.Opacity=1;
                 Capture(window.ControlBar,1000,"pc-redesign-fullscreen-pill.png");
                 window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Stretch,window.ControlBar.HorizontalAlignment);
-                window.Close();
+                window.ReleasePlayback();
             });
         }
 
@@ -147,7 +147,7 @@ namespace ZephyrPlayer.Tests
                 using var libvlc = new LibVLC();
                 using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
                 var settings = new PlayerSettings(path) { ShowSpeed = extras, ShowSleepTimer = extras };
-                var w = new MainWindow(libvlc, player, settings, new VolumeService());
+                var w = new PlayerView(libvlc, player, settings, new VolumeService());
                 try
                 {
                     var bar = w.ControlBar;
@@ -182,7 +182,7 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
                     Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
                 }
-                finally { w.Close(); }
+                finally { w.ReleasePlayback(); }
             });
         }
     }

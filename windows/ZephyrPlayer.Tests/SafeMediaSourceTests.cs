@@ -296,8 +296,10 @@ public sealed class SafeMediaSourceTests
             try{
                 Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
                 var settingsPath=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".json");
-                var window=new MainWindow(vlc,player,new PlayerSettings(settingsPath),new VolumeService());
-                window.Show();
+                var window=new PlayerView(vlc,player,new PlayerSettings(settingsPath),new VolumeService());
+                // The player is a view in 2.0: host it in a plain window like the shell does.
+                var host=new System.Windows.Window{Content=window,Width=640,Height=360,ShowInTaskbar=false};
+                host.Show();
                 try{
                     using var slow=new Fixture((ctx,_)=>{Thread.Sleep(800);ctx.Response.StatusCode=200;ctx.Response.ContentLength64=100;ctx.Response.OutputStream.Write(new byte[100]);});
                     var old=window.PlayFromUrlAsync(slow.Url,null,Array.Empty<string>());
@@ -310,7 +312,7 @@ public sealed class SafeMediaSourceTests
                     PumpUntil(()=>next.IsCompleted,"new play did not complete");next.GetAwaiter().GetResult();
                     PumpUntil(()=>previous.IsCompleted,"superseded preparation did not stop");ObserveCancellation(previous);
                     PumpUntil(()=>player.State==VLCState.Playing,"stale preparation replaced newer movie");
-                }finally{window.StopPlaybackSource();window.Close();try{File.Delete(settingsPath);}catch{}}
+                }finally{window.StopPlaybackSource();host.Close();try{File.Delete(settingsPath);}catch{}}
             }catch(Exception ex){failure=ex;}finally{System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();}
         });
         thread.SetApartmentState(ApartmentState.STA);thread.Start();Assert.True(thread.Join(30000));if(failure!=null)System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();

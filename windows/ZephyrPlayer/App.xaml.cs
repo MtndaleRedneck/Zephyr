@@ -13,8 +13,10 @@ namespace ZephyrPlayer
         private System.Threading.Mutex? _singleInstance;
         private EventWaitHandle? _restoreSignal;
         private TrayService? _tray;
-        private MainWindow? _player;
-        private HomeWindow? _home;
+        private ShellWindow? _shell;
+        private PlayerView? _player;
+        private HomeView? _home;
+        private SettingsWindow? _settingsWin;
         private LibVLC? _libvlc;
         private MediaPlayer? _mediaPlayer;
         private PairingGate? _gate;
@@ -149,56 +151,44 @@ namespace ZephyrPlayer
             }
             catch (Exception ex) { LogCrash("tray", ex.ToString()); _tray = null; }
 
-            var volume = new VolumeService();
-            _player = new MainWindow(libvlc, player, settings, volume);
-            _player.HomeRequested += () => { _player.SavePlaybackProgress(); _player.StopPlaybackSource(); _player.Hide(); _home?.Show(); _home?.Activate(); };
-            _player.SleepFired += () =>
-            {
-                _player.Hide();
-                if (_home != null && !_reallyQuit) { _home.Show(); _home.Activate(); }
-            };
-            _player.Closing += (_, ev) =>
-            {
-                if (_reallyQuit) return; // real shutdown: let the window die
-                // Player X never destroys the window: stop playback, hide it,
-                // and land back on Home, the app's resting screen.
-                ev.Cancel = true;
-                _player.SavePlaybackProgress();
-                _player.StopPlaybackSource();
-                _player.Hide();
-                if (_home != null) { _home.Show(); _home.Activate(); }
-            };
-
-            _home = new HomeWindow(settings, store,
+            // 2.0 (P0-1, P0-2): ONE ShellWindow for the app's life. Library and player
+            // are views swapped in place inside it - no window hides to show another.
+            // Volume is the player's own (owner decision 2): no Windows master service.
+            _shell = new ShellWindow(settings);
+            _player = new PlayerView(libvlc, player, settings);
+            _player.HomeRequested += LeavePlayer;
+            _player.SleepFired += LeavePlayer;
+            _player.FullscreenChanged += on => _shell.ApplyFullscreen(on);
+            _home = new HomeView(settings, store,
                 playLocal: url =>
                 {
-                    EnsurePlayer();
-                    _home?.Hide();
-                    _player!.Show();
-                    _player!.PlayFromUrl(url, null, Array.Empty<string>());
+                    ShowPlayer();
+                    // P0-3: local movies bring their own sidecar subtitles along.
+                    _player!.PlayFromUrl(url, null, SafeMediaSource.LocalSidecars(url));
                 },
-                openPairing: ShowPairingWindow);
-            _home.Closing += (_, ev) =>
+                openPairing: ShowPairingWindow,
+                openSettings: OpenSettings);
+            _shell.ShowView(_home);
+            _shell.ViewKeyDown += (_, ev) => { if (ReferenceEquals(_shell.CurrentView, _player)) _player!.HandleKey(ev); };
+            _shell.Closing += (_, ev) =>
             {
-                if (_reallyQuit) return; // real shutdown: let the window die
-                // Settled tray behavior: closing Home hides the app to the tray
-                // instead of exiting; the icon brings it back.
+                if (_reallyQuit) { _shell.SaveBounds(); return; } // real shutdown: let the window die
+                // Close is not quit (owner decision 1): the app stays in the tray for
+                // phone starts, and the bar leaves WITH the window (P0-1).
                 ev.Cancel = true;
-                _home.Hide();
+                CloseToTray();
             };
 
             // Pairing (protocol.md): the gate owns the code's lifetime, one-shot
             // spend, wrong-code lockout and the phone cap (helper pairing parity).
-            // The one shell handoff for ANY playback start: Home hides, the player
-            // window shows. /play and /control/play both go through it (protocol.md
-            // gives them the same payload - starting a URL must always be visible).
+            // The one shell handoff for ANY playback start: the shell (shown if it was
+            // in the tray) swaps to the player view in place. /play and /control/play
+            // both go through it (protocol.md gives them the same payload).
             SelfUpdate.CleanOldDownloads();
             SafeMediaSource.CleanOldSubtitles();
             System.Threading.Tasks.Task ShowPlayerAndPlay(string url, long? pos, string[] subs)
             {
-                EnsurePlayer();
-                _home?.Hide();
-                _player!.Show();
+                ShowPlayer();
                 return _player!.PlayFromUrlAsync(url, pos, subs);
             }
             _server = new PlaybackServer(
@@ -253,7 +243,7 @@ namespace ZephyrPlayer
                 },
                 input: new SendInputSink(),
                 control: new MainWindowPlaybackControl(_player, player,
-                    showForPlayback: () => { EnsurePlayer(); _home?.Hide(); _player!.Show(); }),
+                    showForPlayback: ShowPlayer),
                 settings: settings);
             // Firewall + listen permission (round-6 N-8): the per-user installer never
             // adds them, so the FIRST run explains and asks Windows once. Declining
@@ -314,11 +304,11 @@ namespace ZephyrPlayer
                     UpdateState.Outcome = "failed: " + ex.GetType().Name;
                 }
             });
-            _home.Show();
+            _shell.Show();
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
-            // otherwise): Home goes up first, then the pairing screen over it.
+            // otherwise): the shell goes up first, then Settings on Paired phones over it.
             SettingsWindow.PairingFactory = () => new PairingPanel(_gate!, store, name => _pendingPhoneName = name);
-            if (!store.HasAny) _home.OpenSettings("remote");
+            if (!store.HasAny) OpenSettings("remote");
             // CI evidence args: COMPILED OUT of the shipped binary (round-6 S6-7/G6;
             // review nit 3 - a release binary must not grow a second Settings window
             // or autoplay from stray args). Only the dedicated capture build defines
@@ -330,7 +320,7 @@ namespace ZephyrPlayer
             {
                 if (arg == "--open-settings")
                 {
-                    _home.OpenSettings("volume");
+                    OpenSettings("volume");
                 }
                 else if (arg == "--tray-menu")
                 {
@@ -338,56 +328,93 @@ namespace ZephyrPlayer
                 }
                 else if (arg == "--open-pairing")
                 {
-                    var capturePair = new PairingWindow(gate, store, name => _pendingPhoneName = name) { Owner = _home };
+                    var capturePair = new PairingWindow(gate, store, name => _pendingPhoneName = name) { Owner = _shell };
                     capturePair.Show();
                 }
                 else if (arg.StartsWith("--play=", StringComparison.Ordinal))
                 {
                     var url = arg.Substring("--play=".Length);
-                    _home.Hide();
-                    _player.Show();
-                    _player.PlayFromUrl(url, null, Array.Empty<string>());
+                    ShowPlayer();
+                    _player.PlayFromUrl(url, null, SafeMediaSource.LocalSidecars(url));
                     if (System.Array.Exists(e.Args, a => a == "--fullscreen")) _player.SetFullscreen(true);
                 }
             }
 #endif
         }
 
-        private void EnsurePlayer() { } // single player window for app lifetime (Closing is cancelled)
-
-        /// <summary>The one Pairing screen, shared by launch, Home and Settings:
-        /// every surface shows the SAME live gate.</summary>
-        public void ShowPairingWindow()
+        /// <summary>Put the shell on the player view. A shell in the tray is shown
+        /// FIRST and then swapped, so LibVLCSharp's overlay never appears over a
+        /// hidden owner.</summary>
+        private void ShowPlayer()
         {
-            _home?.OpenSettings("remote");
+            if (_shell == null || _player == null) return;
+            if (!_shell.IsVisible) _shell.Show();
+            if (_shell.WindowState == WindowState.Minimized) _shell.WindowState = WindowState.Normal;
+            _shell.ShowView(_player);
+            _shell.Activate();
         }
 
-        /// <summary>Tray icon / relaunch restore: bring the app back up. A movie on
-        /// screen stays on top - never cover it with Home (review should-fix 5).</summary>
+        /// <summary>Back / sleep / tray-close from the player: save, stop, hide the
+        /// overlay now, and swap to the library in the same window.</summary>
+        private void LeavePlayer()
+        {
+            if (_shell == null || _player == null || _home == null) return;
+            _player.SavePlaybackProgress();
+            _player.StopPlaybackSource();
+            if (_player.IsFullscreen) _player.SetFullscreen(false);
+            _player.HideOverlayWindow();
+            _shell.ShowView(_home);
+        }
+
+        /// <summary>Window X: never quits (tray). If a movie is up: save progress, stop
+        /// the source, swap to the library (the overlay unloads and hides), and only
+        /// then hide the shell - a cancelled Closing skips LibVLCSharp's own cleanup.</summary>
+        private void CloseToTray()
+        {
+            if (_shell == null) return;
+            if (ReferenceEquals(_shell.CurrentView, _player)) LeavePlayer();
+            _player?.HideOverlayWindow();
+            _shell.SaveBounds();
+            _shell.Hide();
+        }
+
+        /// <summary>The one Settings window: compact, separate, owned by the shell,
+        /// non-modal (an open Settings window must not freeze playback controls).</summary>
+        public void OpenSettings(string section)
+        {
+            if (_settings == null || _store == null || _shell == null) return;
+            if (_settingsWin != null) { _settingsWin.SelectSection(section); _settingsWin.Activate(); return; }
+            _settingsWin = new SettingsWindow(_settings, _store, ShowPairingWindow) { Owner = _shell };
+            _settingsWin.Closed += (_, __) => _settingsWin = null;
+            _settingsWin.SelectSection(section);
+            _settingsWin.Show();
+        }
+
+        /// <summary>The one Pairing screen, shared by launch, the library and Settings:
+        /// every surface shows the SAME live gate (Settings > Paired phones).</summary>
+        public void ShowPairingWindow()
+        {
+            OpenSettings("remote");
+        }
+
+        /// <summary>Tray icon / relaunch restore: the same shell comes back on the view
+        /// it was on (library after a close from the player; the player when a
+        /// phone-started movie is up).</summary>
         private void RestoreApp()
         {
-            if (_reallyQuit) return;
-            if (_player != null && (_player.IsVisible || _player.IsPlayingMedia))
-            {
-                _player.Show();
-                if (_player.WindowState == WindowState.Minimized) _player.WindowState = WindowState.Normal;
-                _player.Activate();
-                return;
-            }
-            if (_home != null)
-            {
-                _home.Show();
-                _home.WindowState = WindowState.Normal;
-                _home.Activate();
-            }
+            if (_reallyQuit || _shell == null) return;
+            _shell.Show();
+            if (_shell.WindowState == WindowState.Minimized) _shell.WindowState = WindowState.Normal;
+            _shell.Activate();
         }
 
         private void QuitApp()
         {
             _player?.SavePlaybackProgress();
             _reallyQuit = true;
-            try { _player?.Close(); } catch { }
-            try { _home?.Close(); } catch { }
+            try { _player?.HideOverlayWindow(); _player?.StopPlaybackSource(); } catch { }
+            try { _settingsWin?.Close(); } catch { }
+            try { _shell?.Close(); } catch { }
             Shutdown();
         }
 

@@ -17,7 +17,7 @@ namespace ZephyrPlayer.Tests
     /// </summary>
     public class BarStyleTests
     {
-        private static void Sta(Action<PlayerSettings, MainWindow> body)
+        private static void Sta(Action<PlayerSettings, PlayerView> body)
         {
             string? error = null;
             var path = Path.Combine(Path.GetTempPath(), "zephyr-barstyle-" + Guid.NewGuid().ToString("N") + ".json");
@@ -29,9 +29,9 @@ namespace ZephyrPlayer.Tests
                     var libvlc = new LibVLC();
                     var player = new MediaPlayer(libvlc);
                     var settings = new PlayerSettings(path);
-                    var w = new MainWindow(libvlc, player, settings, new VolumeService());
+                    var w = new PlayerView(libvlc, player, settings, new VolumeService());
                     body(settings, w);
-                    w.Close();
+                    w.ReleasePlayback();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
                 catch (Exception e) { error = e.ToString(); }

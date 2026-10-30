@@ -31,7 +31,7 @@ namespace ZephyrPlayer
             try
             {
                 var psi = new ProcessStartInfo("powershell",
-                    "-NoProfile -NonInteractive -Command \"$i=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; $p=Get-NetConnectionProfile -InterfaceIndex $i -ErrorAction SilentlyContinue; if ($p) { '{0}|{1}|{2}' -f $p.Name,$p.NetworkCategory,$p.InterfaceIndex }\"")
+                    "-NoLogo -NoProfile -NonInteractive -Command \"$i=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; $p=Get-NetConnectionProfile -InterfaceIndex $i -ErrorAction SilentlyContinue; if ($p) { '{0}|{1}|{2}' -f $p.Name,$p.NetworkCategory,$p.InterfaceIndex }\"")
                 {
                     RedirectStandardOutput = true,
                     UseShellExecute = false,
@@ -40,7 +40,9 @@ namespace ZephyrPlayer
                 using var p = Process.Start(psi)!;
                 // Wait first, read after: reading before the timeout would hang
                 // forever on a stuck PowerShell.
-                if (!p.WaitForExit(15000))
+                // 30 s: a cold Windows PowerShell plus the NetTCPIP module took past 15 s on a
+                // busy CI runner (run 41003548980); the probe runs off the UI thread.
+                if (!p.WaitForExit(30000))
                 {
                     try { p.Kill(); } catch { }
                     return null;
