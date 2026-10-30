@@ -99,8 +99,9 @@ namespace ZephyrPlayer
 
         public static readonly string[] SubtitleSizes = { "S", "M", "L" };
         /// <summary>Subtitle size S/M/L from the subtitles pop-up (render 04). libVLC 3 sets
-        /// text size when it is created, so a change applies the next time Zephyr starts
-        /// (U4: never re-open a playing movie). Unset = M.</summary>
+        /// text size when its LibVLC instance is created (per-media options do not change it,
+        /// SubtitleSizePathTests), so a change applies after Zephyr Player is quit and opened
+        /// again (U4: never re-open a playing movie). Unset = M.</summary>
         public string SubtitleSize
         {
             get { lock (_lock) { var v = Read().SubtitleSize; return Array.IndexOf(SubtitleSizes, v) >= 0 ? v! : "M"; } }

@@ -379,9 +379,9 @@
                         <Grid Margin="6,4">
                             <TextBlock Text="Size" FontSize="13" VerticalAlignment="Center"/>
                             <StackPanel x:Name="SubtitleSizeChips" Orientation="Horizontal" HorizontalAlignment="Right">
-                                <Button x:Name="SubSizeS" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Content="S" Click="OnSubtitleSize" Tag="" ToolTip="Small - applies the next time Zephyr starts"/>
-                                <Button x:Name="SubSizeM" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Margin="6,0,0,0" Content="M" Click="OnSubtitleSize" Tag="on" ToolTip="Medium - applies the next time Zephyr starts"/>
-                                <Button x:Name="SubSizeL" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Margin="6,0,0,0" Content="L" Click="OnSubtitleSize" Tag="" ToolTip="Large - applies the next time Zephyr starts"/>
+                                <Button x:Name="SubSizeS" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Content="S" Click="OnSubtitleSize" Tag="" ToolTip="Small - applies after you quit Zephyr Player (tray menu) and open it again"/>
+                                <Button x:Name="SubSizeM" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Margin="6,0,0,0" Content="M" Click="OnSubtitleSize" Tag="on" ToolTip="Medium - applies after you quit Zephyr Player (tray menu) and open it again"/>
+                                <Button x:Name="SubSizeL" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Margin="6,0,0,0" Content="L" Click="OnSubtitleSize" Tag="" ToolTip="Large - applies after you quit Zephyr Player (tray menu) and open it again"/>
                             </StackPanel>
                         </Grid>
                         <Grid Margin="6,8,6,2">
