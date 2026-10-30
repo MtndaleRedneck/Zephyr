@@ -204,13 +204,34 @@ namespace ZephyrPlayer.Tests
             {
                 // A stale black frame on the video host right after the movie stopped:
                 // painted straight onto the host's DC, outside the shell's own paint.
+                // Painted again every 2 ms from another thread (a natural WM_PAINT, e.g.
+                // when the overlay window goes, would otherwise wipe one black paint
+                // before the screen is read: run 41114710721) until the handoff has
+                // reported the mismatch, at most 1.5 s.
                 var (ev, verdict, hostVisibleAfter) = RunBack("black-after-teardown", host =>
                 {
                     SwitchTrace.Mark("test.paint-host-black");
-                    var dc = GetDC(host);
-                    try { GetClientRect(host, out var r); FillRect(dc, ref r, ShellWindow.BlackBrush); }
-                    finally { ReleaseDC(host, dc); }
-                    GdiFlush();
+                    void Paint()
+                    {
+                        var dc = GetDC(host);
+                        try { GetClientRect(host, out var r); FillRect(dc, ref r, ShellWindow.BlackBrush); }
+                        finally { ReleaseDC(host, dc); }
+                        GdiFlush();
+                    }
+                    Paint();
+                    new Thread(() =>
+                    {
+                        var sw = System.Diagnostics.Stopwatch.StartNew();
+                        while (sw.ElapsedMilliseconds < 1500)
+                        {
+                            var snap = SwitchTrace.Snapshot();
+                            int b = snap.FindIndex(x => x.Event == "test.paint-host-black");
+                            if (b >= 0 && snap.FindIndex(b, x => x.Event == "presented.host-mismatch") >= 0) { SwitchTrace.Mark("test.black-painter-stopped"); return; }
+                            Paint();
+                            Thread.Sleep(2);
+                        }
+                        SwitchTrace.Mark("test.black-painter-timed-out");
+                    }) { IsBackground = true }.Start();
                 });
                 var d = Dump(ev, 0);
                 AssertOrder(ev, verdict, hostVisibleAfter);
