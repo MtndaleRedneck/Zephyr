@@ -60,10 +60,27 @@ internal sealed class SafeMediaSource : IDisposable
         if (uri.Scheme != "http") throw new InvalidDataException("Unsupported media source");
         return new PeerRangeStream(uri,cancellation);
     }
-    internal void AddSubtitle(string source,CancellationToken cancellation = default)
+    internal void AddSubtitle(string source,CancellationToken cancellation = default,uint priority = 0)
     {
         var path=StageSubtitle(source,cancellation);
-        Media.AddSlave(MediaSlaveType.Subtitle,0,new Uri(path).AbsoluteUri);
+        Media.AddSlave(MediaSlaveType.Subtitle,priority,new Uri(path).AbsoluteUri);
+    }
+    /// <summary>Attach a start's subtitles. Phone subtitles keep the strict 1.x
+    /// behaviour (a bad one refuses the start, priority 0). Local sidecars (P0-3)
+    /// are a bonus: an unreadable one is skipped, and the first one gets libVLC's top
+    /// slave priority (4) so it is selected FROM THE START like VLC does - a track
+    /// selected later never shows the cues the demuxer already passed (a cue at
+    /// 0:00 was lost that way; reproduced with libVLC 3.0 callback and path media).</summary>
+    internal void AddSubtitles(System.Collections.Generic.IEnumerable<string> subtitles,CancellationToken cancellation = default)
+    {
+        var firstLocal=true;
+        foreach (var sub in subtitles)
+        {
+            var local=Uri.TryCreate(sub,UriKind.Absolute,out var u)&&u.IsFile;
+            if (!local) { AddSubtitle(sub,cancellation); continue; }
+            try { AddSubtitle(sub,cancellation,firstLocal ? 4u : 0u); firstLocal=false; }
+            catch (Exception) when (!cancellation.IsCancellationRequested) { }
+        }
     }
     /// <summary>Validate a subtitle source (phone sidecar, local sidecar next to the
     /// movie, or a file the user picked) and write a strict, bounded private copy.

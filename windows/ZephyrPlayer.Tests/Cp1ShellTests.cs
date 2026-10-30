@@ -339,18 +339,13 @@ namespace ZephyrPlayer.Tests
                 player.SetVideoCallbacks(lockCb, null, displayCb);
                 var url = new Uri(movie).AbsoluteUri;
                 using var safe = new SafeMediaSource(libvlc, url);
-                if (withSidecar) foreach (var sub in SafeMediaSource.LocalSidecars(url)) safe.AddSubtitle(sub);
+                // The product path: PlayerView attaches a local movie's sidecars exactly so.
+                if (withSidecar) safe.AddSubtitles(SafeMediaSource.LocalSidecars(url));
                 Assert.True(player.Play(safe.Media));
                 var deadline = Environment.TickCount64 + 10000;
                 while (player.State != VLCState.Playing && Environment.TickCount64 < deadline) Thread.Sleep(30);
-                if (withSidecar)
-                {
-                    while (PlayerView.RealTracks(player.SpuDescription).Length == 0 && Environment.TickCount64 < deadline) Thread.Sleep(30);
-                    var real = PlayerView.RealTracks(player.SpuDescription);
-                    Assert.NotEmpty(real);
-                    if (player.Spu != real[0].Id) player.SetSpu(real[0].Id);
-                }
                 Thread.Sleep(1800);
+                var spu = player.Spu; // no manual selection: the sidecar must be on from the start
                 player.SetPause(true);
                 Thread.Sleep(400);
                 var px = new byte[W * H * 4];
@@ -367,7 +362,7 @@ namespace ZephyrPlayer.Tests
                         if (px[i] < 20 && px[i + 1] < 20 && px[i + 2] < 20) blacks++;
                     }
                 player.Stop();
-                return new[] { whites, blacks, frames, player.Spu };
+                return new[] { whites, blacks, frames, spu };
             }
             finally { System.Runtime.InteropServices.Marshal.FreeHGlobal(buffer); GC.KeepAlive(lockCb); GC.KeepAlive(displayCb); }
         }
@@ -385,6 +380,7 @@ namespace ZephyrPlayer.Tests
             var line = $"CP1_SUBPX off: whites={plain[0]} blacks={plain[1]} frames={plain[2]} | on: whites={subs[0]} blacks={subs[1]} frames={subs[2]} spu={subs[3]}";
             File.WriteAllText(Path.Combine(OutDir, "cp1-subtitle-frame.txt"), line);
             Assert.True(plain[2] > 0 && subs[2] > 0, "no frames rendered: " + line);
+            Assert.True(subs[3] >= 0, "the local sidecar was not selected from the start: " + line);
             Assert.True(subs[0] - plain[0] > 150, "subtitle text not blended into the picture: " + line);
             try { Directory.Delete(dir, true); } catch { }
         }
