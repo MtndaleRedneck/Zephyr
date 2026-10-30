@@ -63,6 +63,13 @@ public static class BT {
             var sb = new StringBuilder(256); GetWindowTextW(h, sb, 256); if (sb.ToString() == title) { found = h; return false; } return true; }, IntPtr.Zero);
         return found;
     }
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetClassNameW(IntPtr h, StringBuilder sb, int max);
+    public static IntPtr FindByClass(uint pid, string cls) {
+        IntPtr found = IntPtr.Zero;
+        EnumWindows((h, l) => { uint wp; GetWindowThreadProcessId(h, out wp); if (wp != pid || !IsWindowVisible(h)) return true;
+            var sb = new StringBuilder(64); GetClassNameW(h, sb, 64); if (sb.ToString() == cls) { found = h; return false; } return true; }, IntPtr.Zero);
+        return found;
+    }
     public static List<IntPtr> Visible(uint pid) {
         var list = new List<IntPtr>();
         EnumWindows((h, l) => { uint wp; GetWindowThreadProcessId(h, out wp); if (wp == pid && IsWindowVisible(h)) list.Add(h); return true; }, IntPtr.Zero);
@@ -244,12 +251,50 @@ for ($rep = 1; $rep -le $Reps; $rep++) {
     [BT]::SetCursorPos(524, 360) | Out-Null; Start-Sleep -Milliseconds 700
     $homeBtn = ElementCenter $p.Id $shellH 'HomeButton'
     if ($homeBtn -eq $null) { Log "rep ${rep}: HomeButton not found"; continue }
-    # Variants (rep mod 3): 1 = playing; 2 = paused then resumed through the control
-    # route (as CP1 paused/resumed before its Back); 0 = paused at Back, with 3 busy
-    # threads loading the runner's CPUs during the Back.
-    $variant = $rep % 3
+    # Variants (rep mod 4): 1 = playing; 2 = paused then resumed through the control
+    # route (as CP1 paused/resumed before its Back); 3 = paused at Back, with 3 busy
+    # threads loading the runner's CPUs during the Back; 0 = CP1's last step before its
+    # Back: a subtitle file added through the real Windows file dialog (bar's subtitles
+    # button, "Add subtitle file...", path typed, Enter), then Back while it plays.
+    $variant = $rep % 4
+    if ($variant -eq 0) {
+        [BT]::SetCursorPos(512, 360) | Out-Null; Start-Sleep -Milliseconds 300
+        [BT]::SetCursorPos(524, 360) | Out-Null; Start-Sleep -Milliseconds 700
+        $cap = ElementCenter $p.Id $shellH 'CaptionsButton'
+        $dlgNote = "captions=$($cap -ne $null)"
+        if ($cap -ne $null) {
+            ClickPoint $cap[0] $cap[1]
+            Start-Sleep -Milliseconds 500
+            $nameCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, 'Add subtitle file...')
+            $mi = $null
+            foreach ($try in 1..10) {
+                foreach ($rh in [BT]::Visible($p.Id)) { try { $mi = [System.Windows.Automation.AutomationElement]::FromHandle($rh).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $nameCond) } catch { $mi = $null }; if ($mi -ne $null) { break } }
+                if ($mi -ne $null) { break }; Start-Sleep -Milliseconds 300
+            }
+            $dlgNote += "; menu=$($mi -ne $null)"
+            if ($mi -ne $null) {
+                $mb = $mi.Current.BoundingRectangle
+                ClickPoint ($mb.X + $mb.Width / 2) ($mb.Y + $mb.Height / 2)
+                $dlg = [IntPtr]::Zero
+                foreach ($try in 1..60) { $dlg = [BT]::FindByClass($p.Id, '#32770'); if ($dlg -ne [IntPtr]::Zero) { break }; Start-Sleep -Milliseconds 300 }
+                $dlgNote += "; dialog=$($dlg -ne [IntPtr]::Zero)"
+                if ($dlg -ne [IntPtr]::Zero) {
+                    Start-Sleep -Milliseconds 1500
+                    [BT]::SetForegroundWindow($dlg) | Out-Null; Start-Sleep -Milliseconds 300
+                    $pick = Join-Path $env:RUNNER_TEMP ("bt-pick-{0:D2}.srt" -f $rep)
+                    [IO.File]::WriteAllText($pick, "1`r`n00:00:00,000 --> 00:59:00,000`r`nPicked through the file dialog`r`n")
+                    [System.Windows.Forms.SendKeys]::SendWait($pick); Start-Sleep -Milliseconds 300
+                    [System.Windows.Forms.SendKeys]::SendWait('{ENTER}'); Start-Sleep -Milliseconds 1500
+                    if ([BT]::FindByClass($p.Id, '#32770') -ne [IntPtr]::Zero) { $dlgNote += "; still open, Escape"; [System.Windows.Forms.SendKeys]::SendWait('{ESC}'); Start-Sleep -Milliseconds 800 }
+                }
+            }
+        }
+        $stD = ZStatus
+        Log "rep ${rep}: file dialog step: $dlgNote; spu=$($stD.spu) tracks=$(@($stD.spuTracks).Count)"
+        [BT]::SetCursorPos(5, 5) | Out-Null; Start-Sleep -Milliseconds 1200
+    }
     $ctl = @{ Authorization = "Bearer ci-capture-token" }
-    if ($variant -ne 1) {
+    if ($variant -eq 2 -or $variant -eq 3) {
         try { Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $ctl -ContentType "application/json" -Body '{}' | Out-Null } catch { Log "rep ${rep}: pause failed $($_.Exception.Message)" }
         Start-Sleep -Milliseconds 600
     }
@@ -259,7 +304,7 @@ for ($rep = 1; $rep -le $Reps; $rep++) {
     }
     $stPre = ZStatus
     $tag = "rep{0:D2}" -f $rep
-    if ($variant -eq 0) { [BT]::Load(3) }
+    if ($variant -eq 3) { [BT]::Load(3) }
     [BT]::Start($shellH, $out, $tag)
     Start-Sleep -Milliseconds 300
     $qClick = [Diagnostics.Stopwatch]::GetTimestamp()
