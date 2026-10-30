@@ -52,9 +52,15 @@ namespace ZephyrPlayer
         }
 
         /// <summary>LibVLC with the CP2 subtitle look (lifted above the bar, S/M/L size,
-        /// bold with an outline). libVLC 3 reads these once, at creation. If it refuses
-        /// them, Zephyr still starts with libVLC's defaults.</summary>
-        internal static LibVLC CreateLibVlc(PlayerSettings settings)
+        /// bold with an outline). libVLC 3 reads these once, at creation: this is where a
+        /// subtitle size saved during an earlier session takes effect (the restart popup,
+        /// CP2 round 4). If libVLC refuses them, Zephyr still starts with its defaults.</summary>
+        internal static LibVLC CreateLibVlc(PlayerSettings settings) => CreateLibVlc(settings, out _, out _);
+
+        /// <summary>[optionsUsed] are the options handed to the LibVLC constructor and
+        /// [sizeUsed] the saved size they carry (null when libVLC refused them and its
+        /// defaults are in use).</summary>
+        internal static LibVLC CreateLibVlc(PlayerSettings settings, out string[] optionsUsed, out string? sizeUsed)
         {
             double dpi = 1.0;
             try
@@ -63,8 +69,17 @@ namespace ZephyrPlayer
                 dpi = g.DpiY / 96.0;
             }
             catch { dpi = 1.0; }
-            try { return new LibVLC(PlayerBarLogic.SubtitleOptions(settings.SubtitleSize, dpi)); }
-            catch (Exception ex) { LogCrash("libvlc-options", ex.GetType().Name); return new LibVLC(); }
+            var size = settings.SubtitleSize;
+            optionsUsed = PlayerBarLogic.SubtitleOptions(size, dpi);
+            sizeUsed = size;
+            try { return new LibVLC(optionsUsed); }
+            catch (Exception ex)
+            {
+                LogCrash("libvlc-options", ex.GetType().Name);
+                optionsUsed = Array.Empty<string>();
+                sizeUsed = null;
+                return new LibVLC();
+            }
         }
 
         protected override void OnStartup(StartupEventArgs e)
@@ -145,7 +160,7 @@ namespace ZephyrPlayer
 
             Core.Initialize();
             var settings = new PlayerSettings();
-            var libvlc = CreateLibVlc(settings);
+            var libvlc = CreateLibVlc(settings, out _, out var libVlcSubtitleSize);
             var player = new MediaPlayer(libvlc);
             player.EnableMouseInput = false;
             player.EnableKeyInput = false;
@@ -171,7 +186,7 @@ namespace ZephyrPlayer
             // are views swapped in place inside it - no window hides to show another.
             // Volume is the player's own (owner decision 2): no Windows master service.
             _shell = new ShellWindow(settings);
-            _player = new PlayerView(libvlc, player, settings);
+            _player = new PlayerView(libvlc, player, settings) { LibVlcSubtitleSize = libVlcSubtitleSize };
             _player.HomeRequested += LeavePlayer;
             // Sleep timer: the movie pauses and the player stays (render 04 footnote);
             // nothing navigates on it.

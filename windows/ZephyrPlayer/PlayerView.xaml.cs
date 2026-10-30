@@ -101,6 +101,7 @@ namespace ZephyrPlayer
             _libvlc = libvlc;
             _player = player;
             _settings = settings ?? new PlayerSettings();
+            LibVlcSubtitleSize = _settings.SubtitleSize;
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); HookOverlayKeys(); ApplyLayoutMode(); };
             // The overlay grid loads inside LibVLCSharp's own window, after this view's
             // Loaded: hook that window (keys, first frame) from here.
@@ -1318,17 +1319,61 @@ namespace ZephyrPlayer
             }
         }
 
+        /// <summary>The subtitle size the running LibVLC was created with (App start).
+        /// Unset = the saved size when this view was built, which is what App.CreateLibVlc
+        /// read just before. Null = libVLC refused the options and runs its defaults.</summary>
+        internal string? LibVlcSubtitleSize { get; set; }
+
+        /// <summary>Tests only: replaces showing the restart popup (title, text).</summary>
+        internal Action<string, string>? RestartNoticeOverride;
+        internal int SubtitleRestartNoticeCount { get; private set; }
+        internal string? LastSubtitleRestartNotice { get; private set; }
+        private bool _restartNoticeOpen;
+
         private void OnSubtitleSize(object sender, RoutedEventArgs e)
         {
             var size = (string)((Button)sender).Content;
+            var before = _settings.SubtitleSize;
+            // Saved now; App.CreateLibVlc applies it at the next full app start.
             _settings.SubtitleSize = size;
             RefreshSubtitleSizeUi();
-            var name = size == "S" ? "Small" : size == "L" ? "Large" : "Medium";
-            // U4: libVLC 3 has no live text-size change; never re-open the movie for it.
-            // Measured (SubtitleSizePathTests): the size is read only when the LibVLC
-            // instance is created; per-media options and a new MediaPlayer do not change
-            // it. Closing the window keeps Zephyr (and its LibVLC) running in the tray.
-            ShowOsd("Subtitle size: " + name + ". It applies after you quit Zephyr Player (tray menu) and open it again.");
+            var name = PlayerBarLogic.SubtitleSizeName(size);
+            // U4 + Instinct CP2 round 4: libVLC 3 reads the size only when the LibVLC is
+            // created (SubtitleSizePathTests), and the live libvlccore route is rejected.
+            // So this touches nothing that plays: no media, MediaPlayer, LibVLC or seek.
+            // Closing the window keeps Zephyr (and its LibVLC) running in the tray, so the
+            // popup says Quit from the tray icon, then open Zephyr again.
+            if (size == LibVlcSubtitleSize)
+            {
+                ShowOsd("Subtitle size: " + name + " (the size in use now)");
+                return;
+            }
+            if (size == before)
+            {
+                ShowOsd("Subtitle size " + name + " is saved. It takes effect after you quit Zephyr Player from the tray icon and open it again.");
+                return;
+            }
+            ShowSubtitleRestartNotice(size);
+        }
+
+        private void ShowSubtitleRestartNotice(string size)
+        {
+            var text = PlayerBarLogic.SubtitleRestartNotice(size);
+            SubtitleRestartNoticeCount++;
+            LastSubtitleRestartNotice = text;
+            ClosePopups();
+            if (RestartNoticeOverride != null) { RestartNoticeOverride(PlayerBarLogic.SubtitleRestartTitle, text); return; }
+            var dlg = FirewallSetup.NoteWindow(text, PlayerBarLogic.SubtitleRestartTitle);
+            var owner = Window.GetWindow(this);
+            if (owner != null && owner.IsVisible)
+            {
+                dlg.Owner = owner;
+                dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            }
+            _restartNoticeOpen = true;
+            try { dlg.ShowDialog(); }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Restart notice failed: " + ex.GetType().Name); ShowOsd("Subtitle size saved. It takes effect after you quit Zephyr Player from the tray icon and open it again."); }
+            finally { _restartNoticeOpen = false; }
         }
 
         private void RefreshSubtitleSizeUi()
@@ -1809,6 +1854,9 @@ namespace ZephyrPlayer
                 ["sleep_paused_count"] = SleepPausedCount,
                 ["subtitle_delay_ms"] = _subDelayMs,
                 ["subtitle_size"] = _settings.SubtitleSize,
+                ["subtitle_size_in_use"] = LibVlcSubtitleSize,
+                ["subtitle_restart_notices"] = SubtitleRestartNoticeCount,
+                ["restart_notice_open"] = _restartNoticeOpen,
                 ["fullscreen"] = _fullscreen,
                 ["pill_drawn_width"] = Math.Round(PillDrawnWidth, 1),
                 ["reflow"] = _reflowLevel,

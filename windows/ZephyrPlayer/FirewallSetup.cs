@@ -582,6 +582,15 @@ namespace ZephyrPlayer
             return answer;
         }
 
+        /// <summary>The same dark note (single OK, Enter/Esc close) with its own title,
+        /// built but not shown: the player's subtitle-size restart popup.</summary>
+        internal static Window NoteWindow(string text, string title)
+        {
+            var dlg = DarkDialog(text, "OK", null, () => { });
+            dlg.Title = title;
+            return dlg;
+        }
+
         internal static void Note(string text)
         {
             var dlg = DarkDialog(text, "OK", null, () => { });

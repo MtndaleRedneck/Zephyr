@@ -115,5 +115,37 @@ namespace ZephyrPlayer.Tests
             Assert.True(s.Gap >= 0, "no subtitle text found in the S picture\n" + log);
             Assert.True(l.Height >= s.Height + 4, "L at creation is not taller than S\n" + log);
         }
+
+        /// <summary>CP2 round 4: a size saved during one session is the one the next app
+        /// start's LibVLC is created with. App.CreateLibVlc reads the saved settings file
+        /// and hands --sub-text-scale for that size to the LibVLC constructor; the probe
+        /// then measures text drawn by THAT LibVLC (audio off per media only).</summary>
+        [Fact]
+        public void SavedSize_AppliesAtTheNextLibVlcCreation()
+        {
+            Core.Initialize();
+            var log = new System.Text.StringBuilder();
+            var sizes = new System.Collections.Generic.Dictionary<string, (int Height, int Gap)>();
+            foreach (var size in new[] { "S", "L" })
+            {
+                var path = Path.Combine(Path.GetTempPath(), "zephyr-r4-start-" + Guid.NewGuid().ToString("N") + ".json");
+                try
+                {
+                    new PlayerSettings(path).SubtitleSize = size;      // saved by the popup's session
+                    var fresh = new PlayerSettings(path);               // the next app start reads the file
+                    using var vlc = App.CreateLibVlc(fresh, out var options, out var used);
+                    Assert.Equal(size, used);
+                    Assert.Contains("--sub-text-scale=" + PlayerBarLogic.SubtitleTextScale(size), options);
+                    using var mp = new MediaPlayer(vlc); using var g = new Vmem(mp);
+                    sizes[size] = Play(vlc, mp, g, ":no-audio");
+                    log.AppendLine($"saved {size} -> App.CreateLibVlc options: {string.Join(" ", options)}");
+                    log.AppendLine($"  measured with that LibVLC: text {sizes[size].Height} px tall, {sizes[size].Gap} px above the picture bottom ({W}x{H})");
+                }
+                finally { try { File.Delete(path); } catch { } }
+            }
+            try { File.WriteAllText(Path.Combine(OutDir, "cp2-unit-r4-saved-size-at-creation.txt"), log.ToString()); } catch { }
+            Assert.True(sizes["S"].Gap >= 0, "no subtitle text found with saved S\n" + log);
+            Assert.True(sizes["L"].Height >= sizes["S"].Height + 4, "saved L is not taller than saved S at creation\n" + log);
+        }
     }
 }
