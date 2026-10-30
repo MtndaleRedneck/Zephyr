@@ -319,19 +319,19 @@ function FitWindow($hWnd) {
     for ($try = 0; $try -lt 4; $try++) {
         [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), $wa.Left, $wa.Top, $wantW, $wantH, 0) | Out-Null
         Start-Sleep -Milliseconds 700
-        $fr = [ZRECT]::new()
-        if ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$fr, 16) -ne 0) {
-            # No DWM frame: GetWindowRect minus the usual 7px invisible border.
-            [void][ZWU32]::GetWindowRect($hWnd, [ref]$fr)
-            $fr.Left += 7; $fr.Right -= 7; $fr.Bottom -= 7
-        }
-        if ([Math]::Abs($fr.Left - $wa.Left) -le 6 -and [Math]::Abs($fr.Top - $wa.Top) -le 6 -and
-            [Math]::Abs(($fr.Right - $fr.Left) - $wantW) -le 6 -and [Math]::Abs(($fr.Bottom - $fr.Top) - $wantH) -le 6) {
+        # SetWindowPos positions the WINDOW rect; the DWM frame sits ~7px inside
+        # it (run 40993947776 calibration: requested (0,0) 1024x710 settled at
+        # window=(0,0,1024,710) exactly, frame=(7,0,1017,703)). Verify against
+        # GetWindowRect - the rect SetWindowPos actually controls.
+        $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+        if ([Math]::Abs($wr.Left - $wa.Left) -le 4 -and [Math]::Abs($wr.Top - $wa.Top) -le 4 -and
+            [Math]::Abs(($wr.Right - $wr.Left) - $wantW) -le 4 -and [Math]::Abs(($wr.Bottom - $wr.Top) - $wantH) -le 4) {
             return
         }
     }
-    $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
-    throw "FitWindow: window did not settle at ($($wa.Left),$($wa.Top)) ${wantW}x${wantH}; frame=($($fr.Left),$($fr.Top),$($fr.Right),$($fr.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) workarea=($($wa.Left),$($wa.Top),$($wa.Right),$($wa.Bottom))"
+    $fr = [ZRECT]::new()
+    [void][ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$fr, 16)
+    throw "FitWindow: window did not settle at ($($wa.Left),$($wa.Top)) ${wantW}x${wantH}; window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) frame=($($fr.Left),$($fr.Top),$($fr.Right),$($fr.Bottom)) workarea=($($wa.Left),$($wa.Top),$($wa.Right),$($wa.Bottom))"
 }
 function Wait-MainWindow($proc, $seconds) {
     # WPF can take a while to create its HWND on a cold runner; poll instead
