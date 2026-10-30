@@ -636,6 +636,58 @@ jobs:
           }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           Write-Output 'N-10 UNINSTALL: a foreign 47823 reservation survived the post-upgrade uninstall byte-identical (URL + SDDL + flags), and the log shows the legacy blind delete never ran.' 
+      - name: Published 1.3.0 -> candidate upgrade smoke (real published asset)
+        if: always()
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The real installed-base upgrade path: the PUBLISHED 1.3.0 release
+          # asset -> THIS build's installer. Complements the 1.1.0 leg (state
+          # continuity) with the version users actually upgrade FROM.
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            if (-not $pu.WaitForExit(150000)) { throw 'pre-cleanup uninstaller timed out' }
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          gh release download player-v1.3.0 -p 'Zephyr-PC-1.3.0.exe' --dir "$env:RUNNER_TEMP/pub130" --clobber
+          $oldInstaller = "$env:RUNNER_TEMP/pub130/Zephyr-PC-1.3.0.exe"
+          if (-not (Test-Path $oldInstaller)) { throw "published 1.3.0 installer missing after download" }
+          $oldLog = "$env:RUNNER_TEMP/installer-old130.log"
+          $op = Start-Process $oldInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$oldLog" -PassThru
+          if (-not $op.WaitForExit(150000)) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw 'published 1.3.0 installer timed out' }
+          if ($op.ExitCode -ne 0) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw "published 1.3.0 installer exit $($op.ExitCode)" }
+          $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $installed)) { throw "1.3.0 installed exe missing: $installed" }
+          $alive = $false
+          for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive) { Start-Process $installed; for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) } }
+          if (-not $alive) { throw 'published 1.3.0 never stayed running after install' }
+          Write-Output 'published 1.3.0 installed and ran'
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          if (-not (Test-Path $newInstaller)) { throw "candidate installer missing: $newInstaller" }
+          $upLog = "$env:RUNNER_TEMP/installer-130-upgrade-smoke.log"
+          $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
+          if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'candidate upgrade installer timed out' }
+          if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "candidate upgrade installer exit $($up.ExitCode)" }
+          $newInstalled = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $newInstalled)) { throw "upgraded exe missing: $newInstalled" }
+          $pv = (Get-Item $newInstalled).VersionInfo.ProductVersion
+          if ($pv -notlike '1.4*') { throw "upgraded exe ProductVersion is $pv, expected 1.4.x" }
+          Start-Process $newInstalled
+          $alive2 = $false
+          for ($i = 0; $i -lt 30 -and -not $alive2; $i++) { Start-Sleep -Seconds 1; $alive2 = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive2) { throw 'upgraded build never stayed running' }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Output "published 1.3.0 -> $v upgrade OK (ProductVersion $pv)"
+
       - name: Legacy chain + fresh-install uninstall smokes (real artifacts)
         if: always()
         timeout-minutes: 12
@@ -853,6 +905,8 @@ jobs:
             ${{ runner.temp }}/installer-smoke.log
             ${{ runner.temp }}/installer-update-smoke.log
             ${{ runner.temp }}/installer-old110.log
+            ${{ runner.temp }}/installer-old130.log
+            ${{ runner.temp }}/installer-130-upgrade-smoke.log
             ${{ runner.temp }}/installer-upgrade-smoke.log
             ${{ runner.temp }}/uninstall-upgrade-smoke.log
             ${{ runner.temp }}/n10-acl-poll.log
