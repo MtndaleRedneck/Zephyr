@@ -234,6 +234,7 @@ namespace ZephyrPlayer
                 case "error": start.OnError?.Invoke(_player, EventArgs.Empty); break;
                 case "ended": start.OnEnded?.Invoke(_player, EventArgs.Empty); break;
                 case "opening": start.OnOpening?.Invoke(_player, EventArgs.Empty); break;
+                case "vout": start.OnVout?.Invoke(_player, (MediaPlayerVoutEventArgs)Activator.CreateInstance(typeof(MediaPlayerVoutEventArgs), System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null, new object[] { (int)cache }, null)!); break;
                 case "buffering": start.OnBuffering?.Invoke(_player, (MediaPlayerBufferingEventArgs)Activator.CreateInstance(typeof(MediaPlayerBufferingEventArgs), System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null, new object[] { cache }, null)!); break;
                 default: throw new ArgumentException(kind);
             }
@@ -277,8 +278,14 @@ namespace ZephyrPlayer
             internal long LastProgressTick;
             internal string LastProgress = "handoff";
             internal int ProgressMarks;
+            /// <summary>libVLC said Playing (its demuxer opened); the picture may still be
+            /// buffering. Loading ends at the first sign of content (see OnNativeContent).</summary>
+            internal bool PlayingSeen;
+            internal bool Buffered;
+            internal string? CompletedBy;
             internal EventHandler<EventArgs>? OnPlaying, OnError, OnEnded, OnOpening;
             internal EventHandler<MediaPlayerBufferingEventArgs>? OnBuffering;
+            internal EventHandler<MediaPlayerVoutEventArgs>? OnVout;
         }
         private NativeStart? _nativeStart;
         private readonly DispatcherTimer _stallWatch = new();
@@ -289,12 +296,20 @@ namespace ZephyrPlayer
             a.OnError = (_, __) => Dispatcher.BeginInvoke(() => FailNativeStart(a, "native-error"));
             a.OnEnded = (_, __) => Dispatcher.BeginInvoke(() => FailNativeStart(a, "native-ended"));
             a.OnOpening = (_, __) => Dispatcher.BeginInvoke(() => MarkNativeProgress(a, "opening"));
-            a.OnBuffering = (_, e) => { var cache = e.Cache; Dispatcher.BeginInvoke(() => { if (cache != a.LastCache) { a.LastCache = cache; MarkNativeProgress(a, "buffering " + cache.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%"); } }); };
+            a.OnBuffering = (_, e) => { var cache = e.Cache; Dispatcher.BeginInvoke(() =>
+            {
+                if (cache != a.LastCache) { a.LastCache = cache; MarkNativeProgress(a, "buffering " + cache.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%"); }
+                if (cache >= 100f) { a.Buffered = true; if (a.PlayingSeen) OnNativeContent(a, "buffered"); }
+            }); };
+            // A video output appearing is progress, not content: libVLC 3 opens it
+            // (black) before buffering ends and the first picture shows.
+            a.OnVout = (_, e) => { var count = e.Count; Dispatcher.BeginInvoke(() => { if (count > 0) MarkNativeProgress(a, "video output"); }); };
             _player.Playing += a.OnPlaying;
             _player.EncounteredError += a.OnError;
             _player.EndReached += a.OnEnded;
             _player.Opening += a.OnOpening;
             _player.Buffering += a.OnBuffering;
+            _player.Vout += a.OnVout;
             a.Attached = true;
             a.LastProgressTick = Environment.TickCount64;
             a.LastBytes = a.Source.BytesDelivered;
@@ -317,6 +332,7 @@ namespace ZephyrPlayer
             _player.EndReached -= a.OnEnded;
             _player.Opening -= a.OnOpening;
             _player.Buffering -= a.OnBuffering;
+            _player.Vout -= a.OnVout;
         }
 
         private void DetachNativeStart()
@@ -326,14 +342,37 @@ namespace ZephyrPlayer
             if (a != null) DetachNativeHandlers(a);
         }
 
-        /// <summary>This start's own Playing. It ends loading only when it is still the
-        /// newest start; a start that played while a newer one is preparing leaves the
-        /// newer spinner up.</summary>
+        /// <summary>This start's own Playing. libVLC 3 says Playing when its demuxer has
+        /// opened, before the first picture: a slow phone can still be buffering for a
+        /// while (CI run 41033075025: about 0.7 s of an all-black video area between
+        /// Playing and the first frame on a dribbling source). So Playing alone does not
+        /// end loading; the first sign of content does (OnNativeContent). A start that
+        /// played while a newer one is preparing leaves the newer spinner up.</summary>
         private void OnNativePlaying(NativeStart a)
         {
             if (!a.Waiting || !ReferenceEquals(a, _nativeStart)) return;
+            a.PlayingSeen = true;
+            MarkNativeProgress(a, "playing");
+            if (a.Generation != _playGeneration)
+            {
+                // A newer start is preparing; this one is done waiting and its handlers go.
+                _stallWatch.Stop();
+                DetachNativeHandlers(a);
+                return;
+            }
+            if (a.Buffered) OnNativeContent(a, "buffered");
+        }
+
+        /// <summary>Content of this start is on its way to the screen: after Playing,
+        /// libVLC finished buffering (Buffering 100 %, when its decoders are released to
+        /// show pictures) or its clock is past 0 (CheckNativeStall). Loading ends here,
+        /// for the newest start only.</summary>
+        private void OnNativeContent(NativeStart a, string what)
+        {
+            if (!a.Waiting || !a.PlayingSeen || !ReferenceEquals(a, _nativeStart)) return;
             _stallWatch.Stop();
             DetachNativeHandlers(a);
+            a.CompletedBy = what;
             if (a.Generation != _playGeneration) return;
             LastStartFailure = null;
             EndLoading();
@@ -376,10 +415,17 @@ namespace ZephyrPlayer
         {
             var a = _nativeStart;
             if (a == null || !a.Waiting) { _stallWatch.Stop(); return; }
+            if (a.PlayingSeen && _player.Time > 0) { OnNativeContent(a, "clock"); return; }
             var bytes = a.Source.BytesDelivered;
             if (bytes != a.LastBytes) { a.LastBytes = bytes; MarkNativeProgress(a, "bytes " + bytes); return; }
             if (Environment.TickCount64 - a.LastProgressTick >= (long)NativeStallWindow.TotalMilliseconds)
-                FailNativeStart(a, "native-stalled");
+            {
+                // After libVLC's Playing the movie is libVLC's: a quiet spell then is
+                // never turned into a failure here (its own error/end still are); the
+                // spinner simply gives way.
+                if (a.PlayingSeen) OnNativeContent(a, "playing-quiet");
+                else FailNativeStart(a, "native-stalled");
+            }
         }
 
         private void FailNativeStart(NativeStart a, string why)

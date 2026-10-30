@@ -301,7 +301,8 @@ namespace ZephyrPlayer.Tests
                     bool laidOut = false, hostHeldAtStop = false, playingAtStop = false;
                     shell.ShowView(home, () =>
                     {
-                        laidOut = home.IsLoaded && home.ActualWidth > 0 && home.ActualHeight > 0;
+                        // Laid out in the shell (Loaded itself is raised later, asynchronously).
+                        laidOut = PresentationSource.FromVisual(home) != null && home.ActualWidth > 0 && home.ActualHeight > 0;
                         hostHeldAtStop = shell.VideoHostHeld;
                         playingAtStop = player.State == VLCState.Playing;
                         view.StopPlaybackSource();
