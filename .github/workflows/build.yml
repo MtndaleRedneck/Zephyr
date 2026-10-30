@@ -124,7 +124,7 @@ jobs:
 
   release-sign-verify:
     # Release-gate evidence (manual runs only): build the release APK signed with
-    # the encrypted signer and prove its certificate equals the PUBLISHED 1.3.0
+    # the encrypted signer and prove its certificate equals the PUBLISHED 1.4.0
     # APK's certificate - before anything is uploaded anywhere. The signed APK is
     # a repo-private Actions artifact only: no release, no publication.
     if: github.event_name == 'workflow_dispatch'
@@ -148,22 +148,22 @@ jobs:
           echo "KEYSTORE_FILE=$RUNNER_TEMP/keystore.jks" >> "$GITHUB_ENV"
       - name: Build signed release APK
         run: ./gradlew --no-daemon assembleRelease
-      - name: Signing certificate must match published 1.3.0
+      - name: Signing certificate must match published 1.4.0
         run: |
           set -euo pipefail
           APK=$(ls android/build/outputs/apk/release/*.apk | head -1)
-          gh release download zephyr-android-v1.3.0 -p 'Zephyr-Android-1.3.0.apk' --dir "$RUNNER_TEMP/pub130" --clobber
+          gh release download zephyr-android-v1.4.0 -p 'Zephyr-Android-1.4.0.apk' --dir "$RUNNER_TEMP/pub140" --clobber
           BT=$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)
           APKSIGNER="$ANDROID_HOME/build-tools/$BT/apksigner"
           cand=$("$APKSIGNER" verify --print-certs "$APK" | grep 'SHA-256 digest')
-          pub=$("$APKSIGNER" verify --print-certs "$RUNNER_TEMP/pub130/Zephyr-Android-1.3.0.apk" | grep 'SHA-256 digest')
+          pub=$("$APKSIGNER" verify --print-certs "$RUNNER_TEMP/pub140/Zephyr-Android-1.4.0.apk" | grep 'SHA-256 digest')
           echo "candidate: $cand"
-          echo "pub 1.3.0: $pub"
+          echo "pub 1.4.0: $pub"
           if [ "$cand" != "$pub" ]; then
-            echo 'SIGNER MISMATCH vs published 1.3.0 - a release signed like this would NOT upgrade 1.3 installs'
+            echo 'SIGNER MISMATCH vs published 1.4.0 - a release signed like this would NOT upgrade 1.4 installs'
             exit 1
           fi
-          echo 'SIGNER MATCHES published 1.3.0'
+          echo 'SIGNER MATCHES published 1.4.0'
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Zephyr-Android-release-signed-apk
