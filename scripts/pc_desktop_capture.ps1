@@ -51,6 +51,10 @@ public static class ZWU32 {
     [DllImport("user32.dll")] public static extern bool SystemParametersInfo(int uAction, int uParam, ref ZRECT lpvParam, int fuWinIni);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowW(string cls, string title);
+    [DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr h);
+    [DllImport("user32.dll", EntryPoint="GetWindow")] public static extern IntPtr GetWindowRel(IntPtr h, uint cmd);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, System.IntPtr w, System.IntPtr l);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out ZRECT r, int size);
     [DllImport("dwmapi.dll", EntryPoint="DwmGetWindowAttribute")] static extern int DwmGetWindowAttributeInt(IntPtr hWnd, int attr, out int v, int size);
@@ -1190,6 +1194,36 @@ $cp2Fail = New-Object System.Collections.Generic.List[string]
 Remove-Item $cp2Note -ErrorAction SilentlyContinue
 function Cp2Log($s) { Write-Host "CP2: $s"; $s | Add-Content $cp2Note }
 function Cp2Gate($ok, $s) { if ($ok) { Cp2Log "PASS $s" } else { Cp2Log "FAIL $s"; $cp2Fail.Add($s) } }
+# Observation only (not a gate): is the taskbar over the fullscreen shell? Logs the
+# taskbar's rect and visibility, which of taskbar and shell is higher in the z-order,
+# the foreground window, and the mean colour of the capture's bottom 40 rows at the
+# left and right edges (outside the pill), where render 03 has movie or black.
+function Cp2TaskbarCheck($label, $path) {
+    try {
+        $tray = [ZWU32]::FindWindowW('Shell_TrayWnd', [NullString]::Value)
+        $tr = [ZRECT]::new(); if ($tray -ne [IntPtr]::Zero) { [void][ZWU32]::GetWindowRect($tray, [ref]$tr) }
+        $order = 'unknown'
+        $h = [ZWU32]::GetTopWindow([IntPtr]::Zero); $n = 0
+        while ($h -ne [IntPtr]::Zero -and $n -lt 5000) {
+            if ($tray -ne [IntPtr]::Zero -and $h -eq $tray) { $order = 'taskbar above shell'; break }
+            if ($h -eq $shellH) { $order = 'shell above taskbar'; break }
+            $h = [ZWU32]::GetWindowRel($h, 2); $n++
+        }
+        $fg = [ZWU32]::GetForegroundWindow()
+        $edge = 'n/a'
+        if ($path -and (Test-Path $path)) {
+            $bmp = [System.Drawing.Bitmap]::FromFile($path)
+            try {
+                $sum = 0.0; $cnt = 0
+                foreach ($x in @(4, 40, ($bmp.Width - 41), ($bmp.Width - 5))) {
+                    for ($y = $bmp.Height - 40; $y -lt $bmp.Height; $y += 2) { $c = $bmp.GetPixel($x, $y); $sum += ($c.R + $c.G + $c.B) / 3.0; $cnt++ }
+                }
+                $edge = [math]::Round($sum / [math]::Max(1, $cnt), 1)
+            } finally { $bmp.Dispose() }
+        }
+        Cp2Log "taskbar check ($label, observation): taskbar visible=$([ZWU32]::HwndVisible($tray)) rect=($($tr.Left),$($tr.Top),$($tr.Right),$($tr.Bottom)); z-order: $order; foreground=$(if ($fg -eq $shellH) { 'shell' } else { "other ($fg)" }); bottom-40-row edge mean level $edge of 255"
+    } catch { Cp2Log "taskbar check ($label) could not run: $($_.Exception.Message)" }
+}
 function Cp2Ui() { $st = Cp1Status; if ($st) { return $st.ui } else { return $null } }
 function Cp2Json($o) { if ($o -eq $null) { return 'null' }; return ($o | ConvertTo-Json -Compress -Depth 4) }
 function Cp2FindName($name) {
@@ -1426,6 +1460,7 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     WakeControls
     $uF = Cp2Ui
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-fullscreen.png"
+    Cp2TaskbarCheck 'fullscreen' "$env:RUNNER_TEMP/cp2-fullscreen.png"
     if ($uF -and $uF.bar_screen) {
         $bw = $uF.bar_screen[2] - $uF.bar_screen[0]
         $want = [math]::Min(780, $vs.Width - 48)
