@@ -213,6 +213,90 @@ namespace ZephyrPlayer.Tests
             finally { try { Directory.Delete(dir, true); } catch { } }
         }
 
+        // ---------- player switch: no light video host behind the movie ----------
+
+        private delegate bool EnumChildProc(IntPtr h, IntPtr l);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool EnumChildWindows(IntPtr parent, EnumChildProc cb, IntPtr l);
+        [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)] private static extern int GetClassNameW(IntPtr h, StringBuilder sb, int max);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr SendMessageW(IntPtr h, int msg, IntPtr w, IntPtr l);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr h);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr h, IntPtr dc);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out WinRect r);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern uint GetPixel(IntPtr dc, int x, int y);
+        [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern uint GetBkColor(IntPtr dc);
+        private struct WinRect { public int Left, Top, Right, Bottom; }
+
+        [Fact]
+        public void PlayerVideoHost_PaintsBlack_NotSystemGrey()
+        {
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                var dir = Path.Combine(Path.GetTempPath(), "zephyr-cp1r-host-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                try
+                {
+                    Core.Initialize();
+                    using var vlc = new LibVLC("--no-video", "--aout=dummy");
+                    using var player = new MediaPlayer(vlc);
+                    var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));
+                    var shell = new ShellWindow(settings);
+                    var view = new PlayerView(vlc, player, settings);
+                    shell.ShowView(view);
+                    shell.Show();
+                    try
+                    {
+                        PumpUntil(() => view.IsLoaded, "player view never loaded");
+                        var settle = Environment.TickCount64 + 600; PumpUntil(() => Environment.TickCount64 > settle, "settle");
+                        // LibVLCSharp's video host: a native "static" child of the shell.
+                        var host = IntPtr.Zero;
+                        EnumChildWindows(shell.Handle, (h, _) => { var sb = new StringBuilder(64); GetClassNameW(h, sb, 64); if (sb.ToString().Equals("Static", StringComparison.OrdinalIgnoreCase)) { host = h; return false; } return true; }, IntPtr.Zero);
+                        Assert.NotEqual(IntPtr.Zero, host);
+                        // The colour query the static control makes before it paints.
+                        var dc = GetDC(host);
+                        IntPtr brush; uint bk;
+                        try { brush = SendMessageW(shell.Handle, 0x0138 /* WM_CTLCOLORSTATIC */, dc, host); bk = GetBkColor(dc); }
+                        finally { ReleaseDC(host, dc); }
+                        Assert.Equal(ShellWindow.BlackBrush, brush);
+                        Assert.Equal(0u, bk);
+                        // What is on screen in the middle of the video host (no media yet):
+                        // never the light system grey. CLR_INVALID = no readable desktop.
+                        GetWindowRect(host, out var r);
+                        var screen = GetDC(IntPtr.Zero);
+                        var samples = new System.Collections.Generic.List<string>(); var light = 0; var readable = 0;
+                        try
+                        {
+                            for (var i = 1; i <= 5; i++) for (var j = 1; j <= 5; j++)
+                            {
+                                var x = r.Left + (r.Right - r.Left) * (25 + 10 * i) / 100;
+                                var y = r.Top + (r.Bottom - r.Top) * (25 + 10 * j) / 100;
+                                var c = GetPixel(screen, x, y);
+                                if (c == 0xFFFFFFFF) continue;
+                                readable++;
+                                int cr = (int)(c & 0xFF), cg = (int)((c >> 8) & 0xFF), cb = (int)((c >> 16) & 0xFF);
+                                if (cr >= 0xC8 && cg >= 0xC8 && cb >= 0xC8) light++;
+                                samples.Add($"#{cr:X2}{cg:X2}{cb:X2}");
+                            }
+                        }
+                        finally { ReleaseDC(IntPtr.Zero, screen); }
+                        Note("video-host-colour", $"host=0x{host.ToInt64():X} rect=({r.Left},{r.Top},{r.Right},{r.Bottom}) ctlcolor brush is BLACK_BRUSH={brush == ShellWindow.BlackBrush} bk=0x{bk:X6}; screen samples readable={readable}/25 light={light}: {string.Join(" ", samples)}");
+                        Assert.Equal(0, light);
+                    }
+                    finally { view.ReleasePlayback(); shell.Close(); }
+                }
+                catch (Exception ex) { failure = ex; }
+                finally
+                {
+                    try { Directory.Delete(dir, true); } catch { }
+                    Dispatcher.CurrentDispatcher.InvokeShutdown();
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Assert.True(thread.Join(60000), "STA body did not finish");
+            if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
         // ---------- 4. subtitle encodings ----------
 
         private static byte[] Cp1252Fixture => File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "fixtures", "cp1252.srt"));
