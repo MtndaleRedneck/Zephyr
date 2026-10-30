@@ -14,12 +14,15 @@ internal object CacheCopier {
 
     /** Streams from [open] into [tmp], renames to [final] only when COMPLETE.
      *  [freeSpace] is probed per chunk; [maxBytes] caps the copy. Throws TooLarge /
-     *  NoSpace / Exception on failure, with [tmp] deleted and [final] untouched. */
+     *  NoSpace / Exception on failure, with [tmp] deleted and [final] untouched.
+     *  [commit] owns the final rename so the caller can arbitrate commit against
+     *  request abandonment atomically (default: plain renameTo). */
     fun copy(
         open: () -> java.io.InputStream?,
         tmp: File, final: File,
         freeSpace: () -> Long, maxBytes: Long, minFree: Long,
         cancelled: () -> Boolean = { false },
+        commit: (File, File) -> Boolean = { t, f -> t.renameTo(f) },
     ) {
         try {
             if (freeSpace() < minFree) throw NoSpace()
@@ -42,7 +45,7 @@ internal object CacheCopier {
                 }
             }
             if (cancelled()) throw java.io.InterruptedIOException("copy stopped")
-            if (!tmp.renameTo(final)) throw java.io.IOException("cache rename failed")
+            if (!commit(tmp, final)) throw java.io.IOException("cache commit refused or failed")
         } catch (e: Throwable) {
             tmp.delete()
             throw e

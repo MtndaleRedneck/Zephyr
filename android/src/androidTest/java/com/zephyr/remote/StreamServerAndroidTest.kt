@@ -28,6 +28,7 @@ class StreamServerAndroidTest {
 
     @Before
     fun setUp() {
+        StreamServer.providerBudget.run { drainPermits(); release(8) }
         android.util.Log.i("ZephyrAudit", "APP_PID=${android.os.Process.myPid()}")
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         file = File(context.cacheDir, "synthetic-movie.bin").apply { writeBytes(bytes) }
@@ -76,7 +77,13 @@ class StreamServerAndroidTest {
             while (server.openStreams.get()>0 && android.os.SystemClock.elapsedRealtime()<until) Thread.sleep(10)
             assertEquals(0, server.openStreams.get())
             // Keep producer ends open until after drain assertions: no false release from test teardown.
-            assertTrue(context.cacheDir.listFiles().orEmpty().none { it.name.endsWith(".part") && it.name.startsWith("stream-") })
+            // M1: openStreams reaches zero at the request's LOGICAL release; the
+            // abandoned copy worker deletes its temp when it physically ends (or
+            // the drain sweep does). Wait for that physical cleanup, don't race it.
+            fun leftoverPart() = context.cacheDir.listFiles().orEmpty().any { it.name.endsWith(".part") && it.name.startsWith("stream-") }
+            val gone = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (leftoverPart() && android.os.SystemClock.elapsedRealtime() < gone) Thread.sleep(50)
+            assertTrue("abandoned copy's temp is removed once the worker physically ends", !leftoverPart())
         } finally {
             server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
         }
@@ -253,11 +260,11 @@ class StreamServerAndroidTest {
             assertEquals("request released without the provider returning", 0, server.openStreams.get())
             assertEquals("server closed the client socket", -1, sock.getInputStream().read())
             // The pipe provider's own close completes between poll cycles, so the
-            // abandoned capacity comes back (a truly parked SAF/FUSE provider would
-            // keep it parked - that path is declared, not emulatable here).
+            // budget permit comes back (a truly parked SAF/FUSE provider would
+            // keep it held - that path is declared, not emulatable here).
             val settle = android.os.SystemClock.elapsedRealtime() + 10_000
-            while (server.abandonedStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
-            assertEquals("closed provider returns abandoned capacity", 0, server.abandonedStreams.get())
+            while (StreamServer.providerBudget.availablePermits() < 8 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("closed provider returns its budget permit", 8, StreamServer.providerBudget.availablePermits())
         } finally {
             server.stop(); writers.forEach { runCatching { it.close() } }; runCatching { sock.close() }
         }
@@ -297,8 +304,8 @@ class StreamServerAndroidTest {
             assertTrue("no cache commit from the abandoned copy",
                 context.cacheDir.listFiles().orEmpty().none { it.name.startsWith("stream-") })
             val settle = android.os.SystemClock.elapsedRealtime() + 10_000
-            while (server.abandonedStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
-            assertEquals("late provider closed by the worker", 0, server.abandonedStreams.get())
+            while (StreamServer.providerBudget.availablePermits() < 8 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("late provider closed by the worker", 8, StreamServer.providerBudget.availablePermits())
         } finally {
             server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
         }
@@ -330,13 +337,157 @@ class StreamServerAndroidTest {
         }
     }
 
-    /** M1: at MAX_ABANDONED parked providers, further streams get a clear 503
-     *  instead of spawning more parked workers. The increment/decrement side is
-     *  proven end-to-end by the deadline tests above; a provider whose close
-     *  truly blocks cannot be faked with pipes, so the parked count is set
-     *  directly to exercise the rejection wiring. */
-    @Test fun abandonedCap_rejectsFurtherStreamsWith503() {
-        server.abandonedStreams.set(StreamServer.MAX_ABANDONED)
-        assertEquals("further stream clearly refused", 503, get(movieUrl).first)
+    /** M1/Tab: the process-wide provider budget rejects new streams immediately
+     *  when exhausted - no queue, no unbounded parked workers. (Exhaustion is
+     *  injected by holding all permits; the end-to-end hold/release wiring is
+     *  proven by the deadline tests.) */
+    @Test fun providerBudgetExhausted_rejectsWith503() {
+        assertTrue(StreamServer.providerBudget.tryAcquire(8))
+        try {
+            assertEquals("further stream clearly refused", 503, get(movieUrl).first)
+        } finally { StreamServer.providerBudget.release(8) }
+    }
+
+    /** M1/Tab: the budget gate is process-wide and shared across clients: every
+     *  concurrent new stream is refused while exhausted. (One loopback peer
+     *  stands in for multiple clients; the per-peer accept cap is 4, so three
+     *  concurrent requests stay under it and all reach the gate.) */
+    @Test fun providerBudgetExhausted_concurrentStreamsAllRefused503() {
+        assertTrue(StreamServer.providerBudget.tryAcquire(8))
+        try {
+            val codes = java.util.concurrent.ConcurrentLinkedQueue<Int>()
+            val clients = (1..3).map { kotlin.concurrent.thread { runCatching { codes.add(get(movieUrl).first) } } }
+            clients.forEach { it.join(10_000) }
+            assertEquals(3, codes.size)
+            assertTrue("every concurrent stream refused", codes.all { it == 503 })
+        } finally { StreamServer.providerBudget.release(8) }
+    }
+
+    /** M1/Tab: the budget survives a service restart - a fresh session must not
+     *  pretend old parked providers are gone. */
+    @Test fun providerBudgetSurvivesRestart_newSessionRefusesUntilPermitsReturn() {
+        assertTrue(StreamServer.providerBudget.tryAcquire(8))
+        server.stop()
+        server = StreamServer(InstrumentationRegistry.getInstrumentation().targetContext, InetAddress.getByName("127.0.0.1"), 0)
+        server.start()
+        try {
+            val url = server.addMovie(Uri.fromFile(file), "fresh")
+            assertEquals("parked providers from the old session still count", 503, get(url).first)
+            StreamServer.providerBudget.release(8) // parked providers finally closed
+            assertEquals(200, get(url).first)
+        } finally {
+            StreamServer.providerBudget.run { drainPermits(); release(8) }
+            server.stop()
+        }
+    }
+
+    /** M1/Tab: a provider permit is held for the provider's whole lifetime -
+     *  from before the open through the reads until the close completes - and
+     *  never freed by request abandonment alone. Pipe fakes prove the
+     *  ownership/wiring, not a physically blocked close (declared). */
+    @Test fun providerPermit_heldThroughReadUntilCloseReturns() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        })
+        server.providerDeadlineMs = 60_000 // no abandonment in this test
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/permit"), "permit.mkv")
+        val client = kotlin.concurrent.thread { runCatching { get(url) } }
+        try {
+            val until = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (writers.size < 2 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(10)
+            assertTrue("copy provider open", writers.size >= 2)
+            assertEquals("one permit held while the copy provider is open", 7, StreamServer.providerBudget.availablePermits())
+            server.stop()
+            client.join(5000)
+            val settle = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (StreamServer.providerBudget.availablePermits() < 8 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("permit returned after the close completed", 8, StreamServer.providerBudget.availablePermits())
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
+    }
+
+    /** M1/Tab: commit vs abandonment - complete entry or none, never partial,
+     *  never a leftover temp. Rounds vary the deadline around the copy; the
+     *  atomic ownership itself is unit-tested in RequestStateTest. */
+    @Test fun abandonVsCacheCommit_completeEntryOrNone() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val payload = ByteArray(128 * 1024) { (it % 251).toByte() }
+        repeat(6) { iter ->
+            val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+            server.stop()
+            server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+                android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+            })
+            server.providerDeadlineMs = 50 + iter * 60L // fire around the copy window
+            server.start()
+            val url = server.addMovie(Uri.parse("content://synthetic-pipe/commit$iter"), "commit$iter.mkv")
+            val client = kotlin.concurrent.thread { runCatching { get(url) } }
+            try {
+                val opened = android.os.SystemClock.elapsedRealtime() + 10_000
+                while (writers.size < 2 && android.os.SystemClock.elapsedRealtime() < opened) Thread.sleep(10)
+                assertTrue("copy pipe opened", writers.size >= 2)
+                kotlin.concurrent.thread {
+                    runCatching {
+                        android.os.ParcelFileDescriptor.AutoCloseOutputStream(writers[1]).use { out ->
+                            var off = 0
+                            while (off < payload.size) {
+                                val n = minOf(4096, payload.size - off)
+                                out.write(payload, off, n); out.flush(); off += n
+                                Thread.sleep(5) // pace ~160ms total so copies straddle the 50-350ms deadlines
+                            }
+                        }
+                    }
+                }
+                val until = android.os.SystemClock.elapsedRealtime() + 15_000
+                while (server.openStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(25)
+                client.join(10_000)
+                val left = context.cacheDir.listFiles().orEmpty().filter { it.name.startsWith("stream-") }
+                assertTrue("no leftover temp", left.none { it.name.endsWith(".part") })
+                left.forEach {
+                    assertEquals("commit is the COMPLETE payload or nothing", payload.size.toLong(), it.length())
+                    assertArrayEquals(payload, it.readBytes())
+                }
+            } finally {
+                server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+            }
+        }
+    }
+    /** M1 lifecycle across restart: after a stop with a stalled provider, a NEW
+     *  server session serves normally. Honest limit: a pipe provider cannot stay
+     *  truly parked (its close succeeds between poll cycles), so "old workers
+     *  still blocked" across the restart is declared, not emulated - what this
+     *  proves is that teardown plus a fresh session leave a working server. */
+    @Test fun stopRestartAfterStall_newSessionServes() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        })
+        server.providerDeadlineMs = 1000
+        server.start()
+        val stallUrl = server.addMovie(Uri.parse("content://synthetic-pipe/restart"), "restart.mkv")
+        val stalled = kotlin.concurrent.thread { runCatching { get(stallUrl) } }
+        try {
+            val until = android.os.SystemClock.elapsedRealtime() + 15_000
+            while (server.openStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(50)
+            assertEquals(0, server.openStreams.get())
+            server.stop()
+            stalled.join(5000)
+            // Fresh session on the same port family: normal serving works.
+            server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0)
+            server.start()
+            val fresh = server.addMovie(Uri.fromFile(file), "fresh")
+            val (code, _, body) = get(fresh)
+            assertEquals(200, code)
+            assertArrayEquals(bytes, body)
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; stalled.join(5000)
+        }
     }
 }
