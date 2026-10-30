@@ -202,6 +202,7 @@ namespace ZephyrPlayer
         public void StopPlaybackSource()
         {
             ++_playGeneration; _preparation?.Cancel();
+            DropEndOfMovieSleep();
             DetachNativeStart();
             EndLoading();
             SetOpening(false);
@@ -232,6 +233,7 @@ namespace ZephyrPlayer
         public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
         {
             var generation=++_playGeneration;
+            DropEndOfMovieSleep(); // a new start leaves the movie "End of this movie" was set on
             // "Try again" on the error state re-runs exactly this start (item 68).
             _lastStart = (url, positionSeconds, (string[])subtitles.Clone());
             StartCount++;
@@ -824,10 +826,36 @@ namespace ZephyrPlayer
 
         private void OnPlayPause(object sender, RoutedEventArgs e)
         {
-            if (_player.IsPlaying) _player.SetPause(true);
-            else if (_player.State == VLCState.Paused) _player.SetPause(false);
+            // Opening: the media libVLC holds is the OLD movie behind the new title and
+            // zero timeline. Nothing reaches it, and nothing is saved for the new movie
+            // either (no deferred play/pause); the press simply does nothing.
+            if (_opening) { PlayPauseRefusedCount++; return; }
+            if (_player.IsPlaying) HandPause(true);
+            else if (_player.State == VLCState.Paused) HandPause(false);
             UpdatePlayPauseGlyph();
         }
+
+        /// <summary>The phone's /control/pause and /control/resume. Refused while a new
+        /// start opens, like the bar and Space (the media libVLC holds then is the old
+        /// movie); not queued for the new movie.</summary>
+        internal bool PauseFromPhone(bool pause)
+        {
+            if (_opening) { PlayPauseRefusedCount++; return false; }
+            HandPause(pause);
+            UpdatePlayPauseGlyph();
+            return true;
+        }
+
+        private void HandPause(bool pause)
+        {
+            PlayPauseHandedCount++;
+            _player.SetPause(pause);
+        }
+
+        /// <summary>Test seams: play/pause requests handed to libVLC, and requests refused
+        /// because a new start was opening.</summary>
+        internal int PlayPauseHandedCount { get; private set; }
+        internal int PlayPauseRefusedCount { get; private set; }
 
         private void OnSkipBack(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(false, true), SkipBackSpin, true);
 
@@ -1126,6 +1154,9 @@ namespace ZephyrPlayer
         internal void SetSleep(int minutes)
         {
             if (minutes == 0) _sleep.Off(); else _sleep.Set(minutes, Clock());
+            // "End of this movie" belongs to the start it was chosen on (see
+            // DropEndOfMovieSleep). Timed choices are not bound to a movie.
+            _sleepEndGeneration = minutes == SleepTimerState.EndOfMovie ? _playGeneration : -1;
             if (_sleep.IsActive && !_sleep.IsEndOfMovie) _sleepTick.Start(); else _sleepTick.Stop();
             RefreshSleepUi();
         }
@@ -1166,9 +1197,30 @@ namespace ZephyrPlayer
             if (!ReferenceEquals(a, _mediaStart) || a.Waiting) return;
             MediaEndedCount++;
             RevealBar();
-            if (_sleep.IsEndOfMovie) SleepFire("end");
+            if (_sleep.IsEndOfMovie && _sleepEndGeneration == a.Generation) SleepFire("end");
             UpdatePlayPauseGlyph();
         }
+
+        // The start (play generation) "End of this movie" was chosen on; -1 = none.
+        private int _sleepEndGeneration = -1;
+
+        /// <summary>"End of this movie" means THIS movie: once the movie it was chosen on
+        /// is no longer the current one (Back, tray close, quit, a failed start, or any new
+        /// start - library, phone, Try again), the choice is turned off, so it never fires
+        /// at another movie's end. Called wherever the play generation moves on. The
+        /// timed choices (15 min ... 1 h 30) are left exactly as they were.</summary>
+        private void DropEndOfMovieSleep()
+        {
+            if (!_sleep.IsEndOfMovie) return;
+            _sleep.Off();
+            _sleepEndGeneration = -1;
+            EndOfMovieDroppedCount++;
+            RefreshSleepUi();
+        }
+
+        /// <summary>Test seam: how many times "End of this movie" was turned off because its
+        /// movie was left.</summary>
+        internal int EndOfMovieDroppedCount { get; private set; }
 
         private void RefreshSleepUi()
         {
