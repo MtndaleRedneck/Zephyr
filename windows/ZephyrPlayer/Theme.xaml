@@ -107,4 +107,29 @@
     </Track>
    </Grid></ControlTemplate></Setter.Value></Setter>
  </Style>
+ <!-- 2.0 player bar sliders (render 02 / 04). Tracks are drawn opaque at the colour the
+      render's translucent track has over the bar card (rgba(255,255,255,.16) and .18 over
+      rgba(12,12,15,.74) on dark video): the bar card itself is already 74 % opaque. -->
+ <Style x:Key="ZSeekSlider" TargetType="Slider">
+  <Setter Property="Focusable" Value="False"/><Setter Property="IsMoveToPointEnabled" Value="True"/>
+  <Setter Property="MinHeight" Value="16"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider">
+   <Grid VerticalAlignment="Center" Background="Transparent" Height="18"><Border Background="#303032" Height="4" CornerRadius="2"/>
+    <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}">
+     <Track.DecreaseRepeatButton><RepeatButton Command="Slider.DecreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" Height="4" CornerRadius="2" Margin="0,0,-6,0"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.DecreaseRepeatButton>
+     <Track.Thumb><Thumb Width="18" Height="18" Focusable="False"><Thumb.Template><ControlTemplate TargetType="Thumb"><Grid Background="Transparent"><Ellipse Width="18" Height="18" Fill="#38FF9500"/><Ellipse Width="12" Height="12" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}"/></Grid></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>
+     <Track.IncreaseRepeatButton><RepeatButton Command="Slider.IncreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.IncreaseRepeatButton>
+    </Track>
+   </Grid></ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <Style x:Key="ZVolumeSlider" TargetType="Slider">
+  <Setter Property="Focusable" Value="False"/><Setter Property="IsMoveToPointEnabled" Value="True"/>
+  <Setter Property="MinHeight" Value="16"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider">
+   <Grid VerticalAlignment="Center" Background="Transparent" Height="16"><Border Background="#353537" Height="4" CornerRadius="2"/>
+    <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}">
+     <Track.DecreaseRepeatButton><RepeatButton Command="Slider.DecreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="#FF9500" Height="4" CornerRadius="2" Margin="0,0,-5,0"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.DecreaseRepeatButton>
+     <Track.Thumb><Thumb Width="11" Height="11" Focusable="False"><Thumb.Template><ControlTemplate TargetType="Thumb"><Ellipse Fill="#F5F5F7"/></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>
+     <Track.IncreaseRepeatButton><RepeatButton Command="Slider.IncreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.IncreaseRepeatButton>
+    </Track>
+   </Grid></ControlTemplate></Setter.Value></Setter>
+ </Style>
 </ResourceDictionary>

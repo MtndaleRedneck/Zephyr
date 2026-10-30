@@ -51,7 +51,17 @@ namespace ZephyrPlayer
         public void SetSpu(int trackId) => OnUi(() => _window.SelectSubtitle(trackId));
         public void SetFullscreen(bool on) => OnUi(() => _window.SetFullscreen(on));
 
-        public string StatusJson() => OnUi(() => JsonSerializer.Serialize(new
+        public string StatusJson() => OnUi(() =>
+        {
+            var node = JsonSerializer.SerializeToNode(StatusObject())!.AsObject();
+#if CI_CAPTURE_HOOK
+            // Capture build only: what the bar draws, for the desktop proof script.
+            node["ui"] = JsonSerializer.SerializeToNode(_window.UiState());
+#endif
+            return node.ToJsonString();
+        });
+
+        private object StatusObject() => new
         {
             state = _player.State.ToString(),
             time = _player.Time / 1000,
@@ -69,6 +79,7 @@ namespace ZephyrPlayer
             fullscreen = _window.IsFullscreen,
             update_available = UpdateState.AvailableVersion,
             update_check = UpdateState.Outcome,
-        }));
+            rate = _window.CurrentRate,
+        };
     }
 }

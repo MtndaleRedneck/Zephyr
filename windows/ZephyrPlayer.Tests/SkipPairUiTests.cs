@@ -54,15 +54,17 @@ namespace ZephyrPlayer.Tests
             Sta(path=>{
                 Assert.Equal(Colors.White,SecondarySkipHighlight.HighlightColor(Brand.Orange));Assert.Equal(Brand.Orange,SecondarySkipHighlight.HighlightColor(Color.FromRgb(245,245,247)));
                 foreach(var color in new[]{Brand.Orange,Color.FromRgb(245,245,247)}) {
-                    var canvas=new Canvas{Width=108,Height=92,Background=new SolidColorBrush(Color.FromRgb(27,27,30))};
-                    var basePath=new System.Windows.Shapes.Path{Data=Geometry.Parse("M8,17 Q27,-2 46,17 M46,17 L46,8 M46,17 L37,14"),Stroke=new SolidColorBrush(color),StrokeThickness=2.6};
-                    var highlight=new SecondarySkipHighlight{Width=54,Height=46};canvas.Children.Add(basePath);canvas.Children.Add(highlight);canvas.LayoutTransform=new ScaleTransform(2,2);
-                    highlight.Preview(color,.54);Capture(canvas,216,"pc-secondary-highlight-"+(color==Brand.Orange?"orange":"white")+".png");
-                    var pixels=new RenderTargetBitmap(216,184,96,96,PixelFormats.Pbgra32);pixels.Render(canvas);
-                    var bytes=new byte[216*184*4];pixels.CopyPixels(bytes,216*4,0);
-                    Color AtPixel(int x,int y){var at=(y*216+x)*4;return Color.FromRgb(bytes[at+2],bytes[at+1],bytes[at]);}
+                    // The real 24-unit forward arc (render 02), drawn 8x: 192 x 192 px.
+                    var canvas=new Canvas{Width=24,Height=24,Background=new SolidColorBrush(Color.FromRgb(27,27,30))};
+                    var basePath=new System.Windows.Shapes.Path{Data=Geometry.Parse("M3.73,10.39 A8.8,8.8 0 0 1 20.27,10.39"),Stroke=new SolidColorBrush(color),StrokeThickness=1.8};
+                    var highlight=new SecondarySkipHighlight{Width=24,Height=24};canvas.Children.Add(basePath);canvas.Children.Add(highlight);canvas.LayoutTransform=new ScaleTransform(8,8);
+                    highlight.Preview(color,.5);Capture(canvas,192,"pc-secondary-highlight-"+(color==Brand.Orange?"orange":"white")+".png");
+                    var pixels=new RenderTargetBitmap(192,192,96,96,PixelFormats.Pbgra32);pixels.Render(canvas);
+                    var bytes=new byte[192*192*4];pixels.CopyPixels(bytes,192*4,0);
+                    Color AtPixel(Point p){int x=(int)Math.Round(p.X*8),y=(int)Math.Round(p.Y*8);var at=(y*192+x)*4;return Color.FromRgb(bytes[at+2],bytes[at+1],bytes[at]);}
                     double Dist(Color a,Color b)=>Math.Abs(a.R-b.R)+Math.Abs(a.G-b.G)+Math.Abs(a.B-b.B);
-                    var center=AtPixel(57,15);var outside=AtPixel(20,30);var inverse=SecondarySkipHighlight.HighlightColor(color);
+                    // Band centre at the top of the arc; the tail (3 % along) is outside the band.
+                    var center=AtPixel(highlight.At(.5));var outside=AtPixel(highlight.At(.03));var inverse=SecondarySkipHighlight.HighlightColor(color);
                     Assert.True(Dist(center,inverse)<Dist(center,color),"band center did not render inverse color");
                     Assert.True(Dist(outside,color)<Dist(outside,inverse),"outside band must retain selected base color");
 
@@ -116,7 +118,8 @@ namespace ZephyrPlayer.Tests
                 var a = (FrameworkElement)pause.Children[0]; var b = (FrameworkElement)pause.Children[1];
                 var ar = a.TransformToAncestor(pause).TransformBounds(new Rect(0,0,a.ActualWidth,a.ActualHeight));
                 var br = b.TransformToAncestor(pause).TransformBounds(new Rect(0,0,b.ActualWidth,b.ActualHeight));
-                Assert.True(br.Left - ar.Right >= 6, "Pause bars merge");
+                // Render 02: bars 2.3/24 wide at x 9 and 12.7 of the 50 px button = 2.9 px apart.
+                Assert.True(br.Left - ar.Right >= 2.5, "Pause bars merge");
                 var fullscreenGlyph = (System.Windows.Shapes.Path)window.FindName("FullscreenGlyph")!;
                 var enterShape = fullscreenGlyph.Data.ToString();
                 window.SetFullscreen(true);
@@ -126,7 +129,11 @@ namespace ZephyrPlayer.Tests
                 var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
                 window.SetMuteTied(false);
                 Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
-                Assert.Equal(1000, window.ControlBar.MaxWidth);
+                // The pill (render 03): the bar laid out at up to 1000 px and drawn at 0.78,
+                // i.e. 780 px at most, and never wider than the screen minus 2 x 24 (U2).
+                Assert.True(window.ControlBar.Width <= 1000.001, "pill layout wider than 1000");
+                Assert.Equal(0.78, ((ScaleTransform)window.ControlBar.LayoutTransform).ScaleX, 3);
+                Assert.True(window.PillDrawnWidth <= 780.001 && window.PillDrawnWidth <= SystemParameters.PrimaryScreenWidth - 48 + 0.001, "pill not clamped: " + window.PillDrawnWidth);
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;
                 Capture(window.ControlBar,1000,"pc-redesign-fullscreen-pill.png");

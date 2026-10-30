@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using System.Windows.Input;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Threading;
@@ -17,10 +18,11 @@ namespace ZephyrPlayer
     public partial class PlayerView : UserControl
     {
         private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
+        private static readonly SolidColorBrush IconDefault = new(Color.FromRgb(0xE9, 0xE9, 0xEE));
         private static readonly SolidColorBrush Orange = new(Brand.Orange);
-        private static readonly SolidColorBrush Gold = new(Color.FromRgb(0xF0, 0xC2, 0x3E));
-        private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));
-        private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x1B, 0x1B, 0x1E));
+        private static readonly SolidColorBrush OrangeTint = new(Color.FromArgb(0x1A, 0xFF, 0x95, 0x00));
+        private static readonly SolidColorBrush WhiteTint = new(Color.FromArgb(0x1A, 0xF5, 0xF5, 0xF7));
+        private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x14, 0x14, 0x16));
 
         // Brushes are shared app-wide; Freeze makes them safe to touch from any
         // thread (each test case runs on its own STA thread - unfrozen statics
@@ -28,32 +30,48 @@ namespace ZephyrPlayer
         static PlayerView()
         {
             RingDefault.Freeze();
+            IconDefault.Freeze();
             Orange.Freeze();
-            Gold.Freeze();
-            Muted.Freeze();
+            OrangeTint.Freeze();
+            WhiteTint.Freeze();
             Dark.Freeze();
         }
 
         private readonly LibVLC _libvlc;
         private readonly MediaPlayer _player;
         private SafeMediaSource? _safeSource;
-        private readonly SecondarySkipHighlight _secondaryBackHighlight=new(){Width=54,Height=46,Backward=true,IsHitTestVisible=false};
-        private readonly SecondarySkipHighlight _secondaryForwardHighlight=new(){Width=54,Height=46,IsHitTestVisible=false};
+        // Drawn in the secondary icon's own 24-unit canvas (inside its Viewbox).
+        private readonly SecondarySkipHighlight _secondaryBackHighlight=new(){Width=24,Height=24,Backward=true,IsHitTestVisible=false};
+        private readonly SecondarySkipHighlight _secondaryForwardHighlight=new(){Width=24,Height=24,IsHitTestVisible=false};
         private readonly PlayerSettings _settings;
         private readonly DispatcherTimer _idleTimer = new();
         private readonly DispatcherTimer _clock = new();
+        private readonly DispatcherTimer _sleepTick = new() { Interval = TimeSpan.FromSeconds(1) };
+        private readonly SleepTimerState _sleep = new();
 
-        private DispatcherTimer? _sleepTimer;
         private readonly DispatcherTimer _cursorWatch = new() { Interval = TimeSpan.FromMilliseconds(150) };
         [StructLayout(LayoutKind.Sequential)] private struct CursorPoint { public int X; public int Y; }
         [DllImport("user32.dll")] private static extern bool GetCursorPos(out CursorPoint point);
         private CursorPoint? _lastScreenCursor;
         private bool _fullscreen;
         private Window? _overlayWindow;
+        /// <summary>True while one of the bar's pop-ups is open (it holds the bar up).</summary>
         private bool _menuOpen;
+        private Border? _openPopup;
 
         private bool _seeking;
         private bool _volumeSync;
+        private bool _speedSync;
+        private double _rate = 1.0;
+        private int _subDelayMs;
+        private bool _metaDone;
+        /// <summary>True from a start's Opening until it settles: the timeline shows the NEW
+        /// start (0:00, its own title), never the previous movie's numbers (carry-forward a).</summary>
+        private bool _opening;
+        private bool _errorShown;
+        private (string Url, long? Position, string[] Subtitles)? _lastStart;
+        private NativeStart? _mediaStart;
+        private int _reflowLevel;
         private readonly PlaybackHistory _history = new();
         private string _currentSource = "";
         private DateTime _lastHistorySave;
@@ -62,10 +80,11 @@ namespace ZephyrPlayer
             if (_player.Length > 0 && _player.Time >= 0) _history.Save(_currentSource, _player.Time, _player.Length);
         }
 
-        /// <summary>Fired when the sleep timer ends playback; the shell lands on the library.</summary>
-        public event Action? SleepFired;
+        /// <summary>Fired when the sleep timer paused the movie. The player stays (render
+        /// 04: "Pauses the movie when time is up"); nobody navigates on it.</summary>
+        public event Action? SleepPaused;
         public event Action? HomeRequested;
-        private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
+        private void OnHome(object sender, RoutedEventArgs e) { ClosePopups(); HomeRequested?.Invoke(); }
 
         /// <summary>[volume] is accepted for call-site compatibility only: 2.0 volume is
         /// the player's own (owner decision 2) and never reads or writes Windows'
@@ -75,13 +94,17 @@ namespace ZephyrPlayer
             InitializeComponent();
             ((Canvas)SecondarySkipBackIcon.Parent).Children.Add(_secondaryBackHighlight);
             ((Canvas)SecondarySkipForwardIcon.Parent).Children.Add(_secondaryForwardHighlight);
+            // Seek press/release with handledEventsToo: with IsMoveToPointEnabled the
+            // Slider marks a track press handled while it moves the thumb to the point.
+            SeekBar.AddHandler(PreviewMouseDownEvent, new MouseButtonEventHandler(OnSeekDown), true);
+            SeekBar.AddHandler(PreviewMouseUpEvent, new MouseButtonEventHandler(OnSeekUp), true);
             _libvlc = libvlc;
             _player = player;
             _settings = settings ?? new PlayerSettings();
-            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); HookOverlayKeys(); };
+            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); HookOverlayKeys(); ApplyLayoutMode(); };
             // Unloaded = the shell swapped this view out (library, tray close). Stop
             // every timer; LibVLCSharp hides its overlay window on the same event.
-            Unloaded += (_, __) => StopTimers();
+            Unloaded += (_, __) => { ClosePopups(); StopTimers(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
             _cursorWatch.Tick += (_, __) =>
             {
@@ -97,13 +120,12 @@ namespace ZephyrPlayer
             _idleTimer.Interval = TimeSpan.FromSeconds(3);
             _idleTimer.Tick += (_, __) =>
             {
-                // VideoView hosts controls in a separate floating window. Never
-                // hide the seek thumb while the pointer is using the bar. And a
-                // PAUSED movie keeps the bar (review blocker 3): hiding it while
-                // paused strands phone-only viewers with no visible controls.
-                if (ControlBar.IsMouseOver || _seeking || _menuOpen || _player.State == LibVLCSharp.Shared.VLCState.Paused) return;
-                ControlBar.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(250)));
-                TopOverlay.BeginAnimation(OpacityProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(250)));
+                // Auto-hide (item 65): bar and top overlay fade over 250 ms after 3 s idle.
+                // Kept up while the pointer is on the bar, while seeking, while a pop-up is
+                // open, and while nothing is playing (paused, ended: review blocker 3 - a
+                // hidden bar strands phone-only viewers with no visible controls).
+                if (!BarMayHide) return;
+                FadeBar(0);
                 if (IsFullscreen) Overlay.Cursor = Cursors.None;
                 _idleTimer.Stop();
             };
@@ -111,11 +133,9 @@ namespace ZephyrPlayer
             {
                 // Phone-pause reveals the bar (review evidence): hiding it while
                 // paused strands phone-only viewers with no visible controls.
-                ControlBar.BeginAnimation(OpacityProperty, null);
-            ControlBar.Opacity = 1;
-            Overlay.Cursor = Cursors.Arrow;
-            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+                RevealBar();
                 _idleTimer.Stop(); // never auto-hide while paused
+                UpdatePlayPauseGlyph();
             });
             // Any Playing (also a resume after pause). It never touches the loading
             // state: only the start that is waiting for its OWN Playing ends loading
@@ -126,6 +146,7 @@ namespace ZephyrPlayer
                 TryAutoSelectSidecar();
                 if (IsLoaded) { _idleTimer.Stop(); _idleTimer.Start(); } // resume the hide countdown
                 RefreshCaptionsUi();
+                UpdatePlayPauseGlyph();
             });
             _player.ESSelected += (_, __) => Dispatcher.BeginInvoke(RefreshCaptionsUi);
             _player.ESAdded += (_, ev) => { if (ev.Type == TrackType.Text) Dispatcher.BeginInvoke(TryAutoSelectSidecar); };
@@ -136,6 +157,7 @@ namespace ZephyrPlayer
             _stallWatch.Tick += (_, __) => CheckNativeStall();
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
+            _sleepTick.Tick += (_, __) => SleepTick();
 
             // Settings changes apply live: bar style AND the Boost (decoder gain) at the
             // current slider value, on the playing movie - never a reopen.
@@ -150,6 +172,9 @@ namespace ZephyrPlayer
             ApplyPlayerGain();
             ApplyBarStyle();
             RefreshVolumeUi();
+            RefreshSpeedUi();
+            RefreshSleepUi();
+            RefreshSubtitleSizeUi();
             UpdatePlayPauseGlyph();
         }
 
@@ -176,6 +201,7 @@ namespace ZephyrPlayer
             ++_playGeneration; _preparation?.Cancel();
             DetachNativeStart();
             EndLoading();
+            _opening = false;
             _autoSelectSidecar = false;
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
             var old = _safeSource; _safeSource = null;
@@ -202,6 +228,9 @@ namespace ZephyrPlayer
         public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
         {
             var generation=++_playGeneration;
+            // "Try again" on the error state re-runs exactly this start (item 68).
+            _lastStart = (url, positionSeconds, (string[])subtitles.Clone());
+            StartCount++;
             try { await StartPlaybackAsync(generation,url,positionSeconds,subtitles); }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -235,6 +264,7 @@ namespace ZephyrPlayer
                 case "ended": start.OnEnded?.Invoke(_player, EventArgs.Empty); break;
                 case "opening": start.OnOpening?.Invoke(_player, EventArgs.Empty); break;
                 case "vout": start.OnVout?.Invoke(_player, (MediaPlayerVoutEventArgs)Activator.CreateInstance(typeof(MediaPlayerVoutEventArgs), System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null, new object[] { (int)cache }, null)!); break;
+                case "finished": start.OnFinished?.Invoke(_player, EventArgs.Empty); break;
                 case "buffering": start.OnBuffering?.Invoke(_player, (MediaPlayerBufferingEventArgs)Activator.CreateInstance(typeof(MediaPlayerBufferingEventArgs), System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, null, new object[] { cache }, null)!); break;
                 default: throw new ArgumentException(kind);
             }
@@ -251,9 +281,12 @@ namespace ZephyrPlayer
         {
             // An older request that fails after a newer start began is not ours to show.
             if (generation!=_playGeneration) return;
-            LastStartFailure = ex is TimeoutException ? "timeout" : "preparation";
+            var why = ex is TimeoutException ? "timeout" : "preparation";
             var message = ex is TimeoutException ? ex.Message : OpenFailedMessage;
-            MovieTitle.Text=message;
+            // An older movie still playing behind the failed start stops here: the error
+            // state replaces it (the user asked for the new one), and nothing reopens it.
+            if (_safeSource != null) StopPlaybackSource();
+            LastStartFailure = why;
             ShowLoadingError(message);
         }
 
@@ -279,11 +312,14 @@ namespace ZephyrPlayer
             internal string LastProgress = "handoff";
             internal int ProgressMarks;
             /// <summary>libVLC said Playing (its demuxer opened); the picture may still be
-            /// buffering. Loading ends at the first sign of content (see OnNativeContent).</summary>
+            /// buffering. Loading ends on the signals listed at OnNativeContent.</summary>
             internal bool PlayingSeen;
             internal bool Buffered;
             internal string? CompletedBy;
             internal EventHandler<EventArgs>? OnPlaying, OnError, OnEnded, OnOpening;
+            /// <summary>EndReached for this start's media for as long as libVLC holds it
+            /// (sleep "End of this movie"); detached when the media is replaced or stopped.</summary>
+            internal EventHandler<EventArgs>? OnFinished;
             internal EventHandler<MediaPlayerBufferingEventArgs>? OnBuffering;
             internal EventHandler<MediaPlayerVoutEventArgs>? OnVout;
         }
@@ -310,6 +346,9 @@ namespace ZephyrPlayer
             _player.Opening += a.OnOpening;
             _player.Buffering += a.OnBuffering;
             _player.Vout += a.OnVout;
+            a.OnFinished = (_, __) => Dispatcher.BeginInvoke(() => OnMediaFinished(a));
+            _player.EndReached += a.OnFinished;
+            _mediaStart = a;
             a.Attached = true;
             a.LastProgressTick = Environment.TickCount64;
             a.LastBytes = a.Source.BytesDelivered;
@@ -340,13 +379,15 @@ namespace ZephyrPlayer
             _stallWatch.Stop();
             var a = _nativeStart; _nativeStart = null;
             if (a != null) DetachNativeHandlers(a);
+            var m = _mediaStart; _mediaStart = null;
+            if (m?.OnFinished != null) _player.EndReached -= m.OnFinished;
         }
 
         /// <summary>This start's own Playing. libVLC 3 says Playing when its demuxer has
         /// opened, before the first picture: a slow phone can still be buffering for a
         /// while (CI run 41033075025: about 0.7 s of an all-black video area between
         /// Playing and the first frame on a dribbling source). So Playing alone does not
-        /// end loading; the first sign of content does (OnNativeContent). A start that
+        /// end loading; see OnNativeContent for the exact signals that do. A start that
         /// played while a newer one is preparing leaves the newer spinner up.</summary>
         private void OnNativePlaying(NativeStart a)
         {
@@ -362,11 +403,14 @@ namespace ZephyrPlayer
             }
             if (a.Buffered) OnNativeContent(a, "buffered");
         }
+        /// <summary>Where loading ends, for the newest start only. Exact signals (nothing
+        /// here observes a rendered picture): after this start's own Playing, either
+        /// libVLC reports Buffering 100 % ("buffered") or the movie clock is past 0 at a
+        /// 1-second poll ("clock"); or, if neither comes, 45 s (NativeStallWindow) after
+        /// the last progress with Playing already seen ("playing-quiet"), a fallback that
+        /// ends loading without any picture signal. Before Playing, the same 45 s of no
+        /// progress is a failure instead (CheckNativeStall).</summary>
 
-        /// <summary>Content of this start is on its way to the screen: after Playing,
-        /// libVLC finished buffering (Buffering 100 %, when its decoders are released to
-        /// show pictures) or its clock is past 0 (CheckNativeStall). Loading ends here,
-        /// for the newest start only.</summary>
         private void OnNativeContent(NativeStart a, string what)
         {
             if (!a.Waiting || !a.PlayingSeen || !ReferenceEquals(a, _nativeStart)) return;
@@ -375,7 +419,9 @@ namespace ZephyrPlayer
             a.CompletedBy = what;
             if (a.Generation != _playGeneration) return;
             LastStartFailure = null;
+            _opening = false;
             EndLoading();
+            UpdatePosition();
             StartSettled?.Invoke();
         }
 
@@ -435,7 +481,6 @@ namespace ZephyrPlayer
             if (!a.Waiting || !ReferenceEquals(a, _nativeStart) || a.Generation != _playGeneration) return;
             StopPlaybackSource(); // the failed media goes; any older completion is invalidated
             LastStartFailure=why;
-            MovieTitle.Text=NativeFailedMessage;
             ShowLoadingError(NativeFailedMessage);
         }
 
@@ -462,8 +507,9 @@ namespace ZephyrPlayer
             if(canceled) {source.Dispose();throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
             SavePlaybackProgress();
             _currentSource = url;
-            var localTitle = PlaybackHistory.LocalPath(url);
-            MovieTitle.Text = localTitle != null ? System.IO.Path.GetFileNameWithoutExtension(localTitle) : "Playing from phone";
+            MovieTitle.Text = TitleFor(url);
+            _metaDone = false; MovieMeta.Text = "";
+            _subDelayMs = 0; SubDelayText.Text = PlayerBarLogic.FormatDelay(0);
             _lastHistorySave = DateTime.MinValue;
             // The player's own volume (slider 0-100 x boost) and its own mute carry
             // across the start; Windows' master volume is never touched.
@@ -488,13 +534,11 @@ namespace ZephyrPlayer
             _clock.Start();
             // Phone-started playback shows the bar once (review blocker 3): the PC
             // mouse may never move, so the idle timer alone can't reveal it.
-            ControlBar.BeginAnimation(OpacityProperty, null);
-            ControlBar.Opacity = 1;
-            Overlay.Cursor = Cursors.Arrow;
-            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+            RevealBar();
             _idleTimer.Stop();
             _idleTimer.Start();
             UpdatePlayPauseGlyph();
+            RefreshSpeedUi();
         }
 
         // The player's own mute as last APPLIED. libvlc's Mute read-back is
@@ -505,24 +549,54 @@ namespace ZephyrPlayer
         /// <summary>Test seam (InternalsVisibleTo): the tracked player mute.</summary>
         internal bool TrackedPlayerMute { get => _playerMute; set => _playerMute = value; }
 
+        private static string TitleFor(string url)
+        {
+            var local = PlaybackHistory.LocalPath(url);
+            return local != null ? System.IO.Path.GetFileNameWithoutExtension(local) : "Movie from your phone";
+        }
+
         private void UpdatePosition()
         {
             if (DateTime.UtcNow - _lastHistorySave >= TimeSpan.FromSeconds(5))
             { SavePlaybackProgress(); _lastHistorySave = DateTime.UtcNow; }
+            UpdatePlayPauseGlyph();
+            // While a new start is opening, the timeline belongs to it: an older movie may
+            // still be playing underneath until the new one is handed to libVLC, and its
+            // numbers must not show (carry-forward a).
+            if (_opening) return;
             // 2.0: no Windows master poll. Volume and mute are the player's own.
             if (!_seeking)
             {
                 var length = _player.Length;
                 if (length > 0)
                 {
-                    var time = _player.Time;
+                    var time = Math.Max(0, _player.Time);
                     SeekBar.Value = 1000.0 * time / length;
                     ElapsedText.Text = Format(time);
                     TotalText.Text = Format(length) + " total";
                     RemainingText.Text = "-" + Format(Math.Max(0, length - time));
+                    if (!_metaDone) UpdateMeta(length);
                 }
             }
-            UpdatePlayPauseGlyph();
+        }
+
+        /// <summary>Back to an empty timeline (0:00, -0:00, 0:00 total, thumb at the start).</summary>
+        private void ResetTimeline()
+        {
+            SeekBar.Value = 0;
+            ElapsedText.Text = "0:00";
+            RemainingText.Text = "-0:00";
+            TotalText.Text = "0:00 total";
+            MovieMeta.Text = "";
+            _metaDone = false;
+        }
+
+        private void UpdateMeta(long length)
+        {
+            string? year = null;
+            try { year = _safeSource?.Media?.Meta(MetadataType.Date); } catch { year = null; }
+            MovieMeta.Text = PlayerBarLogic.MetaLine(year, length);
+            _metaDone = true;
         }
 
         private void UpdatePlayPauseGlyph()
@@ -548,10 +622,7 @@ namespace ZephyrPlayer
             var pos = e.GetPosition(this);
             if (_lastMousePos.HasValue && pos == _lastMousePos.Value) return;
             _lastMousePos = pos;
-            ControlBar.BeginAnimation(OpacityProperty, null);
-            ControlBar.Opacity = 1;
-            Overlay.Cursor = Cursors.Arrow;
-            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+            RevealBar();
             _idleTimer.Stop();
             _idleTimer.Start();
         }
@@ -564,9 +635,11 @@ namespace ZephyrPlayer
         public void HandleKey(KeyEventArgs e)
         {
             if (e.Handled) return;
-            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || _menuOpen) return;
+            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase) return;
             var key = e.Key == Key.System ? e.SystemKey : e.Key;
             if ((Keyboard.Modifiers & (ModifierKeys.Alt | ModifierKeys.Control | ModifierKeys.Windows)) != 0) return;
+            // Escape closes an open pop-up first.
+            if (key == Key.Escape && _menuOpen) { ClosePopups(); e.Handled = true; return; }
             ShowBarOnce();
             switch (key)
             {
@@ -603,6 +676,7 @@ namespace ZephyrPlayer
         /// stop the timers. Win32 never hides an owned window with its owner.</summary>
         public void HideOverlayWindow()
         {
+            ClosePopups();
             StopTimers();
             var overlay = Window.GetWindow(Overlay);
             if (overlay != null && !ReferenceEquals(overlay, Window.GetWindow(this))) overlay.Hide();
@@ -620,21 +694,47 @@ namespace ZephyrPlayer
         public void ReleasePlayback()
         {
             StopTimers();
+            _sleepTick.Stop();
             StopPlaybackSource();
         }
 
         private void OnVideoDoubleClick(object sender, MouseButtonEventArgs e)
         {
-            if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
+            if (ControlBar.IsMouseOver || IsInsideOpenPopup(e.OriginalSource as DependencyObject)) return;
+            SetFullscreen(!IsFullscreen); e.Handled = true;
         }
 
-        private void OnSeekDown(object sender, RoutedEventArgs e) => _seeking = true;
+        // ---------- seek: click-to-seek and drag (item 50) ----------
 
-        private void OnSeekUp(object sender, RoutedEventArgs e)
+        private void OnSeekDown(object sender, MouseButtonEventArgs e) => _seeking = true;
+
+        /// <summary>IsMoveToPointEnabled (ZSeekSlider) moves the thumb to the clicked point
+        /// on mouse-down; the seek itself happens here, on release (click or drag end).</summary>
+        private void OnSeekUp(object sender, MouseButtonEventArgs e)
         {
+            if (!_seeking) return;
             _seeking = false;
-            if (_player.Length > 0)
-                _player.Position = (float)(SeekBar.Value / 1000.0);
+            CommitSeek();
+        }
+
+        private void CommitSeek()
+        {
+            if (_player.Length <= 0) return;
+            LastSeekFraction = SeekBar.Value / 1000.0;
+            _player.Position = (float)LastSeekFraction;
+            var t = (long)(LastSeekFraction * _player.Length);
+            ElapsedText.Text = Format(t);
+            RemainingText.Text = "-" + Format(Math.Max(0, _player.Length - t));
+        }
+
+        /// <summary>Test seam: the fraction the last click/drag seek handed to libVLC.</summary>
+        internal double LastSeekFraction { get; private set; } = -1;
+
+        private void OnSeekValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            // While the thumb is held, the elapsed label previews where it will land.
+            if (!_seeking || _player is null || _player.Length <= 0) return;
+            ElapsedText.Text = Format((long)(SeekBar.Value / 1000.0 * _player.Length));
         }
 
         // ---------- play / pause / skips ----------
@@ -654,46 +754,58 @@ namespace ZephyrPlayer
 
         private void OnSecondarySkipForward(object sender, RoutedEventArgs e) => Skip(_settings.SkipDelta(true, false), SecondaryForwardSpin, false);
 
+        /// <summary>Test seam: what the last skip press animated ("spin", "light", "flash").</summary>
+        internal string LastPressEffects { get; private set; } = "";
+
         private void Skip(int deltaSeconds, RotateTransform? spin, bool backward)
         {
             // Nothing loaded = nothing to skip: no time change, no spin, no flash.
             if (_player.Length <= 0) return;
             _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
-            // Rotate only the ring/arc; the duration label stays upright.
-            var secondary=spin==SecondaryBackSpin||spin==SecondaryForwardSpin;
-            if (spin != null && !secondary)
+            var secondary = spin == SecondaryBackSpin || spin == SecondaryForwardSpin;
+            var effects = new System.Collections.Generic.List<string>();
+            // Press animations (item 54) live behind "Animate on press"; the colour flash
+            // (item 55) behind "Flash on press". Rotate only the ring; the label stays upright.
+            if (_settings.AnimateOnPress)
             {
-                spin.BeginAnimation(RotateTransform.AngleProperty, null);
-                spin.Angle = 0;
-                var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420), FillBehavior = FillBehavior.Stop };
-                anim.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
-                spin.BeginAnimation(RotateTransform.AngleProperty, anim);
+                if (spin != null && !secondary)
+                {
+                    spin.BeginAnimation(RotateTransform.AngleProperty, null);
+                    spin.Angle = 0;
+                    var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420), FillBehavior = FillBehavior.Stop };
+                    anim.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                    anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
+                    spin.BeginAnimation(RotateTransform.AngleProperty, anim);
+                    effects.Add("spin");
+                }
+                else if (secondary)
+                {
+                    var highlight = backward ? _secondaryBackHighlight : _secondaryForwardHighlight;
+                    highlight.Start(((SolidColorBrush)(backward ? SecondarySkipBackIcon : SecondarySkipForwardIcon).Stroke).Color);
+                    effects.Add("light");
+                }
             }
-            if(secondary)
-            {
-                var highlight=backward?_secondaryBackHighlight:_secondaryForwardHighlight;
-                if(_settings.ButtonFlash)highlight.Start(((SolidColorBrush)(backward?SecondarySkipBackIcon:SecondarySkipForwardIcon).Stroke).Color);else highlight.Stop();
-            }
-            else if (_settings.ButtonFlash) Flash(backward,false);
+            else { _secondaryBackHighlight.Stop(); _secondaryForwardHighlight.Stop(); }
+            if (_settings.ButtonFlash) { Flash(backward, secondary); effects.Add("flash"); }
+            LastPressEffects = string.Join(",", effects);
         }
 
         private void Flash(bool backward, bool secondary)
         {
             // Animate only the pressed glyph. The number keeps its selected color.
             var path = secondary ? (backward ? SecondarySkipBackIcon : SecondarySkipForwardIcon) : (backward ? SkipBackRing : SkipForwardRing);
-            var arrow = backward ? SkipBackArrow : SkipForwardArrow;
+            var head = secondary ? (backward ? SecondarySkipBackHead : SecondarySkipForwardHead) : (backward ? SkipBackArrow : SkipForwardArrow);
             var normal = ((SolidColorBrush)path.Stroke).Color;
             var brush = new SolidColorBrush(normal);
             path.Stroke = brush;
-            if (!secondary) arrow.Fill = brush;
+            head.Fill = brush; head.Stroke = brush;
             brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(normal == Brand.Orange ? Colors.WhiteSmoke : Brand.Orange, TimeSpan.FromMilliseconds(110)) { AutoReverse = true });
         }
 
         // ---------- volume: the player's own 0-100 %, boost from Settings ----------
 
-        private const string MutedGlyph = "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17";
-        private const string VolumeGlyphData = "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8";
+        private const string MutedGlyph = "M15.5,9.5 L20.5,14.5 M20.5,9.5 L15.5,14.5";
+        private const string VolumeGlyphData = "M15,9.2 A4,4 0 0 1 15,14.8 M17.6,6.8 A7.5,7.5 0 0 1 17.6,17.2";
 
         private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
@@ -715,7 +827,9 @@ namespace ZephyrPlayer
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
         public bool SharedMute => _playerMute;
-        public string CurrentMovieTitle => MovieTitle.Text;
+        /// <summary>The title the phone's /control/status reads: the movie's title, or the
+        /// error text while the error state shows (CP1 late-failure behaviour, kept).</summary>
+        public string CurrentMovieTitle => _errorShown ? ErrorMessage.Text : MovieTitle.Text;
 
         /// <summary>Decoder gain = slider x boost (100 % boost = none, 200 % = VLC-style
         /// doubling). Exposed for tests.</summary>
@@ -737,6 +851,7 @@ namespace ZephyrPlayer
         {
             ApplyBarStyle();
             ApplyPlayerGain(); // Boost (VolumeBoostMaxPct) reaches the playing movie now
+            RefreshSubtitleSizeUi();
         }
 
         private void OnMute(object sender, RoutedEventArgs e) => SetMuteTied(!_playerMute);
@@ -760,56 +875,227 @@ namespace ZephyrPlayer
             VolumeSlider.Opacity = _playerMute ? 0.45 : 1.0;
         }
 
-        // ---------- speed + sleep timer (bar toggles, off by default) ----------
+        // ---------- pop-ups: one open at a time (item 59) ----------
 
-        private void OnSpeed(object sender, RoutedEventArgs e)
+        private Border[] Popups => new[] { SubtitlesPopup, SpeedPopup, SleepPopup };
+
+        /// <summary>Test/CI seam: which pop-up is open ("subtitles", "speed", "sleep") or null.</summary>
+        internal string? OpenPopupName =>
+            ReferenceEquals(_openPopup, SubtitlesPopup) ? "subtitles" :
+            ReferenceEquals(_openPopup, SpeedPopup) ? "speed" :
+            ReferenceEquals(_openPopup, SleepPopup) ? "sleep" : null;
+
+        /// <summary>Open [popup] above [anchor], closing any other; the same button again
+        /// closes it. The open pop-up holds the bar up (auto-hide waits).</summary>
+        internal void TogglePopup(Border popup, FrameworkElement anchor)
         {
-            var menu = new ContextMenu();
-            foreach (var rate in new[] { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
-            {
-                var item = new MenuItem { Header = rate + "x", IsChecked = Math.Abs(_player.Rate - rate) < 0.01 };
-                var r = (float)rate;
-                item.Click += (_, __) => { _player.SetRate(r); SpeedLabel.Text = rate + "x"; };
-                menu.Items.Add(item);
-            }
+            if (ReferenceEquals(_openPopup, popup)) { ClosePopups(); return; }
+            foreach (var p in Popups) if (!ReferenceEquals(p, popup)) p.Visibility = Visibility.Collapsed;
+            if (ReferenceEquals(popup, SubtitlesPopup)) BuildSubtitleRows();
+            else if (ReferenceEquals(popup, SpeedPopup)) RefreshSpeedUi();
+            else RefreshSleepUi();
+            _openPopup = popup;
             _menuOpen = true;
-            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
-            menu.IsOpen = true;
+            popup.Visibility = Visibility.Visible;
+            PositionPopup(popup, anchor);
+            RevealBar();
+            _idleTimer.Stop();
         }
 
-        private void OnSleep(object sender, RoutedEventArgs e)
+        internal void ClosePopups()
         {
-            var menu = new ContextMenu();
-            var off = new MenuItem { Header = "Off", IsChecked = _sleepTimer == null };
-            off.Click += (_, __) => { _sleepTimer?.Stop(); _sleepTimer = null; SleepLabel.Text = "zZ"; };
-            menu.Items.Add(off);
-            foreach (var min in new[] { 15, 30, 45, 60 })
-            {
-                var item = new MenuItem { Header = min + " min" };
-                item.Click += (_, __) =>
-                {
-                    _sleepTimer?.Stop();
-                    _sleepTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(min) };
-                    _sleepTimer.Tick += (_, ___) =>
-                    {
-                        _sleepTimer?.Stop();
-                        _sleepTimer = null;
-                        SleepLabel.Text = "zZ";
-                        SavePlaybackProgress();
-                        StopPlaybackSource();
-                        SleepFired?.Invoke();
-                    };
-                    _sleepTimer.Start();
-                    SleepLabel.Text = min + "m";
-                };
-                menu.Items.Add(item);
-            }
-            _menuOpen = true;
-            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
-            menu.IsOpen = true;
+            foreach (var p in Popups) p.Visibility = Visibility.Collapsed;
+            var wasOpen = _openPopup != null;
+            _openPopup = null;
+            _menuOpen = false;
+            if (wasOpen && IsLoaded) { _idleTimer.Stop(); _idleTimer.Start(); }
         }
 
-        // ---------- captions / fullscreen ----------
+        /// <summary>Centred above its own button, kept 20 px inside the view; bottom edge
+        /// 20 px above the bar's top (130 px above the window bottom when windowed, as
+        /// render 04).</summary>
+        private void PositionPopup(Border popup, FrameworkElement anchor)
+        {
+            Overlay.UpdateLayout();
+            var w = popup.Width;
+            var viewW = Overlay.ActualWidth;
+            double left = 20, bottom = 130;
+            try
+            {
+                var c = anchor.TranslatePoint(new Point(anchor.ActualWidth / 2, 0), Overlay);
+                left = Math.Max(20, Math.Min(c.X - w / 2, viewW - w - 20));
+                var barTop = ControlBar.TranslatePoint(new Point(0, 0), Overlay).Y;
+                bottom = Math.Max(0, Overlay.ActualHeight - barTop + 20);
+            }
+            catch (InvalidOperationException) { }
+            popup.Margin = new Thickness(left, 0, 0, bottom);
+        }
+
+        private bool IsInsideOpenPopup(DependencyObject? d)
+        {
+            if (_openPopup == null || d == null) return false;
+            for (var x = d; x != null; x = x is Visual || x is System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(x) : LogicalTreeHelper.GetParent(x))
+                if (ReferenceEquals(x, _openPopup)) return true;
+            return false;
+        }
+
+        private bool IsInsideBar(DependencyObject? d)
+        {
+            for (var x = d; x != null; x = x is Visual || x is System.Windows.Media.Media3D.Visual3D ? VisualTreeHelper.GetParent(x) : LogicalTreeHelper.GetParent(x))
+                if (ReferenceEquals(x, ControlBar)) return true;
+            return false;
+        }
+
+        /// <summary>A click anywhere else (the video, the top overlay) closes the pop-up;
+        /// clicks on the bar are left to its buttons (switch / toggle).</summary>
+        private void OnOverlayMouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (_openPopup == null) return;
+            var src = e.OriginalSource as DependencyObject;
+            if (IsInsideOpenPopup(src) || IsInsideBar(src)) return;
+            ClosePopups();
+        }
+
+        // ---------- speed (render 04, item 60) ----------
+
+        private void OnSpeed(object sender, RoutedEventArgs e) => TogglePopup(SpeedPopup, SpeedButton);
+
+        private void OnSpeedChip(object sender, RoutedEventArgs e)
+        {
+            var i = SpeedChips.Children.IndexOf((UIElement)sender);
+            if (i >= 0) SetRate(PlayerBarLogic.SpeedChips[i]);
+        }
+
+        private void OnSpeedSliderChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_speedSync || _player is null || _settings is null) return;
+            SetRate(e.NewValue);
+        }
+
+        /// <summary>Live rate change (libVLC SetRate, no reopen); chips, slider, header and
+        /// the bar badge follow.</summary>
+        internal void SetRate(double rate)
+        {
+            _rate = PlayerBarLogic.SnapRate(rate);
+            _player.SetRate((float)_rate);
+            RefreshSpeedUi();
+        }
+
+        /// <summary>The rate last handed to libVLC (its read-back needs a playing input).</summary>
+        internal double CurrentRate => _rate;
+
+        private void RefreshSpeedUi()
+        {
+            if (SpeedLabel == null) return;
+            var normal = PlayerBarLogic.IsNormalRate(_rate);
+            var label = PlayerBarLogic.FormatRate(_rate);
+            SpeedHeaderValue.Text = label;
+            var chip = PlayerBarLogic.ChipIndex(_rate);
+            for (var i = 0; i < SpeedChips.Children.Count; i++)
+                if (SpeedChips.Children[i] is Button b) { b.Tag = i == chip ? "on" : ""; b.Content = PlayerBarLogic.ChipLabel(PlayerBarLogic.SpeedChips[i]); }
+            _speedSync = true;
+            SpeedSlider.Value = _rate;
+            _speedSync = false;
+            SpeedLabel.Text = normal ? "" : label;
+            SetBadge(SpeedButton, SpeedLabel, !normal);
+            var brush = normal ? _iconBrush : Orange;
+            SpeedButton.Foreground = brush; ApplyGlyphBrush(SpeedButton, brush);
+            SpeedButton.ToolTip = normal ? "Playback speed" : "Playback speed (" + label + ")";
+            Reflow();
+        }
+
+        /// <summary>A badge widens its 38 px button to padding 0 8 + icon + 5 + text
+        /// (render 04 .cb:has(.badge)); at reflow level 4 badges give way, icons stay orange.</summary>
+        private void SetBadge(Button button, TextBlock badge, bool on)
+        {
+            var show = on && _reflowLevel < 4;
+            badge.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+            button.Padding = show ? new Thickness(8, 0, 8, 0) : new Thickness(0);
+        }
+
+        // ---------- sleep timer (render 04, items 61-62) ----------
+
+        private void OnSleep(object sender, RoutedEventArgs e) => TogglePopup(SleepPopup, SleepButton);
+
+        private void OnSleepRow(object sender, RoutedEventArgs e)
+        {
+            var i = SleepRows.Children.IndexOf((UIElement)sender);
+            if (i < 0) return;
+            SetSleep(SleepTimerState.Choices[i].Minutes);
+        }
+
+        /// <summary>Test seam: the clock the sleep timer reads.</summary>
+        internal Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
+        internal SleepTimerState Sleep => _sleep;
+        /// <summary>Test seam: how many times the sleep timer paused the movie / saw its end.</summary>
+        internal int SleepPausedCount { get; private set; }
+        internal int MediaEndedCount { get; private set; }
+
+        /// <summary>0 = off, minutes, or SleepTimerState.EndOfMovie.</summary>
+        internal void SetSleep(int minutes)
+        {
+            if (minutes == 0) _sleep.Off(); else _sleep.Set(minutes, Clock());
+            if (_sleep.IsActive && !_sleep.IsEndOfMovie) _sleepTick.Start(); else _sleepTick.Stop();
+            RefreshSleepUi();
+        }
+
+        /// <summary>Once a second while a timed choice runs: badge, header, and the pause
+        /// when the time is up.</summary>
+        internal void SleepTick()
+        {
+            if (_sleep.IsDue(Clock())) { SleepFire("timer"); return; }
+            RefreshSleepUi();
+        }
+
+        /// <summary>Time is up: PAUSE and stay in the player (progress saved), as the
+        /// render's footnote says. Never stop, never go back to the library (item 62).
+        /// For "End of this movie" libVLC has already reached the end (EndReached); the
+        /// player stays on the ended movie with the bar up.</summary>
+        private void SleepFire(string why)
+        {
+            _sleepTick.Stop();
+            if (_player.State is VLCState.Playing or VLCState.Buffering or VLCState.Opening) _player.SetPause(true);
+            SavePlaybackProgress();
+            _sleep.Off();
+            SleepPausedCount++;
+            LastSleepFire = why;
+            RefreshSleepUi();
+            RevealBar();
+            _idleTimer.Stop();
+            UpdatePlayPauseGlyph();
+            ShowOsd(why == "end" ? "Sleep timer: the movie has ended" : "Sleep timer: paused");
+            SleepPaused?.Invoke();
+        }
+        internal string? LastSleepFire { get; private set; }
+
+        /// <summary>EndReached of the media libVLC holds now, after its start settled
+        /// (EndReached before Playing is a failed start, handled by FailNativeStart).</summary>
+        private void OnMediaFinished(NativeStart a)
+        {
+            if (!ReferenceEquals(a, _mediaStart) || a.Waiting) return;
+            MediaEndedCount++;
+            RevealBar();
+            if (_sleep.IsEndOfMovie) SleepFire("end");
+            UpdatePlayPauseGlyph();
+        }
+
+        private void RefreshSleepUi()
+        {
+            if (SleepLabel == null) return;
+            var now = Clock();
+            var on = _sleep.IsActive;
+            SleepLabel.Text = _sleep.Badge(now);
+            SetBadge(SleepButton, SleepLabel, on);
+            SleepHeaderValue.Text = _sleep.Header(now);
+            for (var i = 0; i < SleepRows.Children.Count; i++)
+                if (SleepRows.Children[i] is Button b) b.Tag = SleepTimerState.Choices[i].Minutes == _sleep.Minutes ? "sel" : "";
+            var brush = on ? Orange : _iconBrush;
+            SleepButton.Foreground = brush; ApplyGlyphBrush(SleepButton, brush);
+            SleepButton.ToolTip = on ? "Sleep timer (" + SleepHeaderValue.Text + ")" : "Sleep timer";
+            Reflow();
+        }
+
+        // ---------- subtitles pop-up (render 04, item 66) ----------
 
         /// <summary>Real subtitle tracks only: libVLC lists a "Disable" entry with
         /// id -1 first, which is "Off", not a track (P0-3).</summary>
@@ -819,32 +1105,30 @@ namespace ZephyrPlayer
         private static string TrackLabel(LibVLCSharp.Shared.Structures.TrackDescription t, int index) =>
             string.IsNullOrWhiteSpace(t.Name) ? "Track " + (index + 1) : t.Name;
 
-        /// <summary>Subtitles pop-up (P0-3): Off, each real track by name, then
-        /// "Add subtitle file...". The current choice is checked.</summary>
-        private void OnCaptions(object sender, RoutedEventArgs e)
+        private void OnCaptions(object sender, RoutedEventArgs e) => TogglePopup(SubtitlesPopup, CaptionsButton);
+
+        /// <summary>Off, each real track by name (the current one selected), then the
+        /// orange "Add subtitle file..." row.</summary>
+        private void BuildSubtitleRows()
         {
-            var menu = new ContextMenu { PlacementTarget = CaptionsButton, Placement = System.Windows.Controls.Primitives.PlacementMode.Top };
-            menu.Items.Add(new MenuItem { Header = "Subtitles", IsEnabled = false, Opacity = 0.7 });
+            SubtitleTrackList.Children.Clear();
             var current = _player.Spu;
             var tracks = RealTracks(_player.SpuDescription);
-            var off = new MenuItem { Header = "Off", IsChecked = current == -1 || tracks.All(t => t.Id != current) };
-            off.Click += (_, __) => SelectSubtitle(-1, "Off");
-            menu.Items.Add(off);
+            var offSelected = current == -1 || tracks.All(t => t.Id != current);
+            SubtitleTrackList.Children.Add(MakeTrackRow("Off", -1, offSelected));
             for (var i = 0; i < tracks.Length; i++)
-            {
-                var track = tracks[i];
-                var label = TrackLabel(track, i);
-                var item = new MenuItem { Header = label, IsChecked = track.Id == current };
-                item.Click += (_, __) => SelectSubtitle(track.Id, label);
-                menu.Items.Add(item);
-            }
-            menu.Items.Add(new Separator());
-            var add = new MenuItem { Header = "Add subtitle file...", IsEnabled = _safeSource != null };
-            add.Click += (_, __) => AddSubtitleFile();
-            menu.Items.Add(add);
-            _menuOpen = true;
-            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
-            menu.IsOpen = true;
+                SubtitleTrackList.Children.Add(MakeTrackRow(TrackLabel(tracks[i], i), tracks[i].Id, tracks[i].Id == current));
+            AddSubtitleRow.IsEnabled = _safeSource != null;
+            RefreshSubtitleSizeUi();
+            SubDelayText.Text = PlayerBarLogic.FormatDelay(_subDelayMs);
+        }
+
+        private Button MakeTrackRow(string label, int id, bool selected)
+        {
+            var row = new Button { Style = (Style)FindResource("ZPopupRow"), Content = label, Tag = selected ? "sel" : "" };
+            System.Windows.Automation.AutomationProperties.SetName(row, label);
+            row.Click += (_, __) => { SelectSubtitle(id, label); BuildSubtitleRows(); };
+            return row;
         }
 
         /// <summary>The same path the pop-up, the phone and tests take.</summary>
@@ -859,6 +1143,12 @@ namespace ZephyrPlayer
             }
             ShowOsd("Subtitles: " + label);
             RefreshCaptionsUi(trackId);
+        }
+
+        private void OnAddSubtitleRow(object sender, RoutedEventArgs e)
+        {
+            ClosePopups();
+            AddSubtitleFile();
         }
 
         private void AddSubtitleFile()
@@ -885,6 +1175,37 @@ namespace ZephyrPlayer
             }
         }
 
+        private void OnSubtitleSize(object sender, RoutedEventArgs e)
+        {
+            var size = (string)((Button)sender).Content;
+            _settings.SubtitleSize = size;
+            RefreshSubtitleSizeUi();
+            var name = size == "S" ? "Small" : size == "L" ? "Large" : "Medium";
+            // U4: libVLC 3 has no live text-size change; never re-open the movie for it.
+            ShowOsd("Subtitle size: " + name + ". It applies the next time Zephyr starts.");
+        }
+
+        private void RefreshSubtitleSizeUi()
+        {
+            if (SubSizeM == null || _settings is null) return;
+            var size = _settings.SubtitleSize;
+            SubSizeS.Tag = size == "S" ? "on" : "";
+            SubSizeM.Tag = size == "M" ? "on" : "";
+            SubSizeL.Tag = size == "L" ? "on" : "";
+        }
+
+        private void OnSubtitleDelayMinus(object sender, RoutedEventArgs e) => SetSubtitleDelay(_subDelayMs - PlayerBarLogic.SubtitleDelayStepMs);
+        private void OnSubtitleDelayPlus(object sender, RoutedEventArgs e) => SetSubtitleDelay(_subDelayMs + PlayerBarLogic.SubtitleDelayStepMs);
+
+        /// <summary>Live subtitle delay (libVLC SetSpuDelay, microseconds), 0.1 s steps.</summary>
+        internal void SetSubtitleDelay(int ms)
+        {
+            _subDelayMs = Math.Clamp(ms, -60000, 60000);
+            _player.SetSpuDelay(_subDelayMs * 1000L);
+            SubDelayText.Text = PlayerBarLogic.FormatDelay(_subDelayMs);
+        }
+        internal int SubtitleDelayMs => _subDelayMs;
+
         private bool _autoSelectSidecar;
         /// <summary>One-shot: the first real subtitle track of a local movie's sidecar
         /// is selected when libVLC selected none.</summary>
@@ -904,13 +1225,12 @@ namespace ZephyrPlayer
         {
             if (_settings is null) return;
             var on = spu != -1 && RealTracks(_player.SpuDescription).Any(t => t.Id == spu);
-            var style = _settings.BarColorStyle;
-            Brush normal = style is "orange" or "inverse" ? Orange : RingDefault;
-            var brush = on ? Orange : normal;
+            var brush = on ? Orange : _iconBrush;
             CaptionsButton.Foreground = brush;
             ApplyGlyphBrush(CaptionsButton, brush);
             CaptionsButton.Tag = on ? "on" : "off";
             CaptionsButton.ToolTip = on ? "Subtitles (on)" : "Subtitles";
+            if (ReferenceEquals(_openPopup, SubtitlesPopup)) BuildSubtitleRows();
         }
 
         private void ShowOsd(string text)
@@ -924,14 +1244,19 @@ namespace ZephyrPlayer
             Osd.BeginAnimation(OpacityProperty, fade);
         }
 
-        // ---------- loading state ----------
+        // ---------- loading and error states ----------
 
         private void BeginLoading(string url)
         {
-            var local = PlaybackHistory.LocalPath(url);
-            LoadingTitle.Text = local != null ? System.IO.Path.GetFileNameWithoutExtension(local) : "Movie from your phone";
+            var title = TitleFor(url);
+            HideError();
+            // Carry-forward (a): the Opening state shows the NEW start - its title, an
+            // empty timeline - never the previous movie's time/duration or an old error.
+            _opening = true;
+            ResetTimeline();
+            MovieTitle.Text = title;
+            LoadingTitle.Text = title;
             LoadingDetail.Text = "Opening...";
-            LoadingBackButton.Visibility = Visibility.Collapsed;
             Spinner.Visibility = Visibility.Visible;
             LoadingPanel.Visibility = Visibility.Visible;
             var spin = new DoubleAnimation(0, 360, TimeSpan.FromMilliseconds(900)) { RepeatBehavior = RepeatBehavior.Forever };
@@ -944,13 +1269,22 @@ namespace ZephyrPlayer
             LoadingPanel.Visibility = Visibility.Collapsed;
         }
 
+        /// <summary>The error state (item 68): message + "Back to library" + "Try again".
+        /// It replaces CP1's plain error panel; the bar and top overlay step aside while
+        /// it shows (it has its own Back).</summary>
         private void ShowLoadingError(string message)
         {
             SpinnerTurn.BeginAnimation(RotateTransform.AngleProperty, null);
-            Spinner.Visibility = Visibility.Collapsed;
-            LoadingDetail.Text = message;
-            LoadingBackButton.Visibility = Visibility.Visible;
-            LoadingPanel.Visibility = Visibility.Visible;
+            LoadingPanel.Visibility = Visibility.Collapsed;
+            ClosePopups();
+            _errorShown = true;
+            ErrorTitle.Text = LoadingTitle.Text;
+            ErrorMessage.Text = message;
+            ErrorRetryButton.IsEnabled = _lastStart != null;
+            ErrorPanel.Visibility = Visibility.Visible;
+            ControlBar.Visibility = Visibility.Collapsed;
+            TopOverlay.Visibility = Visibility.Collapsed;
+            BottomGradient.Visibility = Visibility.Collapsed;
             // The error panel is this start's content: settled once the overlay has had
             // a few frames to draw it (a fast failure can come before its first frame).
             var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
@@ -958,23 +1292,69 @@ namespace ZephyrPlayer
             settle.Start();
         }
 
-        /// <summary>True while the loading panel covers the video.</summary>
-        public bool IsLoadingShown => LoadingPanel.Visibility == Visibility.Visible;
-        /// <summary>Test seams: the loading panel's detail line, and whether it shows
-        /// the error surface (spinner gone, Back button shown).</summary>
-        internal string LoadingDetailText => LoadingDetail.Text;
-        internal bool IsLoadingErrorShown => IsLoadingShown && Spinner.Visibility != Visibility.Visible && LoadingBackButton.Visibility == Visibility.Visible;
+        private void HideError()
+        {
+            _errorShown = false;
+            ErrorPanel.Visibility = Visibility.Collapsed;
+            ControlBar.Visibility = Visibility.Visible;
+            TopOverlay.Visibility = Visibility.Visible;
+            BottomGradient.Visibility = _fullscreen ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void OnTryAgain(object sender, RoutedEventArgs e) => _ = RetryLastStartAsync();
+
+        /// <summary>"Try again": the same start again - same URL, position and subtitles.</summary>
+        internal async System.Threading.Tasks.Task RetryLastStartAsync()
+        {
+            if (_lastStart is not { } s) return;
+            RetryCount++;
+            try { await PlayFromUrlAsync(s.Url, s.Position, s.Subtitles); }
+            catch { } // the failure shows as the error state again
+        }
+        internal int RetryCount { get; private set; }
+        internal int StartCount { get; private set; }
+        internal (string Url, long? Position, string[] Subtitles)? LastStartArgs => _lastStart;
+
+        /// <summary>True while the loading or the error panel covers the video.</summary>
+        public bool IsLoadingShown => LoadingPanel.Visibility == Visibility.Visible || ErrorPanel.Visibility == Visibility.Visible;
+        /// <summary>Test seams: the detail line (the error message while the error state
+        /// shows), and whether the error state shows.</summary>
+        internal string LoadingDetailText => _errorShown ? ErrorMessage.Text : LoadingDetail.Text;
+        internal bool IsLoadingErrorShown => ErrorPanel.Visibility == Visibility.Visible;
+        internal bool IsOpening => _opening;
+
+        // ---------- bar show / hide (item 65) ----------
+
+        private bool BarMayHide =>
+            !(ControlBar.IsMouseOver || _seeking || _menuOpen || _errorShown
+              || _player.State is VLCState.Paused or VLCState.Ended or VLCState.Stopped or VLCState.NothingSpecial);
+
+        private void RevealBar()
+        {
+            ControlBar.BeginAnimation(OpacityProperty, null); ControlBar.Opacity = 1;
+            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+            BottomGradient.BeginAnimation(OpacityProperty, null); BottomGradient.Opacity = 1;
+            Overlay.Cursor = Cursors.Arrow;
+        }
+
+        private void FadeBar(double to)
+        {
+            var d = TimeSpan.FromMilliseconds(250);
+            ControlBar.BeginAnimation(OpacityProperty, new DoubleAnimation(to, d));
+            TopOverlay.BeginAnimation(OpacityProperty, new DoubleAnimation(to, d));
+            BottomGradient.BeginAnimation(OpacityProperty, new DoubleAnimation(to, d));
+        }
 
         /// <summary>Phone-initiated pause/resume shows the bar once (review blocker 3).</summary>
         public void ShowBarOnce()
         {
-            ControlBar.BeginAnimation(OpacityProperty, null);
-            ControlBar.Opacity = 1;
-            Overlay.Cursor = Cursors.Arrow;
-            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
+            RevealBar();
             _idleTimer.Stop();
             if (IsLoaded) _idleTimer.Start();
         }
+
+        /// <summary>Test seam: run the idle check now (as its 3 s timer would).</summary>
+        internal void IdleTickForTest() { if (BarMayHide) { ControlBar.BeginAnimation(OpacityProperty, null); ControlBar.Opacity = 0; TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 0; } }
 
         public bool IsFullscreen => _fullscreen;
 
@@ -987,27 +1367,133 @@ namespace ZephyrPlayer
         /// restores Home, not a dead black frame.</summary>
         public bool IsPlayingMedia => _player.State is VLCState.Playing or VLCState.Paused or VLCState.Buffering or VLCState.Opening;
 
+        private const string EnterFullscreenGlyph = "M4,9 V5.5 A1.5,1.5 0 0 1 5.5,4 H9 M15,4 H18.5 A1.5,1.5 0 0 1 20,5.5 V9 M20,15 V18.5 A1.5,1.5 0 0 1 18.5,20 H15 M9,20 H5.5 A1.5,1.5 0 0 1 4,18.5 V15";
+        private const string ExitFullscreenGlyph = "M9,4 V7.5 A1.5,1.5 0 0 1 7.5,9 H4 M15,4 V7.5 A1.5,1.5 0 0 0 16.5,9 H20 M20,15 H16.5 A1.5,1.5 0 0 0 15,16.5 V20 M4,15 H7.5 A1.5,1.5 0 0 1 9,16.5 V20";
+
         public void SetFullscreen(bool on)
         {
             if (on == _fullscreen) return;
             _fullscreen = on;
-            if (on) { ControlBar.MaxWidth = 1000; ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
-            else { ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
+            ClosePopups();
+            ApplyLayoutMode();
             FullscreenChanged?.Invoke(on);
+            FullscreenGlyph.Data = Geometry.Parse(on ? ExitFullscreenGlyph : EnterFullscreenGlyph);
+            FullscreenButton.ToolTip = on ? "Exit full screen (Esc)" : "Full screen (F)";
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
-            ControlBar.BeginAnimation(OpacityProperty, null);
-            ControlBar.Opacity = 1;
-            Overlay.Cursor = Cursors.Arrow;
-            TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
-            FullscreenGlyph.Data = Geometry.Parse(on ? "M10,4 V10 H4 M18,4 V10 H24 M24,18 H18 V24 M4,18 H10 V24" : "M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8");
-            FullscreenButton.ToolTip = on ? "Exit full screen (Esc)" : "Full screen (F)";
             ShowBarOnce();
         }
 
         private void OnFullscreen(object sender, RoutedEventArgs e) => SetFullscreen(!IsFullscreen);
 
-        // ---------- bar styling (Settings, live) ----------
+        private void OnOverlaySizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (_fullscreen) ApplyPillSize();
+            if (_openPopup != null) ClosePopups();
+        }
+
+        /// <summary>Windowed (render 02) or fullscreen (render 03) metrics for the top
+        /// overlay, the bar and the centre cluster.</summary>
+        private void ApplyLayoutMode()
+        {
+            var fs = _fullscreen;
+            // Top overlay: 120 px rgba(0,0,0,.7) + meta, or 140 px rgba(0,0,0,.62), back at
+            // 24/22 on rgba(20,20,24,.55) with a 1 px rgba(255,255,255,.08) edge, title shadow.
+            TopOverlay.Height = fs ? 140 : 120;
+            TopOverlay.Padding = fs ? new Thickness(24, 22, 24, 0) : new Thickness(20, 16, 20, 0);
+            TopGradientStart.Color = fs ? Color.FromArgb(0x9E, 0, 0, 0) : Color.FromArgb(0xB3, 0, 0, 0);
+            HomeButton.Tag = new SolidColorBrush(fs ? Color.FromArgb(0x8C, 20, 20, 24) : Color.FromArgb(0x14, 255, 255, 255));
+            HomeButton.BorderBrush = new SolidColorBrush(Color.FromArgb(0x14, 255, 255, 255));
+            HomeButton.BorderThickness = new Thickness(fs ? 1 : 0);
+            TitleShadow.Opacity = fs ? 0.6 : 0;
+            MovieMeta.Visibility = fs ? Visibility.Collapsed : Visibility.Visible;
+            BottomGradient.Visibility = fs && !_errorShown ? Visibility.Visible : Visibility.Collapsed;
+            // Centre cluster: 44/46/50 px, gap 14, Play margin 0 8 (windowed) or 40/42/46,
+            // gap 12, margin 0 6 (the pill's 1000 px layout).
+            double sec = fs ? 40 : 44, pri = fs ? 42 : 46, play = fs ? 46 : 50, gap = fs ? 12 : 14, pm = fs ? 6 : 8;
+            SecondarySkipBackButton.Width = SecondarySkipBackButton.Height = sec;
+            SecondarySkipForwardButton.Width = SecondarySkipForwardButton.Height = sec;
+            SecondaryBackBox.Width = SecondaryBackBox.Height = sec - 4;
+            SecondaryForwardBox.Width = SecondaryForwardBox.Height = sec - 4;
+            SkipBackButton.Width = SkipBackButton.Height = pri;
+            SkipForwardButton.Width = SkipForwardButton.Height = pri;
+            SkipBackBox.Width = SkipBackBox.Height = pri - 4;
+            SkipForwardBox.Width = SkipForwardBox.Height = pri - 4;
+            PlayPauseButton.Width = PlayPauseButton.Height = play;
+            PlayBox.Width = PlayBox.Height = play;
+            SkipBackButton.Margin = new Thickness(gap, 0, 0, 0);
+            SkipForwardButton.Margin = new Thickness(0, 0, gap, 0);
+            PlayPauseButton.Margin = new Thickness(gap + pm, 0, gap + pm, 0);
+            var k = (sec - 4) / 40.0;
+            SecondarySkipBackLabel.Margin = SecondarySkipForwardLabel.Margin = new Thickness(0, 18 * k, 0, 0);
+            ApplySkipLabels();
+            if (fs)
+            {
+                ControlBar.HorizontalAlignment = HorizontalAlignment.Center;
+                ControlBar.CornerRadius = new CornerRadius(22);
+                ControlBar.Padding = new Thickness(16, 7, 16, 5);
+                ControlBar.Margin = new Thickness(0, 0, 0, PlayerBarLogic.PillBottom);
+                ControlBar.LayoutTransform = new ScaleTransform(PlayerBarLogic.PillScale, PlayerBarLogic.PillScale);
+                ApplyPillSize();
+            }
+            else
+            {
+                ControlBar.LayoutTransform = Transform.Identity;
+                ControlBar.Width = double.NaN;
+                ControlBar.MaxWidth = double.PositiveInfinity;
+                ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch;
+                ControlBar.CornerRadius = new CornerRadius(16);
+                ControlBar.Padding = new Thickness(18, 10, 18, 9);
+                ControlBar.Margin = new Thickness(20);
+            }
+            Reflow();
+        }
+
+        /// <summary>The pill: laid out at up to 1000 px, drawn at 0.78 (at most 780 px),
+        /// clamped to the screen with a 24 px gap each side (Instinct U2).</summary>
+        private void ApplyPillSize()
+        {
+            var viewport = Overlay.ActualWidth > 0 ? Overlay.ActualWidth : ActualWidth;
+            if (viewport <= 0) viewport = SystemParameters.PrimaryScreenWidth;
+            ControlBar.Width = PlayerBarLogic.PillLayoutWidth(viewport);
+            ControlBar.MaxWidth = PlayerBarLogic.PillLayoutMax;
+        }
+
+        /// <summary>Test/CI seam: the pill's drawn width for the current viewport.</summary>
+        internal double PillDrawnWidth => _fullscreen ? ControlBar.Width * PlayerBarLogic.PillScale : 0;
+
+        private void OnBarSizeChanged(object sender, SizeChangedEventArgs e) => Reflow();
+
+        internal int ReflowLevelNow => _reflowLevel;
+
+        /// <summary>At narrow widths the bar gives way in steps (no % label, a shorter
+        /// volume track, speaker only, no badges) so the side groups never run into the
+        /// centre cluster and Play stays on the centre line.</summary>
+        private void Reflow()
+        {
+            if (ControlBar == null || ControlBar.ActualWidth <= 0) return;
+            var inner = ControlBar.ActualWidth - ControlBar.Padding.Left - ControlBar.Padding.Right - 2;
+            CenterPlaybackControls.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            var center = CenterPlaybackControls.DesiredSize.Width;
+            // A badge button is 8 + icon 22 + 5 + text + 8 wide against 38 without: text + 5 more.
+            double BadgeWidth(TextBlock t) { if (string.IsNullOrEmpty(t.Text)) return 0; t.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity)); return t.DesiredSize.Width + 5; }
+            var speedBadge = PlayerBarLogic.IsNormalRate(_rate) ? 0 : BadgeWidth(SpeedLabel);
+            var sleepBadge = _sleep.IsActive ? BadgeWidth(SleepLabel) : 0;
+            var shown = new[] { CaptionsButton, SpeedButton, SleepButton, FullscreenButton }.Count(b => b.Visibility == Visibility.Visible);
+            var rightNoBadges = shown * 38 + Math.Max(0, shown - 1) * 4;
+            var right = rightNoBadges + (SpeedButton.Visibility == Visibility.Visible ? Math.Max(0, speedBadge) : 0) + (SleepButton.Visibility == Visibility.Visible ? Math.Max(0, sleepBadge) : 0);
+            var level = PlayerBarLogic.ReflowLevel(inner, center, right, rightNoBadges);
+            _reflowLevel = level;
+            VolumeLabel.Visibility = level >= 1 ? Visibility.Collapsed : Visibility.Visible;
+            VolumeSlider.Width = level >= 2 ? 56 : 92;
+            VolumeSlider.Visibility = level >= 3 ? Visibility.Collapsed : Visibility.Visible;
+            SetBadge(SpeedButton, SpeedLabel, !PlayerBarLogic.IsNormalRate(_rate));
+            SetBadge(SleepButton, SleepLabel, _sleep.IsActive);
+        }
+
+        // ---------- bar styling (Settings, live; item 58) ----------
+
+        private Brush _iconBrush = IconDefault;
 
         private static void ApplyGlyphBrush(DependencyObject element, Brush brush)
         {
@@ -1017,55 +1503,135 @@ namespace ZephyrPlayer
                 if (path.Fill != null) path.Fill = brush;
             }
             for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++) ApplyGlyphBrush(VisualTreeHelper.GetChild(element, i), brush);
+            if (element is ContentControl cc && cc.Content is DependencyObject content && VisualTreeHelper.GetChildrenCount(element) == 0) ApplyGlyphBrush(content, brush);
+            if (element is Panel panel && VisualTreeHelper.GetChildrenCount(element) == 0) foreach (UIElement child in panel.Children) ApplyGlyphBrush(child, brush);
+            if (element is Decorator dec && dec.Child != null && VisualTreeHelper.GetChildrenCount(element) == 0) ApplyGlyphBrush(dec.Child, brush);
         }
 
+        /// <summary>"10s" with a smaller unit letter, as render 02's skip glyphs. The
+        /// TextBlock's Text still reads "10s".</summary>
+        private static void SetSkipLabel(TextBlock tb, int seconds, double size)
+        {
+            var text = PlayerSettings.FormatSkip(seconds);
+            var unitAt = text.Length - 1;
+            tb.Inlines.Clear();
+            tb.Inlines.Add(new Run(text.Substring(0, unitAt)) { FontSize = size });
+            tb.Inlines.Add(new Run(text.Substring(unitAt)) { FontSize = Math.Round(size * 0.72, 1), FontWeight = FontWeights.SemiBold });
+        }
+
+        private void ApplySkipLabels()
+        {
+            var pri = (SkipBackBox.Width) / 42.0 * 12.6;
+            var sec = (SecondaryBackBox.Width) / 40.0 * 13.0;
+            SetSkipLabel(SkipBackLabel, _settings.PrimarySkipSeconds, pri);
+            SetSkipLabel(SkipForwardLabel, _settings.PrimarySkipSeconds, pri);
+            SetSkipLabel(SecondarySkipBackLabel, _settings.SecondarySkipSeconds, sec);
+            SetSkipLabel(SecondarySkipForwardLabel, _settings.SecondarySkipSeconds, sec);
+        }
+
+        /// <summary>The five colour sets (render 06b; "Default is the original") and
+        /// Outline/Solid. Original = render 02: white primary rings and labels, orange
+        /// secondary arrows and labels, orange Play. Orange / White = everything in that
+        /// colour. "White, orange rings" = orange rings, white labels. "Orange, white rings"
+        /// = white rings, orange labels.</summary>
         public void ApplyBarStyle()
         {
             _secondaryBackHighlight.Stop();_secondaryForwardHighlight.Stop();
             var style = _settings.BarColorStyle;
-            var ring = style is "orange" or "twotone" ? Orange : RingDefault;
-            var label = style is "orange" or "inverse" ? Orange : RingDefault;
-            var times = Orange;
+            Brush priRing, priLabel, secRing, secLabel, play, icons;
+            switch (style)
+            {
+                case "orange": priRing = priLabel = secRing = secLabel = play = Orange; icons = Orange; break;
+                case "white": priRing = priLabel = secRing = secLabel = play = RingDefault; icons = IconDefault; break;
+                case "twotone": priRing = secRing = Orange; priLabel = secLabel = RingDefault; play = Orange; icons = IconDefault; break;
+                case "inverse": priRing = secRing = RingDefault; priLabel = secLabel = Orange; play = Orange; icons = Orange; break;
+                default: priRing = priLabel = RingDefault; secRing = secLabel = Orange; play = Orange; icons = IconDefault; break;
+            }
+            _iconBrush = icons;
 
-            SkipBackRing.Stroke = ring;
-            SkipForwardRing.Stroke = ring;
-            SkipBackArrow.Fill = ring;
-            SkipForwardArrow.Fill = ring;
-            SkipBackLabel.Foreground = label;
-            SkipForwardLabel.Foreground = label;
-            SkipBackLabel.Text = PlayerSettings.FormatSkip(_settings.PrimarySkipSeconds);
-            SkipForwardLabel.Text = PlayerSettings.FormatSkip(_settings.PrimarySkipSeconds);
-            SecondarySkipBackIcon.Stroke = ring;
-            SecondarySkipForwardIcon.Stroke = ring;
-            SecondarySkipBackLabel.Foreground = label;
-            SecondarySkipForwardLabel.Foreground = label;
-            // Settled units: minutes read as minutes (60 -> "1m"), never raw seconds.
-            SecondarySkipBackLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
-            SecondarySkipForwardLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
+            SkipBackRing.Stroke = priRing; SkipForwardRing.Stroke = priRing;
+            SkipBackArrow.Fill = SkipBackArrow.Stroke = priRing;
+            SkipForwardArrow.Fill = SkipForwardArrow.Stroke = priRing;
+            SkipBackLabel.Foreground = priLabel; SkipForwardLabel.Foreground = priLabel;
+            SecondarySkipBackIcon.Stroke = secRing; SecondarySkipForwardIcon.Stroke = secRing;
+            SecondarySkipBackHead.Fill = SecondarySkipBackHead.Stroke = secRing;
+            SecondarySkipForwardHead.Fill = SecondarySkipForwardHead.Stroke = secRing;
+            SecondarySkipBackLabel.Foreground = secLabel; SecondarySkipForwardLabel.Foreground = secLabel;
+            ApplySkipLabels();
             SecondarySkipBackButton.ToolTip = $"Back {_settings.SecondarySkipSeconds} s";
             SecondarySkipForwardButton.ToolTip = $"Forward {_settings.SecondarySkipSeconds} s";
 
+            // Outline (render 02): ring r 10.4/24, 1.25 stroke, 10 % fill, coloured glyph.
+            // Solid: a filled disc with a dark glyph.
             var hollow = _settings.IconStyle == "hollow";
-            PlayRing.Stroke = hollow ? ring : Brushes.Transparent;
-            PlayRing.Fill = hollow ? Brushes.Transparent : ring;
-            PlayGlyph.Fill = hollow ? ring : Dark;
+            var playColor = ((SolidColorBrush)play).Color;
+            PlayRing.Stroke = hollow ? play : Brushes.Transparent;
+            PlayRing.Fill = hollow ? (playColor == Brand.Orange ? OrangeTint : WhiteTint) : play;
+            PlayGlyph.Fill = PlayGlyph.Stroke = hollow ? play : Dark;
             foreach (var child in PauseGlyph.Children)
-                if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? ring : Dark;
+                if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? play : Dark;
 
-            ElapsedText.Foreground = times;
-            TotalText.Foreground = style == "original" ? Muted : times;
-            RemainingText.Foreground = style == "orange" ? Orange : RingDefault;
-            VolumeButton.Foreground = label;
-            SpeedButton.Foreground = label;
-            SleepButton.Foreground = label;
-            CaptionsButton.Foreground = label;
-            FullscreenButton.Foreground = label;
-            foreach (var button in new[] { VolumeButton, SpeedButton, SleepButton, CaptionsButton, FullscreenButton })
-                ApplyGlyphBrush(button, label);
+            VolumeButton.Foreground = icons; ApplyGlyphBrush(VolumeButton, icons);
+            FullscreenButton.Foreground = icons; ApplyGlyphBrush(FullscreenButton, icons);
 
             SpeedButton.Visibility = _settings.ShowSpeed ? Visibility.Visible : Visibility.Collapsed;
             SleepButton.Visibility = _settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
             RefreshCaptionsUi();
+            RefreshSpeedUi();
+            RefreshSleepUi();
+            Reflow();
+        }
+
+        // ---------- CI readback (status JSON) ----------
+
+        /// <summary>What the bar shows right now, for the capture build's /control/status
+        /// (CI_CAPTURE_HOOK only) and tests.</summary>
+        internal System.Collections.Generic.Dictionary<string, object?> UiState()
+        {
+            Rect BarRect()
+            {
+                try
+                {
+                    if (PresentationSource.FromVisual(ControlBar) == null || ControlBar.ActualWidth <= 0) return Rect.Empty;
+                    var tl = ControlBar.PointToScreen(new Point(0, 0));
+                    var br = ControlBar.PointToScreen(new Point(ControlBar.ActualWidth, ControlBar.ActualHeight));
+                    return new Rect(tl, br);
+                }
+                catch { return Rect.Empty; }
+            }
+            var bar = BarRect();
+            return new System.Collections.Generic.Dictionary<string, object?>
+            {
+                ["bar_opacity"] = Math.Round(ControlBar.Opacity, 2),
+                ["bar_visible"] = ControlBar.Visibility == Visibility.Visible,
+                ["top_opacity"] = Math.Round(TopOverlay.Opacity, 2),
+                ["bar_screen"] = bar.IsEmpty ? null : new[] { (int)bar.Left, (int)bar.Top, (int)bar.Right, (int)bar.Bottom },
+                ["popup"] = OpenPopupName,
+                ["elapsed_text"] = ElapsedText.Text,
+                ["remaining_text"] = RemainingText.Text,
+                ["total_text"] = TotalText.Text,
+                ["title_text"] = MovieTitle.Text,
+                ["meta_text"] = MovieMeta.Text,
+                ["seek_value"] = Math.Round(SeekBar.Value, 1),
+                ["opening"] = _opening,
+                ["loading"] = LoadingPanel.Visibility == Visibility.Visible,
+                ["error"] = _errorShown,
+                ["error_message"] = _errorShown ? ErrorMessage.Text : null,
+                ["start_count"] = StartCount,
+                ["retry_count"] = RetryCount,
+                ["last_start_url"] = _lastStart?.Url,
+                ["rate"] = _rate,
+                ["speed_badge"] = SpeedLabel.Visibility == Visibility.Visible ? SpeedLabel.Text : null,
+                ["sleep_minutes"] = _sleep.Minutes,
+                ["sleep_badge"] = SleepLabel.Visibility == Visibility.Visible ? SleepLabel.Text : null,
+                ["sleep_paused_count"] = SleepPausedCount,
+                ["subtitle_delay_ms"] = _subDelayMs,
+                ["subtitle_size"] = _settings.SubtitleSize,
+                ["fullscreen"] = _fullscreen,
+                ["pill_drawn_width"] = Math.Round(PillDrawnWidth, 1),
+                ["reflow"] = _reflowLevel,
+                ["last_seek_fraction"] = Math.Round(LastSeekFraction, 4),
+            };
         }
     }
 }
