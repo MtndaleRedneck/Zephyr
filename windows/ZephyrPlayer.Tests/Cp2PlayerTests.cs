@@ -360,6 +360,44 @@ namespace ZephyrPlayer.Tests
             });
         }
 
+        // ---------- item 44: black caption over the player ----------
+
+        [Fact]
+        public void Caption_IsBlackOverThePlayer_LibraryKeepsItsOwn()
+        {
+            Exception? failure = null;
+            var thread = new Thread(() =>
+            {
+                var dir = Path.Combine(Path.GetTempPath(), "zephyr-cp2-caption-" + Guid.NewGuid().ToString("N"));
+                Directory.CreateDirectory(dir);
+                try
+                {
+                    Core.Initialize();
+                    using var vlc = new LibVLC("--no-video", "--aout=dummy");
+                    using var player = new MediaPlayer(vlc);
+                    var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));
+                    var shell = new ShellWindow(settings);
+                    var home = new HomeView(settings, new PairedStore(Path.Combine(dir, "paired.json")), _ => { }, () => { }, loadDurations: false);
+                    var view = new PlayerView(vlc, player, settings);
+                    var caption = (Border)shell.FindName("CaptionBar")!;
+                    shell.ShowView(home);
+                    Assert.Equal(System.Windows.Media.Color.FromRgb(0x0A, 0x0A, 0x0C), ((System.Windows.Media.SolidColorBrush)caption.Background).Color);
+                    shell.ShowView(view);
+                    Assert.Equal(System.Windows.Media.Colors.Black, ((System.Windows.Media.SolidColorBrush)caption.Background).Color);
+                    shell.ShowView(home, () => view.StopPlaybackSource());
+                    Assert.Equal(System.Windows.Media.Color.FromRgb(0x0A, 0x0A, 0x0C), ((System.Windows.Media.SolidColorBrush)caption.Background).Color);
+                    view.ReleasePlayback();
+                    shell.Close();
+                }
+                catch (Exception ex) { failure = ex; }
+                finally { try { Directory.Delete(dir, true); } catch { } Dispatcher.CurrentDispatcher.InvokeShutdown(); }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.Start();
+            Assert.True(thread.Join(60000), "STA body did not finish");
+            if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+
         // ---------- pure layout logic ----------
 
         [Fact]
