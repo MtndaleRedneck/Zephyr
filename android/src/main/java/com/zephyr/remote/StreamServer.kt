@@ -61,7 +61,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
      *  thread/FD remains until the read returns, holding its process-wide
      *  provider-budget permit (which bounds such parked providers). */
     private class Guarded<T : java.io.Closeable>(val inner: T) {
-        private val gate = Object()
+        /** FAIR lock, not a `synchronized` monitor: the copy/serve loops re-enter
+         *  use() every poll cycle (~500 ms), and a monitor lets the just-releasing
+         *  worker barge ahead of a parked close() indefinitely (observed in CI:
+         *  a deadline close starved >10 s behind an idle pipe poll, so the
+         *  provider's budget permit never returned). Fairness hands the gate to a
+         *  waiting close at the next cycle boundary, so "close between poll
+         *  cycles" actually holds. A close still waits for a parked READ inside
+         *  use() (declared residual). */
+        private val gate = java.util.concurrent.locks.ReentrantLock(true)
         @Volatile var closed = false; private set
         val closeQueued = java.util.concurrent.atomic.AtomicBoolean(false)
         @Volatile var deadlineAt: Long = Long.MAX_VALUE
@@ -69,22 +77,29 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         @Volatile var request: RequestState? = null
         private var onClosed: (() -> Unit)? = null
         fun close() {
-            val cb: (() -> Unit)? = synchronized(gate) {
+            var cb: (() -> Unit)? = null
+            gate.lock()
+            try {
                 if (!closed) { closed = true; runCatching { inner.close() } }
-                val c = onClosed; onClosed = null; c
-            }
+                cb = onClosed; onClosed = null
+            } finally { gate.unlock() }
             cb?.invoke()
         }
         /** Runs [cb] exactly once: immediately if already closed, otherwise when a
          *  future close() completes - possibly only after a parked provider read
          *  returns. Used to hand abandoned-worker capacity back. */
         fun onClosedOnce(cb: () -> Unit) {
-            val runNow = synchronized(gate) { if (closed) true else { onClosed = cb; false } }
+            val runNow: Boolean
+            gate.lock()
+            try { runNow = if (closed) true else { onClosed = cb; false } } finally { gate.unlock() }
             if (runNow) cb()
         }
-        fun <R> use(block: (T) -> R): R = synchronized(gate) {
-            if (closed) throw java.io.InterruptedIOException("provider closed")
-            block(inner)
+        fun <R> use(block: (T) -> R): R {
+            gate.lock()
+            try {
+                if (closed) throw java.io.InterruptedIOException("provider closed")
+                return block(inner)
+            } finally { gate.unlock() }
         }
     }
 
