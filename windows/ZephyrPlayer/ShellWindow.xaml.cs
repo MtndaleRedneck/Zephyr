@@ -47,6 +47,9 @@ namespace ZephyrPlayer
         /// <summary>The library kept drawn under an incoming player until its start has
         /// something on screen (its own Playing, or the error panel).</summary>
         private FrameworkElement? _heldUnder;
+        internal static readonly SolidColorBrush PlayerCaption = Freeze(new SolidColorBrush(Colors.Black));
+        internal static readonly SolidColorBrush LibraryCaption = Freeze(new SolidColorBrush(Color.FromRgb(0x0A, 0x0A, 0x0C)));
+        private static SolidColorBrush Freeze(SolidColorBrush b) { b.Freeze(); return b; }
         internal FrameworkElement? HeldUnderView => _heldUnder;
         internal int ViewHostChildCount => ViewHost.Children.Count;
 
@@ -72,6 +75,9 @@ namespace ZephyrPlayer
         {
             var old = _current;
             if (ReferenceEquals(old, view)) { beforeOldLeaves?.Invoke(); return; }
+            // Item 44 (render 02): the caption is black over the player; the library keeps
+            // render 01's #0A0A0C.
+            CaptionBar.Background = view is PlayerView ? PlayerCaption : LibraryCaption;
             if (old is PlayerView && view is not PlayerView)
             {
                 // Back. The library may still be held under the player (Back pressed
