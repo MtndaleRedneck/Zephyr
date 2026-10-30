@@ -133,7 +133,8 @@ python -m pip install --quiet pillow numpy | Out-Null
 $zip = Join-Path $env:RUNNER_TEMP "vlc-$VlcVersion-win64.zip"
 $base = "https://download.videolan.org/pub/videolan/vlc/$VlcVersion/win64/vlc-$VlcVersion-win64.zip"
 Invoke-WebRequest -Uri $base -OutFile $zip -UseBasicParsing
-$want = ((Invoke-WebRequest -Uri "$base.sha256" -UseBasicParsing).Content -split '\s+')[0].ToLowerInvariant()
+Invoke-WebRequest -Uri "$base.sha256" -OutFile "$zip.sha256" -UseBasicParsing
+$want = ((Get-Content "$zip.sha256" -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
 $got = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 Log "VLC desktop zip $base sha256 $got (VideoLAN's .sha256 says $want)"
 if ($want -ne $got) { throw "VLC zip hash mismatch" }
