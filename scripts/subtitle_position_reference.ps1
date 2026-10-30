@@ -111,8 +111,10 @@ function ClientRect($h) {
     return @($p.X, $p.Y, ($p.X + $c.Right), ($p.Y + $c.Bottom))
 }
 function Measure($png, $prefix) {
-    $j = & python (Join-Path $PSScriptRoot 'subref/measure.py') $png $prefix
-    try { return ($j | ConvertFrom-Json) } catch { Log "measure failed for ${png}: $j"; return $null }
+    $raw = & python (Join-Path $PSScriptRoot 'subref/measure.py') $png $prefix 2>&1 | Out-String
+    $line = ($raw -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -Last 1)
+    if (-not $line) { Log "measure failed for ${png}: $raw"; return $null }
+    try { return ($line | ConvertFrom-Json) } catch { Log "measure output unreadable for ${png}: $raw"; return $null }
 }
 function Park() { $s = ScreenSize; [SU]::SetCursorPos($s[0] - 1, [int]($s[1] / 2)) | Out-Null }
 function Record($player, $leg, $mode, $m, $extra) {
@@ -128,7 +130,8 @@ choco install ffmpeg --no-progress -y | Out-Null
 $ffmpeg = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
 if (-not $ffmpeg -and (Test-Path 'C:\ProgramData\chocolatey\bin\ffmpeg.exe')) { $ffmpeg = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe' }
 if (-not $ffmpeg) { throw 'ffmpeg unavailable' }
-python -m pip install --quiet pillow numpy | Out-Null
+$pipOut = python -m pip install --quiet pillow numpy 2>&1 | Out-String
+Log "python: $((python --version 2>&1) | Out-String) pip: $pipOut"
 
 $zip = Join-Path $env:RUNNER_TEMP "vlc-$VlcVersion-win64.zip"
 $base = "https://download.videolan.org/pub/videolan/vlc/$VlcVersion/win64/vlc-$VlcVersion-win64.zip"
@@ -164,6 +167,9 @@ $server = Start-Process python -ArgumentList "scripts/range_server.py", (Join-Pa
 
 # Zephyr's own setup step for its local control endpoint (the capture build's status).
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+# The capture build honours its CI hooks (--play, --fullscreen, the status token) only
+# with ZEPHYR_CI_CAPTURE set, as in pc_desktop_capture.ps1.
+[Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', '1', 'Process')
 $fw = Start-Process "windows/capture-out/ZephyrPlayer.exe" -ArgumentList '--install-firewall', $sid -PassThru -Wait -WindowStyle Hidden
 Log "Zephyr firewall/listen setup exit $($fw.ExitCode)"
 function ZStatus() { try { return Invoke-RestMethod -Uri "http://127.0.0.1:47823/control/status" -Headers @{ Authorization = "Bearer ci-capture-token" } -TimeoutSec 5 } catch { return $null } }
