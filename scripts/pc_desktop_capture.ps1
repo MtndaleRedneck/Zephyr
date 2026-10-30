@@ -636,7 +636,9 @@ public static class ZCP1 {
 # window of the process about every 50 ms during library->player and Back, plus a
 # 48x30 point grid of the screen under the shell rect. A frame counts against "no
 # flash" when the shell is not visible, a second titled/large Zephyr window is
-# visible, or the shell area is one flat colour (a blank shell). This is SAMPLING:
+# visible, the shell area is one flat colour (a blank shell), or a quarter or more
+# of it is one light colour (the app is dark throughout). Transition frames are
+# saved as PNGs (bounded) so they can be looked at. This is SAMPLING:
 # the result is "no flash observed in N sampled frames", never a proof.
 Add-Type -TypeDefinition @'
 using System;
@@ -669,7 +671,8 @@ public static class ZFlash {
 
     static Thread _t; static volatile bool _run; static uint _pid; static IntPtr _shell; static string _dir, _phase;
     static readonly List<string> _frames = new List<string>();
-    static int _n, _shellHidden, _second, _blank, _popups, _saved; static long _t0, _tLast;
+    static int _n, _shellHidden, _second, _blank, _bright, _popups, _saved, _changes; static long _t0, _tLast;
+    static int _prevMode = -1; static double _prevFrac = -1;
 
     // w x h pixels of the screen at (x,y), 32-bit BGRA, top-down.
     static byte[] Grab(int x, int y, int sw, int sh, int w, int h) {
@@ -695,7 +698,7 @@ public static class ZFlash {
     public static void Start(uint pid, IntPtr shell, string dir, string phase) {
         _pid = pid; _shell = shell; _dir = dir; _phase = phase;
         lock (_frames) { _frames.Clear(); }
-        _n = _shellHidden = _second = _blank = _popups = _saved = 0;
+        _n = _shellHidden = _second = _blank = _bright = _popups = _saved = _changes = 0; _prevMode = -1; _prevFrac = -1;
         _run = true; _t0 = Environment.TickCount64; _tLast = _t0;
         _t = new Thread(Loop) { IsBackground = true }; _t.Start();
     }
@@ -727,7 +730,7 @@ public static class ZFlash {
             return true;
         }, IntPtr.Zero);
         string pix = "";
-        bool blank = false;
+        bool blank = false, bright = false;
         if (shellVis) {
             int sw = sr.Rt - sr.L, sh = sr.B - sr.T;
             var g = Grab(sr.L, sr.T, sw, sh, GW, GH);
@@ -737,25 +740,36 @@ public static class ZFlash {
                 int c; counts.TryGetValue(k, out c); counts[k] = ++c; if (c > best) { best = c; bestKey = k; }
             }
             double frac = best / (double)(GW * GH);
+            int mr = (bestKey >> 10) << 3, mg = ((bestKey >> 5) & 31) << 3, mb = (bestKey & 31) << 3;
             blank = frac >= 0.995;
-            pix = string.Format(" flat={0:0.000} mode=#{1:X2}{2:X2}{3:X2}", frac, (bestKey >> 10) << 3, ((bestKey >> 5) & 31) << 3, (bestKey & 31) << 3);
-            if (blank && _saved < 6) {
+            // The app is dark throughout (library, loading panel, video letterbox): a
+            // quarter or more of the shell in one LIGHT colour is a bright flash.
+            bright = frac >= 0.25 && mr >= 0xC0 && mg >= 0xC0 && mb >= 0xC0;
+            bool change = _prevMode >= 0 && (bestKey != _prevMode || Math.Abs(frac - _prevFrac) > 0.15);
+            if (change) _changes++;
+            pix = string.Format(" flat={0:0.000} mode=#{1:X2}{2:X2}{3:X2}", frac, mr, mg, mb);
+            // Save the transition frames and every flagged one (bounded), so a person
+            // can look at exactly what the sampler saw.
+            if ((blank || bright || change) && _saved < 10) {
                 var full = Grab(sr.L, sr.T, sw, sh, sw, sh);
-                SaveBmp(Path.Combine(_dir, "cp1-flash-" + _phase + "-blank-" + t + "ms.bmp"), full, sw, sh); _saved++;
+                var tag = blank ? "blank" : bright ? "bright" : "change";
+                SaveBmp(Path.Combine(_dir, "cp1-flash-" + _phase + "-" + t.ToString("D5") + "ms-" + tag + ".bmp"), full, sw, sh); _saved++;
+                pix += " saved";
             }
+            _prevMode = bestKey; _prevFrac = frac;
         }
-        _n++; if (!shellVis) _shellHidden++; if (second > 0) _second++; if (blank) _blank++; if (popups > 0) _popups++;
-        lock (_frames) _frames.Add(t + "ms" + (shellVis ? "" : " SHELL-NOT-VISIBLE") + (blank ? " BLANK" : "") + pix + " | " + string.Join(" ; ", wins));
+        _n++; if (!shellVis) _shellHidden++; if (second > 0) _second++; if (blank) _blank++; if (bright) _bright++; if (popups > 0) _popups++;
+        lock (_frames) _frames.Add(t + "ms" + (shellVis ? "" : " SHELL-NOT-VISIBLE") + (blank ? " BLANK" : "") + (bright ? " BRIGHT" : "") + pix + " | " + string.Join(" ; ", wins));
     }
     public static string Stop() {
         _run = false; if (_t != null) _t.Join(3000);
         long span = _tLast - _t0;
         lock (_frames) { var all = new List<string> { "== phase " + _phase + " ==" }; all.AddRange(_frames); File.AppendAllLines(Path.Combine(_dir, "cp1-flash-frames.txt"), all); }
-        return string.Format("{0}: {1} frames over {2} ms (~{3} ms apart); shell not visible: {4}; second Zephyr window: {5}; blank (flat) shell: {6}; small untitled popups (tooltips): {7}",
-            _phase, _n, span, _n > 0 ? span / _n : 0, _shellHidden, _second, _blank, _popups);
+        return string.Format("{0}: {1} frames over {2} ms (~{3} ms apart); shell not visible: {4}; second Zephyr window: {5}; blank (flat) shell: {6}; bright (light) flash: {7}; small untitled popups (tooltips): {8}; colour transitions: {9}",
+            _phase, _n, span, _n > 0 ? span / _n : 0, _shellHidden, _second, _blank, _bright, _popups, _changes);
     }
     public static int Frames { get { return _n; } }
-    public static int Bad { get { return _shellHidden + _second + _blank; } }
+    public static int Bad { get { return _shellHidden + _second + _blank + _bright; } }
 }
 '@
 $cp1FlashTotal = 0; $cp1FlashBad = 0
@@ -962,7 +976,7 @@ foreach ($bmp in (Get-ChildItem "$env:RUNNER_TEMP/cp1-flash-*.bmp" -ErrorAction 
     try { $img = [System.Drawing.Image]::FromFile($bmp.FullName); $img.Save(($bmp.FullName -replace '\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Remove-Item $bmp.FullName } catch { }
 }
 if ($cp1FlashTotal -gt 0 -and $cp1FlashBad -eq 0) { Cp1Log "flash verdict: no flash observed in $cp1FlashTotal sampled frames (sampling only, not a proof; raw frames in cp1-flash-frames.txt)" }
-else { Cp1Log "flash verdict: $cp1FlashBad of $cp1FlashTotal sampled frames flagged (shell not visible, a second Zephyr window, or a flat shell; see cp1-flash-frames.txt and any cp1-flash-*.png)" }
+else { Cp1Log "flash verdict: $cp1FlashBad of $cp1FlashTotal sampled frames flagged (shell not visible, a second Zephyr window, a flat shell, or a light flash; see cp1-flash-frames.txt and cp1-flash-*.png)" }
 # Back to a clean first-run state for the legacy legs below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $cfgDir 'paired.json') -Force -ErrorAction SilentlyContinue
