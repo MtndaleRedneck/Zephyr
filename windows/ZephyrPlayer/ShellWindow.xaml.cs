@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace ZephyrPlayer
 {
@@ -87,17 +88,29 @@ namespace ZephyrPlayer
                 _heldUnder = null;
                 view.UpdateLayout();
                 HoldVideoHost(view);
+                var leaving = (PlayerView)old;
+                // The WPF surface under the native host must show the library too: the
+                // player turns see-through over it and stops taking clicks.
+                leaving.SetSwitchTransparent(true);
+                leaving.IsHitTestVisible = false;
                 beforeOldLeaves?.Invoke();
                 // The movie's own video window is gone now: the host's whole client
                 // paints the library picture (it clips its children, so the paint
                 // above could not reach under the video window).
                 RepaintVideoHost();
-                if (old is PlayerView p) p.SetSwitchTransparent(false);
-                ViewHost.Children.Remove(old);
                 _current = view;
-                ReleaseVideoHost();
+                // CP2 (run 41056301476, one all-black frame ~470 ms into Back): the
+                // player used to leave the tree and the host went back to black in the
+                // same dispatcher pass. WPF hides the native host on its own schedule,
+                // so the host could paint black, or uncover a WPF frame still showing
+                // the player's black background, before the library was presented.
+                // Now the player leaves only after WPF has rendered the see-through
+                // frame, and the host lets go of the library picture only once it is
+                // hidden.
+                ScheduleLeave(leaving);
                 return;
             }
+            CancelPendingLeave(view as PlayerView);
             if (old != null && view is PlayerView player && old is not PlayerView)
             {
                 // library -> player: the library stays drawn under the player.
@@ -169,6 +182,80 @@ namespace ZephyrPlayer
             }
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("video host hold failed: " + ex.GetType().Name); }
         }
+
+        // ---------- Back: the player leaves after the library is on screen ----------
+
+        private int _leaveGen;
+        private PlayerView? _leaving;
+        internal bool LeavePending => _leaving != null;
+
+        private void ScheduleLeave(PlayerView leaving)
+        {
+            var gen = ++_leaveGen;
+            _leaving = leaving;
+            int frames = 0; bool done = false;
+            var fallback = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(150) };
+            EventHandler? onFrame = null;
+            void Finish()
+            {
+                if (done) return;
+                done = true;
+                CompositionTarget.Rendering -= onFrame;
+                fallback.Stop();
+                // ContextIdle: after the Render pass that follows the second frame.
+                Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => CompleteLeave(gen)));
+            }
+            // Two Rendering callbacks: the first frame after the switch has been handed
+            // to the compositor. The timer covers a hidden shell (tray close), which
+            // renders nothing.
+            onFrame = (_, _) => { if (++frames >= 2) Finish(); };
+            CompositionTarget.Rendering += onFrame;
+            fallback.Tick += (_, _) => Finish();
+            fallback.Start();
+        }
+
+        private void CompleteLeave(int gen)
+        {
+            if (gen != _leaveGen) return;
+            var leaving = _leaving; _leaving = null;
+            if (leaving == null || ReferenceEquals(_current, leaving)) return;
+            ViewHost.Children.Remove(leaving);
+            leaving.SetSwitchTransparent(false);
+            leaving.IsHitTestVisible = true;
+            ReleaseHoldWhenHostHidden(gen, 0);
+        }
+
+        /// <summary>The library picture stays on the native host until the host is
+        /// hidden (it left with the player); painting it black while it still shows
+        /// would be the blink this replaces. Bounded: after ~300 ms it is released
+        /// anyway.</summary>
+        private void ReleaseHoldWhenHostHidden(int gen, int tries)
+        {
+            if (gen != _leaveGen || _holdBrush == IntPtr.Zero) return;
+            var host = VideoHostHandle();
+            if (host == IntPtr.Zero || !IsWindowVisible(host)) { FreeHold(); return; }
+            if (tries >= 10) { ReleaseVideoHost(); return; }
+            var t = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(30) };
+            t.Tick += (_, _) => { t.Stop(); ReleaseHoldWhenHostHidden(gen, tries + 1); };
+            t.Start();
+        }
+
+        /// <summary>Any other switch overrides a pending Back. A player coming straight
+        /// back is the same view still in the tree: it is restored, not removed.</summary>
+        private void CancelPendingLeave(PlayerView? incoming)
+        {
+            ++_leaveGen;
+            var leaving = _leaving; _leaving = null;
+            if (leaving == null) return;
+            leaving.IsHitTestVisible = true;
+            if (!ReferenceEquals(leaving, incoming))
+            {
+                ViewHost.Children.Remove(leaving);
+                leaving.SetSwitchTransparent(false);
+            }
+        }
+
+        [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
 
         private void ReleaseVideoHost()
         {
