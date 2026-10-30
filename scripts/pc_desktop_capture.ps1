@@ -123,8 +123,30 @@ function CaptureWindow($hWnd, $path) {
     # GetWindowRect includes the invisible drop-shadow ring; through that ring
     # the runner's console/taskbar pixels bleed into UI evidence.
     $r = [ZRECT]::new()
-    if ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16) -ne 0) {
+    $dwmOk = ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16) -eq 0)
+    if (-not $dwmOk) {
         if (-not [ZWU32]::GetWindowRect($hWnd, [ref]$r)) { Write-Host "::error::GetWindowRect failed for hwnd $hWnd"; return "0 x 0" }
+    }
+    # Geometry agreement: the frame bounds must sit inside GetWindowRect's
+    # invisible-border envelope. If they disagree, the DWM rect is stale (or the
+    # handle is not the rendered window) and CopyFromScreen would grab desktop +
+    # a shifted player - the run 40989952680 false-fail mode. One bounded
+    # re-assert + re-read, then throw WITH the rects: a capture whose crop does
+    # not match its window is decisive-logging-worthy, never silent evidence.
+    $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+    if ($dwmOk) {
+        $dL = $r.Left - $wr.Left; $dT = $r.Top - $wr.Top; $dR = $wr.Right - $r.Right; $dB = $wr.Bottom - $r.Bottom
+        if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 6 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
+            [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, 0, 0, 0x13) | Out-Null  # TOPMOST|NOMOVE|NOSIZE|NOACTIVATE
+            Start-Sleep -Milliseconds 400
+            $r = [ZRECT]::new()
+            [void][ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16)
+            $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+            $dL = $r.Left - $wr.Left; $dT = $r.Top - $wr.Top; $dR = $wr.Right - $r.Right; $dB = $wr.Bottom - $r.Bottom
+            if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 6 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
+                throw "CaptureWindow: frame/window bounds disagree for hwnd ${hWnd} ($path): frame=($($r.Left),$($r.Top),$($r.Right),$($r.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) delta=($dL,$dT,$dR,$dB)"
+            }
+        }
     }
     $r.Left += 2; $r.Top += 2; $r.Right -= 2; $r.Bottom -= 2
     $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
@@ -134,6 +156,7 @@ function CaptureWindow($hWnd, $path) {
     $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
+    "$(Split-Path $path -Leaf): frame=($($r.Left),$($r.Top),$($r.Right),$($r.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) size=${w}x${h}" | Add-Content "$env:RUNNER_TEMP/pc-capture-bounds.txt"
     return "$w x $h"
 }
 function CountColored($path, $y0frac, $y1frac) {
@@ -284,8 +307,31 @@ function FitWindow($hWnd) {
     # 40960360181). HWND_TOPMOST (-1) kept so nothing else overlaps either.
     $wa = [ZRECT]::new()
     [ZWU32]::SystemParametersInfo(0x0030 <# SPI_GETWORKAREA #>, 0, [ref]$wa, 0) | Out-Null
-    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), $wa.Left, $wa.Top, ($wa.Right - $wa.Left), ($wa.Bottom - $wa.Top - 10), 0) | Out-Null
-    Start-Sleep -Milliseconds 700
+    $wantW = $wa.Right - $wa.Left
+    $wantH = $wa.Bottom - $wa.Top - 10
+    # VERIFY the fitted geometry landed. An externally positioned WPF window can
+    # be re-placed by a late dispatcher/layout pass (startup/cascade position)
+    # after SetWindowPos returns; every later capture then crops the rect the
+    # window USED to occupy and grabs desktop + a down-right-shifted player with
+    # clipped chrome and a clipped control bar (run 40989952680, offset ~20,25px,
+    # windowed mouse-recovery 20/20 false fail). Bounded re-fit, then fail
+    # loudly with every rect logged instead of producing misleading evidence.
+    for ($try = 0; $try -lt 4; $try++) {
+        [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), $wa.Left, $wa.Top, $wantW, $wantH, 0) | Out-Null
+        Start-Sleep -Milliseconds 700
+        $fr = [ZRECT]::new()
+        if ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$fr, 16) -ne 0) {
+            # No DWM frame: GetWindowRect minus the usual 7px invisible border.
+            [void][ZWU32]::GetWindowRect($hWnd, [ref]$fr)
+            $fr.Left += 7; $fr.Right -= 7; $fr.Bottom -= 7
+        }
+        if ([Math]::Abs($fr.Left - $wa.Left) -le 6 -and [Math]::Abs($fr.Top - $wa.Top) -le 6 -and
+            [Math]::Abs(($fr.Right - $fr.Left) - $wantW) -le 6 -and [Math]::Abs(($fr.Bottom - $fr.Top) - $wantH) -le 6) {
+            return
+        }
+    }
+    $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+    throw "FitWindow: window did not settle at ($($wa.Left),$($wa.Top)) ${wantW}x${wantH}; frame=($($fr.Left),$($fr.Top),$($fr.Right),$($fr.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) workarea=($($wa.Left),$($wa.Top),$($wa.Right),$($wa.Bottom))"
 }
 function Wait-MainWindow($proc, $seconds) {
     # WPF can take a while to create its HWND on a cold runner; poll instead
