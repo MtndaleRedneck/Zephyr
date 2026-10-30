@@ -68,7 +68,7 @@
                                 </Button>
                                 <Slider Focusable="False" Style="{StaticResource PlaybackSlider}" Foreground="#F5F5F7" x:Name="VolumeSlider" Width="110" Minimum="0" Maximum="100" Value="100"
                                         VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"/>
-                                <TextBlock x:Name="VolumeLabel" Text="100%" Width="44" Foreground="#E9E9EE" FontSize="12.5" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                <TextBlock x:Name="VolumeLabel" Text="100%" MinWidth="36" Foreground="#E9E9EE" FontSize="12.5" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center" Margin="8,0,0,0"/>
                             </StackPanel>
                             <StackPanel x:Name="CenterPlaybackControls" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
 
