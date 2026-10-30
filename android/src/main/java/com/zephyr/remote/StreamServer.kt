@@ -28,6 +28,13 @@ import java.util.concurrent.Executors
  */
 class StreamServer(private val context: Context, private val wifiAddr: InetAddress, private val port: Int = 0,
     private val openDescriptor: (Uri, android.os.CancellationSignal) -> ParcelFileDescriptor? = { uri, signal -> context.contentResolver.openFileDescriptor(uri, "r", signal) },
+    private val providerSize: (Uri, android.os.CancellationSignal) -> Long? = { uri, signal ->
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.SIZE), null, null, null, signal)?.use { c ->
+                if (c.moveToFirst() && !c.isNull(0)) c.getLong(0) else null
+            }
+        }.getOrNull()
+    },
 ) {
 
     data class Entry(val uri: Uri, val displayName: String, val subtitles: List<Uri>)
@@ -48,6 +55,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     private val requests = java.util.concurrent.ConcurrentHashMap.newKeySet<RequestState>()
     /** Test seam: provider inactivity deadline in ms (production default 60 s). */
     @Volatile internal var providerDeadlineMs: Long = 60_000
+    /** Test seam: stop-drain wait budget (production default DRAIN_WAIT_BUDGET_MS). */
+    @Volatile internal var drainBudgetMs: Long = DRAIN_WAIT_BUDGET_MS
+    /** Test-observable: the drain thread reached its end (once per stop()). */
+    internal val drainFinished = java.util.concurrent.CountDownLatch(1)
     @Volatile private var running = false
 
     /** Serializes close() against every raw-descriptor use: while a worker holds
@@ -172,10 +183,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     // wake/Wi-Fi locks release. The provider's budget permit
                     // returns only when its close actually completes.
                     res.request?.let { req -> req.abandon() }
-                    if (res.closeQueued.compareAndSet(false, true)) {
-                        try { pool.execute { providers.remove(res); res.close() } }
-                        catch (e: java.util.concurrent.RejectedExecutionException) { providers.remove(res); res.close() }
-                    }
+                    queueClose(res)
                 }
             }
         }, 1, 1, java.util.concurrent.TimeUnit.SECONDS)
@@ -234,6 +242,19 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         permits.release()
     }
 
+    /** Queue a provider's close on the worker pool, once per provider. The close
+     *  itself NEVER runs on the calling thread (watchdog, stop caller, or drain):
+     *  a SAF/FUSE close can block, and a blocked close must not park a timer, a
+     *  shutdown path, or the drain. If the pool is already shut down (stop
+     *  teardown race), just unregister - stop()'s own close pass and the
+     *  worker's exit close are the owners then; a provider whose read never
+     *  returns stays parked, budget-bounded (declared residual). */
+    private fun queueClose(res: Guarded<*>) {
+        if (!res.closeQueued.compareAndSet(false, true)) return
+        try { pool.execute { providers.remove(res); res.close() } }
+        catch (e: java.util.concurrent.RejectedExecutionException) { providers.remove(res) }
+    }
+
     fun stop() {
         running = false
         runCatching { socket?.close() }
@@ -245,27 +266,34 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         // so a parked provider worker cannot keep counts held through teardown.
         requests.forEach { it.abandon() }
         watchdog.shutdownNow()
-        pool.shutdownNow()
+        // Hand every provider close to the pool BEFORE shutting it down (queued
+        // tasks still run under an orderly shutdown; shutdownNow would discard
+        // them and cannot interrupt a parked SAF/FUSE read anyway).
+        providers.forEach { queueClose(it) }
+        pool.shutdown()
         kotlin.concurrent.thread(name = "stream-drain", isDaemon = true) {
-            // Provider closes can block on a stuck SAF/FUSE provider: they belong
-            // here, never on the caller (service shutdown / UI) thread.
-            providers.forEach { it.close() }
-            // Cleanup only after copy workers end; never delete while a worker can rename.
-            // Bounded wait: a provider that NEVER returns must not park one drain
-            // thread per stopped session for process lifetime (M1). After the
-            // budget, remaining parked providers are closed by their own workers
-            // when (if) the read returns; the cache is reclaimed by the next
-            // start()'s cleanCache. Abandoned workers cannot commit a rename after
-            // stop (every request was abandoned above), so late deletion is safe.
-            val drainDeadline = android.os.SystemClock.elapsedRealtime() + DRAIN_WAIT_BUDGET_MS
+            // The drain thread only WAITS - the deadline is computed FIRST and no
+            // close ever runs on this thread - so a provider that never returns
+            // cannot park one drain thread per stopped session for process
+            // lifetime (M1). A parked close occupies a pool thread instead,
+            // bounded process-wide by the provider budget (a parked provider
+            // holds its permit). After the budget, remaining parked providers
+            // are closed by their own workers when (if) the read returns; the
+            // cache is reclaimed below and by the next start()'s cleanCache.
+            val drainDeadline = android.os.SystemClock.elapsedRealtime() + drainBudgetMs
             while (!pool.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) {
-                providers.forEach { it.close() }
                 if (android.os.SystemClock.elapsedRealtime() >= drainDeadline) break
             }
+            // Deletion cannot race a rename: every request was abandoned above,
+            // so no NEW commit can win the gate; a commit that won before
+            // abandonment finishes its rename inside CacheCopier.copy before
+            // the worker proceeds (never across the copy boundary), and the
+            // wait above gives such workers until the budget to finish.
             // A process killed before this point leaves files behind; cleanCache()
             // on the next start() reclaims them.
             context.cacheDir.listFiles()?.filter { it.name.startsWith("stream-$token-") }?.forEach { it.delete() }
             activeTokens.remove(token)
+            drainFinished.countDown()
         }
     }
 
@@ -414,6 +442,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     synchronized(lock) {
                         if (!cached.exists()) {
                             val tmp = java.io.File(context.cacheDir, "stream-$token-" + cacheFile(context, uri, ".part").name)
+                            var expectedBytes: Long? = null
                             try {
                                 CacheCopier.copy(
                                     open = {
@@ -421,7 +450,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                         val copyOpenDeadline = try { watchdog.schedule({ copySignal.cancel() }, 60, java.util.concurrent.TimeUnit.SECONDS) }
                                             catch (e: java.util.concurrent.RejectedExecutionException) { cancellations.remove(copySignal); throw java.io.InterruptedIOException() }
                                         if (!providerBudget.tryAcquire()) throw ProviderBudgetExhausted()
-                                        val copyFd = try { openDescriptor(uri, copySignal) }
+                                        val copyFd = try {
+                                            val fd = openDescriptor(uri, copySignal)
+                                            // Declared length for complete-or-nothing validation, under the same
+                                            // cancellation umbrella as the open. A provider that cannot answer
+                                            // yields null = unknown (EOF is then the only completeness signal,
+                                            // declared); a canceled query never fails the stream.
+                                            if (fd != null) expectedBytes = providerSize(uri, copySignal)
+                                            fd
+                                        }
                                             catch (e: Throwable) { providerBudget.release(); throw e }
                                             finally { copyOpenDeadline.cancel(false); cancellations.remove(copySignal) }
                                             ?: run { providerBudget.release(); throw java.io.IOException("no provider") }
@@ -460,12 +497,16 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                     tmp = tmp, final = cached,
                                     freeSpace = { context.cacheDir.usableSpace },
                                     maxBytes = MAX_CACHE_COPY_BYTES, minFree = MIN_FREE_BYTES, cancelled = { !running || !req.isActive },
+                                    // Fully-read AND validated before the commit CAS (M1/Tab).
+                                    expectedBytes = { expectedBytes },
                                     // Atomic commit-vs-abandon ownership (M1/Tab):
                                     // the rename runs only while still ACTIVE.
                                     commit = { t, f -> req.withCommit { t.renameTo(f) } ?: false },
                                 )
                             } catch (e: ProviderBudgetExhausted) {
                                 return reply(client, 503, ByteArray(0), "text/plain")
+                            } catch (e: CacheCopier.SizeMismatch) {
+                                return reply(client, 502, ByteArray(0), "text/plain")
                             } catch (e: CacheCopier.NoSpace) {
                                 return reply(client, 507, ByteArray(0), "text/plain")
                             } catch (e: CacheCopier.TooLarge) {
