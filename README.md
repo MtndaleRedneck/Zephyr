@@ -1,6 +1,6 @@
-# Zephyr
+<p align="center"><img src="android/src/main/res/drawable-nodpi/app_logo.png" alt="Zephyr icon" width="96"></p>
 
-<img src="android/src/main/res/drawable-nodpi/app_logo.png" width="128" alt="Zephyr icon">
+# Zephyr
 
 A phone remote app and Zephyr Media Player for Windows, plus VLC phone remote support.
 
