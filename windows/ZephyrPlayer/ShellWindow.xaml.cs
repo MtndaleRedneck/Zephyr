@@ -97,27 +97,19 @@ namespace ZephyrPlayer
                 leaving.SetSwitchTransparent(true);
                 leaving.IsHitTestVisible = false;
                 SwitchTrace.Mark("player.see-through");
-                // CP2 round 5: the library is put ON SCREEN before anything is torn
-                // down, and that is read back from the screen, not assumed. The bar's
-                // overlay goes, libVLC's video window(s) inside the host are hidden (so
-                // nothing the stop does can reach the screen), the host's whole client
-                // paints the library picture, and the composed screen must show it.
-                leaving.HideOverlayWindow();
-                var host = VideoHostHandle();
-                HideVideoWindows(host);
-                RepaintVideoHost();
-                GdiFlush();
-                ProveHostShowsPicture(host, "before-stop");
                 beforeOldLeaves?.Invoke();
-                // After the stop libVLC's video window(s) are gone (checked, not
-                // assumed) and the host is painted again over its whole client.
+                // After the stop (and the overlay's hide) libVLC's video window(s) are
+                // gone, checked rather than assumed, and the host paints the library
+                // picture over its whole client (it clips its children, so the paint
+                // above could not reach under the video window).
+                var host = VideoHostHandle();
                 WaitVideoWindowsGone(host);
                 RepaintVideoHost();
                 GdiFlush();
                 TeardownPaintedForTest?.Invoke(host);
                 _current = view;
                 // The player leaves, and the host is hidden and lets go of the library
-                // picture, only once the screen has been read back again and shows (a)
+                // picture, only once the screen has been read back and shows (a)
                 // the library picture where the host is and (b) WPF's own switched frame
                 // (the caption in the library's colour, drawn in the same frame as the
                 // library under the see-through player). Rendering callbacks and timers
@@ -296,6 +288,7 @@ namespace ZephyrPlayer
                             else
                             {
                                 SwitchTrace.Mark("presented.host-mismatch", "after-teardown: " + r);
+                                if (SwitchTrace.On) ScreenProof.DumpMismatch(hx, hy, hw, hh, pic!, pw);
                                 if (repaints++ < 20) Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(() => { if (gen == _leaveGen) { RepaintVideoHost(); GdiFlush(); } }));
                             }
                         }
@@ -341,42 +334,6 @@ namespace ZephyrPlayer
             FreeHold();
         }
 
-        /// <summary>Synchronous screen check before the teardown: the composed screen shows
-        /// the library picture where the host is. A mismatch repaints the host and looks
-        /// again, for at most 6 composed frames; the result is recorded either way (a
-        /// shell that is not on screen has nothing to show).</summary>
-        private void ProveHostShowsPicture(IntPtr host, string phase)
-        {
-            var pic = _holdPixels;
-            if (pic == null || host == IntPtr.Zero || !GetWindowRect(host, out var hr)) { SwitchTrace.Mark("presented.host-unchecked", phase + (pic == null ? ": no drawn library picture" : ": no host")); return; }
-            var shell = Handle;
-            for (int i = 0; i < 6; i++)
-            {
-                ScreenProof.WaitForComposedFrame();
-                GetWindowRect(host, out hr);
-                var r = ScreenProof.PictureShown(shell, hr.Left, hr.Top, Math.Min(_holdW, hr.Right - hr.Left), Math.Min(_holdH, hr.Bottom - hr.Top), pic, _holdW);
-                if (r.Verdict != ScreenProof.Verdict.Mismatch) { SwitchTrace.Mark("presented.host", phase + ": " + r); return; }
-                SwitchTrace.Mark("presented.host-mismatch", phase + ": " + r);
-                RepaintVideoHost();
-                GdiFlush();
-            }
-            System.Diagnostics.Trace.TraceWarning("Back: the screen did not show the library picture before the stop");
-        }
-
-        /// <summary>Hides libVLC's video window(s) inside the host before the stop
-        /// (asynchronously, they belong to libVLC's own thread), and waits at most 100 ms
-        /// for them to be hidden.</summary>
-        private static void HideVideoWindows(IntPtr host)
-        {
-            if (host == IntPtr.Zero) return;
-            int asked = 0;
-            EnumChildWindows(host, (h, _) => { if (IsWindowVisible(h)) { ShowWindowAsync(h, 0 /* SW_HIDE */); asked++; } return true; }, IntPtr.Zero);
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            int n;
-            while ((n = VisibleChildren(host)) > 0 && sw.ElapsedMilliseconds < 100) System.Threading.Thread.Sleep(1);
-            SwitchTrace.Mark("video-windows.hidden-before-stop", $"asked {asked}, {n} visible after {sw.ElapsedMilliseconds} ms");
-        }
-
         /// <summary>libVLC's video window(s) inside the host: gone after its stop. Waited
         /// on (at most 100 ms) rather than assumed, so the host's paint covers its
         /// whole client.</summary>
@@ -417,7 +374,6 @@ namespace ZephyrPlayer
         [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
         [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
         [DllImport("gdi32.dll")] private static extern bool GdiFlush();
-        [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr h, int cmd);
 
         private void ReleaseVideoHost()
         {

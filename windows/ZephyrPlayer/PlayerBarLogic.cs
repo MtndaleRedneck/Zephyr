@@ -86,10 +86,6 @@ namespace ZephyrPlayer
 
         // ---------- libVLC subtitle look (items 67, 66 size, carry-forward b) ----------
 
-        /// <summary>Distance, in DIP above the video's bottom edge, that keeps subtitles
-        /// clear of the windowed bar (20 px inset + about 90 px card + 40 px air; the
-        /// fullscreen pill is lower: 28 + 70).</summary>
-        public const double SubtitleClearanceDip = 150;
         /// <summary>libVLC 3's text size is 6.25 % of the picture height; render 02's
         /// line is about 26 px on a 667 px picture (3.9 %), so M = 62 %.</summary>
         public static int SubtitleTextScale(string size) => size switch { "S" => 50, "L" => 78, _ => 62 };
@@ -113,17 +109,17 @@ namespace ZephyrPlayer
             + "Closing the window is not enough, because Zephyr Player keeps running in the tray.\n\n"
             + "Your movie keeps playing. Zephyr will not restart or reopen it.";
 
-        /// <summary>The LibVLC creation options for the subtitle look. libVLC 3 reads
-        /// them when it is created; none of them can change on a playing movie.
-        /// --sub-margin lifts subtitles above the bar (libVLC 3 has no live subtitle
-        /// position API); it is in the pixels libVLC renders subtitles at, which are
-        /// screen pixels when the picture is drawn at or above its own size.</summary>
+        /// <summary>The LibVLC creation options for the subtitle look (size and style).
+        /// libVLC 3 reads them when it is created; none of them can change on a playing
+        /// movie. Position: none is set, so libVLC's default placement is used, the same
+        /// place Windows VLC 3.0.24 draws them (Ezzy: "Should be the same location VLC PC
+        /// uses"; CP2 round 5 removed the old 150 DIP --sub-margin lift). While the bar
+        /// shows it can cover the line (disclosed, accepted); the bar auto-hides.
+        /// [dpiScale] no longer changes any option (it scaled the removed lift).</summary>
         public static string[] SubtitleOptions(string size, double dpiScale)
         {
-            var margin = (int)Math.Ceiling(SubtitleClearanceDip * Math.Max(1.0, dpiScale));
             return new[]
             {
-                "--sub-margin=" + margin.ToString(CultureInfo.InvariantCulture),
                 "--sub-text-scale=" + SubtitleTextScale(size).ToString(CultureInfo.InvariantCulture),
                 "--freetype-font=Segoe UI",
                 "--freetype-bold",

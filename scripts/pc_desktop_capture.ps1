@@ -1268,6 +1268,19 @@ function Cp2CropRect($hWnd) {
 # Rows of near-white subtitle text (all channels >= 200) in the capture, between
 # $yMin and $yMax (capture pixels), x in the middle 70 %, rows inside the bar's rect
 # skipped. Returns @(firstRow, lastRow, rows) or @(-1, -1, 0).
+function Cp2PictureBottom($path, $rgb) {
+    # Last row (from the bottom up) where the left edge column of the picture is the
+    # movie's own flat colour (within 12): the detected picture bottom.
+    $bmp = [System.Drawing.Bitmap]::FromFile($path)
+    try {
+        $x = [int]($bmp.Width * 0.06)
+        for ($y = $bmp.Height - 1; $y -ge 0; $y--) {
+            $p = $bmp.GetPixel($x, $y)
+            if ([math]::Abs($p.R - (($rgb -shr 16) -band 255)) -le 12 -and [math]::Abs($p.G - (($rgb -shr 8) -band 255)) -le 12 -and [math]::Abs($p.B - ($rgb -band 255)) -le 12) { return $y }
+        }
+        return -1
+    } finally { $bmp.Dispose() }
+}
 function Cp2SubtitleRows($path, $yMin, $yMax, $barTop, $barBottom) {
     $bmp = [System.Drawing.Bitmap]::FromFile($path)
     $w = $bmp.Width; $h = $bmp.Height
@@ -1393,7 +1406,7 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $null = Receive-Job $job -Wait -AutoRemoveJob
     foreach ($i in 1..60) { $stS = Cp1Status; if ($stS -and $stS.state -eq 'Playing' -and $stS.time -ge 1) { break }; Start-Sleep -Milliseconds 500 }
 
-    # --- the subtitle movie: windowed bar (vs render 02), subtitle above the bar ---
+    # --- the subtitle movie: windowed bar (vs render 02), subtitle at libVLC's default place ---
     WakeControls
     $null = Cp1ClickElement $shellH 'HomeButton'
     [ZWU32]::SetCursorPos(5, 5) | Out-Null
@@ -1408,16 +1421,22 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $crop = Cp2CropRect $shellH
     if ($uB -and $uB.bar_screen) {
         $barTop = $uB.bar_screen[1] - $crop[1]; $barBottom = $uB.bar_screen[3] - $crop[1]
-        $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-subtitle-above-bar.png"
-        $subShown = Cp2SubtitleRows "$env:RUNNER_TEMP/cp2-subtitle-above-bar.png" 180 ($crop[3] - $crop[1]) $barTop $barBottom
+        $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-subtitle-bar-shown.png"
+        $subShown = Cp2SubtitleRows "$env:RUNNER_TEMP/cp2-subtitle-bar-shown.png" 180 ($crop[3] - $crop[1]) $barTop $barBottom
         [ZWU32]::SetCursorPos(5, 5) | Out-Null
         Start-Sleep -Milliseconds 4500
         $uH = Cp2Ui
         $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-subtitle-bar-hidden.png"
         $subHidden = Cp2SubtitleRows "$env:RUNNER_TEMP/cp2-subtitle-bar-hidden.png" 180 ($crop[3] - $crop[1]) -1 -1
         Cp2Log "subtitle rows with the bar shown: $($subShown -join ',') (bar top $barTop, bottom $barBottom in capture px); with the bar hidden (opacity $($uH.bar_opacity)): $($subHidden -join ',')"
-        Cp2Gate ($subShown[2] -ge 6 -and $subShown[1] -lt ($barTop - 4)) "subtitle drawn ABOVE the visible bar: text rows $($subShown[0])-$($subShown[1]) end above the bar top at $barTop (cp2-subtitle-above-bar.png)"
-        Cp2Gate ($subHidden[2] -ge 6 -and [math]::Abs($subHidden[1] - $subShown[1]) -le 4) "the same subtitle with the bar hidden sits at rows $($subHidden[0])-$($subHidden[1]) (static lift, not tied to the bar: a stated deviation)"
+        # CP2 round 5 (Ezzy: "Should be the same location VLC PC uses"): no lift; libVLC's
+        # default placement. With the bar hidden the whole line shows near the bottom of
+        # the picture (the old 150 px lift put it about 200 px up); while the bar shows it
+        # may cover the line (disclosed, accepted), so that frame is recorded, not gated.
+        $picBottom = Cp2PictureBottom "$env:RUNNER_TEMP/cp2-subtitle-bar-hidden.png" 0x1C2833
+        $subGap = if ($picBottom -ge 0 -and $subHidden[1] -ge 0) { $picBottom - $subHidden[1] } else { -1 }
+        Cp2Log "subtitle placement: picture bottom row $picBottom (Night Drive #1C2833, detected), text baseline row $($subHidden[1]) with the bar hidden: $subGap px above the picture bottom; with the bar shown, text rows outside the bar: $($subShown -join ',') (bar rows $barTop-$barBottom)"
+        Cp2Gate ($subHidden[2] -ge 6 -and $subGap -ge 0 -and $subGap -le 100) "with the bar hidden the subtitle shows at libVLC's default place near the picture bottom: baseline $subGap px above the detected picture bottom (no lift; cp2-subtitle-bar-hidden.png)"
     } else { Cp2Gate $false "no bar rect in /control/status ui (got $(Cp2Json $uB))" }
 
     # --- pop-ups (item 59-62, 66): real clicks, one open at a time ---

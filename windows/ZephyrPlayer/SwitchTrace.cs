@@ -32,6 +32,8 @@ namespace ZephyrPlayer
         private static IntPtr _shell;
 
         internal static bool On => _entries != null;
+        /// <summary>Where trace-only picture dumps go (none when empty).</summary>
+        internal static string DumpDir = "";
 
         /// <summary>Turns the trace on (clearing any earlier entries).</summary>
         internal static void Begin()
@@ -169,6 +171,7 @@ namespace ZephyrPlayer
             var path = Environment.GetEnvironmentVariable("ZEPHYR_SWITCH_TRACE");
             if (string.IsNullOrEmpty(path)) return;
             Begin();
+            DumpDir = System.IO.Path.GetDirectoryName(path) ?? "";
             Mark("trace.start", $"qpc-frequency={Stopwatch.Frequency}");
             var t = new Thread(() =>
             {
