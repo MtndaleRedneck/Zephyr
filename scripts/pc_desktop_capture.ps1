@@ -733,10 +733,13 @@ public static class ZFlash {
         bool blank = false, bright = false;
         if (shellVis) {
             int sw = sr.Rt - sr.L, sh = sr.B - sr.T;
-            var g = Grab(sr.L, sr.T, sw, sh, GW, GH);
+            // One full-size grab per frame: the grid is read from it and a saved frame
+            // is exactly the frame that was judged (no second, later grab).
+            var full = Grab(sr.L, sr.T, sw, sh, sw, sh);
             var counts = new Dictionary<int, int>(); int best = 0, bestKey = 0;
             for (int i = 0; i < GW * GH; i++) {
-                int k = ((g[i*4+2] >> 3) << 10) | ((g[i*4+1] >> 3) << 5) | (g[i*4] >> 3);
+                int px = ((i % GW) * sw + sw / 2) / GW, py = ((i / GW) * sh + sh / 2) / GH, o = (py * sw + px) * 4;
+                int k = ((full[o+2] >> 3) << 10) | ((full[o+1] >> 3) << 5) | (full[o] >> 3);
                 int c; counts.TryGetValue(k, out c); counts[k] = ++c; if (c > best) { best = c; bestKey = k; }
             }
             double frac = best / (double)(GW * GH);
@@ -751,7 +754,6 @@ public static class ZFlash {
             // Save the transition frames and every flagged one (bounded), so a person
             // can look at exactly what the sampler saw.
             if ((blank || bright || change) && _saved < 10) {
-                var full = Grab(sr.L, sr.T, sw, sh, sw, sh);
                 var tag = blank ? "blank" : bright ? "bright" : "change";
                 SaveBmp(Path.Combine(_dir, "cp1-flash-" + _phase + "-" + t.ToString("D5") + "ms-" + tag + ".bmp"), full, sw, sh); _saved++;
                 pix += " saved";
