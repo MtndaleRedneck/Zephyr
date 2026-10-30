@@ -1,0 +1,42 @@
+name: Back switch trace
+
+# Zephyr Player 2.0 CP2 round 5: the real Back path repeated with the app's own ordering
+# trace and an outside screen sampler on one clock. Evidence only; gates nothing.
+on:
+  workflow_dispatch:
+    inputs:
+      reps:
+        description: 'Back clicks to trace'
+        required: false
+        default: '30'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  trace:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Publish hooked capture build (CI-only seams, never shipped)
+        timeout-minutes: 10
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+      - name: Back switch trace
+        timeout-minutes: 20
+        shell: pwsh
+        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '30' }}
+      - name: Upload trace
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: back-switch-trace
+          path: ${{ runner.temp }}/backtrace/
+          if-no-files-found: warn
