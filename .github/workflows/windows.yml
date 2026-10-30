@@ -261,7 +261,7 @@ jobs:
           $latin = [Text.Encoding]::GetEncoding(28591)
           $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/out/ZephyrPlayer.exe"))
           $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/capture-out/ZephyrPlayer.exe"))
-          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot', 'ci-capture-token', 'ZEPHYR_CI_CAPTURE') {
+          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot', 'ci-capture-token', 'ZEPHYR_CI_CAPTURE', 'ZEPHYR_SWITCH_TRACE') {
             $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
               $n = $latin.GetString($enc.GetBytes($needle))

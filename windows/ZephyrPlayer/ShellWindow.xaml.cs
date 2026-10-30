@@ -97,21 +97,33 @@ namespace ZephyrPlayer
                 leaving.SetSwitchTransparent(true);
                 leaving.IsHitTestVisible = false;
                 SwitchTrace.Mark("player.see-through");
-                beforeOldLeaves?.Invoke();
-                // The movie's own video window is gone now: the host's whole client
-                // paints the library picture (it clips its children, so the paint
-                // above could not reach under the video window).
+                // CP2 round 5: the library is put ON SCREEN before anything is torn
+                // down, and that is read back from the screen, not assumed. The bar's
+                // overlay goes, libVLC's video window(s) inside the host are hidden (so
+                // nothing the stop does can reach the screen), the host's whole client
+                // paints the library picture, and the composed screen must show it.
+                leaving.HideOverlayWindow();
+                var host = VideoHostHandle();
+                HideVideoWindows(host);
                 RepaintVideoHost();
+                GdiFlush();
+                ProveHostShowsPicture(host, "before-stop");
+                beforeOldLeaves?.Invoke();
+                // After the stop libVLC's video window(s) are gone (checked, not
+                // assumed) and the host is painted again over its whole client.
+                WaitVideoWindowsGone(host);
+                RepaintVideoHost();
+                GdiFlush();
+                TeardownPaintedForTest?.Invoke(host);
                 _current = view;
-                // CP2 (run 41056301476, one all-black frame ~470 ms into Back): the
-                // player used to leave the tree and the host went back to black in the
-                // same dispatcher pass. WPF hides the native host on its own schedule,
-                // so the host could paint black, or uncover a WPF frame still showing
-                // the player's black background, before the library was presented.
-                // Now the player leaves only after WPF has rendered the see-through
-                // frame, and the host lets go of the library picture only once it is
-                // hidden.
-                ScheduleLeave(leaving);
+                // The player leaves, and the host is hidden and lets go of the library
+                // picture, only once the screen has been read back again and shows (a)
+                // the library picture where the host is and (b) WPF's own switched frame
+                // (the caption in the library's colour, drawn in the same frame as the
+                // library under the see-through player). Rendering callbacks and timers
+                // are no longer taken as presentation (run 41095411723 attempt 1: one
+                // all-black client frame at 438 ms of Back).
+                StartPresentedHandoff(leaving, host);
                 return;
             }
             CancelPendingLeave(view as PlayerView);
@@ -158,6 +170,7 @@ namespace ZephyrPlayer
         // ---------- the native video host during a switch ----------
 
         private IntPtr _holdBrush, _holdBitmap;
+        private byte[]? _holdPixels; private int _holdW, _holdH;
         internal bool VideoHostHeld => _holdBrush != IntPtr.Zero;
 
         /// <summary>The video host (LibVLCSharp's native "static" child) paints [view]'s
@@ -173,10 +186,19 @@ namespace ZephyrPlayer
                 var dv = new DrawingVisual();
                 using (var dc = dv.RenderOpen())
                     dc.DrawRectangle(new VisualBrush(view) { Stretch = Stretch.None, AlignmentX = AlignmentX.Left, AlignmentY = AlignmentY.Top, ViewboxUnits = BrushMappingMode.Absolute, Viewbox = new Rect(0, 0, w, h) }, null, new Rect(0, 0, w, h));
-                var rtb = new RenderTargetBitmap(pw, ph, 96 * m.M11, 96 * m.M22, PixelFormats.Pbgra32);
-                rtb.Render(dv);
                 var pixels = new byte[pw * ph * 4];
-                rtb.CopyPixels(pixels, pw * 4, 0);
+                double drawn = 0;
+                // The picture must really be drawn (the library's own background is
+                // opaque, so a drawn picture is opaque everywhere): one more render if
+                // not; a picture still not drawn is kept but never counted as proof.
+                for (int attempt = 0; attempt < 2 && drawn < 99; attempt++)
+                {
+                    if (attempt > 0) view.UpdateLayout();
+                    var rtb = new RenderTargetBitmap(pw, ph, 96 * m.M11, 96 * m.M22, PixelFormats.Pbgra32);
+                    rtb.Render(dv);
+                    rtb.CopyPixels(pixels, pw * 4, 0);
+                    drawn = OpaquePercent(pixels);
+                }
                 var bi = new BITMAPINFOHEADER { biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(), biWidth = pw, biHeight = -ph, biPlanes = 1, biBitCount = 32 };
                 var bmp = CreateDIBSection(IntPtr.Zero, ref bi, 0, out var bits, IntPtr.Zero, 0);
                 if (bmp == IntPtr.Zero) { SwitchTrace.Mark("hold.failed", "CreateDIBSection"); return; }
@@ -185,10 +207,19 @@ namespace ZephyrPlayer
                 if (brush == IntPtr.Zero) { DeleteObject(bmp); SwitchTrace.Mark("hold.failed", "CreatePatternBrush"); return; }
                 FreeHold();
                 _holdBitmap = bmp; _holdBrush = brush;
-                if (SwitchTrace.On) SwitchTrace.Mark("hold.set", $"{pw}x{ph} non-black={NonBlackPercent(pixels):0.0}%");
+                _holdPixels = drawn >= 99 ? pixels : null; _holdW = pw; _holdH = ph;
+                if (SwitchTrace.On) SwitchTrace.Mark(drawn >= 99 ? "hold.set" : "hold.set-NOT-DRAWN", $"{pw}x{ph} opaque={drawn:0.0}% non-black={NonBlackPercent(pixels):0.0}%");
                 RepaintVideoHost();
             }
             catch (Exception ex) { SwitchTrace.Mark("hold.failed", ex.GetType().Name); System.Diagnostics.Trace.TraceWarning("video host hold failed: " + ex.GetType().Name); }
+        }
+
+        /// <summary>Share of sampled pixels that are fully opaque (drawn).</summary>
+        internal static double OpaquePercent(byte[] bgra)
+        {
+            int n = 0, op = 0;
+            for (int o = 3; o < bgra.Length; o += 4 * 61) { n++; if (bgra[o] == 255) op++; }
+            return n == 0 ? 0 : 100.0 * op / n;
         }
 
         /// <summary>Share of sampled pixels that are not black (any channel above 24).</summary>
@@ -203,60 +234,166 @@ namespace ZephyrPlayer
 
         private int _leaveGen;
         private PlayerView? _leaving;
+        private IntPtr _leavingHost;
         internal bool LeavePending => _leaving != null;
+        /// <summary>The last Back's handoff verdict ("proven", or why not), for tests.</summary>
+        internal string LastHandoff { get; private set; } = "";
+        /// <summary>Upper bound on the wait for the screen proofs. A shell that is hidden,
+        /// minimized or covered is not waited on at all (nothing of it is on screen);
+        /// this bound only stops a visible screen that never shows the library from
+        /// holding the old player forever, and the result is recorded as unproven.</summary>
+        internal static int MaxPresentWaitMs = 1500;
+        /// <summary>Test seam: runs right after the post-teardown repaint of the host,
+        /// with the host handle (a test paints the host black here, as a stale video
+        /// remnant would be).</summary>
+        internal Action<IntPtr>? TeardownPaintedForTest;
 
-        private void ScheduleLeave(PlayerView leaving)
+        private void StartPresentedHandoff(PlayerView leaving, IntPtr host)
         {
             var gen = ++_leaveGen;
             _leaving = leaving;
-            int frames = 0; bool done = false;
-            var fallback = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(150) };
-            EventHandler? onFrame = null;
-            void Finish()
+            _leavingHost = host;
+            var shell = Handle;
+            // What the screen must show, captured here on the UI thread.
+            var pic = _holdPixels; int pw = _holdW, ph = _holdH;
+            int hx = 0, hy = 0, hw = 0, hh = 0;
+            if (pic != null && host != IntPtr.Zero && GetWindowRect(host, out var hr))
             {
-                if (done) return;
-                done = true;
-                CompositionTarget.Rendering -= onFrame;
-                fallback.Stop();
-                // Background: below Render and Loaded, so after the render pass that
-                // follows the second frame (and still reached by a test pump that drains
-                // only down to Background).
-                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() => CompleteLeave(gen)));
+                hx = hr.Left; hy = hr.Top; hw = Math.Min(pw, hr.Right - hr.Left); hh = Math.Min(ph, hr.Bottom - hr.Top);
             }
-            // Two Rendering callbacks: the first frame after the switch has been handed
-            // to the compositor. The timer covers a hidden shell (tray close), which
-            // renders nothing.
-            onFrame = (_, _) => { SwitchTrace.Mark("render.tick", (frames + 1).ToString()); if (++frames >= 2) Finish(); };
-            CompositionTarget.Rendering += onFrame;
-            fallback.Tick += (_, _) => { SwitchTrace.Mark("leave.timer"); Finish(); };
-            fallback.Start();
+            bool hostCheck = pic != null && hw >= 4 && hh >= 4;
+            bool pictureMissing = _holdBrush == IntPtr.Zero || pic == null;
+            int cx = 0, cy = 0, cw = 0, ch = 0;
+            bool captionCheck = false;
+            if (CaptionBar.IsVisible && CaptionBar.ActualWidth > 8 && CaptionBar.ActualHeight > 3 && PresentationSource.FromVisual(CaptionBar) != null)
+            {
+                var tl = CaptionBar.PointToScreen(new Point(0, 0));
+                var br = CaptionBar.PointToScreen(new Point(CaptionBar.ActualWidth, CaptionBar.ActualHeight));
+                cx = (int)Math.Ceiling(tl.X); cy = (int)Math.Ceiling(tl.Y); cw = (int)Math.Floor(br.X) - cx; ch = (int)Math.Floor(br.Y) - cy;
+                captionCheck = cw > 8 && ch > 3;
+            }
+            int libColor = ToRgb(LibraryCaption.Color), playerColor = ToRgb(PlayerCaption.Color);
+            SwitchTrace.Mark("handoff.begin", $"host-check={hostCheck} caption-check={captionCheck}");
+            System.Threading.Tasks.Task.Run(() =>
+            {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                bool hostOk = !hostCheck, wpfOk = !captionCheck;
+                string hostWord = hostCheck ? "waiting" : (pictureMissing ? "LIBRARY PICTURE MISSING OR NOT DRAWN" : "no host on screen to check");
+                if (pictureMissing && host != IntPtr.Zero) hostOk = false;
+                string wpfWord = captionCheck ? "waiting" : "no caption on screen";
+                int repaints = 0;
+                try
+                {
+                    while (gen == _leaveGen && !(hostOk && wpfOk) && !(pic == null && wpfOk) && sw.ElapsedMilliseconds < MaxPresentWaitMs)
+                    {
+                        ScreenProof.WaitForComposedFrame();
+                        if (!hostOk && pic != null)
+                        {
+                            // The host's place now (a window leaving full screen may still move).
+                            if (GetWindowRect(host, out var nr)) { hx = nr.Left; hy = nr.Top; hw = Math.Min(pw, nr.Right - nr.Left); hh = Math.Min(ph, nr.Bottom - nr.Top); }
+                            var r = ScreenProof.PictureShown(shell, hx, hy, hw, hh, pic!, pw);
+                            if (r.Verdict != ScreenProof.Verdict.Mismatch) { hostOk = true; hostWord = r.ToString(); SwitchTrace.Mark("presented.host", "after-teardown: " + r); }
+                            else
+                            {
+                                SwitchTrace.Mark("presented.host-mismatch", "after-teardown: " + r);
+                                if (repaints++ < 20) Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(() => { if (gen == _leaveGen) { RepaintVideoHost(); GdiFlush(); } }));
+                            }
+                        }
+                        if (!wpfOk)
+                        {
+                            var c = ScreenProof.StripShows(shell, cx, cy, cw, ch, libColor, playerColor);
+                            if (c.Verdict != ScreenProof.Verdict.Mismatch) { wpfOk = true; wpfWord = c.ToString(); SwitchTrace.Mark("presented.wpf", c.ToString()); }
+                        }
+                    }
+                }
+                catch (Exception ex) { hostWord += " (" + ex.GetType().Name + ")"; }
+                var verdict = hostOk && wpfOk ? "proven" : $"unproven after {sw.ElapsedMilliseconds} ms (host: {hostWord}; wpf frame: {wpfWord})";
+                if (!(hostOk && wpfOk)) System.Diagnostics.Trace.TraceWarning("Back handoff " + verdict);
+                SwitchTrace.Mark("handoff.verdict", verdict);
+                Dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() => CompleteLeave(gen, verdict)));
+            });
         }
 
-        private void CompleteLeave(int gen)
+        private static int ToRgb(Color c) => (c.R << 16) | (c.G << 8) | c.B;
+
+        /// <summary>Order, after the screen proofs: the player leaves the tree (its
+        /// transparency is reset), the host is hidden (WPF parks it on removal; if it
+        /// is still visible the shell hides it itself), and only then is the library
+        /// picture let go. The host is never painted black while it can be seen.</summary>
+        private void CompleteLeave(int gen, string verdict)
         {
             if (gen != _leaveGen) return;
             var leaving = _leaving; _leaving = null;
+            var host = _leavingHost; _leavingHost = IntPtr.Zero;
             if (leaving == null || ReferenceEquals(_current, leaving)) return;
+            LastHandoff = verdict;
             ViewHost.Children.Remove(leaving);
             SwitchTrace.Mark("player.removed");
             leaving.SetSwitchTransparent(false);
             leaving.IsHitTestVisible = true;
-            ReleaseHoldWhenHostHidden(gen, 0);
+            if (host != IntPtr.Zero && IsWindow(host) && IsWindowVisible(host))
+            {
+                SetWindowPos(host, IntPtr.Zero, 0, 0, 0, 0, 0x0080 /*HIDEWINDOW*/ | 0x0001 /*NOSIZE*/ | 0x0002 /*NOMOVE*/ | 0x0004 /*NOZORDER*/ | 0x0010 /*NOACTIVATE*/);
+                SwitchTrace.Mark("host.hidden-by-shell");
+            }
+            bool hidden = host == IntPtr.Zero || !IsWindow(host) || !IsWindowVisible(host);
+            SwitchTrace.Mark("hold.released", hidden ? "host-hidden" : "HOST-STILL-VISIBLE");
+            FreeHold();
         }
 
-        /// <summary>The library picture stays on the native host until the host is
-        /// hidden (it left with the player); painting it black while it still shows
-        /// would be the blink this replaces. Bounded: after ~300 ms it is released
-        /// anyway.</summary>
-        private void ReleaseHoldWhenHostHidden(int gen, int tries)
+        /// <summary>Synchronous screen check before the teardown: the composed screen shows
+        /// the library picture where the host is. A mismatch repaints the host and looks
+        /// again, for at most 6 composed frames; the result is recorded either way (a
+        /// shell that is not on screen has nothing to show).</summary>
+        private void ProveHostShowsPicture(IntPtr host, string phase)
         {
-            if (gen != _leaveGen || _holdBrush == IntPtr.Zero) return;
-            var host = VideoHostHandle();
-            if (host == IntPtr.Zero || !IsWindowVisible(host)) { SwitchTrace.Mark("hold.released", host == IntPtr.Zero ? "host-gone" : "host-hidden"); FreeHold(); return; }
-            if (tries >= 10) { SwitchTrace.Mark("hold.released", "timeout-host-still-visible"); ReleaseVideoHost(); return; }
-            var t = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(30) };
-            t.Tick += (_, _) => { t.Stop(); ReleaseHoldWhenHostHidden(gen, tries + 1); };
-            t.Start();
+            var pic = _holdPixels;
+            if (pic == null || host == IntPtr.Zero || !GetWindowRect(host, out var hr)) { SwitchTrace.Mark("presented.host-unchecked", phase + (pic == null ? ": no drawn library picture" : ": no host")); return; }
+            var shell = Handle;
+            for (int i = 0; i < 6; i++)
+            {
+                ScreenProof.WaitForComposedFrame();
+                GetWindowRect(host, out hr);
+                var r = ScreenProof.PictureShown(shell, hr.Left, hr.Top, Math.Min(_holdW, hr.Right - hr.Left), Math.Min(_holdH, hr.Bottom - hr.Top), pic, _holdW);
+                if (r.Verdict != ScreenProof.Verdict.Mismatch) { SwitchTrace.Mark("presented.host", phase + ": " + r); return; }
+                SwitchTrace.Mark("presented.host-mismatch", phase + ": " + r);
+                RepaintVideoHost();
+                GdiFlush();
+            }
+            System.Diagnostics.Trace.TraceWarning("Back: the screen did not show the library picture before the stop");
+        }
+
+        /// <summary>Hides libVLC's video window(s) inside the host before the stop
+        /// (asynchronously, they belong to libVLC's own thread), and waits at most 100 ms
+        /// for them to be hidden.</summary>
+        private static void HideVideoWindows(IntPtr host)
+        {
+            if (host == IntPtr.Zero) return;
+            int asked = 0;
+            EnumChildWindows(host, (h, _) => { if (IsWindowVisible(h)) { ShowWindowAsync(h, 0 /* SW_HIDE */); asked++; } return true; }, IntPtr.Zero);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int n;
+            while ((n = VisibleChildren(host)) > 0 && sw.ElapsedMilliseconds < 100) System.Threading.Thread.Sleep(1);
+            SwitchTrace.Mark("video-windows.hidden-before-stop", $"asked {asked}, {n} visible after {sw.ElapsedMilliseconds} ms");
+        }
+
+        /// <summary>libVLC's video window(s) inside the host: gone after its stop. Waited
+        /// on (at most 100 ms) rather than assumed, so the host's paint covers its
+        /// whole client.</summary>
+        private static void WaitVideoWindowsGone(IntPtr host)
+        {
+            if (host == IntPtr.Zero) return;
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int n;
+            while ((n = VisibleChildren(host)) > 0 && sw.ElapsedMilliseconds < 100) System.Threading.Thread.Sleep(1);
+            SwitchTrace.Mark("video-windows.after-stop", $"{n} visible after {sw.ElapsedMilliseconds} ms");
+        }
+
+        private static int VisibleChildren(IntPtr host)
+        {
+            int n = 0;
+            EnumChildWindows(host, (h, _) => { if (IsWindowVisible(h)) n++; return true; }, IntPtr.Zero);
+            return n;
         }
 
         /// <summary>Any other switch overrides a pending Back. A player coming straight
@@ -265,6 +402,7 @@ namespace ZephyrPlayer
         {
             ++_leaveGen;
             var leaving = _leaving; _leaving = null;
+            _leavingHost = IntPtr.Zero;
             if (leaving == null) return;
             leaving.IsHitTestVisible = true;
             if (!ReferenceEquals(leaving, incoming))
@@ -275,6 +413,11 @@ namespace ZephyrPlayer
         }
 
         [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+        [DllImport("user32.dll")] private static extern bool IsWindow(IntPtr h);
+        [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out RECT r);
+        [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+        [DllImport("gdi32.dll")] private static extern bool GdiFlush();
+        [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr h, int cmd);
 
         private void ReleaseVideoHost()
         {
@@ -287,6 +430,7 @@ namespace ZephyrPlayer
         {
             var brush = _holdBrush; var bmp = _holdBitmap;
             _holdBrush = _holdBitmap = IntPtr.Zero;
+            _holdPixels = null;
             if (brush != IntPtr.Zero) DeleteObject(brush);
             if (bmp != IntPtr.Zero) DeleteObject(bmp);
         }

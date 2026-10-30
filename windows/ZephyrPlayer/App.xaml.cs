@@ -405,11 +405,8 @@ namespace ZephyrPlayer
             var player = _player;
             _shell.ShowView(_home, () =>
             {
-                SwitchTrace.Mark("stop.begin");
                 player.StopPlaybackSource();
-                SwitchTrace.Mark("stop.end");
                 player.HideOverlayWindow();
-                SwitchTrace.Mark("overlay.hide-called");
             });
         }
 

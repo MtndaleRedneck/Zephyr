@@ -202,6 +202,7 @@ namespace ZephyrPlayer
 
         public void StopPlaybackSource()
         {
+            SwitchTrace.Mark("stop.begin");
             ++_playGeneration; _preparation?.Cancel();
             DropEndOfMovieSleep();
             DetachNativeStart();
@@ -215,6 +216,7 @@ namespace ZephyrPlayer
             // decoder threads and provider closes, and a blocked close/read must
             // never stall stop/cleanup on the UI.
             if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(old));
+            SwitchTrace.Mark("stop.end");
         }
         internal const string OpenFailedMessage = "Could not open this movie safely. Check the file or phone connection.";
         internal const string NativeFailedMessage = "This movie could not be played. Check the file or phone connection.";
@@ -748,6 +750,7 @@ namespace ZephyrPlayer
             StopTimers();
             var overlay = Window.GetWindow(Overlay);
             if (overlay != null && !ReferenceEquals(overlay, Window.GetWindow(this))) overlay.Hide();
+            SwitchTrace.Mark("overlay.hidden");
         }
 
         private void StopTimers()
