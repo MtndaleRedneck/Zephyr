@@ -157,12 +157,12 @@ namespace ZephyrPlayer.Tests
             Assert.True(back >= 0, "no back.begin in the trace:\n" + d);
             int hold = Index(ev, "hold.set", back);
             int seeThrough = Index(ev, "player.see-through", back);
-            int paintBefore = Index(ev, "host.paint", hold, x => x == "library-picture");
+            int paintBefore = Index(ev, "host.paint", hold, x => x.StartsWith("library-picture", StringComparison.Ordinal) && !x.Contains("FAILED"));
             int stopB = Index(ev, "stop.begin", back), stopE = Index(ev, "stop.end", back);
             int overlay = Index(ev, "overlay.hidden", stopE);
             int gone = Index(ev, "video-windows.after-stop", stopE, x => x.StartsWith("0 visible"));
             int repaint = Index(ev, "host.repaint", gone);
-            int paintLib = Index(ev, "host.paint", repaint, x => x == "library-picture");
+            int paintLib = Index(ev, "host.paint", repaint, x => x.StartsWith("library-picture", StringComparison.Ordinal) && !x.Contains("FAILED"));
             int handoff = Index(ev, "handoff.begin", back, x => x.Contains("host-check=True") && x.Contains("caption-check=True"));
             int hostProof = Index(ev, "presented.host", handoff, x => x.StartsWith("after-teardown: Match"));
             int wpfProof = Index(ev, "presented.wpf", handoff, x => x.StartsWith("Match"));

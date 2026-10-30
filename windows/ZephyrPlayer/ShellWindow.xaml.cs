@@ -199,6 +199,10 @@ namespace ZephyrPlayer
                 if (brush == IntPtr.Zero) { DeleteObject(bmp); SwitchTrace.Mark("hold.failed", "CreatePatternBrush"); return; }
                 FreeHold();
                 _holdBitmap = bmp; _holdBrush = brush;
+                // A memory DC holding the picture, copied into the host at its corner
+                // (WndProc, WM_CTLCOLORSTATIC); the brush stays as the fallback.
+                _holdDC = CreateCompatibleDC(IntPtr.Zero);
+                if (_holdDC != IntPtr.Zero) _holdDCOld = SelectObject(_holdDC, bmp);
                 _holdPixels = drawn >= 99 ? pixels : null; _holdW = pw; _holdH = ph;
                 if (SwitchTrace.On) SwitchTrace.Mark(drawn >= 99 ? "hold.set" : "hold.set-NOT-DRAWN", $"{pw}x{ph} opaque={drawn:0.0}% non-black={NonBlackPercent(pixels):0.0}%");
                 RepaintVideoHost();
@@ -385,6 +389,7 @@ namespace ZephyrPlayer
         private void FreeHold()
         {
             var brush = _holdBrush; var bmp = _holdBitmap;
+            if (_holdDC != IntPtr.Zero) { SelectObject(_holdDC, _holdDCOld); DeleteDC(_holdDC); _holdDC = _holdDCOld = IntPtr.Zero; }
             _holdBrush = _holdBitmap = IntPtr.Zero;
             _holdPixels = null;
             if (brush != IntPtr.Zero) DeleteObject(brush);
@@ -605,9 +610,14 @@ namespace ZephyrPlayer
         private const int WM_CTLCOLORSTATIC = 0x0138;
         [DllImport("gdi32.dll")] private static extern IntPtr GetStockObject(int index);
         [DllImport("gdi32.dll")] private static extern uint SetBkColor(IntPtr hdc, uint color);
-        [DllImport("gdi32.dll")] private static extern bool GetDCOrgEx(IntPtr hdc, out POINT org);
-        [DllImport("gdi32.dll")] private static extern bool SetBrushOrgEx(IntPtr hdc, int x, int y, IntPtr prev);
-        [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr h, ref POINT p);
+        [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr dst, int x, int y, int w, int h, IntPtr src, int sx, int sy, uint rop);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] private static extern bool DeleteDC(IntPtr hdc);
+        [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+        [DllImport("user32.dll")] private static extern int FillRect(IntPtr hdc, ref RECT r, IntPtr brush);
+        [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr h, out RECT r);
+        internal static readonly IntPtr HollowBrush = GetStockObject(5 /* NULL_BRUSH */);
+        private IntPtr _holdDC, _holdDCOld;
         internal static readonly IntPtr BlackBrush = GetStockObject(4 /* BLACK_BRUSH */);
 
         private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -616,24 +626,25 @@ namespace ZephyrPlayer
             {
                 SetBkColor(wParam, 0x000000);
                 handled = true;
-                string org = "";
-                if (_holdBrush != IntPtr.Zero)
+                if (_holdDC != IntPtr.Zero)
                 {
-                    // The picture's top-left belongs at the host's top-left. GDI tiles a
-                    // pattern brush from the DC's brush origin, and the DC the host paints
-                    // with does not always start at the host's corner: CP2 round 5 run
-                    // 41114710721 read the screen and saw the library picture shifted up by
-                    // the host's offset in the window (7 of 24 Backs). The brush origin is
-                    // set so the pattern starts exactly at the host's client corner.
-                    var p0 = new POINT(); ClientToScreen(lParam, ref p0);
-                    if (GetDCOrgEx(wParam, out var dcOrg))
-                    {
-                        int dx = p0.X - dcOrg.X, dy = p0.Y - dcOrg.Y;
-                        SetBrushOrgEx(wParam, dx, dy, IntPtr.Zero);
-                        org = $" dc-offset={dx},{dy}";
-                    }
+                    // The library picture is copied into the host's DC at the host's own
+                    // client corner. It used to be a pattern brush, and GDI aligns pattern
+                    // brushes to the drawing surface, not to the host: CP2 round 5 runs
+                    // 41114710721 and 41116015629 read the screen back and saw the library
+                    // picture shifted up by the host's 32 px offset in the window (7 of 24
+                    // and 4 of 24 Backs), even with the brush origin set. A copy in the
+                    // DC's own coordinates cannot be shifted. The returned brush is hollow
+                    // so the host does not paint over it; anything of the host outside the
+                    // picture is painted black.
+                    GetClientRect(lParam, out var cr);
+                    if (cr.Right > _holdW) { var rr = new RECT { Left = _holdW, Top = 0, Right = cr.Right, Bottom = cr.Bottom }; FillRect(wParam, ref rr, BlackBrush); }
+                    if (cr.Bottom > _holdH) { var rb = new RECT { Left = 0, Top = _holdH, Right = Math.Min(cr.Right, _holdW), Bottom = cr.Bottom }; FillRect(wParam, ref rb, BlackBrush); }
+                    bool ok = BitBlt(wParam, 0, 0, _holdW, _holdH, _holdDC, 0, 0, 0x00CC0020 /* SRCCOPY */);
+                    if (SwitchTrace.On) SwitchTrace.Mark("host.paint", ok ? "library-picture" : "library-picture-COPY-FAILED");
+                    if (ok) return HollowBrush;
                 }
-                if (SwitchTrace.On) SwitchTrace.Mark("host.paint", _holdBrush != IntPtr.Zero ? "library-picture" + org : "black");
+                if (SwitchTrace.On) SwitchTrace.Mark("host.paint", _holdBrush != IntPtr.Zero ? "library-picture brush" : "black");
                 // During a view switch: the outgoing library's picture (ShowView).
                 return _holdBrush != IntPtr.Zero ? _holdBrush : BlackBrush;
             }
