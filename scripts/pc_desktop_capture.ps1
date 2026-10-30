@@ -141,7 +141,9 @@ function CaptureWindow($hWnd, $path) {
         if (-not [ZWU32]::GetWindowRect($hWnd, [ref]$r)) { Write-Host "::error::GetWindowRect failed for hwnd $hWnd"; return "0 x 0" }
     }
     # Geometry agreement: the frame bounds must sit inside GetWindowRect's
-    # invisible-border envelope. If they disagree, the DWM rect is stale (or the
+    # invisible-border envelope (any edge may carry the ~7px border; the
+    # --fullscreen window showed 7px on all four in run 40996037753). If they
+    # disagree, the DWM rect is stale (or the
     # handle is not the rendered window) and CopyFromScreen would grab desktop +
     # a shifted player - the run 40989952680 false-fail mode. One bounded
     # re-assert + re-read, then throw WITH the rects: a capture whose crop does
@@ -149,14 +151,14 @@ function CaptureWindow($hWnd, $path) {
     $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
     if ($dwmOk) {
         $dL = $r.Left - $wr.Left; $dT = $r.Top - $wr.Top; $dR = $wr.Right - $r.Right; $dB = $wr.Bottom - $r.Bottom
-        if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 6 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
+        if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 14 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
             [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, 0, 0, 0x13) | Out-Null  # TOPMOST|NOMOVE|NOSIZE|NOACTIVATE
             Start-Sleep -Milliseconds 400
             $r = [ZRECT]::new()
             [void][ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16)
             $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
             $dL = $r.Left - $wr.Left; $dT = $r.Top - $wr.Top; $dR = $wr.Right - $r.Right; $dB = $wr.Bottom - $r.Bottom
-            if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 6 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
+            if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 14 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
                 throw "CaptureWindow: frame/window bounds disagree for hwnd ${hWnd} ($path): frame=($($r.Left),$($r.Top),$($r.Right),$($r.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) delta=($dL,$dT,$dR,$dB)"
             }
         }
