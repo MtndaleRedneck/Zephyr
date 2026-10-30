@@ -16,7 +16,7 @@ on:
       reps:
         description: 'Back clicks to trace'
         required: false
-        default: '30'
+        default: '60'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,7 +40,7 @@ jobs:
       - name: Back switch trace
         timeout-minutes: 20
         shell: pwsh
-        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '30' }}
+        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '60' }}
       - name: Upload trace
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

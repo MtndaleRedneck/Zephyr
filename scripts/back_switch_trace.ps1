@@ -10,7 +10,7 @@
 #     read back about every 3-6 ms, each sample classed (blank = all one colour by the
 #     same 24-level tolerance as the CP1 flash sampler, on a 128x86 point grid).
 # Nothing here gates the product; it measures. Output: $env:RUNNER_TEMP/backtrace.
-param([int]$Reps = 30)
+param([int]$Reps = 60)
 $ErrorActionPreference = 'Continue'
 $out = Join-Path $env:RUNNER_TEMP 'backtrace'
 New-Item -ItemType Directory -Force $out | Out-Null
@@ -87,6 +87,12 @@ public static class BT {
             f.Write(bits);
         }
     }
+    static volatile bool _load; static List<Thread> _loaders = new List<Thread>();
+    public static void Load(int n) {
+        _load = n > 0;
+        if (n == 0) { foreach (var t in _loaders) t.Join(1000); _loaders.Clear(); return; }
+        for (int i = 0; i < n; i++) { var t = new Thread(() => { double x = 0; while (_load) { x += Math.Sqrt(x + 1); } }) { IsBackground = true }; t.Start(); _loaders.Add(t); }
+    }
     static Thread _t; static volatile bool _run; static IntPtr _shell; static string _dir, _tag; static StringBuilder _sb; static int _saves, _blanks, _n;
     public static int Blanks { get { return _blanks; } }
     public static int Samples { get { return _n; } }
@@ -136,9 +142,9 @@ public static class BT {
                 _sb.AppendFormat("{0} {1} fullgrab-saved\n", q2, q2);
                 saveNextFull = blank;
                 prevFull = full; pw = cw; ph = ch; prevQ = q2;
-            } else if (_n % 4 == 0) {
-                // a full-size frame every 4th sample, kept only as the "before" of a blank
-                prevFull = Grab(cx, cy, cw, ch, cw, ch); pw = cw; ph = ch; prevQ = Stopwatch.GetTimestamp();
+            } else {
+                // the last sample (point grid) is kept as the "before" of a blank
+                prevFull = px; pw = GW; ph = GH; prevQ = q0;
             }
             Thread.Sleep(1);
         }
@@ -186,6 +192,8 @@ $clip = Join-Path $env:RUNNER_TEMP 'bt-clip.mp4'
 $lib = Join-Path $env:RUNNER_TEMP 'bt-library'
 New-Item -ItemType Directory -Force $lib | Out-Null
 foreach ($v in 'Tears of Steel','His Girl Friday','Charade','Night of the Living Dead','Sintel','Big Buck Bunny','Detour','Metropolis') { Copy-Item $clip (Join-Path $lib "$v.mp4") }
+# CP1's sidecar subtitle on the same tile, so a subtitle is drawn at Back as in run 41095411723.
+[IO.File]::WriteAllText((Join-Path $lib 'Big Buck Bunny.srt'), "1`r`n00:00:00,000 --> 00:59:00,000`r`nZephyr subtitle proof`r`n")
 $thumbs = Join-Path $env:RUNNER_TEMP 'bt-thumbs'
 New-Item -ItemType Directory -Force $thumbs | Out-Null
 $srcs = 'testsrc','smptebars','mandelbrot','rgbtestsrc','cellauto','testsrc2','yuvtestsrc','smptehdbars'
@@ -236,7 +244,22 @@ for ($rep = 1; $rep -le $Reps; $rep++) {
     [BT]::SetCursorPos(524, 360) | Out-Null; Start-Sleep -Milliseconds 700
     $homeBtn = ElementCenter $p.Id $shellH 'HomeButton'
     if ($homeBtn -eq $null) { Log "rep ${rep}: HomeButton not found"; continue }
+    # Variants (rep mod 3): 1 = playing; 2 = paused then resumed through the control
+    # route (as CP1 paused/resumed before its Back); 0 = paused at Back, with 3 busy
+    # threads loading the runner's CPUs during the Back.
+    $variant = $rep % 3
+    $ctl = @{ Authorization = "Bearer ci-capture-token" }
+    if ($variant -ne 1) {
+        try { Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $ctl -ContentType "application/json" -Body '{}' | Out-Null } catch { Log "rep ${rep}: pause failed $($_.Exception.Message)" }
+        Start-Sleep -Milliseconds 600
+    }
+    if ($variant -eq 2) {
+        try { Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Headers $ctl -ContentType "application/json" -Body '{}' | Out-Null } catch { }
+        Start-Sleep -Milliseconds 800
+    }
+    $stPre = ZStatus
     $tag = "rep{0:D2}" -f $rep
+    if ($variant -eq 0) { [BT]::Load(3) }
     [BT]::Start($shellH, $out, $tag)
     Start-Sleep -Milliseconds 300
     $qClick = [Diagnostics.Stopwatch]::GetTimestamp()
@@ -245,9 +268,10 @@ for ($rep = 1; $rep -le $Reps; $rep++) {
     [BT]::SetCursorPos(5, 5) | Out-Null
     Start-Sleep -Milliseconds 1500
     $samples = [BT]::Stop()
+    [BT]::Load(0)
     Set-Content (Join-Path $out "$tag-screen.txt") ("click-down-window " + $qClick + " " + $qUp + "`n" + $samples)
     $st = ZStatus
-    $line = "rep ${rep}: samples=$([BT]::Samples) blank=$([BT]::Blanks) state-after=$($st.state)"
+    $line = "rep ${rep}: variant=$variant state-before=$($stPre.state) spu=$($stPre.spu) samples=$([BT]::Samples) blank=$([BT]::Blanks) state-after=$($st.state)"
     Log $line; $summary += $line
     Start-Sleep -Milliseconds 800
 }
