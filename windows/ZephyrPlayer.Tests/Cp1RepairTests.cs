@@ -460,11 +460,13 @@ namespace ZephyrPlayer.Tests
                 var a = view.CurrentNativeStart!;
                 PumpUntil(() => player.State == VLCState.Playing && !view.IsLoadingShown || view.IsLoadingErrorShown, "slow start neither played nor failed", 60000);
                 var elapsed = Environment.TickCount64 - t0;
-                Note("slow-source-plays", $"stallWindow=2s elapsedToPlaying={elapsed} ms state={player.State} failure={view.LastStartFailure ?? "none"} progressMarks={a.ProgressMarks} lastProgress=[{a.LastProgress}] bytesDelivered={a.Source.BytesDelivered} served={slow.BytesServed} requests={slow.Requests}");
+                Note("slow-source-plays", $"stallWindow=2s elapsedToLoadingEnd={elapsed} ms completedBy={a.CompletedBy} state={player.State} failure={view.LastStartFailure ?? "none"} progressMarks={a.ProgressMarks} lastProgress=[{a.LastProgress}] bytesDelivered={a.Source.BytesDelivered} served={slow.BytesServed} requests={slow.Requests}");
                 Assert.False(view.IsLoadingErrorShown, "a slow but valid source was stopped: " + view.LastStartFailure);
                 Assert.Null(view.LastStartFailure);
                 Assert.Equal(VLCState.Playing, player.State);
-                Assert.True(elapsed > 5 * 2000, $"the source was not actually slow ({elapsed} ms)");
+                // CI run 41033075025: Playing after 9.9 s with a 2 s stall window (libVLC reports
+                // Playing once the demuxer opens, before the dribble phase ended).
+                Assert.True(elapsed > 3 * 2000, $"the source was not actually slow ({elapsed} ms)");
                 Assert.True(a.ProgressMarks > 3);
             });
         }
@@ -488,6 +490,38 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(PlayerView.NativeFailedMessage, view.LoadingDetailText);
                 Assert.StartsWith("native-", view.LastStartFailure);
                 Assert.Null(view.CurrentMedia);
+            });
+        }
+
+        /// <summary>libVLC 3 says Playing once its demuxer opens, before the first
+        /// picture (CI run 41033075025: ~0.7 s of all-black video area on a dribbling
+        /// phone). Playing alone keeps the spinner; buffering complete after Playing
+        /// ends it.</summary>
+        [Fact]
+        public void Playing_AloneKeepsSpinner_UntilBufferingCompletes()
+        {
+            using var slow = new DribbleServer(slowSeconds: 15);
+            WithPlayer((view, player, _) =>
+            {
+                var start = view.PlayFromUrlAsync(slow.Url, null, Array.Empty<string>());
+                PumpUntil(() => start.IsCompleted, "slow start never handed off", 30000);
+                start.GetAwaiter().GetResult();
+                var a = view.CurrentNativeStart!;
+                Assert.True(a.Waiting);
+                view.RaiseNativeEvent(a, "playing");
+                view.RaiseNativeEvent(a, "vout", 1);
+                PumpFor(400);
+                var afterPlaying = $"loading={view.IsLoadingShown} playingSeen={a.PlayingSeen} waiting={a.Waiting}";
+                Assert.True(a.PlayingSeen);
+                Assert.True(a.Waiting, "Playing (or a black video output) ended the start before any picture");
+                Assert.True(view.IsLoadingShown, "Playing alone hid the spinner");
+                view.RaiseNativeEvent(a, "buffering", 100);
+                PumpFor(400);
+                Assert.False(a.Waiting);
+                Assert.Equal("buffered", a.CompletedBy);
+                Assert.False(view.IsLoadingShown, "buffering complete after Playing did not end loading");
+                Assert.Null(view.LastStartFailure);
+                Note("playing-keeps-spinner", $"after Playing + video output: {afterPlaying}; after Buffering 100%: loading={view.IsLoadingShown} completedBy={a.CompletedBy}");
             });
         }
 

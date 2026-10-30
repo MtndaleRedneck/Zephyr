@@ -1017,23 +1017,45 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     }
     $pickNote += "; file dialog=" + $(if ($dlgH -ne [System.IntPtr]::Zero) { ([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match '#32770' }) -join ' ' } else { 'not found' })
     $typed = $false
+    $dlgOpen = { @([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match 'class=\[#32770\]' }).Count -gt 0 }
     if ($dlgH -ne [System.IntPtr]::Zero) {
-        try {
-            $dlgEl = [System.Windows.Automation.AutomationElement]::FromHandle($dlgH)
-            $combo = Find-ByAutoId $dlgEl '1148'
-            $editCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
-            $edit = if ($combo -ne $null) { $combo.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $editCond) } else { $null }
-            if ($edit -eq $null) { $edit = $dlgEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $editCond) }
-            if ($edit -ne $null) {
-                $edit.SetFocus()
-                $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($pickSrt)
-                Start-Sleep -Milliseconds 400
-                [ZCP1]::Key(0x0D)  # Enter = Open
-                $typed = $true
-            }
-        } catch { $pickNote += "; dialog automation error: $($_.Exception.Message)" }
-        Start-Sleep -Milliseconds 800
-        if (@([ZCP1]::Visible($pC.Id) | Where-Object { $_ -match '#32770' }).Count -gt 0) { $pickNote += "; dialog still open, pressing Escape"; [ZCP1]::Key(0x1B); Start-Sleep -Milliseconds 500 }
+        # Run 41033075025: SetFocus on the found edit threw "Target element cannot
+        # receive focus" (the dialog was still building). Now: let it settle, set the
+        # File name box's value (no focus needed), press the dialog's Open button; if
+        # it is still open, type the path into the focused File name box instead.
+        Start-Sleep -Milliseconds 1200
+        $editCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Edit)
+        foreach ($try in 1..5) {
+            try {
+                $dlgEl = [System.Windows.Automation.AutomationElement]::FromHandle($dlgH)
+                $combo = Find-ByAutoId $dlgEl '1148'
+                $edit = if ($combo -ne $null) { $combo.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $editCond) } else { $null }
+                if ($edit -eq $null) { $edit = $combo }
+                if ($edit -ne $null) {
+                    $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($pickSrt)
+                    $pickNote += "; File name set via UIA ($($edit.Current.ControlType.ProgrammaticName))"
+                    Start-Sleep -Milliseconds 300
+                    $open = Find-ByAutoId $dlgEl '1'
+                    if ($open -ne $null) { $open.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); $pickNote += "; Open invoked" }
+                    else { [ZCP1]::Key(0x0D); $pickNote += "; Enter pressed" }
+                    $typed = $true
+                    break
+                }
+            } catch { $pickNote += "; try $try automation: $($_.Exception.Message)" }
+            Start-Sleep -Milliseconds 500
+        }
+        Start-Sleep -Milliseconds 1000
+        if (& $dlgOpen) {
+            $pickNote += "; dialog still open, typing the path"
+            [ZWU32]::SetForegroundWindow($dlgH) | Out-Null
+            Start-Sleep -Milliseconds 300
+            [System.Windows.Forms.SendKeys]::SendWait($pickSrt)
+            Start-Sleep -Milliseconds 300
+            [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+            $typed = $true
+            Start-Sleep -Milliseconds 1200
+        }
+        if (& $dlgOpen) { $pickNote += "; dialog STILL open, pressing Escape"; [ZCP1]::Key(0x1B); Start-Sleep -Milliseconds 500 }
     }
     $attached = $false
     foreach ($i in 1..20) {
