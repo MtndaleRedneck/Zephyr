@@ -142,7 +142,8 @@ namespace ZephyrPlayer
         /// held library leaves, the video host goes back to black.</summary>
         private void OnPlayerStartSettled()
         {
-            if (_current is not PlayerView player) return;
+            if (_current is not PlayerView player) { SwitchTrace.Mark("settled.ignored", "current is not the player"); return; }
+            SwitchTrace.Mark("settled.release-hold");
             player.StartSettled -= OnPlayerStartSettled;
             var held = _heldUnder; _heldUnder = null;
             player.SetSwitchTransparent(false);
@@ -166,7 +167,7 @@ namespace ZephyrPlayer
             try
             {
                 var w = view.ActualWidth; var h = view.ActualHeight;
-                if (w < 1 || h < 1) return;
+                if (w < 1 || h < 1) { SwitchTrace.Mark("hold.skipped", $"view {w:0}x{h:0}"); return; }
                 var m = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
                 int pw = (int)Math.Ceiling(w * m.M11), ph = (int)Math.Ceiling(h * m.M22);
                 var dv = new DrawingVisual();
@@ -178,16 +179,24 @@ namespace ZephyrPlayer
                 rtb.CopyPixels(pixels, pw * 4, 0);
                 var bi = new BITMAPINFOHEADER { biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(), biWidth = pw, biHeight = -ph, biPlanes = 1, biBitCount = 32 };
                 var bmp = CreateDIBSection(IntPtr.Zero, ref bi, 0, out var bits, IntPtr.Zero, 0);
-                if (bmp == IntPtr.Zero) return;
+                if (bmp == IntPtr.Zero) { SwitchTrace.Mark("hold.failed", "CreateDIBSection"); return; }
                 Marshal.Copy(pixels, 0, bits, pixels.Length);
                 var brush = CreatePatternBrush(bmp);
-                if (brush == IntPtr.Zero) { DeleteObject(bmp); return; }
+                if (brush == IntPtr.Zero) { DeleteObject(bmp); SwitchTrace.Mark("hold.failed", "CreatePatternBrush"); return; }
                 FreeHold();
                 _holdBitmap = bmp; _holdBrush = brush;
-                SwitchTrace.Mark("hold.set", $"{pw}x{ph}");
+                if (SwitchTrace.On) SwitchTrace.Mark("hold.set", $"{pw}x{ph} non-black={NonBlackPercent(pixels):0.0}%");
                 RepaintVideoHost();
             }
-            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("video host hold failed: " + ex.GetType().Name); }
+            catch (Exception ex) { SwitchTrace.Mark("hold.failed", ex.GetType().Name); System.Diagnostics.Trace.TraceWarning("video host hold failed: " + ex.GetType().Name); }
+        }
+
+        /// <summary>Share of sampled pixels that are not black (any channel above 24).</summary>
+        internal static double NonBlackPercent(byte[] bgra)
+        {
+            int n = 0, lit = 0;
+            for (int o = 0; o + 3 < bgra.Length; o += 4 * 61) { n++; if (bgra[o] > 24 || bgra[o + 1] > 24 || bgra[o + 2] > 24) lit++; }
+            return n == 0 ? 0 : 100.0 * lit / n;
         }
 
         // ---------- Back: the player leaves after the library is on screen ----------
