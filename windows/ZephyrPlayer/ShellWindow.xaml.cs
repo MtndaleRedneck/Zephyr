@@ -36,6 +36,7 @@ namespace ZephyrPlayer
             {
                 var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
                 source?.AddHook(WndProc);
+                SwitchTrace.WatchShell(new WindowInteropHelper(this).Handle);
             };
             StateChanged += (_, __) => UpdateChromeForState();
             PreviewKeyDown += (_, e) => ViewKeyDown?.Invoke(this, e);
@@ -83,16 +84,19 @@ namespace ZephyrPlayer
             {
                 // Back. The library may still be held under the player (Back pressed
                 // while the start was loading): it is already in the tree.
+                SwitchTrace.Mark("back.begin");
                 if (!ViewHost.Children.Contains(view)) ViewHost.Children.Insert(0, view);
                 view.IsHitTestVisible = true;
                 _heldUnder = null;
                 view.UpdateLayout();
+                SwitchTrace.Mark("library.laid-out", $"{view.ActualWidth:0}x{view.ActualHeight:0}");
                 HoldVideoHost(view);
                 var leaving = (PlayerView)old;
                 // The WPF surface under the native host must show the library too: the
                 // player turns see-through over it and stops taking clicks.
                 leaving.SetSwitchTransparent(true);
                 leaving.IsHitTestVisible = false;
+                SwitchTrace.Mark("player.see-through");
                 beforeOldLeaves?.Invoke();
                 // The movie's own video window is gone now: the host's whole client
                 // paints the library picture (it clips its children, so the paint
@@ -180,6 +184,7 @@ namespace ZephyrPlayer
                 if (brush == IntPtr.Zero) { DeleteObject(bmp); return; }
                 FreeHold();
                 _holdBitmap = bmp; _holdBrush = brush;
+                SwitchTrace.Mark("hold.set", $"{pw}x{ph}");
                 RepaintVideoHost();
             }
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("video host hold failed: " + ex.GetType().Name); }
@@ -212,9 +217,9 @@ namespace ZephyrPlayer
             // Two Rendering callbacks: the first frame after the switch has been handed
             // to the compositor. The timer covers a hidden shell (tray close), which
             // renders nothing.
-            onFrame = (_, _) => { if (++frames >= 2) Finish(); };
+            onFrame = (_, _) => { SwitchTrace.Mark("render.tick", (frames + 1).ToString()); if (++frames >= 2) Finish(); };
             CompositionTarget.Rendering += onFrame;
-            fallback.Tick += (_, _) => Finish();
+            fallback.Tick += (_, _) => { SwitchTrace.Mark("leave.timer"); Finish(); };
             fallback.Start();
         }
 
@@ -224,6 +229,7 @@ namespace ZephyrPlayer
             var leaving = _leaving; _leaving = null;
             if (leaving == null || ReferenceEquals(_current, leaving)) return;
             ViewHost.Children.Remove(leaving);
+            SwitchTrace.Mark("player.removed");
             leaving.SetSwitchTransparent(false);
             leaving.IsHitTestVisible = true;
             ReleaseHoldWhenHostHidden(gen, 0);
@@ -237,8 +243,8 @@ namespace ZephyrPlayer
         {
             if (gen != _leaveGen || _holdBrush == IntPtr.Zero) return;
             var host = VideoHostHandle();
-            if (host == IntPtr.Zero || !IsWindowVisible(host)) { FreeHold(); return; }
-            if (tries >= 10) { ReleaseVideoHost(); return; }
+            if (host == IntPtr.Zero || !IsWindowVisible(host)) { SwitchTrace.Mark("hold.released", host == IntPtr.Zero ? "host-gone" : "host-hidden"); FreeHold(); return; }
+            if (tries >= 10) { SwitchTrace.Mark("hold.released", "timeout-host-still-visible"); ReleaseVideoHost(); return; }
             var t = new DispatcherTimer(DispatcherPriority.Normal, Dispatcher) { Interval = TimeSpan.FromMilliseconds(30) };
             t.Tick += (_, _) => { t.Stop(); ReleaseHoldWhenHostHidden(gen, tries + 1); };
             t.Start();
@@ -296,6 +302,7 @@ namespace ZephyrPlayer
             var host = VideoHostHandle();
             // Its own client only (no RDW_ALLCHILDREN: libVLC's video window inside it
             // keeps its picture), painted now rather than at the next message pump.
+            if (SwitchTrace.On) SwitchTrace.Mark("host.repaint", $"host={(host == IntPtr.Zero ? "none" : "found")} visible-video-windows={SwitchTrace.VisibleVideoChildren(host)} hold={_holdBrush != IntPtr.Zero}");
             if (host != IntPtr.Zero) RedrawWindow(host, IntPtr.Zero, IntPtr.Zero, 0x0001 /*INVALIDATE*/ | 0x0004 /*ERASE*/ | 0x0100 /*UPDATENOW*/);
         }
 
@@ -497,6 +504,7 @@ namespace ZephyrPlayer
             {
                 SetBkColor(wParam, 0x000000);
                 handled = true;
+                if (SwitchTrace.On) SwitchTrace.Mark("host.paint", _holdBrush != IntPtr.Zero ? "library-picture" : "black");
                 // During a view switch: the outgoing library's picture (ShowView).
                 return _holdBrush != IntPtr.Zero ? _holdBrush : BlackBrush;
             }

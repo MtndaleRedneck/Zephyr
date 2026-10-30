@@ -85,6 +85,9 @@ namespace ZephyrPlayer
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+#if CI_CAPTURE_HOOK
+            SwitchTrace.StartFromEnvironment();
+#endif
             DispatcherUnhandledException += (_, ev) =>
                 LogCrash("dispatcher", ev.Exception.ToString());
             AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
@@ -402,8 +405,11 @@ namespace ZephyrPlayer
             var player = _player;
             _shell.ShowView(_home, () =>
             {
+                SwitchTrace.Mark("stop.begin");
                 player.StopPlaybackSource();
+                SwitchTrace.Mark("stop.end");
                 player.HideOverlayWindow();
+                SwitchTrace.Mark("overlay.hide-called");
             });
         }
 
