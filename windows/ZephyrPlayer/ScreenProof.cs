@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.Runtime.InteropServices;
 
@@ -14,9 +15,9 @@ namespace ZephyrPlayer
     {
         internal enum Verdict { Match, Mismatch, NotOnScreen }
 
-        internal readonly record struct Result(Verdict Verdict, int Owned, int Matched, int Total, int Old = -1, string Misses = "")
+        internal readonly record struct Result(Verdict Verdict, int Owned, int Matched, int Total, int Old = -1, string Misses = "", string Lit = "")
         {
-            public override string ToString() => $"{Verdict} matched={Matched}/{Owned} on-screen-of={Total}" + (Old >= 0 ? $" old-colour={Old}" : "") + (Misses.Length > 0 ? " misses " + Misses : "");
+            public override string ToString() => $"{Verdict} matched={Matched}/{Owned} on-screen-of={Total}" + Lit + (Old >= 0 ? $" old-colour={Old}" : "") + (Misses.Length > 0 ? " misses " + Misses : "");
         }
 
         /// <summary>Waits for the desktop compositor's next presented frame (DwmFlush);
@@ -28,36 +29,60 @@ namespace ZephyrPlayer
         }
 
         /// <summary>The top-left [w] x [h] of the picture [expected] (top-down BGRA, rows
-        /// [stride] pixels wide) is what the screen shows at [screenX],[screenY]: a 32 x 20
-        /// grid of points, each within 16 levels per channel of the expected pixel (or of
-        /// one of its 8 neighbours, for a one-pixel rounding of the window position).</summary>
+        /// [stride] pixels wide) is what the screen shows at [screenX],[screenY]. Two sets
+        /// of points, each point within 16 levels per channel of the expected pixel (or of
+        /// one of its 8 neighbours, for a one-pixel rounding of the window position):
+        /// a 32 x 20 grid (97 % must match), and up to 320 of the picture's LIT points
+        /// (any channel at 64 or more: text, artwork, accents; 95 % must match). The
+        /// library is mostly near-black, so the grid alone would also match a black host
+        /// (CP2 round 5 test run 41116015629); the lit points tell the picture from black
+        /// and from a shifted picture.</summary>
         internal static Result PictureShown(IntPtr root, int screenX, int screenY, int w, int h, byte[] expected, int stride)
         {
-            const int GX = 32, GY = 20, Tol = 16;
+            const int GX = 32, GY = 20;
             if (w < 4 || h < 4) return new Result(Verdict.NotOnScreen, 0, 0, 0);
-            int ew = w, eh = h;
             var shot = Grab(screenX, screenY, w, h);
-            int owned = 0, matched = 0;
             var misses = new System.Text.StringBuilder();
+            int owned = 0, matched = 0;
             for (int j = 0; j < GY; j++)
                 for (int i = 0; i < GX; i++)
+                    Check((int)((i + 0.5) * w / GX), (int)((j + 0.5) * h / GY), ref owned, ref matched);
+            var grid = Judge(owned, matched, GX * GY, 0.97);
+            // The lit points, spread evenly over the picture.
+            var lit = new List<int>();
+            for (int y = 1; y < h - 1; y += 3)
+                for (int x = 1; x < w - 1; x += 3)
                 {
-                    int x = (int)((i + 0.5) * ew / GX), y = (int)((j + 0.5) * eh / GY);
-                    if (!Owned(root, screenX + x, screenY + y)) continue;
-                    owned++;
-                    int o = (y * w + x) * 4;
-                    bool ok = false;
-                    for (int dy = -1; dy <= 1 && !ok; dy++)
-                        for (int dx = -1; dx <= 1 && !ok; dx++)
-                        {
-                            int xx = Math.Clamp(x + dx, 0, ew - 1), yy = Math.Clamp(y + dy, 0, eh - 1), e = (yy * stride + xx) * 4;
-                            ok = Math.Abs(shot[o] - expected[e]) <= Tol && Math.Abs(shot[o + 1] - expected[e + 1]) <= Tol && Math.Abs(shot[o + 2] - expected[e + 2]) <= Tol;
-                        }
-                    if (ok) matched++;
-                    else if (misses.Length < 400) misses.Append($"{x},{y}:{shot[o + 2]:X2}{shot[o + 1]:X2}{shot[o]:X2}/{expected[(y * stride + x) * 4 + 2]:X2}{expected[(y * stride + x) * 4 + 1]:X2}{expected[(y * stride + x) * 4]:X2} ");
+                    int e = (y * stride + x) * 4;
+                    if (expected[e] >= 64 || expected[e + 1] >= 64 || expected[e + 2] >= 64) lit.Add(y * w + x);
                 }
-            var res = Judge(owned, matched, GX * GY, 0.97);
-            return res.Verdict == Verdict.Mismatch ? res with { Misses = misses.ToString().TrimEnd() } : res;
+            int litOwned = 0, litMatched = 0, litTotal = Math.Min(320, lit.Count);
+            for (int k = 0; k < litTotal; k++)
+            {
+                int q = lit[(int)((long)k * lit.Count / litTotal)];
+                Check(q % w, q / w, ref litOwned, ref litMatched);
+            }
+            string litWord = litTotal >= 12 ? $" lit={litMatched}/{litOwned}" : " lit=too-few";
+            bool litOk = litTotal < 12 || litOwned < litTotal / 4 || litMatched >= Math.Ceiling(litOwned * 0.95);
+            var v = grid.Verdict == Verdict.Match && !litOk ? Verdict.Mismatch : grid.Verdict;
+            var res = new Result(v, grid.Owned, grid.Matched, grid.Total, -1, v == Verdict.Mismatch ? misses.ToString().TrimEnd() : "", litWord);
+            return res;
+
+            void Check(int x, int y, ref int own, ref int ok)
+            {
+                if (!Owned(root, screenX + x, screenY + y)) return;
+                own++;
+                int o = (y * w + x) * 4;
+                bool good = false;
+                for (int dy = -1; dy <= 1 && !good; dy++)
+                    for (int dx = -1; dx <= 1 && !good; dx++)
+                    {
+                        int xx = Math.Clamp(x + dx, 0, w - 1), yy = Math.Clamp(y + dy, 0, h - 1), e = (yy * stride + xx) * 4;
+                        good = Math.Abs(shot[o] - expected[e]) <= 16 && Math.Abs(shot[o + 1] - expected[e + 1]) <= 16 && Math.Abs(shot[o + 2] - expected[e + 2]) <= 16;
+                    }
+                if (good) ok++;
+                else if (misses.Length < 300) { int e0 = (y * stride + x) * 4; misses.Append($"{x},{y}:{shot[o + 2]:X2}{shot[o + 1]:X2}{shot[o]:X2}/{expected[e0 + 2]:X2}{expected[e0 + 1]:X2}{expected[e0]:X2} "); }
+            }
         }
 
         /// <summary>The flat colour [rgb] is what the screen shows over most of the strip
