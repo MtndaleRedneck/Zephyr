@@ -1,0 +1,31 @@
+Notices for the .NET 8.0.32 runtime bundled inside ZephyrVlcRemote.exe
+
+ZephyrVlcRemote.exe is published self-contained as a single file. It carries
+the Microsoft.NETCore.App 8.0.32 and Microsoft.WindowsDesktop.App 8.0.32
+runtimes (win-x64). The files in this folder are the official license and
+third-party notice files for those runtimes, copied unchanged from the
+v8.0.32 release tags of the .NET repositories:
+
+dotnet-runtime-8.0.32-THIRD-PARTY-NOTICES.TXT
+  https://github.com/dotnet/runtime/blob/v8.0.32/THIRD-PARTY-NOTICES.TXT
+  (commit b9a49e4a6d3a444a3685e318c74a7892d01873f7; the same text, apart from
+  line endings, as THIRD-PARTY-NOTICES.TXT inside the NuGet package
+  Microsoft.NETCore.App.Runtime.win-x64 8.0.32)
+
+dotnet-wpf-8.0.32-THIRD-PARTY-NOTICES.TXT
+  https://github.com/dotnet/wpf/blob/v8.0.32/THIRD-PARTY-NOTICES.TXT
+  (commit d60df3c3ac9e49c0c0733d3948a9d3a22205f6f6)
+
+dotnet-winforms-8.0.32-THIRD-PARTY-NOTICES.TXT
+  https://github.com/dotnet/winforms/blob/v8.0.32/THIRD-PARTY-NOTICES.TXT
+  (commit 6f3d394582b11915e1b057ea7816dab881ba2c44)
+
+dotnet-8.0.32-LICENSE.TXT (MIT License)
+  https://github.com/dotnet/runtime/blob/v8.0.32/LICENSE.TXT
+  The same MIT text is the LICENSE of dotnet/windowsdesktop, dotnet/wpf and
+  dotnet/winforms at v8.0.32.
+
+The Microsoft.WindowsDesktop.App.Runtime.win-x64 8.0.32 package
+(dotnet/windowsdesktop commit c88bcd7803794eb887460f3285b4896a1a7c521a)
+contains no third-party notices file of its own; its WPF and Windows Forms
+parts come from the dotnet/wpf and dotnet/winforms commits above.
