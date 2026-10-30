@@ -312,9 +312,16 @@ namespace ZephyrPlayer.Tests
                     Assert.True(hostHeldAtStop, "the video host did not hold the library's picture when the movie stopped");
                     Assert.True(playingAtStop, "the movie stopped before the library was ready");
                     Assert.Same(home, shell.CurrentView);
+                    // CP2: the player leaves only after WPF has drawn the see-through
+                    // frame over the library, and the host keeps the library picture
+                    // until it is hidden (run 41056301476's one black Back frame).
+                    Assert.True(shell.LeavePending, "the player left the tree in the same pass as Back");
+                    Assert.True(shell.VideoHostHeld, "the video host let go of the library picture before the player left");
+                    Assert.False(view.IsHitTestVisible, "the leaving player still takes clicks");
                     PumpUntil(() => !view.IsLoaded, "player view still in the tree after Back");
+                    PumpUntil(() => !shell.VideoHostHeld, "the video host never let go of the library picture after Back");
+                    Assert.False(shell.LeavePending);
                     Assert.Equal(1, shell.ViewHostChildCount);
-                    Assert.False(shell.VideoHostHeld);
                     Assert.True(home.IsHitTestVisible);
                     notes.Append($"Back: libraryLaidOutBeforeStop={laidOut} hostHeldAtStop={hostHeldAtStop} moviePlayingUntilThen={playingAtStop} children={shell.ViewHostChildCount}; ");
 
@@ -329,6 +336,7 @@ namespace ZephyrPlayer.Tests
                     gate2.Set();
                     PumpUntil(() => start2.IsCompleted, "loading start never completed after Back", 15000);
                     Pump(300);
+                    PumpUntil(() => !shell.LeavePending && !shell.VideoHostHeld, "the Back while loading never finished leaving");
                     Assert.Same(home, shell.CurrentView);
                     Assert.Null(shell.HeldUnderView);
                     Assert.Equal(1, shell.ViewHostChildCount);
