@@ -292,7 +292,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("0:00", El<TextBlock>(view, "ElapsedText").Text);
                 Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
                 Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
-                Assert.Equal(0, El<Slider>(view, "SeekBar").Value);
+                Assert.Equal(0.0, El<Slider>(view, "SeekBar").Value);
                 Assert.Equal("Movie from your phone", view.CurrentMovieTitle);
                 Assert.Equal("", El<TextBlock>(view, "MovieMeta").Text);
                 var opening = $"old=[{oldTitle}] opening: elapsed={El<TextBlock>(view, "ElapsedText").Text} total=[{El<TextBlock>(view, "TotalText").Text}] title=[{view.CurrentMovieTitle}]";
@@ -645,16 +645,238 @@ namespace ZephyrPlayer.Tests
                 Assert.False(view.Sleep.IsActive);
                 Assert.False(view.SleepTickRunning);
                 Assert.NotEqual(VLCState.Playing, player.State);
-                // C. "End of this movie", Back, a new movie: it fires at THAT movie's end.
+                // C. "End of this movie", Back, a new movie (round 3: the choice belongs to the
+                //    movie it was set on, so Back turns it off and the next movie's end does
+                //    not pause; SleepTimer_EndOfThisMovie_IsBoundToItsMovie covers it in full).
                 StartClip();
                 view.SetSleep(SleepTimerState.EndOfMovie);
                 Back();
-                Assert.True(view.Sleep.IsEndOfMovie);
+                Assert.False(view.Sleep.IsActive);
+                var endedBefore = view.MediaEndedCount;
                 StartClip();
-                PumpUntil(() => view.SleepPausedCount == 3, "end-of-movie timer did not fire on the next movie's end", 15000);
-                log.AppendLine($"C. 'End of this movie', Back, new movie: timer still 'End' after Back; fired at the NEW movie's end ({view.LastSleepFire}); timer now active={view.Sleep.IsActive}");
-                Assert.Equal("end", view.LastSleepFire);
+                PumpUntil(() => view.MediaEndedCount > endedBefore, "the new movie never reached its end", 15000);
+                Pump(300);
+                log.AppendLine($"C. 'End of this movie', Back: choice now off (active={view.Sleep.IsActive}); the new movie reached its end with no sleep pause (paused count {view.SleepPausedCount}, state {player.State})");
+                Assert.Equal(2, view.SleepPausedCount);
                 Note("r2-sleep-across-back", log.ToString());
+            });
+        }
+
+        // ---------- round 3: play/pause during Opening, end-of-movie bound to its movie ----------
+
+        private static KeyEventArgs SpaceKey(Window host) =>
+            new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(host)!, 0, Key.Space) { RoutedEvent = Keyboard.PreviewKeyDownEvent };
+
+        [Fact]
+        public void Opening_HeldNewStart_NoPlayPauseReachesTheOldMovie_NothingIsQueued()
+        {
+            const string phoneUrl1 = "http://127.0.0.1:9/s/held/pp1";
+            const string phoneUrl2 = "http://127.0.0.1:9/s/held/pp2";
+            using var gate1 = new ManualResetEventSlim(false);
+            using var gate2 = new ManualResetEventSlim(false);
+            WithPlayer((view, player, settings, host) =>
+            {
+                view.PrepareOverride = (url, subs, token) =>
+                {
+                    if (url == phoneUrl1) { gate1.Wait(20000); return view.PrepareSource(ClipMkvUrl, subs, token); }
+                    if (url == phoneUrl2) { gate2.Wait(20000); return view.PrepareSource(ClipUrl, subs, token); }
+                    return view.PrepareSource(url, subs, token);
+                };
+                var control = new MainWindowPlaybackControl(view, player);
+                var log = new System.Text.StringBuilder();
+                void AssertNewTitleAndZeroTimeline()
+                {
+                    Assert.True(view.IsOpening);
+                    Assert.Equal("Movie from your phone", view.CurrentMovieTitle);
+                    Assert.Equal("Movie from your phone", El<TextBlock>(view, "MovieTitle").Text);
+                    Assert.Equal(0.0, El<Slider>(view, "SeekBar").Value);
+                    Assert.Equal("0:00", El<TextBlock>(view, "ElapsedText").Text);
+                    Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
+                    Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
+                }
+                string Glyph() => El<FrameworkElement>(view, "PauseGlyph").Visibility == Visibility.Visible ? "pause" : "play";
+
+                // A. OLD movie PLAYING, new phone start held: the button, Space and the phone's
+                //    Pause must not pause it.
+                var first = view.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>());
+                PumpUntil(() => first.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "old clip did not play");
+                var oldMedia = view.CurrentMedia;
+                var next = view.PlayFromUrlAsync(phoneUrl1, null, Array.Empty<string>());
+                Pump(500);
+                Assert.True(view.IsOpening);
+                Assert.Same(oldMedia, view.CurrentMedia);
+                Assert.Equal(VLCState.Playing, player.State);
+                var handed0 = view.PlayPauseHandedCount; var refused0 = view.PlayPauseRefusedCount;
+                var tA0 = player.Time;
+                Click(view, "PlayPauseButton");          // the button's registered Click handler
+                Pump(150);
+                var space = SpaceKey(host); view.HandleKey(space); // the one key map (shell + overlay feed it)
+                Assert.True(space.Handled);
+                Pump(150);
+                control.Pause();                         // /control/pause
+                Pump(500);
+                var tA1 = player.Time;
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.Same(oldMedia, view.CurrentMedia);
+                Assert.True(tA1 > tA0, $"the old movie stopped advancing: {tA0} -> {tA1} ms");
+                Assert.Equal(handed0, view.PlayPauseHandedCount); // nothing handed to libVLC
+                Assert.Equal(refused0 + 3, view.PlayPauseRefusedCount);
+                AssertNewTitleAndZeroTimeline();
+                log.AppendLine($"A. old clip PLAYING, phone start held (opening={view.IsOpening}): button, Space (handled={space.Handled}), phone Pause -> old state {player.State}, old time {tA0} -> {tA1} ms (still advancing), same old media={ReferenceEquals(oldMedia, view.CurrentMedia)}, handed to libVLC {view.PlayPauseHandedCount - handed0}, refused {view.PlayPauseRefusedCount - refused0}; title [{view.CurrentMovieTitle}], bar [{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}] [{El<TextBlock>(view, "TotalText").Text}] thumb {El<Slider>(view, "SeekBar").Value}; play/pause glyph shows [{Glyph()}]");
+
+                // Release: the new movie plays and nothing pressed during Opening is applied
+                // to it (three presses would leave it paused if any had been queued).
+                gate1.Set();
+                PumpUntil(() => next.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "held start 1 never played", 15000);
+                Assert.NotSame(oldMedia, view.CurrentMedia);
+                var handedAtRelease = view.PlayPauseHandedCount;
+                Pump(800);
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.Equal(handedAtRelease, view.PlayPauseHandedCount);
+                log.AppendLine($"   released: new movie (clip.mkv) playing; 800 ms later still {player.State}, handed to libVLC since release {view.PlayPauseHandedCount - handedAtRelease} (nothing deferred)");
+
+                // After release every path works on the NEW movie.
+                var newMedia = view.CurrentMedia;
+                Click(view, "PlayPauseButton");
+                PumpUntil(() => player.State == VLCState.Paused, "button did not pause the new movie: " + player.State);
+                view.HandleKey(SpaceKey(host));
+                PumpUntil(() => player.State == VLCState.Playing, "Space did not resume the new movie: " + player.State);
+                control.Pause();
+                PumpUntil(() => player.State == VLCState.Paused, "phone Pause did not pause the new movie: " + player.State);
+                var pausedNew = player.State;
+                control.Resume();
+                PumpUntil(() => player.State == VLCState.Playing, "phone Resume did not resume the new movie: " + player.State);
+                Assert.Same(newMedia, view.CurrentMedia);
+                Assert.Equal(handedAtRelease + 4, view.PlayPauseHandedCount);
+                log.AppendLine($"   after release on the new movie: button -> Paused, Space -> Playing, phone Pause -> {pausedNew}, phone Resume -> {player.State}; handed to libVLC {view.PlayPauseHandedCount - handedAtRelease}");
+
+                // B. OLD movie PAUSED, another phone start held: the button, Space and the
+                //    phone's Resume must not resume it.
+                Click(view, "PlayPauseButton");
+                PumpUntil(() => player.State == VLCState.Paused, "could not pause before the second held start");
+                var oldMediaB = view.CurrentMedia;
+                var next2 = view.PlayFromUrlAsync(phoneUrl2, null, Array.Empty<string>());
+                Pump(500);
+                Assert.True(view.IsOpening);
+                Assert.Same(oldMediaB, view.CurrentMedia);
+                var handedB = view.PlayPauseHandedCount; var refusedB = view.PlayPauseRefusedCount;
+                var tB0 = player.Time;
+                Click(view, "PlayPauseButton");
+                Pump(150);
+                view.HandleKey(SpaceKey(host));
+                Pump(150);
+                control.Resume();                        // /control/resume
+                Pump(700);
+                var tB1 = player.Time;
+                Assert.Equal(VLCState.Paused, player.State);
+                Assert.Same(oldMediaB, view.CurrentMedia);
+                Assert.True(Math.Abs(tB1 - tB0) <= 50, $"the paused old movie moved: {tB0} -> {tB1} ms");
+                Assert.Equal(handedB, view.PlayPauseHandedCount);
+                Assert.Equal(refusedB + 3, view.PlayPauseRefusedCount);
+                AssertNewTitleAndZeroTimeline();
+                log.AppendLine($"B. old clip PAUSED, phone start held: button, Space, phone Resume -> old state {player.State}, old time {tB0} -> {tB1} ms, same old media={ReferenceEquals(oldMediaB, view.CurrentMedia)}, handed to libVLC {view.PlayPauseHandedCount - handedB}, refused {view.PlayPauseRefusedCount - refusedB}; title [{view.CurrentMovieTitle}], bar [{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "TotalText").Text}]; glyph [{Glyph()}]");
+                gate2.Set();
+                PumpUntil(() => next2.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "held start 2 never played", 15000);
+                var handedAt2 = view.PlayPauseHandedCount;
+                Pump(800);
+                Assert.Equal(VLCState.Playing, player.State);
+                Assert.Equal(handedAt2, view.PlayPauseHandedCount);
+                control.Pause();
+                PumpUntil(() => player.State == VLCState.Paused, "phone Pause did not pause the second new movie");
+                Click(view, "PlayPauseButton");
+                PumpUntil(() => player.State == VLCState.Playing, "button did not resume the second new movie");
+                log.AppendLine($"   released: second new movie plays on its own start (800 ms later {VLCState.Playing}, nothing deferred); phone Pause -> Paused, button -> {player.State}");
+                Note("r3-opening-playpause-guard", log.ToString());
+            });
+        }
+
+        [Fact]
+        public void SleepTimer_EndOfThisMovie_IsBoundToItsMovie()
+        {
+            WithPlayer((view, player, settings, host) =>
+            {
+                var log = new System.Text.StringBuilder();
+                void Back() { view.SavePlaybackProgress(); view.StopPlaybackSource(); view.HideOverlayWindow(); }
+                void Start(string url, long? from)
+                {
+                    var s = view.PlayFromUrlAsync(url, from, Array.Empty<string>());
+                    PumpUntil(() => s.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "clip did not play: " + url);
+                }
+                void PickEnd()
+                {
+                    Click(view, "SleepButton");
+                    var row = (Button)El<StackPanel>(view, "SleepRows").Children[6];
+                    Assert.Equal("End of this movie", row.Content);
+                    row.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, row));
+                    Click(view, "SleepButton");
+                    Assert.True(view.Sleep.IsEndOfMovie);
+                    Assert.Equal("End", El<TextBlock>(view, "SleepLabel").Text);
+                }
+                string Badge() => El<TextBlock>(view, "SleepLabel").Visibility == Visibility.Visible ? El<TextBlock>(view, "SleepLabel").Text : "(none)";
+                void WaitEnd(int endedBefore) { PumpUntil(() => view.MediaEndedCount > endedBefore, "the movie never reached its end", 20000); Pump(300); }
+
+                // 1. Set on movie A, Back, start A again, its end: no pause.
+                Start(ClipUrl, 3);
+                PickEnd();
+                Back();
+                Assert.False(view.Sleep.IsActive);
+                Assert.Equal("(none)", Badge());
+                Assert.Equal(1, view.EndOfMovieDroppedCount);
+                var e1 = view.MediaEndedCount;
+                Start(ClipUrl, 3);
+                Assert.False(view.Sleep.IsActive);
+                WaitEnd(e1);
+                Assert.Equal(0, view.SleepPausedCount);
+                Assert.Null(view.LastSleepFire);
+                log.AppendLine($"1. End of this movie set on clip.mp4, Back: choice off (active={view.Sleep.IsActive}, badge {Badge()}, dropped {view.EndOfMovieDroppedCount}); clip started again and reached its end (ended count {view.MediaEndedCount}): sleep pauses {view.SleepPausedCount}, state {player.State}");
+
+                // 2. Set on movie A, a DIFFERENT movie starts straight over it (no Back, the
+                //    phone/library start path): the choice goes at that start; B's end: no pause.
+                Start(ClipUrl, 1);
+                PickEnd();
+                var dropped2 = view.EndOfMovieDroppedCount;
+                var e2 = view.MediaEndedCount;
+                Start(ClipMkvUrl, 3);
+                Assert.False(view.Sleep.IsActive);
+                Assert.Equal(dropped2 + 1, view.EndOfMovieDroppedCount);
+                WaitEnd(e2);
+                Assert.Equal(0, view.SleepPausedCount);
+                log.AppendLine($"2. End of this movie set on clip.mp4, clip.mkv started over it (no Back): choice off at that start (badge {Badge()}); clip.mkv reached its end: sleep pauses {view.SleepPausedCount}, state {player.State}");
+
+                // 3. Tray close and coming back to a different movie: App.CloseToTray goes through
+                //    the same LeavePlayer view calls as Back (StopPlaybackSource drops it).
+                Start(ClipUrl, 1);
+                PickEnd();
+                view.SavePlaybackProgress(); view.StopPlaybackSource(); view.HideOverlayWindow(); view.HideOverlayWindow();
+                Assert.False(view.Sleep.IsActive);
+                var e3 = view.MediaEndedCount;
+                Start(ClipMkvUrl, 3);
+                WaitEnd(e3);
+                Assert.Equal(0, view.SleepPausedCount);
+                log.AppendLine($"3. End of this movie, tray-close view calls, a different movie: choice off; that movie's end: sleep pauses {view.SleepPausedCount}");
+
+                // 4. A timed choice is NOT touched by any of this (lifecycle held for a product
+                //    decision): 15 min set, Back, a new start: still 15 min, tick running.
+                view.SetSleep(15);
+                Back();
+                Start(ClipUrl, null);
+                Assert.Equal(15, view.Sleep.Minutes);
+                Assert.True(view.SleepTickRunning);
+                log.AppendLine($"4. 15 min timer, Back, new start: still {view.Sleep.Minutes} min, tick running={view.SleepTickRunning} (timed lifecycle unchanged)");
+                view.SetSleep(0);
+
+                // 5. The same-movie case still pauses at that movie's end.
+                Start(ClipUrl, 3);
+                PickEnd();
+                var media = view.CurrentMedia;
+                var e5 = view.MediaEndedCount;
+                PumpUntil(() => view.MediaEndedCount > e5, "EndReached never reached the view", 20000);
+                PumpUntil(() => view.SleepPausedCount == 1, "end of this movie did not fire at its own end");
+                Assert.Equal("end", view.LastSleepFire);
+                Assert.Same(media, view.CurrentMedia);
+                Assert.False(view.Sleep.IsActive);
+                log.AppendLine($"5. End of this movie set on clip.mp4 and left playing: fired at its own end ({view.LastSleepFire}), sleep pauses {view.SleepPausedCount}, same media={ReferenceEquals(media, view.CurrentMedia)}, choice now off");
+                Note("r3-sleep-end-bound", log.ToString());
             });
         }
     }

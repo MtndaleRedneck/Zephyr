@@ -43,8 +43,8 @@ namespace ZephyrPlayer
         public Task PlayAsync(string url,long? positionSeconds,string[] subtitles) => _window.Dispatcher.InvokeAsync(() => {
             _showForPlayback?.Invoke();return _window.PlayFromUrlAsync(url,positionSeconds,subtitles);
         }).Task.Unwrap();
-        public void Pause() => OnUi(() => { _player.SetPause(true); _window.ShowBarOnce(); });
-        public void Resume() => OnUi(() => { _player.SetPause(false); _window.ShowBarOnce(); });
+        public void Pause() => OnUi(() => { _window.PauseFromPhone(true); _window.ShowBarOnce(); });
+        public void Resume() => OnUi(() => { _window.PauseFromPhone(false); _window.ShowBarOnce(); });
         public void Seek(long positionSeconds) => OnUi(() => { _window.SeekFromPhone(positionSeconds); _window.ShowBarOnce(); });
         public void SetVolume(int volume) => OnUi(() => _window.SetVolumeTied(volume));
         public void Mute(bool mute) => OnUi(() => _window.SetMuteTied(mute));
