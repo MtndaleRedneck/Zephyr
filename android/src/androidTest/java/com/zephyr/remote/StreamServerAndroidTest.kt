@@ -227,4 +227,116 @@ class StreamServerAndroidTest {
     fun urlShape_carriesSessionTokenNotPairingToken() {
         assertTrue(movieUrl.matches(Regex("http://127\\.0\\.0\\.1:\\d+/s/[0-9a-f]{36}/1")))
     }
+
+    /** M1: a provider that never returns must not pin the REQUEST. The deadline
+     *  abandons it without the provider guard: socket closed, open-stream count
+     *  released (the count the idle policy and therefore the service locks follow),
+     *  while the writer end stays open (the provider never came back). */
+    @Test fun stalledProviderDeadline_abandonsRequestBeforeProviderReturns() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        })
+        server.providerDeadlineMs = 1500
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/stall"), "stall.mkv")
+        val sock = java.net.Socket()
+        try {
+            val u = URL(url)
+            sock.connect(java.net.InetSocketAddress(u.host, u.port))
+            sock.soTimeout = 30_000
+            sock.getOutputStream().write("GET ${u.path} HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())
+            val until = android.os.SystemClock.elapsedRealtime() + 15_000
+            while (server.openStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(50)
+            assertEquals("request released without the provider returning", 0, server.openStreams.get())
+            assertEquals("server closed the client socket", -1, sock.getInputStream().read())
+            // The pipe provider's own close completes between poll cycles, so the
+            // abandoned capacity comes back (a truly parked SAF/FUSE provider would
+            // keep it parked - that path is declared, not emulatable here).
+            val settle = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (server.abandonedStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("closed provider returns abandoned capacity", 0, server.abandonedStreams.get())
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; runCatching { sock.close() }
+        }
+    }
+
+    /** M1: bytes that arrive AFTER the abandonment must never be written to the
+     *  (closed) client socket, and the abandoned copy must never commit into the
+     *  cache (no rename, temp deleted). */
+    @Test fun lateProviderReturn_noWriteNoCommit() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        })
+        server.providerDeadlineMs = 1500
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/late"), "late.mkv")
+        val received = java.util.concurrent.atomic.AtomicInteger()
+        val client = kotlin.concurrent.thread {
+            runCatching {
+                val c = URL(url).openConnection() as HttpURLConnection
+                c.readTimeout = 30_000
+                val stream = runCatching { c.inputStream }.getOrNull() ?: return@runCatching
+                stream.use { val b = ByteArray(4096); while (it.read(b) >= 0) received.incrementAndGet() }
+            }
+        }
+        try {
+            val until = android.os.SystemClock.elapsedRealtime() + 15_000
+            while (server.openStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(50)
+            assertEquals("request abandoned", 0, server.openStreams.get())
+            client.join(15_000); assertTrue("client connection ended", !client.isAlive)
+            // Late provider return: data shows up only now.
+            writers.forEach { w -> runCatching { android.os.ParcelFileDescriptor.AutoCloseOutputStream(w).use { it.write(ByteArray(8192)); it.flush() } } }
+            Thread.sleep(1500)
+            assertEquals("no bytes written after abandonment", 0, received.get())
+            assertTrue("no cache commit from the abandoned copy",
+                context.cacheDir.listFiles().orEmpty().none { it.name.startsWith("stream-") })
+            val settle = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (server.abandonedStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("late provider closed by the worker", 0, server.abandonedStreams.get())
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
+    }
+
+    /** M1: stop() racing the provider deadline still releases exactly once -
+     *  the count lands on zero and never goes negative. */
+    @Test fun stopAndDeadline_onceOnlyRelease() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        })
+        server.providerDeadlineMs = 1500
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/race"), "race.mkv")
+        val client = kotlin.concurrent.thread { runCatching { get(url) } }
+        try {
+            Thread.sleep(1200) // right around the deadline window
+            val before = android.os.SystemClock.elapsedRealtime(); server.stop()
+            assertTrue("stop must return promptly", android.os.SystemClock.elapsedRealtime() - before < 2000)
+            client.join(5000); assertTrue("client ended", !client.isAlive)
+            assertEquals(0, server.openStreams.get())
+            Thread.sleep(1000)
+            assertEquals("no double release", 0, server.openStreams.get())
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
+    }
+
+    /** M1: at MAX_ABANDONED parked providers, further streams get a clear 503
+     *  instead of spawning more parked workers. The increment/decrement side is
+     *  proven end-to-end by the deadline tests above; a provider whose close
+     *  truly blocks cannot be faked with pipes, so the parked count is set
+     *  directly to exercise the rejection wiring. */
+    @Test fun abandonedCap_rejectsFurtherStreamsWith503() {
+        server.abandonedStreams.set(StreamServer.MAX_ABANDONED)
+        assertEquals("further stream clearly refused", 503, get(movieUrl).first)
+    }
 }
