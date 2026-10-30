@@ -14,9 +14,9 @@ namespace ZephyrPlayer
     {
         internal enum Verdict { Match, Mismatch, NotOnScreen }
 
-        internal readonly record struct Result(Verdict Verdict, int Owned, int Matched, int Total, int Old = -1)
+        internal readonly record struct Result(Verdict Verdict, int Owned, int Matched, int Total, int Old = -1, string Misses = "")
         {
-            public override string ToString() => $"{Verdict} matched={Matched}/{Owned} on-screen-of={Total}" + (Old >= 0 ? $" old-colour={Old}" : "");
+            public override string ToString() => $"{Verdict} matched={Matched}/{Owned} on-screen-of={Total}" + (Old >= 0 ? $" old-colour={Old}" : "") + (Misses.Length > 0 ? " misses " + Misses : "");
         }
 
         /// <summary>Waits for the desktop compositor's next presented frame (DwmFlush);
@@ -38,6 +38,7 @@ namespace ZephyrPlayer
             int ew = w, eh = h;
             var shot = Grab(screenX, screenY, w, h);
             int owned = 0, matched = 0;
+            var misses = new System.Text.StringBuilder();
             for (int j = 0; j < GY; j++)
                 for (int i = 0; i < GX; i++)
                 {
@@ -53,8 +54,10 @@ namespace ZephyrPlayer
                             ok = Math.Abs(shot[o] - expected[e]) <= Tol && Math.Abs(shot[o + 1] - expected[e + 1]) <= Tol && Math.Abs(shot[o + 2] - expected[e + 2]) <= Tol;
                         }
                     if (ok) matched++;
+                    else if (misses.Length < 400) misses.Append($"{x},{y}:{shot[o + 2]:X2}{shot[o + 1]:X2}{shot[o]:X2}/{expected[(y * stride + x) * 4 + 2]:X2}{expected[(y * stride + x) * 4 + 1]:X2}{expected[(y * stride + x) * 4]:X2} ");
                 }
-            return Judge(owned, matched, GX * GY, 0.97);
+            var res = Judge(owned, matched, GX * GY, 0.97);
+            return res.Verdict == Verdict.Mismatch ? res with { Misses = misses.ToString().TrimEnd() } : res;
         }
 
         /// <summary>The flat colour [rgb] is what the screen shows over most of the strip
@@ -80,6 +83,36 @@ namespace ZephyrPlayer
                 }
             var r = Judge(owned, matched, GX * GY, 0.5);
             return r with { Old = old };
+        }
+
+        private static int _dumps;
+
+        /// <summary>Trace only: writes what the screen showed and what was expected at the
+        /// host's place (BMP files in SwitchTrace.DumpDir, at most 6 per process), so a
+        /// mismatch can be looked at.</summary>
+        internal static void DumpMismatch(int x, int y, int w, int h, byte[] expected, int stride)
+        {
+            var dir = SwitchTrace.DumpDir;
+            if (string.IsNullOrEmpty(dir) || w < 4 || h < 4 || System.Threading.Interlocked.Increment(ref _dumps) > 6) return;
+            try
+            {
+                var shot = Grab(x, y, w, h);
+                var exp = new byte[w * h * 4];
+                for (int r = 0; r < h; r++) Buffer.BlockCopy(expected, r * stride * 4, exp, r * w * 4, w * 4);
+                var tag = System.Diagnostics.Stopwatch.GetTimestamp().ToString();
+                SaveBmp(System.IO.Path.Combine(dir, $"handoff-mismatch-{tag}-screen.bmp"), shot, w, h);
+                SaveBmp(System.IO.Path.Combine(dir, $"handoff-mismatch-{tag}-expected.bmp"), exp, w, h);
+                SwitchTrace.Mark("presented.dump", tag);
+            }
+            catch (Exception ex) { SwitchTrace.Mark("presented.dump-failed", ex.GetType().Name); }
+        }
+
+        private static void SaveBmp(string path, byte[] bits, int w, int h)
+        {
+            using var f = new System.IO.BinaryWriter(System.IO.File.Create(path));
+            f.Write((ushort)0x4D42); f.Write(54 + bits.Length); f.Write(0); f.Write(54);
+            f.Write(40); f.Write(w); f.Write(-h); f.Write((ushort)1); f.Write((ushort)32); f.Write(0); f.Write(bits.Length); f.Write(2835); f.Write(2835); f.Write(0); f.Write(0);
+            f.Write(bits);
         }
 
         private static bool Near(byte[] b, int o, int rgb, int tol) =>

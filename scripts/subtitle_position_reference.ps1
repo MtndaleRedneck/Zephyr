@@ -110,16 +110,18 @@ function ClientRect($h) {
     $p = [SPOINT]::new(); [void][SU]::ClientToScreen($h, [ref]$p)
     return @($p.X, $p.Y, ($p.X + $c.Right), ($p.Y + $c.Bottom))
 }
-function Get-SubMeasure($png, $prefix) {
-    $raw = & python (Join-Path $PSScriptRoot 'subref/measure.py') $png $prefix 2>&1 | Out-String
+function Get-SubMeasure($png, $prefix, $fb = -1) {
+    $margs = @((Join-Path $PSScriptRoot 'subref/measure.py'), $png, $prefix)
+    if ($fb -ge 0) { $margs += @('--fb-bottom', "$fb") }
+    $raw = & python @margs 2>&1 | Out-String
     $line = ($raw -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -Last 1)
     if (-not $line) { Log "measure failed for ${png}: $raw"; return $null }
     try { return ($line | ConvertFrom-Json) } catch { Log "measure output unreadable for ${png}: $raw"; return $null }
 }
-function Grab-Measure($png, $prefix) {
+function Grab-Measure($png, $prefix, $fb = -1) {
     for ($k = 0; $k -lt 4; $k++) {
         Grab $png
-        $mm = Get-SubMeasure $png $prefix
+        $mm = Get-SubMeasure $png $prefix $fb
         if ($mm -and $mm.baseline_to_picture_bottom -ne $null) { return $mm }
         Start-Sleep -Milliseconds 350
     }
@@ -228,7 +230,7 @@ function Leg-Vlc($leg, $clip, [switch]$Fullscreen) {
     Park
     if (-not $Fullscreen) { Topmost $h }
     $png = Join-Path $out "vlc-$leg-screen.png"
-    $m = Grab-Measure $png (Join-Path $out "vlc-$leg")
+    $m = Grab-Measure $png (Join-Path $out "vlc-$leg") $(if ($Fullscreen) { (ScreenSize)[1] - 1 } else { -1 })
     $cr = ClientRect $h
     Record 'VLC desktop' $leg $(if ($Fullscreen) { 'fullscreen' } else { 'windowed' }) $m @{ vlc_window_client = ($cr -join ','); vlc_version = $vi.ProductVersion }
     $p | Stop-Process -Force; Start-Sleep -Seconds 2
@@ -243,7 +245,7 @@ function Leg-Harness($name, $leg, $clip, $x, $y, $w, $hgt, $opts) {
     for ($i = 0; $i -lt 60; $i++) { Start-Sleep -Milliseconds 500; try { $st = Get-Content $state -Raw -ErrorAction Stop | ConvertFrom-Json } catch { $st = $null }; if ($st -and $st.time_ms -ge 8000) { break } }
     Start-Sleep -Milliseconds 500
     $png = Join-Path $out "libvlc-$name-$leg-screen.png"
-    $m = Grab-Measure $png (Join-Path $out "libvlc-$name-$leg")
+    $m = Grab-Measure $png (Join-Path $out "libvlc-$name-$leg") ($y + $hgt - 1)
     Record "libVLC $name" $leg 'borderless window' $m @{ harness_state = $st }
     $p | Stop-Process -Force; Start-Sleep -Seconds 1
 }
@@ -278,7 +280,10 @@ function Leg-Zephyr($leg, $clip, $cw, $ch, [switch]$Fullscreen) {
     for ($fit = 0; $fit -lt 4; $fit++) {
         Park; Start-Sleep -Milliseconds 4500
         Topmost $h
-        $m = Grab-Measure $png (Join-Path $out "zephyr-$leg")
+        # Framebuffer bottom: the screen's last row in full screen; in a window the video
+        # host fills the client area down to its last row.
+        $fbz = if ($Fullscreen) { (ScreenSize)[1] - 1 } else { (ClientRect $h)[3] - 1 }
+        $m = Grab-Measure $png (Join-Path $out "zephyr-$leg") $fbz
         if ($Fullscreen -or -not $m -or -not $m.picture_size) { break }
         # Zephyr's own title row sits inside the client area, so the video host is
         # shorter than the client: grow the window until the PICTURE is cw x ch.
@@ -300,13 +305,13 @@ function Leg-Zephyr($leg, $clip, $cw, $ch, [switch]$Fullscreen) {
     $png2 = Join-Path $out "zephyr-$leg-bar-shown-screen.png"
     Grab $png2
     $s2 = ZStatus
-    $null = Get-SubMeasure $png2 (Join-Path $out "zephyr-$leg-bar-shown")
-    Record 'Zephyr (current)' $leg $(if ($Fullscreen) { 'fullscreen' } else { 'windowed' }) $m @{ client = ($cr -join ','); state = $s1.state; time_s = $s1.time; spu = $s1.spu; bar_hidden_opacity = $s1.ui.bar_opacity; bar_shown_opacity = $s2.ui.bar_opacity; bar_screen = ($s2.ui.bar_screen -join ','); subtitle_size = $s2.ui.subtitle_size; fullscreen = $s2.ui.fullscreen }
+    $null = Get-SubMeasure $png2 (Join-Path $out "zephyr-$leg-bar-shown") $fbz
+    Record 'Zephyr (no lift, libVLC default placement)' $leg $(if ($Fullscreen) { 'fullscreen' } else { 'windowed' }) $m @{ client = ($cr -join ','); state = $s1.state; time_s = $s1.time; spu = $s1.spu; bar_hidden_opacity = $s1.ui.bar_opacity; bar_shown_opacity = $s2.ui.bar_opacity; bar_screen = ($s2.ui.bar_screen -join ','); subtitle_size = $s2.ui.subtitle_size; fullscreen = $s2.ui.fullscreen }
     StopZephyr
 }
 
-# Zephyr's subtitle options minus --sub-margin (size M at 96 DPI), copied from
-# PlayerBarLogic.SubtitleOptions: what Zephyr would draw with VLC's default position.
+# Zephyr's subtitle options (size M at 96 DPI), copied from PlayerBarLogic.SubtitleOptions,
+# which since CP2 round 5 carries no --sub-margin: the same look in a plain libVLC window.
 $zephyrNoMargin = @('--sub-text-scale=62', '--freetype-font=Segoe UI', '--freetype-bold', '--freetype-color=16777215', '--freetype-outline-thickness=2', '--freetype-outline-opacity=255', '--freetype-shadow-opacity=200', '--no-audio', '--no-video-title-show')
 $libvlcDefault = @('--no-audio', '--no-video-title-show')
 

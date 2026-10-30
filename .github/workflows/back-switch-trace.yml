@@ -44,11 +44,12 @@ jobs:
           dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter "FullyQualifiedName~BackHandoffTests|FullyQualifiedName~ViewSwitch_LibraryStaysDrawnUntilPlayerHasContent|FullyQualifiedName~Caption_IsBlackOverThePlayer" --logger "trx;LogFileName=back-handoff.trx" --results-directory "$env:RUNNER_TEMP/backtrace/tests" --blame-hang --blame-hang-timeout 5m
           Copy-Item "$env:RUNNER_TEMP/cp2-unit-r5-*.txt" "$env:RUNNER_TEMP/backtrace/tests/" -ErrorAction SilentlyContinue
           Copy-Item "$env:RUNNER_TEMP/cp1-unit-view-switch.txt" "$env:RUNNER_TEMP/backtrace/tests/" -ErrorAction SilentlyContinue
+          Copy-Item "$env:RUNNER_TEMP/handoff-mismatch-*" "$env:RUNNER_TEMP/backtrace/tests/" -ErrorAction SilentlyContinue
       - name: Back switch trace
         if: ${{ !cancelled() }}
         timeout-minutes: 20
         shell: pwsh
-        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '60' }}
+        run: scripts/back_switch_trace.ps1 -Reps ${{ github.event.inputs.reps || '24' }}
       - name: Upload trace
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

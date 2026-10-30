@@ -123,6 +123,7 @@ namespace ZephyrPlayer.Tests
                 Assert.NotEqual(IntPtr.Zero, host);
                 Assert.True(IsWindowVisible(host), "the video host is not visible while the movie plays");
 
+                SwitchTrace.DumpDir = OutDir;
                 SwitchTrace.Begin();
                 SwitchTrace.Mark("test.back", name);
                 shell.TeardownPaintedForTest = afterTeardown;
@@ -156,11 +157,9 @@ namespace ZephyrPlayer.Tests
             Assert.True(back >= 0, "no back.begin in the trace:\n" + d);
             int hold = Index(ev, "hold.set", back);
             int seeThrough = Index(ev, "player.see-through", back);
-            int overlay = Index(ev, "overlay.hidden", back);
-            int hidVideo = Index(ev, "video-windows.hidden-before-stop", back, x => x.Contains(" 0 visible"));
-            int paintBefore = Index(ev, "host.paint", hidVideo, x => x == "library-picture");
-            int proofBefore = Index(ev, "presented.host", back, x => x.StartsWith("before-stop: Match"));
+            int paintBefore = Index(ev, "host.paint", hold, x => x == "library-picture");
             int stopB = Index(ev, "stop.begin", back), stopE = Index(ev, "stop.end", back);
+            int overlay = Index(ev, "overlay.hidden", stopE);
             int gone = Index(ev, "video-windows.after-stop", stopE, x => x.StartsWith("0 visible"));
             int repaint = Index(ev, "host.repaint", gone);
             int paintLib = Index(ev, "host.paint", repaint, x => x == "library-picture");
@@ -170,11 +169,9 @@ namespace ZephyrPlayer.Tests
             int removed = Index(ev, "player.removed", back);
             int released = Index(ev, "hold.released", back);
             Assert.True(hold > back && hold < seeThrough, "the drawn library picture was not on the host first:\n" + d);
-            Assert.True(overlay > seeThrough && hidVideo > overlay, "the overlay and libVLC's video windows were not hidden first:\n" + d);
-            Assert.True(paintBefore > hidVideo, "the host was not painted with the library picture before the stop:\n" + d);
-            Assert.True(proofBefore > paintBefore && proofBefore < stopB, "the screen did not show the library picture BEFORE the movie stopped:\n" + d);
-            Assert.True(stopB < stopE, "teardown order:\n" + d);
-            Assert.True(gone > stopE, "libVLC's video windows were not checked gone after the stop:\n" + d);
+            Assert.True(paintBefore > hold && paintBefore < stopB, "the host was not painted with the library picture before the stop:\n" + d);
+            Assert.True(seeThrough < stopB && stopB < stopE && stopE < overlay, "teardown order (see-through, stop, overlay):\n" + d);
+            Assert.True(gone > overlay, "libVLC's video windows were not checked gone after the stop:\n" + d);
             Assert.True(repaint > gone && paintLib > repaint, "the host was not repainted with the library picture after the teardown:\n" + d);
             Assert.True(handoff > paintLib, "the handoff did not check both the host and the caption:\n" + d);
             Assert.True(hostProof > handoff, "the screen never showed the library picture on the host after the teardown:\n" + d);

@@ -440,12 +440,13 @@ namespace ZephyrPlayer.Tests
             foreach (var size in new[] { "S", "M", "L" })
             {
                 var options = PlayerBarLogic.SubtitleOptions(size, 1.25);
-                Assert.Contains("--sub-margin=188", options);
+                // CP2 round 5: no subtitle lift; libVLC's default placement (as VLC PC).
+                Assert.DoesNotContain(options, o => o.StartsWith("--sub-margin", StringComparison.Ordinal));
                 using var vlc = new LibVLC(options);
                 Assert.NotNull(vlc);
             }
             Assert.Contains("--sub-text-scale=62", PlayerBarLogic.SubtitleOptions("M", 1));
-            Assert.Contains("--sub-margin=150", PlayerBarLogic.SubtitleOptions("M", 1));
+            Assert.DoesNotContain(PlayerBarLogic.SubtitleOptions("M", 1), o => o.StartsWith("--sub-margin", StringComparison.Ordinal));
             using var app = App.CreateLibVlc(new PlayerSettings(Path.Combine(Path.GetTempPath(), "zephyr-cp2-vlc-" + Guid.NewGuid().ToString("N") + ".json")));
             Assert.NotNull(app);
         }
