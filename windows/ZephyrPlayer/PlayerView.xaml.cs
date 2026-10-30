@@ -102,6 +102,9 @@ namespace ZephyrPlayer
             _player = player;
             _settings = settings ?? new PlayerSettings();
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); HookOverlayKeys(); ApplyLayoutMode(); };
+            // The overlay grid loads inside LibVLCSharp's own window, after this view's
+            // Loaded: hook that window (keys, first frame) from here.
+            Overlay.Loaded += (_, __) => HookOverlayKeys();
             // Unloaded = the shell swapped this view out (library, tray close). Stop
             // every timer; LibVLCSharp hides its overlay window on the same event.
             Unloaded += (_, __) => { ClosePopups(); StopTimers(); };
@@ -202,6 +205,7 @@ namespace ZephyrPlayer
             DetachNativeStart();
             EndLoading();
             _opening = false;
+            DropPendingSettle();
             _autoSelectSidecar = false;
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
             var old = _safeSource; _safeSource = null;
@@ -422,12 +426,43 @@ namespace ZephyrPlayer
             _opening = false;
             EndLoading();
             UpdatePosition();
-            StartSettled?.Invoke();
+            RaiseStartSettled();
         }
 
         /// <summary>The newest start shows its own content now: its first Playing, or
         /// the error panel. The shell releases the library it kept drawn underneath.</summary>
         public event Action? StartSettled;
+
+        // The shell releases the library it holds under the player on StartSettled.
+        // LibVLCSharp's overlay window (where the loading panel, bar and error state
+        // live) is a separate layered window: before its FIRST frame is drawn it shows
+        // nothing, so a start that settled before that frame uncovered the bare black
+        // video host (CI run 41047779027: three all-black sampled frames in the CP2
+        // library->player phase, the start settling before the overlay's first paint).
+        // So the settle waits for the overlay window's ContentRendered, with a 1.5 s
+        // fallback; a newer start or a stop drops a pending settle.
+        private bool _overlayRendered;
+        private bool _settlePending;
+        private int _settleGeneration;
+        private void RaiseStartSettled()
+        {
+            HookOverlayKeys();
+            if (_overlayRendered || !IsLoaded) { _settlePending = false; StartSettled?.Invoke(); return; }
+            _settlePending = true;
+            var generation = ++_settleGeneration;
+            var fallback = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+            fallback.Tick += (_, __) => { fallback.Stop(); if (generation == _settleGeneration) FlushStartSettled(); };
+            fallback.Start();
+        }
+        private void FlushStartSettled()
+        {
+            if (!_settlePending) return;
+            _settlePending = false;
+            StartSettled?.Invoke();
+        }
+        private void DropPendingSettle() { _settlePending = false; _settleGeneration++; }
+        /// <summary>Test seam: the overlay window has drawn its first frame.</summary>
+        internal bool OverlayRendered => _overlayRendered;
 
         /// <summary>While the shell keeps the library drawn underneath (library ->
         /// player), this view's own surfaces are transparent so WPF shows the library,
@@ -669,6 +704,12 @@ namespace ZephyrPlayer
             if (overlay == null || ReferenceEquals(overlay, Window.GetWindow(this)) || ReferenceEquals(overlay, _overlayWindow)) return;
             _overlayWindow = overlay;
             overlay.PreviewKeyDown += (_, e) => { if (IsLoaded) HandleKey(e); };
+            overlay.ContentRendered += (_, __) =>
+            {
+                _overlayRendered = true;
+                // One more pass so the frame is on screen before the library leaves.
+                Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(FlushStartSettled));
+            };
         }
 
         /// <summary>Belt and braces for every leave/hide path: hide LibVLCSharp's
@@ -1249,6 +1290,7 @@ namespace ZephyrPlayer
         private void BeginLoading(string url)
         {
             var title = TitleFor(url);
+            DropPendingSettle();
             HideError();
             // Carry-forward (a): the Opening state shows the NEW start - its title, an
             // empty timeline - never the previous movie's time/duration or an old error.
@@ -1288,7 +1330,7 @@ namespace ZephyrPlayer
             // The error panel is this start's content: settled once the overlay has had
             // a few frames to draw it (a fast failure can come before its first frame).
             var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-            settle.Tick += (_, __) => { settle.Stop(); if (IsLoadingErrorShown) StartSettled?.Invoke(); };
+            settle.Tick += (_, __) => { settle.Stop(); if (IsLoadingErrorShown) RaiseStartSettled(); };
             settle.Start();
         }
 
@@ -1325,8 +1367,24 @@ namespace ZephyrPlayer
 
         // ---------- bar show / hide (item 65) ----------
 
+        /// <summary>The real pointer is over the bar's card. Read from the cursor position,
+        /// not IsMouseOver: the bar lives in LibVLCSharp's overlay window, and a pointer
+        /// that jumps from a bar button straight onto another window can leave
+        /// IsMouseOver set (CI run 41047779027: the bar never hid after the pop-up clicks).</summary>
+        private bool PointerOnBar()
+        {
+            if (ControlBar.Visibility != Visibility.Visible || PresentationSource.FromVisual(ControlBar) == null) return false;
+            if (!GetCursorPos(out var p)) return ControlBar.IsMouseOver;
+            try
+            {
+                var local = ControlBar.PointFromScreen(new Point(p.X, p.Y));
+                return local.X >= 0 && local.Y >= 0 && local.X <= ControlBar.ActualWidth && local.Y <= ControlBar.ActualHeight;
+            }
+            catch (InvalidOperationException) { return false; }
+        }
+
         private bool BarMayHide =>
-            !(ControlBar.IsMouseOver || _seeking || _menuOpen || _errorShown
+            !(PointerOnBar() || _seeking || _menuOpen || _errorShown
               || _player.State is VLCState.Paused or VLCState.Ended or VLCState.Stopped or VLCState.NothingSpecial);
 
         private void RevealBar()
@@ -1514,6 +1572,9 @@ namespace ZephyrPlayer
         {
             var text = PlayerSettings.FormatSkip(seconds);
             var unitAt = text.Length - 1;
+            // Text first (TextBlock.Text does not follow later Inline edits, CI run
+            // 41047779027), then the same characters as two runs for the drawing.
+            tb.Text = text;
             tb.Inlines.Clear();
             tb.Inlines.Add(new Run(text.Substring(0, unitAt)) { FontSize = size });
             tb.Inlines.Add(new Run(text.Substring(unitAt)) { FontSize = Math.Round(size * 0.72, 1), FontWeight = FontWeights.SemiBold });
