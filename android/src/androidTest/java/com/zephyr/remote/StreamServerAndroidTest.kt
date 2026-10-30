@@ -493,6 +493,42 @@ class StreamServerAndroidTest {
         }
     }
 
+    /** R3/Tab: a non-seekable provider that declares SIZE 0 for streamed content
+     *  (common for streamed/generated media) must play as UNKNOWN length: EOF
+     *  completes the copy and the entry commits. On bd80f63 this ended in 502 -
+     *  a regression vs 1.3, which had no declared-length validation. */
+    @Test fun zeroDeclaredSize_copyCompletesAsUnknownLength() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val payload = ByteArray(64 * 1024) { (it % 239).toByte() }
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        }, providerSize = { _, _ -> 0L })
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/zerolen"), "zerolen.mkv")
+        var code = -1; var body = ByteArray(0)
+        val client = kotlin.concurrent.thread { runCatching { get(url).also { code = it.first; body = it.third } } }
+        try {
+            val opened = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (writers.size < 2 && android.os.SystemClock.elapsedRealtime() < opened) Thread.sleep(10)
+            assertTrue("copy pipe opened", writers.size >= 2)
+            android.os.ParcelFileDescriptor.AutoCloseOutputStream(writers[1]).use { it.write(payload); it.flush() }
+            client.join(10_000)
+            assertFalse("client ended", client.isAlive)
+            assertEquals("zero declared size plays as unknown length", 200, code)
+            assertTrue("full payload served", payload.contentEquals(body))
+            val left = context.cacheDir.listFiles().orEmpty().filter { it.name.startsWith("stream-") }
+            assertTrue("committed entry exists", left.any { !it.name.endsWith(".part") })
+            assertTrue("no leftover temp", left.none { it.name.endsWith(".part") })
+            val settle = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (StreamServer.providerBudget.availablePermits() < 8 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("provider permit returned", 8, StreamServer.providerBudget.availablePermits())
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
+    }
+
     /** M1/Tab: the stop drain is bounded even with a provider that never
      *  returns - the drain thread itself never runs a close, so it must reach
      *  its end (cache sweep + token release) within the drain budget instead

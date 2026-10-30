@@ -11,7 +11,7 @@ internal object CacheCopier {
 
     class TooLarge : Exception()
     class NoSpace : Exception()
-    /** The provider ended the stream at a different length than it declared:
+    /** The provider ended the stream SHORT of its positive declared length:
      *  the copy is not the complete file, so it must never be committed. */
     class SizeMismatch(val expected: Long, val actual: Long) : Exception("provider ended at $actual of $expected declared bytes")
 
@@ -19,13 +19,16 @@ internal object CacheCopier {
      *  [freeSpace] is probed per chunk; [maxBytes] caps the copy. Throws TooLarge /
      *  NoSpace / SizeMismatch / Exception on failure, with [tmp] deleted and
      *  [final] untouched. [expectedBytes] (evaluated AFTER the copy) is the
-     *  provider's declared length: when known, the copy is validated against it
-     *  BEFORE [commit] runs - a short or overlong stream is never committed
-     *  (complete-or-nothing covers content, not just rename atomicity). When the
-     *  provider declares no length, EOF is the only completeness signal
-     *  (declared limit). [commit] owns the final rename so the caller can
-     *  arbitrate commit against request abandonment atomically (default: plain
-     *  renameTo). */
+     *  provider's declared length: a POSITIVE declaration is validated BEFORE
+     *  [commit] runs - a short stream is never committed (complete-or-nothing
+     *  covers content, not just rename atomicity). Zero/negative declarations
+     *  are not known lengths (streamed-content providers commonly report 0):
+     *  like an absent declaration, EOF is then the only completeness signal
+     *  (declared limit). A clean EOF BEYOND a stale positive declaration is
+     *  accepted and reported via [onStaleDeclared] - never unlimited, since
+     *  [maxBytes] and the free-space floor already capped the copy. [commit]
+     *  owns the final rename so the caller can arbitrate commit against
+     *  request abandonment atomically (default: plain renameTo). */
     fun copy(
         open: () -> java.io.InputStream?,
         tmp: File, final: File,
@@ -33,6 +36,10 @@ internal object CacheCopier {
         cancelled: () -> Boolean = { false },
         expectedBytes: () -> Long? = { null },
         commit: (File, File) -> Boolean = { t, f -> t.renameTo(f) },
+        // R3/Tab: invoked (declared, actual) when a clean EOF runs BEYOND a stale
+        // positive declaration; the copy is accepted. Sizes only - the caller
+        // decides what is safe to log.
+        onStaleDeclared: (Long, Long) -> Unit = { _, _ -> },
     ) {
         try {
             if (freeSpace() < minFree) throw NoSpace()
@@ -55,8 +62,12 @@ internal object CacheCopier {
                 }
             }
             if (cancelled()) throw java.io.InterruptedIOException("copy stopped")
-            val expected = expectedBytes()
-            if (expected != null && total != expected) throw SizeMismatch(expected, total)
+            // R3/Tab: zero/negative declarations are not known lengths - EOF only.
+            val expected = expectedBytes()?.takeIf { it > 0 }
+            // EOF SHORT of a positive declaration: clear provider error, never commit.
+            if (expected != null && total < expected) throw SizeMismatch(expected, total)
+            // Clean EOF BEYOND a stale positive declaration: accept and report.
+            if (expected != null && total > expected) onStaleDeclared(expected, total)
             if (!commit(tmp, final)) throw java.io.IOException("cache commit refused or failed")
         } catch (e: Throwable) {
             tmp.delete()
