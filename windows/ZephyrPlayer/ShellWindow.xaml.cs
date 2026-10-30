@@ -46,7 +46,7 @@ namespace ZephyrPlayer
         public FrameworkElement? CurrentView => _current;
         private FrameworkElement? _current;
         /// <summary>The library kept drawn under an incoming player until its start has
-        /// something on screen (its own Playing, or the error panel).</summary>
+        /// settled (see OnPlayerStartSettled for the exact signals), or the error panel shows.</summary>
         private FrameworkElement? _heldUnder;
         internal static readonly SolidColorBrush PlayerCaption = Freeze(new SolidColorBrush(Colors.Black));
         internal static readonly SolidColorBrush LibraryCaption = Freeze(new SolidColorBrush(Color.FromRgb(0x0A, 0x0A, 0x0C)));
@@ -64,7 +64,7 @@ namespace ZephyrPlayer
         /// something to show.
         /// - library -> player: the player is added OVER the library with a
         ///   transparent background, and the library stays drawn under it until the
-        ///   player's start settles (its own Playing, or the error panel). The video
+        ///   player's start settles (exact signals: OnPlayerStartSettled). The video
         ///   host is a native child window that WPF cannot draw over or under, so it
         ///   paints a picture of the library (not black) for the same span.
         /// - player -> library (Back): the library is laid out UNDER the player first
@@ -132,8 +132,10 @@ namespace ZephyrPlayer
             _current = view;
         }
 
-        /// <summary>The incoming player now shows its own content (first frame or the
-        /// error panel): the held library leaves, the video host goes back to black.</summary>
+        /// <summary>The incoming player's start has settled (PlayerView.OnNativeContent:
+        /// after its own Playing, Buffering 100 % or a positive movie clock, or the 45 s
+        /// quiet fallback; or the error panel). No rendered picture is observed here. The
+        /// held library leaves, the video host goes back to black.</summary>
         private void OnPlayerStartSettled()
         {
             if (_current is not PlayerView player) return;
@@ -338,7 +340,45 @@ namespace ZephyrPlayer
                 if (_stateBeforeFullscreen == WindowState.Maximized) WindowState = WindowState.Maximized;
             }
             UpdateChromeForState();
+            MarkFullscreenForTaskbar(on);
         }
+
+        /// <summary>Render 03 is edge to edge: the taskbar must not sit over the bottom of
+        /// a fullscreen movie. Windows lowers the taskbar for a window it judges
+        /// fullscreen; ITaskbarList2.MarkFullscreenWindow says so explicitly, for the
+        /// shell and for the windows it owns (LibVLCSharp's overlay with the bar, which
+        /// is the active window after a click on the bar). Best effort: a refusal leaves
+        /// Windows' own judgement.</summary>
+        private void MarkFullscreenForTaskbar(bool on)
+        {
+            try
+            {
+                var list = (ITaskbarList2)new TaskbarListCoClass();
+                list.HrInit();
+                var me = Handle;
+                if (me != IntPtr.Zero) list.MarkFullscreenWindow(me, on);
+                foreach (Window w in OwnedWindows)
+                {
+                    var h = new WindowInteropHelper(w).Handle;
+                    if (h != IntPtr.Zero) list.MarkFullscreenWindow(h, on);
+                }
+            }
+            catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("taskbar fullscreen mark failed: " + ex.GetType().Name); }
+        }
+
+        [ComImport, Guid("602D4995-B13A-429b-A66E-1935E44F4317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        private interface ITaskbarList2
+        {
+            void HrInit();
+            void AddTab(IntPtr hwnd);
+            void DeleteTab(IntPtr hwnd);
+            void ActivateTab(IntPtr hwnd);
+            void SetActiveAlt(IntPtr hwnd);
+            void MarkFullscreenWindow(IntPtr hwnd, [MarshalAs(UnmanagedType.Bool)] bool fullscreen);
+        }
+
+        [ComImport, Guid("56FDF344-FD6D-11d0-958A-006097C9A090"), ClassInterface(ClassInterfaceType.None)]
+        private class TaskbarListCoClass { }
 
         private void UpdateChromeForState()
         {
