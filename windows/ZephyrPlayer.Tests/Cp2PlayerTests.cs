@@ -879,5 +879,62 @@ namespace ZephyrPlayer.Tests
                 Note("r3-sleep-end-bound", log.ToString());
             });
         }
+
+        /// <summary>Ezzy, 2026-10-30 11:22 (via Instinct): a TIMED choice is session-wide. It
+        /// keeps its original deadline across Back, coming back, and switching movies, and
+        /// fires on whatever movie is current at that moment. (Existing behaviour, kept.)</summary>
+        [Fact]
+        public void SleepTimer_Timed_KeepsItsDeadlineAcrossBackAndAMovieSwitch()
+        {
+            WithPlayer((view, player, settings, host) =>
+            {
+                var log = new System.Text.StringBuilder();
+                var t0 = new DateTime(2026, 10, 30, 22, 0, 0, DateTimeKind.Utc);
+                var now = t0;
+                view.Clock = () => now;
+                void Back() { view.SavePlaybackProgress(); view.StopPlaybackSource(); view.HideOverlayWindow(); }
+                void Start(string url)
+                {
+                    var s = view.PlayFromUrlAsync(url, null, Array.Empty<string>());
+                    PumpUntil(() => s.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "clip did not play: " + url);
+                }
+                void Left(int minutes, string where)
+                {
+                    view.SleepTick();
+                    Assert.True(view.Sleep.IsActive);
+                    Assert.Equal(30, view.Sleep.Minutes);
+                    Assert.Equal(TimeSpan.FromMinutes(minutes), view.Sleep.Remaining(now));
+                    Assert.True(view.SleepTickRunning);
+                    Assert.Equal(minutes + "m", El<TextBlock>(view, "SleepLabel").Text);
+                    log.AppendLine($"{where} at +{(now - t0).TotalMinutes:0}:00 -> {view.Sleep.Header(now)}, badge {El<TextBlock>(view, "SleepLabel").Text}, tick running={view.SleepTickRunning}");
+                }
+                Start(ClipUrl);
+                Click(view, "SleepButton");
+                var row = (Button)El<StackPanel>(view, "SleepRows").Children[2];
+                Assert.Equal("30 minutes", row.Content);
+                row.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, row));
+                Click(view, "SleepButton");
+                Left(30, "30 minutes chosen on clip.mp4");
+                now = t0.AddMinutes(5); Back();
+                Left(25, "Back to the library");
+                now = t0.AddMinutes(10); Start(ClipUrl);
+                Left(20, "back in the player (clip.mp4 started again)");
+                now = t0.AddMinutes(15); Start(ClipMkvUrl);   // a different movie straight over it, no Back
+                Left(15, "switched to clip.mkv (no Back)");
+                Assert.Equal(0, view.SleepPausedCount);
+                now = t0.AddMinutes(30).AddSeconds(-1); view.SleepTick();
+                Assert.Equal(0, view.SleepPausedCount);
+                Assert.Equal(VLCState.Playing, player.State);
+                var media = view.CurrentMedia;
+                now = t0.AddMinutes(30); view.SleepTick();     // the ORIGINAL deadline
+                PumpUntil(() => player.State == VLCState.Paused, "the timer did not pause at its original deadline: " + player.State);
+                Assert.Equal(1, view.SleepPausedCount);
+                Assert.Equal("timer", view.LastSleepFire);
+                Assert.Same(media, view.CurrentMedia);
+                Assert.False(view.Sleep.IsActive);
+                log.AppendLine($"+29:59 -> not fired (state Playing); +30:00 (original deadline) -> fired ({view.LastSleepFire}) on the current movie clip.mkv: state {player.State}, same media={ReferenceEquals(media, view.CurrentMedia)}, timer now off");
+                Note("r3-sleep-timed-session", log.ToString());
+            });
+        }
     }
 }
