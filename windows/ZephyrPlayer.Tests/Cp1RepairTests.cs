@@ -224,6 +224,7 @@ namespace ZephyrPlayer.Tests
         [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr h, out WinRect r);
         [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern uint GetPixel(IntPtr dc, int x, int y);
         [System.Runtime.InteropServices.DllImport("gdi32.dll")] private static extern uint GetBkColor(IntPtr dc);
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint GetSysColor(int index);
         private struct WinRect { public int Left, Top, Right, Bottom; }
 
         [Fact]
@@ -260,10 +261,14 @@ namespace ZephyrPlayer.Tests
                         Assert.Equal(ShellWindow.BlackBrush, brush);
                         Assert.Equal(0u, bk);
                         // What is on screen in the middle of the video host (no media yet):
-                        // never the light system grey. CLR_INVALID = no readable desktop.
+                        // never the system button-face grey. CLR_INVALID = no readable
+                        // desktop. (Run 41024150781: 19 of 25 points #0C0C0C; 6 lighter
+                        // points #8C-#CC were overlay content, not the grey #F0F0F0.)
                         GetWindowRect(host, out var r);
                         var screen = GetDC(IntPtr.Zero);
-                        var samples = new System.Collections.Generic.List<string>(); var light = 0; var readable = 0;
+                        var samples = new System.Collections.Generic.List<string>(); var grey = 0; var dark = 0; var readable = 0;
+                        var face = GetSysColor(15 /* COLOR_BTNFACE: what Windows painted the host before */);
+                        int fr = (int)(face & 0xFF), fg = (int)((face >> 8) & 0xFF), fb = (int)((face >> 16) & 0xFF);
                         try
                         {
                             for (var i = 1; i <= 5; i++) for (var j = 1; j <= 5; j++)
@@ -274,13 +279,17 @@ namespace ZephyrPlayer.Tests
                                 if (c == 0xFFFFFFFF) continue;
                                 readable++;
                                 int cr = (int)(c & 0xFF), cg = (int)((c >> 8) & 0xFF), cb = (int)((c >> 16) & 0xFF);
-                                if (cr >= 0xC8 && cg >= 0xC8 && cb >= 0xC8) light++;
+                                if (Math.Abs(cr - fr) <= 4 && Math.Abs(cg - fg) <= 4 && Math.Abs(cb - fb) <= 4) grey++;
+                                if (cr < 0x30 && cg < 0x30 && cb < 0x30) dark++;
                                 samples.Add($"#{cr:X2}{cg:X2}{cb:X2}");
                             }
                         }
                         finally { ReleaseDC(IntPtr.Zero, screen); }
-                        Note("video-host-colour", $"host=0x{host.ToInt64():X} rect=({r.Left},{r.Top},{r.Right},{r.Bottom}) ctlcolor brush is BLACK_BRUSH={brush == ShellWindow.BlackBrush} bk=0x{bk:X6}; screen samples readable={readable}/25 light={light}: {string.Join(" ", samples)}");
-                        Assert.Equal(0, light);
+                        Note("video-host-colour", $"host=0x{host.ToInt64():X} rect=({r.Left},{r.Top},{r.Right},{r.Bottom}) ctlcolor brush is BLACK_BRUSH={brush == ShellWindow.BlackBrush} bk=0x{bk:X6}; screen samples readable={readable}/25 system-grey(#{fr:X2}{fg:X2}{fb:X2})={grey} dark={dark}: {string.Join(" ", samples)}");
+                        // Overlay content (glyphs, text) may sit over a few points; the
+                        // host itself must read black, and never the system grey.
+                        Assert.Equal(0, grey);
+                        if (readable >= 20) Assert.True(dark * 2 > readable, $"video host not mostly dark: {dark}/{readable}");
                     }
                     finally { view.ReleasePlayback(); shell.Close(); }
                 }
