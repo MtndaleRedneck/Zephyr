@@ -84,15 +84,32 @@ public sealed class SafeMediaSourceTests
         Assert.Throws<InvalidDataException>(()=>source.Seek(10,SeekOrigin.Begin));
     }
     [Fact]
+    public void TotalPreparationDeadline_CancelsDuringConnect()
+    {
+        // Connect phase: the server holds its response headers past the deadline,
+        // so the cancel always lands before any body exists.
+        using var fixture=new Fixture((ctx,_)=>{Thread.Sleep(3000);ctx.Response.StatusCode=200;ctx.Response.ContentLength64=100;ctx.Response.OutputStream.Write(new byte[100]);});
+        using var deadline=new CancellationTokenSource(300);
+        var watch=System.Diagnostics.Stopwatch.StartNew();
+        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);}));
+        Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2));
+    }
+    [Fact]
     public void TotalPreparationDeadline_StopsDribblingBody()
     {
+        // Body phase, deterministically: the stream connects with the deadline not
+        // yet armed, a first body byte is read, and only then is the deadline armed
+        // while the server keeps dribbling one byte per 50 ms (5 s in all).
         using var fixture=new Fixture((ctx,_)=>{ctx.Response.StatusCode=200;ctx.Response.ContentLength64=100;for(int i=0;i<100;i++){ctx.Response.OutputStream.WriteByte(1);ctx.Response.OutputStream.Flush();Thread.Sleep(50);}});
-        using var deadline=new CancellationTokenSource(300);
-        // The deadline may land while the request is still connecting on a loaded
-        // runner (CI run 41010514847) or while the body dribbles: both must cancel.
-        var watch=System.Diagnostics.Stopwatch.StartNew();var b=new byte[10];
-        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);while(true)source.Read(b,0,b.Length);}));
+        using var deadline=new CancellationTokenSource();
+        using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);
+        var b=new byte[10];
+        Assert.True(source.Read(b,0,b.Length)>0,"no body byte arrived before the deadline was armed");
+        deadline.CancelAfter(300);
+        var watch=System.Diagnostics.Stopwatch.StartNew();
+        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{while(true)source.Read(b,0,b.Length);}));
         Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2));
+        Assert.True(watch.Elapsed>=TimeSpan.FromMilliseconds(250),"cancelled before the armed deadline: not the body-phase path");
     }
     [Fact]
     public void ConcurrentAbort_ReleasesStalledReadAndCallbackOwnership()

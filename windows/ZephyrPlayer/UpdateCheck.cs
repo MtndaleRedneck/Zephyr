@@ -35,8 +35,9 @@ namespace ZephyrPlayer
 
     internal static class UpdateCheck
     {
-        /// <summary>Canonical repository (renamed from Zephyr-Dev on 2026-10-30; the owner
-        /// accepted that installed 1.4 builds keep checking the old name).</summary>
+        /// <summary>The update feed's repository: MtndaleRedneck/Zephyr. Older 1.4
+        /// installs may keep checking the old repository name; the owner installs 2.0
+        /// by hand.</summary>
         internal const string Repo = "MtndaleRedneck/Zephyr";
         internal const string Api = "https://api.github.com/repos/" + Repo + "/releases?per_page=30";
         /// <summary>Phone, helper and player release separately; this only looks at player-v* tags.</summary>
