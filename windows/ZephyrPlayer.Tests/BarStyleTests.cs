@@ -59,14 +59,18 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("10s", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
                 Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
                 Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
-                // Speed + sleep hidden by default.
-                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
-                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
+                // Speed + sleep shown by default (render 06b toggles on, item 57).
+                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SpeedButton")!).Visibility);
+                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SleepButton")!).Visibility);
                 // Volume left, icons right: volume stack is column 0.
                 var volumeStack = (StackPanel)((Button)w.FindName("VolumeButton")!).Parent;
                 Assert.Equal(0, Grid.GetColumn(volumeStack));
-                // Unset default: the bar is orange when no style was ever picked.
-                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
+                // Unset default = "original" (render 02): white primary rings, orange
+                // secondary arrows, orange outline Play with a 10 % tint.
+                Assert.Equal(Color.FromRgb(0xF5, 0xF5, 0xF7), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!));
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("PlayRing")!));
+                Assert.Equal(Color.FromArgb(0x1A, 0xFF, 0x95, 0x00), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("PlayRing")!).Fill).Color);
             });
         }
 
@@ -79,8 +83,8 @@ namespace ZephyrPlayer.Tests
                 settings.SecondarySkipSeconds = 60;
                 settings.BarColorStyle = "orange";
                 settings.IconStyle = "filled";
-                settings.ShowSpeed = true;
-                settings.ShowSleepTimer = true;
+                settings.ShowSpeed = false;
+                settings.ShowSleepTimer = false;
                 // Flush the queued Changed handlers: a bare Invoke runs at Send priority and
                 // jumps AHEAD of the Normal-priority ApplyBarStyle callbacks; pumping at
                 // SystemIdle waits until they have all run.
@@ -98,8 +102,26 @@ namespace ZephyrPlayer.Tests
                 // filled semantics, not the hollow one.
                 Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("PlayRing")!).Fill).Color);
                 Assert.Equal(Colors.Transparent, StrokeOf((System.Windows.Shapes.Shape)w.FindName("PlayRing")!));
-                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SpeedButton")!).Visibility);
-                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SleepButton")!).Visibility);
+                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
+                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
+            });
+        }
+
+        [Fact]
+        public void ColourSets_Apply_To_The_Real_Bar()
+        {
+            Sta((settings, w) =>
+            {
+                Color Ring() => StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!);
+                Color Label() => ((SolidColorBrush)((TextBlock)w.FindName("SkipBackLabel")!).Foreground).Color;
+                Color Sec() => StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipBackIcon")!);
+                var orange = Color.FromRgb(0xFF, 0x95, 0x00); var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
+                void Pick(string style) { settings.BarColorStyle = style; w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle); }
+                Pick("orange"); Assert.Equal(orange, Ring()); Assert.Equal(orange, Label()); Assert.Equal(orange, Sec());
+                Pick("white"); Assert.Equal(white, Ring()); Assert.Equal(white, Label()); Assert.Equal(white, Sec());
+                Pick("twotone"); Assert.Equal(orange, Ring()); Assert.Equal(white, Label()); Assert.Equal(orange, Sec());
+                Pick("inverse"); Assert.Equal(white, Ring()); Assert.Equal(orange, Label()); Assert.Equal(white, Sec());
+                Pick("original"); Assert.Equal(white, Ring()); Assert.Equal(white, Label()); Assert.Equal(orange, Sec());
             });
         }
     }

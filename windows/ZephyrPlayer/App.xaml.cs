@@ -51,6 +51,22 @@ namespace ZephyrPlayer
             catch { }
         }
 
+        /// <summary>LibVLC with the CP2 subtitle look (lifted above the bar, S/M/L size,
+        /// bold with an outline). libVLC 3 reads these once, at creation. If it refuses
+        /// them, Zephyr still starts with libVLC's defaults.</summary>
+        internal static LibVLC CreateLibVlc(PlayerSettings settings)
+        {
+            double dpi = 1.0;
+            try
+            {
+                using var g = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
+                dpi = g.DpiY / 96.0;
+            }
+            catch { dpi = 1.0; }
+            try { return new LibVLC(PlayerBarLogic.SubtitleOptions(settings.SubtitleSize, dpi)); }
+            catch (Exception ex) { LogCrash("libvlc-options", ex.GetType().Name); return new LibVLC(); }
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
@@ -128,12 +144,12 @@ namespace ZephyrPlayer
             restoreListener.Start();
 
             Core.Initialize();
-            var libvlc = new LibVLC();
+            var settings = new PlayerSettings();
+            var libvlc = CreateLibVlc(settings);
             var player = new MediaPlayer(libvlc);
             player.EnableMouseInput = false;
             player.EnableKeyInput = false;
             var store = new PairedStore();
-            var settings = new PlayerSettings();
             var gate = new PairingGate();
             _libvlc = libvlc;
             _mediaPlayer = player;
@@ -157,7 +173,8 @@ namespace ZephyrPlayer
             _shell = new ShellWindow(settings);
             _player = new PlayerView(libvlc, player, settings);
             _player.HomeRequested += LeavePlayer;
-            _player.SleepFired += LeavePlayer;
+            // Sleep timer: the movie pauses and the player stays (render 04 footnote);
+            // nothing navigates on it.
             _player.FullscreenChanged += on => _shell.ApplyFullscreen(on);
             _home = new HomeView(settings, store,
                 playLocal: url =>

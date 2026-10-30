@@ -124,9 +124,8 @@ namespace ZephyrPlayer.Tests
                     Core.Initialize();
                     var libvlc = new LibVLC();
                     var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
-                    // Explicit "original" pick: the shipping default is orange now, and this
-                    // render proof's pixel calibration below is gold. Keep the render check
-                    // independent of which style ships as the default.
+                    // Explicit "original" pick (also the shipping default again, render 06b):
+                    // keep the render check independent of which style ships as the default.
                     var settings = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-" + Guid.NewGuid().ToString("N") + ".json"));
                     settings.BarColorStyle = "original";
                     var w = new PlayerView(libvlc, player, settings, new VolumeService());
@@ -172,15 +171,15 @@ namespace ZephyrPlayer.Tests
                         if (r > 230 && g > 230 && b > 230) white++;
                     }
                     // Threshold encodes the settled 13pt captions (~44 pure-gold px on the 96dpi runner render; 0-ish would mean not rendered).
-                    Assert.True(gold > 30, $"gold elapsed-text pixels {gold} - control bar not rendered");
-                    Assert.True(white > 30, $"white remaining-text pixels {white} - control bar not rendered");
+                    Assert.True(gold > 30, $"gold (secondary arrows / Play) pixels {gold} - control bar not rendered");
+                    Assert.True(white > 30, $"white (primary rings / labels) pixels {white} - control bar not rendered");
                     w.ReleasePlayback();
 
-                    // The SHIPPING default (no pick stored): the bar must render with the
-                    // orange elapsed/total/remaining text. Same offscreen render, orange
+                    // The SHIPPING default (no pick stored) = "original" (render 02): orange
+                    // secondary arrows and Play on the bar. Same offscreen render, orange
                     // pixel count - visual proof of the default, not just a brush assert.
                     var settingsDefault = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-def-" + Guid.NewGuid().ToString("N") + ".json"));
-                    Assert.Equal("orange", settingsDefault.BarColorStyle); // unset default
+                    Assert.Equal("original", settingsDefault.BarColorStyle); // unset default
                     var w2 = new PlayerView(libvlc, player, settingsDefault, new VolumeService());
                     var bar2 = w2.ControlBar;
                     bar2.Opacity = 1;
@@ -209,7 +208,7 @@ namespace ZephyrPlayer.Tests
                         var b = wide2[i]; var g = wide2[i + 1]; var r = wide2[i + 2];
                         if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #FF9500
                     }
-                    Assert.True(orangePx > 30, $"orange elapsed-text pixels {orangePx} - default control bar not rendered in the shipping style");
+                    Assert.True(orangePx > 30, $"orange pixels {orangePx} - default control bar not rendered in the shipping style");
                     w2.ReleasePlayback();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }

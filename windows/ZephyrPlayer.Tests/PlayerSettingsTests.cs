@@ -31,12 +31,39 @@ namespace ZephyrPlayer.Tests
             Assert.Equal("movies", new PlayerSettings(_path).LibraryFolder);
         }
         [Fact]
-        public void ButtonFlash_DefaultOn_ChoicePersists()
+        public void ButtonFlash_DefaultOff_ChoicePersists()
+        {
+            // U6: render 06 shows "Flash on press" off; unset = off, a stored value is kept.
+            var s = new PlayerSettings(_path);
+            Assert.False(s.ButtonFlash);
+            s.ButtonFlash = true;
+            Assert.True(new PlayerSettings(_path).ButtonFlash);
+            File.WriteAllText(_path, "{\"ButtonFlash\":true}");
+            Assert.True(new PlayerSettings(_path).ButtonFlash);
+        }
+
+        [Fact]
+        public void AnimateOnPress_DefaultOn_And_SubtitleSize_DefaultM()
         {
             var s = new PlayerSettings(_path);
-            Assert.True(s.ButtonFlash);
-            s.ButtonFlash = false;
-            Assert.False(new PlayerSettings(_path).ButtonFlash);
+            Assert.True(s.AnimateOnPress);
+            Assert.Equal("M", s.SubtitleSize);
+            s.AnimateOnPress = false;
+            s.SubtitleSize = "L";
+            s.SubtitleSize = "XL"; // ignored
+            var reread = new PlayerSettings(_path);
+            Assert.False(reread.AnimateOnPress);
+            Assert.Equal("L", reread.SubtitleSize);
+        }
+
+        [Fact]
+        public void Stored_Speed_And_Sleep_Choices_Survive_The_Default_Change()
+        {
+            // U8: the new "on" default applies only when the key was never written.
+            File.WriteAllText(_path, "{\"ShowSpeed\":false,\"ShowSleepTimer\":false}");
+            var s = new PlayerSettings(_path);
+            Assert.False(s.ShowSpeed);
+            Assert.False(s.ShowSleepTimer);
         }
         [Fact]
         public void Library_Sort_Roundtrips_Without_Losing_Older_Settings()
@@ -55,21 +82,21 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(200, s.VolumeBoostMaxPct);
             Assert.Equal(10, s.PrimarySkipSeconds);
             Assert.Equal(30, s.SecondarySkipSeconds);
-            Assert.Equal("orange", s.BarColorStyle); // unset default
+            Assert.Equal("original", s.BarColorStyle); // unset default (render 06b)
             Assert.Equal("hollow", s.IconStyle);
-            Assert.False(s.ShowSpeed);
-            Assert.False(s.ShowSleepTimer);
+            Assert.True(s.ShowSpeed);
+            Assert.True(s.ShowSleepTimer);
             Assert.Equal(100, s.LastVolume);
         }
 
         [Fact]
-        public void Stored_Original_Choice_Survives_The_Default_Change()
+        public void Stored_Orange_Choice_Survives_The_Default_Change()
         {
-            // The default moved to orange, but an explicit earlier pick is a stored
-            // value, not a missing one: it must read back exactly as chosen.
-            File.WriteAllText(_path, "{\"BarColorStyle\":\"original\"}");
+            // The default is "original" again (render 06b), but an explicit earlier pick
+            // is a stored value, not a missing one: it must read back exactly as chosen.
+            File.WriteAllText(_path, "{\"BarColorStyle\":\"orange\"}");
             var s = new PlayerSettings(_path);
-            Assert.Equal("original", s.BarColorStyle);
+            Assert.Equal("orange", s.BarColorStyle);
         }
 
         [Fact]
@@ -82,8 +109,8 @@ namespace ZephyrPlayer.Tests
             s.SecondarySkipSeconds = 60;
             s.BarColorStyle = "twotone";
             s.IconStyle = "filled";
-            s.ShowSpeed = true;
-            s.ShowSleepTimer = true;
+            s.ShowSpeed = false;
+            s.ShowSleepTimer = false;
             s.LastVolume = 75;
             var reread = new PlayerSettings(_path);
             Assert.Equal(@"C:\Movies", reread.LibraryFolder);
@@ -92,8 +119,8 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(60, reread.SecondarySkipSeconds);
             Assert.Equal("twotone", reread.BarColorStyle);
             Assert.Equal("filled", reread.IconStyle);
-            Assert.True(reread.ShowSpeed);
-            Assert.True(reread.ShowSleepTimer);
+            Assert.False(reread.ShowSpeed);
+            Assert.False(reread.ShowSleepTimer);
             Assert.Equal(75, reread.LastVolume);
         }
 
@@ -116,7 +143,7 @@ namespace ZephyrPlayer.Tests
             s.PrimarySkipSeconds = 7;
             Assert.Equal(10, s.PrimarySkipSeconds);
             s.BarColorStyle = "purple";
-            Assert.Equal("orange", s.BarColorStyle); // unset default
+            Assert.Equal("original", s.BarColorStyle); // unset default
             s.IconStyle = "sparkly";
             Assert.Equal("hollow", s.IconStyle);
         }
@@ -206,7 +233,7 @@ namespace ZephyrPlayer.Tests
             var s = new PlayerSettings(_path);
             var fired = 0;
             s.Changed += (_, __) => fired++;
-            s.ShowSpeed = true;
+            s.ShowSpeed = false;
             s.LastVolume = 33;
             Assert.Equal(2, fired);
         }

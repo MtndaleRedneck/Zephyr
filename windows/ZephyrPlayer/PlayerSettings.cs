@@ -69,9 +69,9 @@ namespace ZephyrPlayer
 
         public string BarColorStyle
         {
-            // Unset default is orange; a stored choice is never null, so an explicit
-            // pick in Settings always wins over this fallback.
-            get { lock (_lock) return Read().BarColorStyle ?? "orange"; }
+            // Unset default is "original" (render 06b: "Default is the original", the look of
+            // render 02); a stored choice is never null, so an explicit pick always wins.
+            get { lock (_lock) return Read().BarColorStyle ?? "original"; }
             set { if (Array.IndexOf(BarColorStyles, value) < 0) return; Write(d => d with { BarColorStyle = value }); }
         }
 
@@ -81,21 +81,42 @@ namespace ZephyrPlayer
             set { if (Array.IndexOf(IconStyles, value) < 0) return; Write(d => d with { IconStyle = value }); }
         }
 
+        /// <summary>"Flash on press": the brief colour flash of a pressed skip glyph. Render
+        /// 06 shows it OFF; unset = off (U6), a stored value is kept on upgrade.</summary>
         public bool ButtonFlash
         {
-            get { lock (_lock) return Read().ButtonFlash ?? true; }
+            get { lock (_lock) return Read().ButtonFlash ?? false; }
             set { Write(d => d with { ButtonFlash = value }); }
+        }
+
+        /// <summary>"Animate on press" (item 80, a new key): primary rings turn and the
+        /// secondary arrows get a light that runs to the tip. Unset = on (render 06).</summary>
+        public bool AnimateOnPress
+        {
+            get { lock (_lock) return Read().AnimateOnPress ?? true; }
+            set { Write(d => d with { AnimateOnPress = value }); }
+        }
+
+        public static readonly string[] SubtitleSizes = { "S", "M", "L" };
+        /// <summary>Subtitle size S/M/L from the subtitles pop-up (render 04). libVLC 3 sets
+        /// text size when it is created, so a change applies the next time Zephyr starts
+        /// (U4: never re-open a playing movie). Unset = M.</summary>
+        public string SubtitleSize
+        {
+            get { lock (_lock) { var v = Read().SubtitleSize; return Array.IndexOf(SubtitleSizes, v) >= 0 ? v! : "M"; } }
+            set { if (Array.IndexOf(SubtitleSizes, value) < 0) return; Write(d => d with { SubtitleSize = value }); }
         }
 
         public bool ShowSpeed
         {
-            get { lock (_lock) return Read().ShowSpeed ?? false; }
+            // On by default (render 06b toggles ON, item 57); a stored choice is kept (U8).
+            get { lock (_lock) return Read().ShowSpeed ?? true; }
             set { Write(d => d with { ShowSpeed = value }); }
         }
 
         public bool ShowSleepTimer
         {
-            get { lock (_lock) return Read().ShowSleepTimer ?? false; }
+            get { lock (_lock) return Read().ShowSleepTimer ?? true; }
             set { Write(d => d with { ShowSleepTimer = value }); }
         }
 
@@ -142,7 +163,9 @@ namespace ZephyrPlayer
             string? LibrarySort = null,
             bool? FoldersFirst = null,
             bool? ButtonFlash = null,
-            string? ShellBounds = null);
+            string? ShellBounds = null,
+            bool? AnimateOnPress = null,
+            string? SubtitleSize = null);
 
         private bool _readFailed;
         private Data? _lastGood;

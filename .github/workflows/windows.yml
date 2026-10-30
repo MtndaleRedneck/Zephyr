@@ -1012,6 +1012,8 @@ jobs:
           path: |
             ${{ runner.temp }}/cp1-*.png
             ${{ runner.temp }}/cp1-*.txt
+            ${{ runner.temp }}/cp2-*.png
+            ${{ runner.temp }}/cp2-*.txt
             ${{ runner.temp }}/icon-proof.txt
             ${{ runner.temp }}/pc-redesign-*.png
             ${{ runner.temp }}/pc-mouse-recovery.txt

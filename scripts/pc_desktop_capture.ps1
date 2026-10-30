@@ -205,9 +205,9 @@ function CountDiff($pathA, $pathB, $x0f, $x1f, $y0f, $y1f) {
 # Pixel metrics via LockBits (fast byte-array scans - GetPixel loops are minutes-slow).
 # These judge ACTUAL content, not brightness (the 67b6ee4 brightness count mistook the
 # test pattern's own rainbow strip for the bar):
-#  - Measure-Bar: the bar's golden ElapsedText (#F0C23E) in the left of the band, and
-#    the seek track: a long contiguous run of near-gray bright pixels. Video gradients
-#    are saturated, not near-gray; solid color bars are narrower than 40% of the width.
+#  - Measure-Bar: brand-orange pixels in the left of the band (CP2: the volume fill),
+#    and the seek track: a long bounded run of the track's own opaque colours (#303032
+#    track, #FF9500 fill). See the function for the exact rule.
 #  - Measure-Video: SATURATED pixels (max-min channel > 60, max > 100). Black, white
 #    and gray transients (unrendered window) are not saturated.
 function Load-Band($path, $y0frac, $y1frac) {
@@ -240,40 +240,38 @@ function Measure-Video($path) {
 }
 function Measure-Bar($path) {
     if (-not (Test-Path $path)) { return @(0, 0) }
-    # Golden-threshold calibration (run 40492866626): the positive control - a KNOWN
-    # bar composited from the suite's own render at capture scale - scores golden=4,
-    # seekRun=86%. The bar gate is golden>=2 (half the control) + seekRun>=40; a
-    # post-autohide frame scores golden=0. The control gate matches (>=2 / >=40).
-    # The bar body occupies roughly the bottom third (about y 0.64-0.95 in an 800x500
-    # capture; the golden ElapsedText ~0.67, the seek track ~0.72-0.82). A 0.75+ band
-    # missed BOTH signatures (round-7 review C). 0.55 keeps full margin while the
-    # seek-run's near-gray requirement still rejects the test pattern's own content.
-    # The band stops at 0.93: below that sits window chrome / the taskbar top
-    # separator - a full-width RGB(190,190,190) line there satisfies the near-gray
-    # rule and scored seekRun=100% over a genuinely hidden bar (run 40960360181).
+    # CP2 bar (render 02) signature, re-calibrated from the CP1 metric:
+    #  - "golden": brand-orange #FF9500 pixels in the left 30 % of the band. The
+    #    original colour set keeps orange on the volume fill (left group) and the
+    #    seek fill; the 1.4-era gold #F0C23E is still accepted for old renders.
+    #  - "seekRun": the longest horizontal run made of the seek track's own opaque
+    #    colours - track #303032 (48,48,50) and fill #FF9500 - allowing gaps of at
+    #    most 8 px (the thumb's see-through halo), bounded on both sides. The card
+    #    behind it is see-through, but the 4 px track is opaque, so its colour does
+    #    not depend on the video under it. Reported as % of the band width.
+    # Band 0.55-0.93 as before (the taskbar separator below 0.93 is excluded).
     $band = Load-Band $path 0.55 0.93
-    $golden = 0; $goldenBand = [int]($band.W * 0.24); $bestRun = 0
+    $golden = 0; $goldenBand = [int]($band.W * 0.30); $bestRun = 0
     for ($y = 0; $y -lt $band.H; $y++) {
-        $run = 0
+        $runStart = -1; $lastHit = -100
         for ($x = 0; $x -lt $band.W; $x++) {
             $o = $y * $band.S + $x * 4
             $b = $band.B[$o]; $g = $band.B[$o + 1]; $r = $band.B[$o + 2]
-            # ElapsedText signature: gold #F0C23E for an explicit "original" pick,
-            # brand orange #FF9500 for the default style. Counting only gold went
-            # blind the day the default became orange (b11db80 run: bar visible,
-            # seekRun 88%, golden 0).
             $isGold = [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40
             $isOrange = $r -gt 227 -and [math]::Abs($g - 149) -lt 28 -and $b -lt 40
             if ($x -lt $goldenBand -and ($isGold -or $isOrange)) { $golden++ }
-            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 65 -and $r -lt 235) { $run++ } else {
-                # Only runs bounded on BOTH sides by non-matching pixels count.
-                # A run touching a row edge is full-bleed chrome (taskbar
-                # separator, window border), never the inset seek track.
-                if ($run -gt 0 -and ($x - $run) -gt 0 -and $run -gt $bestRun) { $bestRun = $run }
-                $run = 0
+            $isTrack = ([math]::Abs($r - 48) -le 7 -and [math]::Abs($g - 48) -le 7 -and [math]::Abs($b - 50) -le 7) -or ($r -ge 238 -and [math]::Abs($g - 149) -le 14 -and $b -le 24)
+            if ($isTrack) {
+                if ($runStart -lt 0 -or ($x - $lastHit) -gt 9) {
+                    # close the previous run (bounded: it did not touch the left edge)
+                    if ($runStart -gt 0) { $len = $lastHit - $runStart + 1; if ($len -gt $bestRun) { $bestRun = $len } }
+                    $runStart = $x
+                }
+                $lastHit = $x
             }
         }
         # A run still open at the right edge touched it: reject (chrome, not track).
+        if ($runStart -gt 0 -and $lastHit -lt $band.W - 1) { $len = $lastHit - $runStart + 1; if ($len -gt $bestRun) { $bestRun = $len } }
     }
     return @($golden, [int](100.0 * $bestRun / $band.W))
 }
@@ -1132,7 +1130,8 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-8-late-failure.png"
     Cp1Gate ($stL -and $stL.state -ne 'Playing') "late PC-side failure: the decoder never played it; the phone's /control/status reads state=$($stL.state) title=[$($stL.title)] (no failed-start HTTP answer on this path: /play said $($lateResp.StatusCode))"
     # Back to the library from the error panel's own button.
-    $backOk = Cp1ClickElement $shellH 'LoadingBackButton'
+    # CP2: the item-68 error state replaced CP1's error panel; its Back is ErrorBackButton.
+    $backOk = Cp1ClickElement $shellH 'ErrorBackButton'
     if (-not $backOk) { $backOk = Cp1ClickElement $shellH 'HomeButton' }
     [ZWU32]::SetCursorPos(5, 5) | Out-Null
     Start-Sleep -Seconds 2
@@ -1179,6 +1178,276 @@ foreach ($bmp in (Get-ChildItem "$env:RUNNER_TEMP/cp1-flash-*.bmp" -ErrorAction 
 }
 if ($cp1FlashTotal -gt 0 -and $cp1FlashBad -eq 0) { Cp1Log "flash verdict: 0 of $cp1FlashTotal sampled frames flagged by the client-area rule (blank or all-one-colour content, light flash, hidden shell, second window); sampling at ~50 ms, not a proof; raw frames in cp1-flash-frames.txt" }
 else { Cp1Log "flash verdict: $cp1FlashBad of $cp1FlashTotal sampled frames FLAGGED by the client-area rule (blank or all-one-colour content, light flash, hidden shell, second window); each saved as cp1-flash-*-BLANK/BRIGHT.png with its before/after frames; see cp1-flash-frames.txt" }
+# =====================================================================================
+# CP2 (renders 02 / 03 / 04): real-desktop proof of the new bar, its pop-ups, the
+# fullscreen pill clamp, the error state, auto-hide, click-to-seek, subtitles above
+# the bar, and the Opening reset. Its own app launch and fixtures; its own gates
+# (cp2-note.txt). Flash sampling continues on one CP2 library->player phase with
+# the same client-area rule; its frames are counted apart and gated the same way.
+# =====================================================================================
+$cp2Note = "$env:RUNNER_TEMP/cp2-note.txt"
+$cp2Fail = New-Object System.Collections.Generic.List[string]
+Remove-Item $cp2Note -ErrorAction SilentlyContinue
+function Cp2Log($s) { Write-Host "CP2: $s"; $s | Add-Content $cp2Note }
+function Cp2Gate($ok, $s) { if ($ok) { Cp2Log "PASS $s" } else { Cp2Log "FAIL $s"; $cp2Fail.Add($s) } }
+function Cp2Ui() { $st = Cp1Status; if ($st) { return $st.ui } else { return $null } }
+function Cp2Json($o) { if ($o -eq $null) { return 'null' }; return ($o | ConvertTo-Json -Compress -Depth 4) }
+function Cp2FindName($name) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::NameProperty, $name)
+    foreach ($rh in [ZCP1]::VisibleHandles($pC.Id)) {
+        try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($rh).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond) } catch { $el = $null }
+        if ($el -ne $null -and $el.Current.BoundingRectangle.Width -gt 0) { return $el }
+    }
+    return $null
+}
+function Cp2FindId($id) {
+    foreach ($rh in [ZCP1]::VisibleHandles($pC.Id)) {
+        try { $el = Find-ByAutoId ([System.Windows.Automation.AutomationElement]::FromHandle($rh)) $id } catch { $el = $null }
+        if ($el -ne $null -and $el.Current.BoundingRectangle.Width -gt 0) { return $el }
+    }
+    return $null
+}
+function Cp2ClickName($name) {
+    $el = Cp2FindName $name
+    if ($el -eq $null) { Cp2Log "element named [$name] not found via UIA"; return $false }
+    $b = $el.Current.BoundingRectangle
+    Cp1ClickPoint ($b.X + $b.Width / 2) ($b.Y + $b.Height / 2)
+    return $true
+}
+function Cp2WaitUi($test, $ms) {
+    $until = [Environment]::TickCount64 + $ms
+    do { $u = Cp2Ui; if ($u -ne $null -and (& $test $u)) { return $u }; Start-Sleep -Milliseconds 150 } while ([Environment]::TickCount64 -lt $until)
+    return (Cp2Ui)
+}
+function Cp2Post($url) {
+    # /play answers only after the hand-off, so it runs as a job: the script keeps
+    # sampling the Opening state while the phone start is in flight.
+    return Start-Job -ScriptBlock { param($u) try { (Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers @{ Authorization = "Bearer ci-capture-token" } -ContentType "application/json" -Body ('{"url":"' + $u + '"}') -SkipHttpErrorCheck -TimeoutSec 90).StatusCode } catch { "error: $($_.Exception.Message)" } } -ArgumentList $url
+}
+function Cp2CropRect($hWnd) {
+    $r = [ZRECT]::new(); [void][ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16)
+    return @(($r.Left + 2), ($r.Top + 2), ($r.Right - 2), ($r.Bottom - 2))
+}
+# Rows of near-white subtitle text (all channels >= 200) in the capture, between
+# $yMin and $yMax (capture pixels), x in the middle 70 %, rows inside the bar's rect
+# skipped. Returns @(firstRow, lastRow, rows) or @(-1, -1, 0).
+function Cp2SubtitleRows($path, $yMin, $yMax, $barTop, $barBottom) {
+    $bmp = [System.Drawing.Bitmap]::FromFile($path)
+    $w = $bmp.Width; $h = $bmp.Height
+    $rect = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
+    $data = $bmp.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $stride = [math]::Abs($data.Stride); $bytes = [byte[]]::new($stride * $h)
+    [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $bytes, 0, $bytes.Length)
+    $bmp.UnlockBits($data); $bmp.Dispose()
+    $first = -1; $last = -1; $rows = 0
+    $x0 = [int]($w * 0.15); $x1 = [int]($w * 0.85)
+    for ($y = [math]::Max(0, $yMin); $y -lt [math]::Min($h, $yMax); $y++) {
+        if ($y -ge $barTop -and $y -le $barBottom) { continue }
+        $n = 0
+        for ($x = $x0; $x -lt $x1; $x++) {
+            $o = $y * $stride + $x * 4
+            if ($bytes[$o] -ge 200 -and $bytes[$o + 1] -ge 200 -and $bytes[$o + 2] -ge 200) { $n++ }
+        }
+        if ($n -ge 3) { if ($first -lt 0) { $first = $y }; $last = $y; $rows++ }
+    }
+    return @($first, $last, $rows)
+}
+
+# Fixtures: a 600 s test pattern (the capture clip) and a 600 s dark 16:9 movie with a
+# whole-length subtitle cue, so subtitle pixels are the only near-white pixels in the
+# picture. Two fresh dribbling phone servers (the CP1 one is past its slow phase).
+$cp2Lib = Join-Path $env:RUNNER_TEMP 'Movies-cp2'
+Remove-Item $cp2Lib -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force $cp2Lib | Out-Null
+Copy-Item "$env:RUNNER_TEMP/clip.mp4" (Join-Path $cp2Lib 'Big Buck Bunny.mp4')
+& $ffmpeg -y -f lavfi -i "color=c=0x1c2833:s=640x360:r=10" -t 600 -c:v libx264 -preset ultrafast -pix_fmt yuv420p (Join-Path $cp2Lib 'Night Drive.mp4') 2>$null
+[IO.File]::WriteAllText((Join-Path $cp2Lib 'Night Drive.srt'), "1`r`n00:00:00,000 --> 00:59:00,000`r`nZephyr subtitle above the bar`r`n")
+$cp2Thumbs = Join-Path $env:RUNNER_TEMP 'cp2-thumbs'
+New-Item -ItemType Directory -Force $cp2Thumbs | Out-Null
+& $ffmpeg -y -f lavfi -i 'testsrc=size=320x200:rate=1' -frames:v 1 (Join-Path $cp2Thumbs 'Big Buck Bunny.png') 2>$null
+& $ffmpeg -y -f lavfi -i 'color=c=0x1c2833:s=320x200' -frames:v 1 (Join-Path $cp2Thumbs 'Night Drive.png') 2>$null
+$srvSlow2 = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER_TEMP","8904","10","1024" -PassThru -WindowStyle Hidden
+$srvSlow3 = Start-Process python -ArgumentList "scripts/range_server.py","$env:RUNNER_TEMP","8905","10","1024" -PassThru -WindowStyle Hidden
+$cp2LibJson = $cp2Lib -replace '\\','\\'
+[IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$cp2LibJson`"}")
+'[{"token":"cp1-fixture","name":"Pixel 8"}]' | Set-Content (Join-Path $cfgDir 'paired.json')
+Remove-Item (Join-Path $cfgDir 'playback-history.json') -ErrorAction SilentlyContinue
+[Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $cp2Thumbs, 'Process')
+[ZWU32]::SetCursorPos(5, 5) | Out-Null
+$cp2FlashBase = $cp1FlashTotal; $cp2FlashBadBase = $cp1FlashBad
+$pC = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
+$shellH = Wait-MainWindow $pC 20
+Close-PairingWindow $pC
+Cp2Gate ($shellH -ne [System.IntPtr]::Zero) "CP2 shell window up (hwnd $shellH)"
+$times = [char]0x00D7
+if ($shellH -ne [System.IntPtr]::Zero) {
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    $cw = [math]::Min(1600, $wa.Width); $ch = [math]::Min(1000, $wa.Height)
+    [ZWU32]::SetWindowPos($shellH, [System.IntPtr]::Zero, $wa.Left + [int](($wa.Width - $cw) / 2), $wa.Top + [int](($wa.Height - $ch) / 2), $cw, $ch, $SWP_NOZORDER) | Out-Null
+    [ZWU32]::SetForegroundWindow($shellH) | Out-Null
+    Start-Sleep -Seconds 3
+    Cp2Log "shell ${cw}x${ch} on a $($vs.Width)x$($vs.Height) screen"
+
+    # --- library -> player (flash-sampled) ---
+    Cp1FlashStart 'cp2-library-to-player'
+    $null = Cp1DoubleClickTile $shellH 'Big Buck Bunny'
+    $st = $null; foreach ($i in 1..30) { $st = Cp1Status; if ($st -and $st.state -eq 'Playing' -and $st.time -ge 1) { break }; Start-Sleep -Milliseconds 500 }
+    Start-Sleep -Milliseconds 1000
+    Cp1FlashStop
+    Cp2Gate ($st -and $st.state -eq 'Playing') "Big Buck Bunny playing from a library double-click (state=$($st.state) length=$($st.length))"
+
+    # --- click-to-seek (item 50): a REAL click at 75 % of the seek track ---
+    WakeControls
+    $seekEl = Cp2FindId 'SeekBar'
+    if ($seekEl -ne $null) {
+        $sb = $seekEl.Current.BoundingRectangle
+        $len = [double]$st.length
+        $clickX = $sb.X + $sb.Width * 0.75
+        # IsMoveToPointEnabled puts the 18 px thumb's centre on the click: the value is
+        # (x - left - 9) / (width - 18) of the track.
+        $expFrac = (($clickX - $sb.X) - 9) / ($sb.Width - 18)
+        $before = (Cp1Status).time
+        Cp1ClickPoint $clickX ($sb.Y + $sb.Height / 2)
+        Start-Sleep -Milliseconds 1200
+        $after = Cp1Status
+        $expected = $expFrac * $len
+        $tol = [math]::Max(6, 0.015 * $len)
+        $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-seek-click.png"
+        Cp2Gate ($after -and [math]::Abs($after.time - $expected) -le $tol -and [math]::Abs($after.time - $before) -gt 60) ("click-to-seek: real click at 75 % of the track ({0:N0},{1:N0}; track {2:N0} px) landed at {3} s, expected {4:N1} s +/- {5:N0} (was {6} s; last_seek_fraction={7}, expected {8:N4})" -f $clickX, ($sb.Y + $sb.Height / 2), $sb.Width, $after.time, $expected, $tol, $before, $after.ui.last_seek_fraction, $expFrac)
+    } else { Cp2Gate $false "click-to-seek: SeekBar not found via UIA" }
+
+    # --- Opening reset (carry-forward a): a slow phone start over the playing movie ---
+    $job = Cp2Post "http://127.0.0.1:8904/s/tok/1"
+    $seen = $null; $shot = $false; $samples = 0
+    $until = [Environment]::TickCount64 + 9000
+    while ([Environment]::TickCount64 -lt $until) {
+        $u = Cp2Ui; $samples++
+        if ($u -and $u.opening) {
+            if ($seen -eq $null) { $seen = $u }
+            if (-not $shot) { Start-Sleep -Milliseconds 600; $u2 = Cp2Ui; if ($u2 -and $u2.opening) { $seen = $u2; $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-opening.png"; $shot = $true } }
+        }
+        if ($shot) { break }
+        Start-Sleep -Milliseconds 120
+    }
+    Cp2Log ("opening sample: " + (Cp2Json ($seen | Select-Object opening, loading, title_text, elapsed_text, remaining_text, total_text, seek_value, meta_text)))
+    Cp2Gate ($seen -and $seen.elapsed_text -eq '0:00' -and $seen.remaining_text -eq '-0:00' -and $seen.total_text -eq '0:00 total' -and [double]$seen.seek_value -eq 0 -and $seen.title_text -eq 'Movie from your phone' -and $seen.loading) "Opening over a playing movie shows the NEW start: 0:00 / -0:00 / 0:00 total, thumb at 0, title [$($seen.title_text)] (cp2-opening.png)"
+    $stS = $null; foreach ($i in 1..60) { $stS = Cp1Status; if ($stS -and $stS.state -eq 'Playing' -and $stS.time -ge 1) { break }; Start-Sleep -Milliseconds 500 }
+    $jobOut = Receive-Job $job -Wait -AutoRemoveJob
+    Cp2Log "slow phone start /play answered $jobOut; then state=$($stS.state) time=$($stS.time) title=[$($stS.title)]"
+
+    # --- error state (item 68) + Try again re-runs the same start ---
+    $job = Cp2Post "http://127.0.0.1:8903/s/tok/1"
+    $uE = Cp2WaitUi { param($u) $u.error } 30000
+    $null = Receive-Job $job -Wait -AutoRemoveJob
+    Start-Sleep -Milliseconds 500
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-error.png"
+    $retryEl = Cp2FindId 'ErrorRetryButton'; $backEl = Cp2FindId 'ErrorBackButton'
+    Cp2Gate ($uE -and $uE.error -and $uE.error_message -and $retryEl -ne $null -and $backEl -ne $null -and -not $uE.bar_visible) "error state: message [$($uE.error_message)] with 'Back to library' and 'Try again' (bar stepped aside: bar_visible=$($uE.bar_visible)) (cp2-error.png)"
+    $starts0 = $uE.start_count; $url0 = $uE.last_start_url
+    $clickedRetry = Cp1ClickElement $shellH 'ErrorRetryButton'
+    $uR = Cp2WaitUi { param($u) $u.retry_count -ge 1 -and $u.error } 30000
+    Cp2Gate ($clickedRetry -and $uR -and $uR.retry_count -eq 1 -and $uR.start_count -eq ($starts0 + 1) -and $uR.last_start_url -eq $url0) "real click on Try again re-ran the same start (retry_count=$($uR.retry_count), starts $starts0 -> $($uR.start_count), url $($uR.last_start_url)) and it failed the same way (error=$($uR.error))"
+    # The next start's Opening never shows the previous failure.
+    $job = Cp2Post "http://127.0.0.1:8905/s/tok/1"
+    $uO = Cp2WaitUi { param($u) $u.opening } 8000
+    Start-Sleep -Milliseconds 400; $uO2 = Cp2Ui
+    if ($uO2 -and $uO2.opening) { $uO = $uO2; $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-opening-after-error.png" }
+    Cp2Gate ($uO -and $uO.opening -and -not $uO.error -and $uO.title_text -eq 'Movie from your phone' -and (Cp1Status).title -ne $uE.error_message -and $uO.elapsed_text -eq '0:00') "Opening after a failure: title [$($uO.title_text)], error=$($uO.error), elapsed $($uO.elapsed_text) - the failure text is gone (cp2-opening-after-error.png)"
+    $null = Receive-Job $job -Wait -AutoRemoveJob
+    foreach ($i in 1..60) { $stS = Cp1Status; if ($stS -and $stS.state -eq 'Playing' -and $stS.time -ge 1) { break }; Start-Sleep -Milliseconds 500 }
+
+    # --- the subtitle movie: windowed bar (vs render 02), subtitle above the bar ---
+    WakeControls
+    $null = Cp1ClickElement $shellH 'HomeButton'
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+    Start-Sleep -Seconds 2
+    $null = Cp1DoubleClickTile $shellH 'Night Drive'
+    $stN = $null; foreach ($i in 1..30) { $stN = Cp1Status; if ($stN -and $stN.state -eq 'Playing' -and $stN.spu -ge 0 -and $stN.time -ge 2) { break }; Start-Sleep -Milliseconds 500 }
+    Cp2Gate ($stN -and $stN.state -eq 'Playing' -and $stN.spu -ge 0) "Night Drive playing with its sidecar subtitle selected (spu=$($stN.spu))"
+    WakeControls
+    $uB = Cp2Ui
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-windowed.png"
+    Cp2Log ("windowed bar: " + (Cp2Json ($uB | Select-Object bar_opacity, bar_screen, title_text, meta_text, elapsed_text, remaining_text, total_text, reflow, rate, sleep_minutes)))
+    $crop = Cp2CropRect $shellH
+    if ($uB -and $uB.bar_screen) {
+        $barTop = $uB.bar_screen[1] - $crop[1]; $barBottom = $uB.bar_screen[3] - $crop[1]
+        $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-subtitle-above-bar.png"
+        $subShown = Cp2SubtitleRows "$env:RUNNER_TEMP/cp2-subtitle-above-bar.png" 180 ($crop[3] - $crop[1]) $barTop $barBottom
+        [ZWU32]::SetCursorPos(5, 5) | Out-Null
+        Start-Sleep -Milliseconds 4500
+        $uH = Cp2Ui
+        $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-subtitle-bar-hidden.png"
+        $subHidden = Cp2SubtitleRows "$env:RUNNER_TEMP/cp2-subtitle-bar-hidden.png" 180 ($crop[3] - $crop[1]) -1 -1
+        Cp2Log "subtitle rows with the bar shown: $($subShown -join ',') (bar top $barTop, bottom $barBottom in capture px); with the bar hidden (opacity $($uH.bar_opacity)): $($subHidden -join ',')"
+        Cp2Gate ($subShown[2] -ge 6 -and $subShown[1] -lt ($barTop - 4)) "subtitle drawn ABOVE the visible bar: text rows $($subShown[0])-$($subShown[1]) end above the bar top at $barTop (cp2-subtitle-above-bar.png)"
+        Cp2Gate ($subHidden[2] -ge 6 -and [math]::Abs($subHidden[1] - $subShown[1]) -le 4) "the same subtitle with the bar hidden sits at rows $($subHidden[0])-$($subHidden[1]) (static lift, not tied to the bar: a stated deviation)"
+    } else { Cp2Gate $false "no bar rect in /control/status ui (got $(Cp2Json $uB))" }
+
+    # --- pop-ups (item 59-62, 66): real clicks, one open at a time ---
+    WakeControls
+    $okS = Cp1ClickElement $shellH 'SpeedButton'
+    $uP = Cp2WaitUi { param($u) $u.popup -eq 'speed' } 3000
+    $okChip = Cp2ClickName ("1.25" + $times)
+    $uP2 = Cp2WaitUi { param($u) [double]$u.rate -eq 1.25 } 3000
+    Start-Sleep -Milliseconds 300
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-popup-speed.png"
+    $stRate = Cp1Status
+    Cp2Gate ($okS -and $uP.popup -eq 'speed' -and $okChip -and [double]$uP2.rate -eq 1.25 -and $uP2.speed_badge -eq ("1.25" + $times) -and $uP2.popup -eq 'speed') "speed pop-up: opened by a real click; the 1.25$times chip set rate $($stRate.rate) with the bar badge [$($uP2.speed_badge)] (cp2-popup-speed.png)"
+    $okL = Cp1ClickElement $shellH 'SleepButton'
+    $uQ = Cp2WaitUi { param($u) $u.popup -eq 'sleep' } 3000
+    $okRow = Cp2ClickName '30 minutes'
+    $uQ2 = Cp2WaitUi { param($u) $u.sleep_minutes -eq 30 } 3000
+    Start-Sleep -Milliseconds 300
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-popup-sleep.png"
+    Cp2Gate ($okL -and $uQ.popup -eq 'sleep' -and $okRow -and $uQ2.sleep_minutes -eq 30 -and ($uQ2.sleep_badge -eq '30m' -or $uQ2.sleep_badge -eq '29m')) "sleep pop-up: opening it closed the speed pop-up (popup=$($uQ.popup)); '30 minutes' set the timer, bar badge [$($uQ2.sleep_badge)] (cp2-popup-sleep.png)"
+    $okC = Cp1ClickElement $shellH 'CaptionsButton'
+    $uC = Cp2WaitUi { param($u) $u.popup -eq 'subtitles' } 3000
+    Start-Sleep -Milliseconds 300
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-popup-subtitles.png"
+    $addRow = Cp2FindId 'AddSubtitleRow'
+    Cp2Gate ($okC -and $uC.popup -eq 'subtitles' -and $addRow -ne $null) "subtitles pop-up: opened by a real click (only it open: popup=$($uC.popup)), with the 'Add subtitle file...' row (cp2-popup-subtitles.png)"
+    [ZCP1]::Key(0x1B)  # Esc
+    $uX = Cp2WaitUi { param($u) $u.popup -eq $null } 2000
+    Cp2Gate ($uX -and $uX.popup -eq $null -and -not $uX.fullscreen) "Esc closed the pop-up (popup=$($uX.popup)) and stayed windowed"
+
+    # --- auto-hide (item 65): gone after idle, back on a mouse move ---
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+    Start-Sleep -Milliseconds 4500
+    $uA = Cp2Ui
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-autohide-hidden.png"
+    WakeControls
+    $uA2 = Cp2Ui
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-autohide-shown.png"
+    Cp2Gate ($uA -and [double]$uA.bar_opacity -eq 0 -and [double]$uA.top_opacity -eq 0 -and $uA2 -and [double]$uA2.bar_opacity -eq 1) "auto-hide: bar and top overlay at opacity $($uA.bar_opacity)/$($uA.top_opacity) after 4.5 s idle while playing, back to $($uA2.bar_opacity) on a real mouse move (cp2-autohide-hidden.png, cp2-autohide-shown.png)"
+
+    # --- fullscreen pill (render 03, U2): 780 px max, clamped to the screen ---
+    $okF = Cp1ClickElement $shellH 'FullscreenButton'
+    Start-Sleep -Milliseconds 1500
+    WakeControls
+    $uF = Cp2Ui
+    $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp2-fullscreen.png"
+    if ($uF -and $uF.bar_screen) {
+        $bw = $uF.bar_screen[2] - $uF.bar_screen[0]
+        $want = [math]::Min(780, $vs.Width - 48)
+        $gapL = $uF.bar_screen[0] - $vs.Left; $gapR = ($vs.Left + $vs.Width) - $uF.bar_screen[2]
+        $gapB = ($vs.Top + $vs.Height) - $uF.bar_screen[3]
+        Cp2Gate ($okF -and $uF.fullscreen -and [math]::Abs($bw - $want) -le 3 -and [math]::Abs($gapL - $gapR) -le 3 -and [math]::Abs($gapB - 28) -le 4) "fullscreen pill: drawn $bw px wide (want min(780, $($vs.Width) - 48) = $want), gaps left/right $gapL/$gapR, bottom $gapB (want 28) (cp2-fullscreen.png)"
+    } else { Cp2Gate $false "fullscreen: no bar rect (ui=$(Cp2Json $uF))" }
+    [ZCP1]::Key(0x1B)
+    Start-Sleep -Milliseconds 1200
+    $uW = Cp2Ui
+    Cp2Gate ($uW -and -not $uW.fullscreen) "Esc left full screen (fullscreen=$($uW.fullscreen))"
+}
+StopZephyr
+Stop-Process -Id $srvSlow2.Id -Force -ErrorAction SilentlyContinue
+Stop-Process -Id $srvSlow3.Id -Force -ErrorAction SilentlyContinue
+[Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $null, 'Process')
+$cp2Frames = $cp1FlashTotal - $cp2FlashBase; $cp2Bad = $cp1FlashBad - $cp2FlashBadBase
+Cp2Gate ($cp2Frames -gt 0 -and $cp2Bad -eq 0) "flash sampler (CP2 library->player phase): $cp2Bad of $cp2Frames sampled frames flagged; CP1 + CP2 total: $cp1FlashBad of $cp1FlashTotal"
+foreach ($bmp in (Get-ChildItem "$env:RUNNER_TEMP/cp1-flash-*.bmp" -ErrorAction SilentlyContinue)) {
+    try { $img = [System.Drawing.Image]::FromFile($bmp.FullName); $img.Save(($bmp.FullName -replace '\.bmp$', '.png'), [System.Drawing.Imaging.ImageFormat]::Png); $img.Dispose(); Remove-Item $bmp.FullName } catch { }
+}
+Cp2Log ("CP2 verdict: " + $(if ($cp2Fail.Count -eq 0) { "ALL GATES PASS" } else { "FAILED: " + ($cp2Fail -join '; ') }))
 # Back to a clean first-run state for the legacy legs below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $cfgDir 'paired.json') -Force -ErrorAction SilentlyContinue
@@ -1413,20 +1682,52 @@ Prove-MouseRecovery $hw3 'windowed'
 # Volume response: the thumb drag is pixel-provable, but the headless runner
 # has NO audio device - the audio apply tail stays explicitly UNVERIFIED here
 # (same headless-audio limit as the skipped Audio_Volume_Mute test).
-# Fractions below were measured on the 1024x768 captures (ring 0.497,0.90;
-# seek 0.60,0.807; brackets 0.94,0.90); a missed click shows up as a
-# NOT PROVEN verdict, never a silent pass.
+# CP2: the bar's layout changed (render 02), so the click points and the diff boxes
+# come from UI Automation (the element's real screen rect, converted to the
+# capture's fractions), not from fractions measured on the old bar. A missed
+# click still shows up as a NOT PROVEN verdict, never a silent pass.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function SmokeRect($id) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    foreach ($rh in @($hw3) + @([ZCP1]::VisibleHandles($p3.Id) | Where-Object { $_ -ne $hw3 })) {
+        try { $el = [System.Windows.Automation.AutomationElement]::FromHandle($rh).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond) } catch { $el = $null }
+        if ($el -ne $null) { $b = $el.Current.BoundingRectangle; if ($b.Width -gt 0) { return $b } }
+    }
+    return $null
+}
+function SmokeFrac($b) {
+    # Screen rect -> fractions of the CaptureWindow crop (DWM frame bounds inset by 2).
+    $r = [ZRECT]::new(); [void][ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$r, 16)
+    $L = $r.Left + 2; $T = $r.Top + 2; $W = ($r.Right - 2) - $L; $H = ($r.Bottom - 2) - $T
+    return @((($b.X - $L) / $W), (($b.X + $b.Width - $L) / $W), (($b.Y - $T) / $H), (($b.Y + $b.Height - $T) / $H))
+}
+function SmokeClick($b) { if ($b -ne $null) { ClickPx ($b.X + $b.Width / 2) ($b.Y + $b.Height / 2) } }
+function ClickPx($x, $y) {
+    [ZWU32]::SetCursorPos([int]$x, [int]$y) | Out-Null
+    Start-Sleep -Milliseconds 250
+    [ZWU32]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 60
+    [ZWU32]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 700
+}
 $fnPauseGlyph = -1; $fnPauseClock = -1; $fnSeek = -1; $fnFs = 0
-ClickAt 0.497 0.90
+WakeControls
+$playR = SmokeRect 'PlayPauseButton'; $elapsedR = SmokeRect 'ElapsedText'
+Write-Host "smoke: PlayPauseButton=$playR ElapsedText=$elapsedR"
+$pf = if ($playR) { SmokeFrac $playR } else { @(0.47, 0.53, 0.84, 0.88) }
+$ef = if ($elapsedR) { SmokeFrac $elapsedR } else { @(0.02, 0.10, 0.78, 0.82) }
+$null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-before.png"
+SmokeClick $playR
 $szPause = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused.png"
 # Keep the bar from auto-hiding between frames (mouse nudge, not a click).
 Start-Sleep -Milliseconds 800
-[ZWU32]::SetCursorPos([int]($vs.Width * 0.497), [int]($vs.Height * 0.88)) | Out-Null
+if ($playR) { [ZWU32]::SetCursorPos([int]($playR.X + $playR.Width / 2), [int]($playR.Y - 30)) | Out-Null }
 Start-Sleep -Milliseconds 700
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused2.png"
-$fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-playing-controls-window.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
-$fnPauseClock = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-paused2.png" 0.02 0.10 0.82 0.87
-ClickAt 0.497 0.90   # resume
+$fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-smoke-before.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" $pf[0] $pf[1] $pf[2] $pf[3]
+$fnPauseClock = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-paused2.png" $ef[0] $ef[1] $ef[2] $ef[3]
+SmokeClick $playR   # resume
 # Seek by DRAGGING the real thumb. Fraction-guessed coordinates miss the
 # thumb (a track press only steps LargeChange ~1%, invisible at second
 # granularity), so locate the controls through UI Automation: x:Name becomes
@@ -1464,7 +1765,7 @@ if ($sliderEl -ne $null) {
     } else { Write-Host "::warning::SeekBar thumb not found via UIA" }
 } else { Write-Host "::warning::SeekBar not found via UIA" }
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-seeked.png"
-$fnSeek = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-seeked.png" 0.02 0.10 0.82 0.87
+$fnSeek = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-seeked.png" $ef[0] $ef[1] $ef[2] $ef[3]
 # Fullscreen toggle: invoke the real button through UIA (a blind click can
 # land while controls are fading), verdict = bounds GROW to the virtual
 # screen (the fitted window is already near-full-size).
@@ -1546,4 +1847,5 @@ if (-not ($vidOkAuto -and -not $barOnAuto)) { Write-Host "::error::autohide leg 
 if (-not $barOnPaused) { Write-Host "::error::paused leg failed (golden=$($mPaused[0]) seekRun=$($mPaused[1])%) - a paused movie must keep the bar"; $barGateFailed = $true }
 if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cursor leg failed (video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])%) - a still cursor over the video must not pin the bar"; $barGateFailed = $true }
 if ($cp1Fail.Count -gt 0) { Write-Host "::error::CP1 evidence gates failed: $($cp1Fail -join '; ')" }
-if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0) { exit 1 }
+if ($cp2Fail.Count -gt 0) { Write-Host "::error::CP2 evidence gates failed: $($cp2Fail -join '; ')" }
+if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0 -or $cp2Fail.Count -gt 0) { exit 1 }

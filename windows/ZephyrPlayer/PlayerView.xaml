@@ -6,17 +6,164 @@
         MouseMove="OnMouseMove" MouseDoubleClick="OnVideoDoubleClick">
     <!-- 2.0: the player is a VIEW inside the one ShellWindow (no second top-level
          window). Leaving the player removes this view from the tree, which raises
-         Unloaded, which makes LibVLCSharp hide its overlay window. -->
-    <UserControl.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></UserControl.Resources>
-    <!-- Every floating control lives inside VideoView.Content
-         (WPF airspace), not over the VideoView. -->
-    <!-- Black surface before the first frame: the VideoView default is the light
-         system control color, which flashed light-gray on every playback start
-         (round-7 S7-4). -->
+         Unloaded, which makes LibVLCSharp hide its overlay window.
+         CP2 (renders 02, 03, 04): floating bar card, real-size 3-column layout,
+         in-overlay pop-ups (one open at a time), fullscreen pill, error state. -->
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries>
+            <!-- Bar buttons: 38 px, radius 9 (render 02 .cb); hover/pressed use the 2.0 tokens. -->
+            <Style x:Key="ZBarButton" TargetType="Button">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Foreground" Value="#E9E9EE"/>
+                <Setter Property="MinWidth" Value="38"/>
+                <Setter Property="Height" Value="38"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bg" Background="Transparent" CornerRadius="9" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#12FFFFFF"/></Trigger>
+                                <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bg" Property="Background" Value="#1FFFFFFF"/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Skip / play buttons: no box of their own (render 02 draws only the glyphs). -->
+            <Style x:Key="ZGlyphButton" TargetType="Button">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Padding" Value="0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bg" Background="Transparent" CornerRadius="10"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#0DFFFFFF"/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Pop-up rows (render 04 .row): 36 px, radius 8, 13.5 px; Tag="sel" = selected
+                 (orange tint, #FFB347 SemiBold, check on the right). -->
+            <Style x:Key="ZPopupRow" TargetType="Button">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Foreground" Value="#E3E3E8"/>
+                <Setter Property="FontSize" Value="13.5"/>
+                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bg" Background="Transparent" CornerRadius="8" Height="36" Padding="10,0">
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <ContentPresenter VerticalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+                                    <Path x:Name="Check" Grid.Column="1" Width="16" Height="16" Stretch="Uniform" Visibility="Collapsed" Data="M5,12.5 L9.5,17 L19,7.5" Stroke="#FF9500" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#0FFFFFFF"/></Trigger>
+                                <Trigger Property="Tag" Value="sel"><Setter TargetName="Bg" Property="Background" Value="#21FF9500"/><Setter Property="Foreground" Value="#FFB347"/><Setter Property="FontWeight" Value="SemiBold"/><Setter TargetName="Check" Property="Visibility" Value="Visible"/></Trigger>
+                                <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Chips (render 04 .chip): 30 px, radius 15; Tag="on" = orange gradient, #141416 SemiBold. -->
+            <Style x:Key="ZChip" TargetType="Button">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Foreground" Value="#D9D9E0"/>
+                <Setter Property="FontSize" Value="13"/>
+                <Setter Property="FontWeight" Value="Medium"/>
+                <Setter Property="Height" Value="30"/>
+                <Setter Property="Padding" Value="13,0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bg" Background="#0FFFFFFF" BorderBrush="#12FFFFFF" BorderThickness="1" CornerRadius="15" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#17FFFFFF"/></Trigger>
+                                <Trigger Property="Tag" Value="on"><Setter TargetName="Bg" Property="Background" Value="{StaticResource ZAccentGradient}"/><Setter TargetName="Bg" Property="BorderBrush" Value="Transparent"/><Setter Property="Foreground" Value="#141416"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Small boxed +/- (render 04 .iconbtn.box 26 px). -->
+            <Style x:Key="ZBoxButton" TargetType="Button">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Width" Value="26"/><Setter Property="Height" Value="26"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bg" Background="#0DFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1" CornerRadius="8"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                            <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#1AFFFFFF"/></Trigger></ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Text buttons (render tokens .btn / .btn.or): 32 px, radius 8. -->
+            <Style x:Key="ZTextButton" TargetType="Button">
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Foreground" Value="#E6E6EB"/>
+                <Setter Property="FontSize" Value="13"/><Setter Property="FontWeight" Value="Medium"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="Bg" Height="32" Padding="14,0" CornerRadius="8" Background="#0EFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1">
+                                <ContentPresenter VerticalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#1AFFFFFF"/></Trigger>
+                                <Trigger Property="Tag" Value="or"><Setter TargetName="Bg" Property="Background" Value="{StaticResource ZAccentGradient}"/><Setter TargetName="Bg" Property="BorderBrush" Value="Transparent"/><Setter Property="Foreground" Value="#141416"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <!-- Shared pop-up card (render 04 .pop): rgba(22,22,26,.94), 1 px rgba(255,255,255,.09),
+                 radius 14, padding 14, shadow 0 24 60 rgba(0,0,0,.6). The HTML's backdrop blur is a
+                 solid see-through fill here (Instinct correction, section 9). -->
+            <Style x:Key="ZPopupCard" TargetType="Border">
+                <Setter Property="Background" Value="#F016161A"/>
+                <Setter Property="BorderBrush" Value="#17FFFFFF"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="14"/>
+                <Setter Property="Padding" Value="14"/>
+                <Setter Property="VerticalAlignment" Value="Bottom"/>
+                <Setter Property="HorizontalAlignment" Value="Left"/>
+                <Setter Property="Visibility" Value="Collapsed"/>
+                <Setter Property="TextBlock.Foreground" Value="#F5F5F7"/>
+                <Setter Property="Effect"><Setter.Value><DropShadowEffect BlurRadius="60" ShadowDepth="24" Direction="270" Opacity="0.6" Color="Black"/></Setter.Value></Setter>
+            </Style>
+            <Style x:Key="ZPopupHeader" TargetType="Grid">
+                <Setter Property="Margin" Value="4,2,4,12"/>
+            </Style>
+            <Style x:Key="ZPopupSep" TargetType="Border">
+                <Setter Property="Height" Value="1"/><Setter Property="Background" Value="#12FFFFFF"/><Setter Property="Margin" Value="2,8"/>
+            </Style>
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <!-- Every floating control lives inside VideoView.Content (WPF airspace), not over
+         the VideoView. Black surface before the first frame (round-7 S7-4). -->
     <libvlc:VideoView x:Name="Video" Background="Black">
         <libvlc:VideoView.Content>
-            <Grid x:Name="Overlay" Background="#01000000" MouseMove="OnMouseMove">
-                <!-- Loading state from navigation until Playing (preparation can take up to 30 s). -->
+            <Grid x:Name="Overlay" Background="#01000000" MouseMove="OnMouseMove" PreviewMouseDown="OnOverlayMouseDown" SizeChanged="OnOverlaySizeChanged">
+                <!-- Loading state from navigation until the start settles (black, spinner, title). -->
                 <Grid x:Name="LoadingPanel" Background="#060607" Visibility="Collapsed">
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
                         <Grid x:Name="Spinner" Width="44" Height="44" HorizontalAlignment="Center" RenderTransformOrigin="0.5,0.5">
@@ -26,120 +173,278 @@
                         </Grid>
                         <TextBlock x:Name="LoadingTitle" Foreground="#F5F5F7" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,18,0,0" TextTrimming="CharacterEllipsis" MaxWidth="560"/>
                         <TextBlock x:Name="LoadingDetail" Text="Opening..." Foreground="#8E8E98" FontSize="12.5" HorizontalAlignment="Center" Margin="0,6,0,0" TextWrapping="Wrap" TextAlignment="Center" MaxWidth="560"/>
-                        <Button x:Name="LoadingBackButton" Focusable="False" Visibility="Collapsed" Click="OnHome" Cursor="Hand" HorizontalAlignment="Center" Margin="0,18,0,0">
-                            <Button.Template><ControlTemplate TargetType="Button"><Border Background="{StaticResource ZAccentGradient}" CornerRadius="8" Height="34" Padding="16,0"><TextBlock Text="Back to library" Foreground="#141416" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"/></Border></ControlTemplate></Button.Template>
-                        </Button>
                     </StackPanel>
                 </Grid>
+                <!-- Error state (item 68): message + "Back to library" + "Try again". Not pictured
+                     in the renders; built only from their tokens (#060607, 15 px SemiBold title,
+                     12.5 px #8E8E98, .btn / .btn.or buttons). -->
+                <Grid x:Name="ErrorPanel" Background="#060607" Visibility="Collapsed">
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="520">
+                        <Viewbox Width="36" Height="36" HorizontalAlignment="Center"><Canvas Width="24" Height="24"><Path Data="M12,3 A9,9 0 1 1 12,21 A9,9 0 1 1 12,3 Z M12,7.6 V13 M12,16.3 V16.4" Stroke="#FF9500" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas></Viewbox>
+                        <TextBlock x:Name="ErrorTitle" Foreground="#F5F5F7" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,16,0,0" TextTrimming="CharacterEllipsis" MaxWidth="520"/>
+                        <TextBlock x:Name="ErrorMessage" Foreground="#8E8E98" FontSize="12.5" HorizontalAlignment="Center" Margin="0,6,0,0" TextWrapping="Wrap" TextAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                            <Button x:Name="ErrorBackButton" Style="{StaticResource ZTextButton}" Content="Back to library" Click="OnHome" AutomationProperties.Name="Back to library"/>
+                            <Button x:Name="ErrorRetryButton" Style="{StaticResource ZTextButton}" Tag="or" Margin="10,0,0,0" Content="Try again" Click="OnTryAgain" AutomationProperties.Name="Try again"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+                <!-- Fullscreen soft gradients (render 03): bottom 220 px 0 -> rgba(0,0,0,.55);
+                     they fade with the bar. -->
+                <Border x:Name="BottomGradient" VerticalAlignment="Bottom" Height="220" IsHitTestVisible="False" Visibility="Collapsed">
+                    <Border.Background><LinearGradientBrush StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#00000000" Offset="0"/><GradientStop Color="#8C000000" Offset="1"/></LinearGradientBrush></Border.Background>
+                </Border>
+                <!-- Top overlay (render 02): 120 px gradient rgba(0,0,0,.7) -> 0, padding 16 20,
+                     back 32 px, title 15 SemiBold, meta 12.5 #9C9CA6. Fullscreen (render 03): 140 px
+                     rgba(0,0,0,.62) -> 0, back at 24/22 with its own dark fill, no meta. -->
+                <Border x:Name="TopOverlay" VerticalAlignment="Top" Height="120" Padding="20,16,20,0">
+                    <Border.Background><LinearGradientBrush x:Name="TopGradient" StartPoint="0,0" EndPoint="0,1"><GradientStop x:Name="TopGradientStart" Color="#B3000000" Offset="0"/><GradientStop Color="#00000000" Offset="1"/></LinearGradientBrush></Border.Background>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Top">
+                        <Button x:Name="HomeButton" ToolTip="Back to library" AutomationProperties.Name="Back to library" Click="OnHome" Focusable="False" Cursor="Hand" Width="32" Height="32">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Bg" CornerRadius="8" Background="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}" BorderBrush="{Binding BorderBrush, RelativeSource={RelativeSource TemplatedParent}}" BorderThickness="{Binding BorderThickness, RelativeSource={RelativeSource TemplatedParent}}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
+                                    <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#29FFFFFF"/></Trigger></ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                            <Button.Tag><SolidColorBrush Color="#14FFFFFF"/></Button.Tag>
+                            <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Path Data="M19,12 H5 M11,6 L5,12 L11,18" Stroke="#D6D6DD" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox>
+                        </Button>
+                        <TextBlock x:Name="MovieTitle" Foreground="#F5F5F7" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" LineHeight="32" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="900">
+                            <TextBlock.Effect><DropShadowEffect x:Name="TitleShadow" BlurRadius="4" ShadowDepth="1" Direction="270" Opacity="0" Color="Black"/></TextBlock.Effect>
+                        </TextBlock>
+                        <TextBlock x:Name="MovieMeta" Foreground="#9C9CA6" FontSize="12.5" VerticalAlignment="Center" Margin="12,0,0,0"/>
+                    </StackPanel>
+                </Border>
                 <!-- One-line notice (for example "Subtitles: English"). -->
-                <Border x:Name="Osd" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,76,0,0" Background="#E616161A" CornerRadius="10" Padding="14,7" Opacity="0" IsHitTestVisible="False">
+                <Border x:Name="Osd" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,76,0,0" Background="#F016161A" BorderBrush="#17FFFFFF" BorderThickness="1" CornerRadius="10" Padding="14,7" Opacity="0" IsHitTestVisible="False">
                     <TextBlock x:Name="OsdText" Foreground="#F5F5F7" FontSize="13" FontWeight="SemiBold"/>
                 </Border>
-                <Border x:Name="TopOverlay" VerticalAlignment="Top" Background="#551B1B1E" Padding="18,10"><DockPanel><Button Focusable="False" x:Name="HomeButton" ToolTip="Back to Movies" Click="OnHome" Background="Transparent" Foreground="#F5F5F7" BorderThickness="0" Padding="8"><Path Data="M16,4 L8,12 L16,20 M8,12 H23" Stroke="#F5F5F7" StrokeThickness="1.6" Width="20" Height="20" Stretch="Uniform"/></Button><TextBlock Text="Zephyr Player" Foreground="#F5F5F7" VerticalAlignment="Center" Margin="14,0"/><TextBlock x:Name="MovieTitle" Foreground="#F5F5F7" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/></DockPanel></Border>
+                <!-- The bar: a floating card, NOT a full-width scrim (render 02). Inset 20, radius 16,
+                     padding 10 18 9, rgba(12,12,15,.74), 1 px rgba(255,255,255,.085), shadow 0 18 50
+                     rgba(0,0,0,.55). Fullscreen: the same content laid out at up to 1000 px and drawn
+                     at 0.78 (render 03), clamped to the screen (Instinct U2). -->
                 <Border x:Name="ControlBar" x:FieldModifier="public"
-                        VerticalAlignment="Bottom" Margin="20"
-                        Padding="22,14" CornerRadius="16"
-                        Background="#BD1E1E22" BorderBrush="#35353B" BorderThickness="1" Opacity="0">
+                        VerticalAlignment="Bottom" Margin="20" Padding="18,10,18,9" CornerRadius="16"
+                        Background="#BD0C0C0F" BorderBrush="#16FFFFFF" BorderThickness="1" Opacity="0"
+                        SizeChanged="OnBarSizeChanged">
+                    <Border.Effect><DropShadowEffect BlurRadius="50" ShadowDepth="18" Direction="270" Opacity="0.55" Color="Black"/></Border.Effect>
                     <Grid>
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="16"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <Grid Grid.Row="0" Margin="0,0,0,8">
-                          <Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="76"/></Grid.ColumnDefinitions>
-                          <TextBlock x:Name="ElapsedText" Text="0:00" Foreground="#FF9500" FontSize="13" VerticalAlignment="Center"/>
-                          <Slider Focusable="False" Style="{StaticResource PlaybackSlider}" x:Name="SeekBar" Grid.Column="1" Minimum="0" Maximum="1000" Value="0" Foreground="#FF9500" PreviewMouseDown="OnSeekDown" PreviewMouseUp="OnSeekUp"/>
-                          <TextBlock x:Name="RemainingText" Grid.Column="2" Text="-0:00" Foreground="#F5F5F7" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                        <!-- Seek row 16 px, gap 14: elapsed (62) | track | remaining (62). -->
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="62"/><ColumnDefinition Width="*"/><ColumnDefinition Width="62"/></Grid.ColumnDefinitions>
+                            <TextBlock x:Name="ElapsedText" Text="0:00" Foreground="#E9E9EE" FontSize="12" FontWeight="Medium" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center"/>
+                            <Slider x:Name="SeekBar" Grid.Column="1" Margin="14,0" Style="{StaticResource ZSeekSlider}" Minimum="0" Maximum="1000" Value="0" Foreground="#FF9500" VerticalAlignment="Center"
+                                    ValueChanged="OnSeekValueChanged"/>
+                            <TextBlock x:Name="RemainingText" Grid.Column="2" Text="-0:00" Foreground="#B4B4BE" FontSize="12" FontWeight="Medium" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center" HorizontalAlignment="Right"/>
                         </Grid>
-                        <TextBlock x:Name="TotalText" Grid.Row="1" HorizontalAlignment="Right" Foreground="#9696A0" FontSize="11" Margin="0,-5,0,4" Text="0:00 total"/>
-                        <Viewbox Grid.Row="3" Stretch="Uniform" StretchDirection="DownOnly"><Grid Width="900">
+                        <!-- Controls row, 3 columns (*, Auto, *): Play on the centre line, equal sides. -->
+                        <Grid x:Name="ControlsRow" Grid.Row="1" Margin="0,3,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
-                            <!-- default placement: volume LEFT, other icons RIGHT -->
-                            <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
-                                <Button Focusable="False" x:Name="VolumeButton" Width="34" Height="34" Padding="0" Click="OnMute"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Path x:Name="VolumeGlyph" Data="M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Stretch="Uniform" Height="16" Width="16"/>
+                            <!-- "1:42:08 total" under the remaining time (0.85 em, 60 %), drawn over the
+                                 top of the controls row as in the render. -->
+                            <TextBlock x:Name="TotalText" Grid.Column="2" Text="0:00 total" Foreground="#B4B4BE" Opacity="0.6" FontSize="10.2" FontWeight="Medium" Typography.NumeralAlignment="Tabular"
+                                       HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,-4,0,0" IsHitTestVisible="False"/>
+                            <!-- Volume group, gap 10: speaker 38 px, track 92x4, % label. -->
+                            <StackPanel x:Name="VolumeGroup" Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                                <Button x:Name="VolumeButton" Style="{StaticResource ZBarButton}" Width="38" Click="OnMute" ToolTip="Mute (M)">
+                                    <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                        <Path x:Name="VolumeBody" Data="M4,9.5 H7 L11,6 V18 L7,14.5 H4 Z" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeLineJoin="Round"/>
+                                        <Path x:Name="VolumeGlyph" Data="M15,9.2 A4,4 0 0 1 15,14.8 M17.6,6.8 A7.5,7.5 0 0 1 17.6,17.2" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/>
+                                    </Canvas></Viewbox>
                                 </Button>
-                                <Slider Focusable="False" Style="{StaticResource PlaybackSlider}" Foreground="#F5F5F7" x:Name="VolumeSlider" Width="110" Minimum="0" Maximum="100" Value="100"
-                                        VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"/>
-                                <TextBlock x:Name="VolumeLabel" Text="100%" MinWidth="36" Foreground="#E9E9EE" FontSize="12.5" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                <Slider x:Name="VolumeSlider" Style="{StaticResource ZVolumeSlider}" Width="92" Minimum="0" Maximum="100" Value="100" Margin="10,0,0,0" VerticalAlignment="Center" ValueChanged="OnVolumeChanged"/>
+                                <TextBlock x:Name="VolumeLabel" Text="100%" MinWidth="36" Foreground="#E9E9EE" FontSize="12.5" FontWeight="SemiBold" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center" Margin="10,0,0,0"/>
                             </StackPanel>
+                            <!-- Centre cluster, gap 14: 30s back, 10s back, Play/Pause, 10s fwd, 30s fwd. -->
                             <StackPanel x:Name="CenterPlaybackControls" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-
-                                <Button Focusable="False" x:Name="SecondarySkipBackButton" ToolTip="Skip back" Width="54" Height="46" Padding="0" Click="OnSecondarySkipBack" Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                  <Grid ClipToBounds="False">
-                                    <Canvas Width="54" Height="46" RenderTransformOrigin="0.5,0.5"><Canvas.RenderTransform><RotateTransform x:Name="SecondaryBackSpin"/></Canvas.RenderTransform><Path x:Name="SecondarySkipBackIcon" Data="M46,17 Q27,-2 8,17 M8,17 L8,8 M8,17 L17,14" Stroke="#F5F5F7" StrokeThickness="2.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas><TextBlock x:Name="SecondarySkipBackLabel" Text="30s" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,1"/>
-                                      </Grid>
+                                <Button x:Name="SecondarySkipBackButton" Style="{StaticResource ZGlyphButton}" ToolTip="Skip back" AutomationProperties.Name="Secondary skip backward" Width="44" Height="44" Click="OnSecondarySkipBack">
+                                    <Grid x:Name="SecondaryBackBox" Width="40" Height="40" ClipToBounds="False">
+                                        <Viewbox><Canvas Width="24" Height="24" RenderTransformOrigin="0.5,0.5" ClipToBounds="False"><Canvas.RenderTransform><RotateTransform x:Name="SecondaryBackSpin"/></Canvas.RenderTransform>
+                                            <Path x:Name="SecondarySkipBackIcon" Data="M20.27,10.39 A8.8,8.8 0 0 0 3.73,10.39" Stroke="#FF9500" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                            <Path x:Name="SecondarySkipBackHead" Data="M2.92,12.62 L1.95,9.08 L5.94,10.53 Z" Fill="#FF9500" Stroke="#FF9500" StrokeThickness="0.8" StrokeLineJoin="Round"/>
+                                        </Canvas></Viewbox>
+                                        <TextBlock x:Name="SecondarySkipBackLabel" Text="30s" Foreground="#FF9500" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,18,0,0"/>
+                                    </Grid>
                                 </Button>
-                                <Button Focusable="False" x:Name="SkipBackButton" ToolTip="Primary skip backward" AutomationProperties.Name="Primary skip backward" Width="60" Height="60" Padding="0" Click="OnSkipBack"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Grid>
-                                        <Grid Width="46" Height="46" RenderTransformOrigin="0.5,0.5">
+                                <Button x:Name="SkipBackButton" Style="{StaticResource ZGlyphButton}" ToolTip="Primary skip backward" AutomationProperties.Name="Primary skip backward" Width="46" Height="46" Margin="14,0,0,0" Click="OnSkipBack">
+                                    <Grid x:Name="SkipBackBox" Width="42" Height="42">
+                                        <Grid RenderTransformOrigin="0.5,0.5">
                                             <Grid.RenderTransform><RotateTransform x:Name="SkipBackSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Path x:Name="SkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
-                                            <Path x:Name="SkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F5F5F7"/>
+                                            <Viewbox><Canvas Width="24" Height="24">
+                                                <Path x:Name="SkipBackRing" Data="M17.79,18.89 A9,9 0 1 0 6.21,18.89" Stroke="#F5F5F7" StrokeThickness="1.55" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                <Path x:Name="SkipBackArrow" Data="M7.89,20.30 L4.52,20.02 L7.03,17.03 Z" Fill="#F5F5F7" Stroke="#F5F5F7" StrokeThickness="0.8" StrokeLineJoin="Round"/>
+                                            </Canvas></Viewbox>
                                         </Grid>
-                                        <TextBlock x:Name="SkipBackLabel" Text="10s" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="SkipBackLabel" Text="10s" Foreground="#F5F5F7" FontSize="12.6" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Button>
-                                <Button Focusable="False" x:Name="PlayPauseButton" Width="64" Height="64" Padding="0" Click="OnPlayPause"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="10,0">
-                                    <Grid>
-                                        <Ellipse x:Name="PlayRing" Width="60" Height="60" Stroke="#F5F5F7" StrokeThickness="3" Fill="Transparent"/>
-                                        <Path x:Name="PlayGlyph" Data="M26,20 L46,32 L26,44 Z" Fill="#F5F5F7"/>
-                                        <Grid x:Name="PauseGlyph" Width="24" Height="24" Visibility="Collapsed">
-                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Left" Margin="2,0,0,0"/>
-                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Right" Margin="0,0,2,0"/>
+                                <Button x:Name="PlayPauseButton" Style="{StaticResource ZGlyphButton}" ToolTip="Play / pause (Space)" AutomationProperties.Name="Play or pause" Width="50" Height="50" Margin="22,0,22,0" Click="OnPlayPause">
+                                    <Grid x:Name="PlayBox" Width="50" Height="50">
+                                        <Viewbox><Canvas Width="24" Height="24">
+                                            <Ellipse x:Name="PlayRing" Canvas.Left="1.6" Canvas.Top="1.6" Width="20.8" Height="20.8" Stroke="#FF9500" StrokeThickness="1.25" Fill="#1AFF9500"/>
+                                            <Path x:Name="PlayGlyph" Data="M9.4,7.9 L16.2,12 L9.4,16.1 Z" Fill="#FF9500" Stroke="#FF9500" StrokeThickness="0.9" StrokeLineJoin="Round"/>
+                                        </Canvas></Viewbox>
+                                        <!-- Pause bars: 2.3 x 7.6 of 24 at x 9 and 12.7 (render 02), i.e. 4.8 x 15.8 px. -->
+                                        <Grid x:Name="PauseGlyph" Width="12.5" Height="15.8" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                            <Rectangle Width="4.8" Height="15.8" RadiusX="1.7" RadiusY="1.7" Fill="#FF9500" HorizontalAlignment="Left"/>
+                                            <Rectangle Width="4.8" Height="15.8" RadiusX="1.7" RadiusY="1.7" Fill="#FF9500" HorizontalAlignment="Right"/>
                                         </Grid>
                                     </Grid>
                                 </Button>
-                                <Button Focusable="False" x:Name="SkipForwardButton" ToolTip="Primary skip forward" AutomationProperties.Name="Primary skip forward" Width="60" Height="60" Padding="0" Click="OnSkipForward"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Grid>
-                                        <Grid Width="46" Height="46" RenderTransformOrigin="0.5,0.5">
+                                <Button x:Name="SkipForwardButton" Style="{StaticResource ZGlyphButton}" ToolTip="Primary skip forward" AutomationProperties.Name="Primary skip forward" Width="46" Height="46" Margin="0,0,14,0" Click="OnSkipForward">
+                                    <Grid x:Name="SkipForwardBox" Width="42" Height="42">
+                                        <Grid RenderTransformOrigin="0.5,0.5">
                                             <Grid.RenderTransform><RotateTransform x:Name="SkipForwardSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Path x:Name="SkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
-                                            <Path x:Name="SkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F5F5F7"/>
+                                            <Viewbox><Canvas Width="24" Height="24">
+                                                <Path x:Name="SkipForwardRing" Data="M6.21,18.89 A9,9 0 1 1 17.79,18.89" Stroke="#F5F5F7" StrokeThickness="1.55" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                                <Path x:Name="SkipForwardArrow" Data="M16.11,20.30 L16.97,17.03 L19.48,20.02 Z" Fill="#F5F5F7" Stroke="#F5F5F7" StrokeThickness="0.8" StrokeLineJoin="Round"/>
+                                            </Canvas></Viewbox>
                                         </Grid>
-                                        <TextBlock x:Name="SkipForwardLabel" Text="10s" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        <TextBlock x:Name="SkipForwardLabel" Text="10s" Foreground="#F5F5F7" FontSize="12.6" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                     </Grid>
                                 </Button>
-                                <Button Focusable="False" x:Name="SecondarySkipForwardButton" ToolTip="Skip forward" Width="54" Height="46" Padding="0" Click="OnSecondarySkipForward" Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                  <Grid ClipToBounds="False">
-                                    <Canvas Width="54" Height="46" RenderTransformOrigin="0.5,0.5"><Canvas.RenderTransform><RotateTransform x:Name="SecondaryForwardSpin"/></Canvas.RenderTransform><Path x:Name="SecondarySkipForwardIcon" Data="M8,17 Q27,-2 46,17 M46,17 L46,8 M46,17 L37,14" Stroke="#F5F5F7" StrokeThickness="2.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas><TextBlock x:Name="SecondarySkipForwardLabel" Text="30s" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,1"/>
-                                      </Grid>
-                                </Button>
-
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <Button Focusable="False" x:Name="CaptionsButton" Margin="0,0,8,0" Padding="6" Click="OnCaptions" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Subtitles">
-                                    <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
-                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M5.7,5.0 H22.3 A1.7,1.7 0 0 1 24,6.7 V17.3 A1.7,1.7 0 0 1 22.3,19.0 H14.5 L7.4,24.8 L9.5,19.0 H5.7 A1.7,1.7 0 0 1 4,17.3 V6.7 A1.7,1.7 0 0 1 5.7,5.0 Z"/>
-                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M7.2,9.0 H13.3 M14.7,9.0 H17.7 M19.1,9.0 H20.8 M7.2,12.0 H8.7 M10.1,12.0 H16.2 M17.6,12.0 H20.8 M7.2,15.0 H11.8 M13.2,15.0 H15.1 M16.5,15.0 H20.8"/>
-                                    </Canvas></Viewbox>
-                                </Button>
-                                <Button Focusable="False" x:Name="SpeedButton" Visibility="Collapsed" Margin="0,0,10,0" Padding="8,4" Click="OnSpeed"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
-                                    <Grid><Path Data="M3,17 A9,9 0 1 1 21,17 M12,13 L17,6" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Width="24" Height="24" Stretch="Uniform"/><TextBlock x:Name="SpeedLabel" Visibility="Collapsed"/></Grid>
-                                </Button>
-                                <Button Focusable="False" x:Name="SleepButton" Visibility="Collapsed" Margin="10,0,0,0" Padding="8,4" Click="OnSleep"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
-                                    <Grid><Path Data="M19,15 A8,8 0 1 1 9,3 A7,7 0 0 0 19,15" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Width="24" Height="24" Stretch="Uniform"/><TextBlock x:Name="SleepLabel" Visibility="Collapsed"/></Grid>
-                                </Button>
-                                <Button Focusable="False" x:Name="FullscreenButton" Padding="6" Click="OnFullscreen" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Full screen (F)">
-                                    <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
-                                        <Path x:Name="FullscreenGlyph" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8"/>
-                                    </Canvas></Viewbox>
+                                <Button x:Name="SecondarySkipForwardButton" Style="{StaticResource ZGlyphButton}" ToolTip="Skip forward" AutomationProperties.Name="Secondary skip forward" Width="44" Height="44" Click="OnSecondarySkipForward">
+                                    <Grid x:Name="SecondaryForwardBox" Width="40" Height="40" ClipToBounds="False">
+                                        <Viewbox><Canvas Width="24" Height="24" RenderTransformOrigin="0.5,0.5" ClipToBounds="False"><Canvas.RenderTransform><RotateTransform x:Name="SecondaryForwardSpin"/></Canvas.RenderTransform>
+                                            <Path x:Name="SecondarySkipForwardIcon" Data="M3.73,10.39 A8.8,8.8 0 0 1 20.27,10.39" Stroke="#FF9500" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                            <Path x:Name="SecondarySkipForwardHead" Data="M21.08,12.62 L18.06,10.53 L22.05,9.08 Z" Fill="#FF9500" Stroke="#FF9500" StrokeThickness="0.8" StrokeLineJoin="Round"/>
+                                        </Canvas></Viewbox>
+                                        <TextBlock x:Name="SecondarySkipForwardLabel" Text="30s" Foreground="#FF9500" FontSize="13" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,18,0,0"/>
+                                    </Grid>
                                 </Button>
                             </StackPanel>
-                        </Grid></Viewbox>
+                            <!-- Right group, gap 4: subtitles, speed, sleep, fullscreen (38 px, radius 9,
+                                 icons 21-22 px at stroke 1.6, active #FF9500, badges 12 px SemiBold). -->
+                            <StackPanel x:Name="RightGroup" Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button x:Name="CaptionsButton" Style="{StaticResource ZBarButton}" Click="OnCaptions" ToolTip="Subtitles" AutomationProperties.Name="Subtitles">
+                                    <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeLineJoin="Round" Data="M6,5 H18 A3,3 0 0 1 21,8 V15 A3,3 0 0 1 18,18 H6 A3,3 0 0 1 3,15 V8 A3,3 0 0 1 6,5 Z"/>
+                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M8,18 L6.5,21 L11,18 M7,10.5 H12 M14.5,10.5 H17 M7,14 H9.5 M12,14 H17"/>
+                                    </Canvas></Viewbox>
+                                </Button>
+                                <Button x:Name="SpeedButton" Style="{StaticResource ZBarButton}" Margin="4,0,0,0" Click="OnSpeed" ToolTip="Playback speed" AutomationProperties.Name="Playback speed">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
+                                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M4.2,17.5 A9,9 0 1 1 19.8,17.5 M12,13.2 L16,9 M12,5.5 V6.9 M6.4,8 L7.4,9 M17.6,8 L16.6,9 M4.6,13 H6 M18,13 H19.4"/>
+                                            <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M10.6,13.6 A1.4,1.4 0 1 1 13.4,13.6 A1.4,1.4 0 1 1 10.6,13.6 Z"/>
+                                        </Canvas></Viewbox>
+                                        <TextBlock x:Name="SpeedLabel" Visibility="Collapsed" Margin="5,0,0,0" FontSize="12" FontWeight="SemiBold" Foreground="#FF9500" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="SleepButton" Style="{StaticResource ZBarButton}" Margin="4,0,0,0" Click="OnSleep" ToolTip="Sleep timer" AutomationProperties.Name="Sleep timer">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
+                                            <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeLineJoin="Round" Data="M19.5,14.6 A8,8 0 0 1 9.4,4.5 A8,8 0 1 0 19.5,14.6 Z"/>
+                                        </Canvas></Viewbox>
+                                        <TextBlock x:Name="SleepLabel" Visibility="Collapsed" Margin="5,0,0,0" FontSize="12" FontWeight="SemiBold" Foreground="#FF9500" Typography.NumeralAlignment="Tabular" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="FullscreenButton" Style="{StaticResource ZBarButton}" Margin="4,0,0,0" Click="OnFullscreen" ToolTip="Full screen (F)" AutomationProperties.Name="Full screen">
+                                    <Viewbox Width="21" Height="21"><Canvas Width="24" Height="24">
+                                        <Path x:Name="FullscreenGlyph" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M4,9 V5.5 A1.5,1.5 0 0 1 5.5,4 H9 M15,4 H18.5 A1.5,1.5 0 0 1 20,5.5 V9 M20,15 V18.5 A1.5,1.5 0 0 1 18.5,20 H15 M9,20 H5.5 A1.5,1.5 0 0 1 4,18.5 V15"/>
+                                    </Canvas></Viewbox>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
                     </Grid>
+                </Border>
+                <!-- Pop-ups (render 04), anchored above their own button, one open at a time; the
+                     render shows all three side by side for review only. Bottom edge: 20 px above
+                     the bar's top (= 130 px above the window bottom when windowed). -->
+                <Border x:Name="SubtitlesPopup" Style="{StaticResource ZPopupCard}" Width="300">
+                    <StackPanel>
+                        <Grid Style="{StaticResource ZPopupHeader}">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Path Stroke="#F5F5F7" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M6,5 H18 A3,3 0 0 1 21,8 V15 A3,3 0 0 1 18,18 H6 A3,3 0 0 1 3,15 V8 A3,3 0 0 1 6,5 Z M8,18 L6.5,21 L11,18 M7,10.5 H12 M14.5,10.5 H17 M7,14 H9.5 M12,14 H17"/></Canvas></Viewbox>
+                                <TextBlock Text="Subtitles" FontSize="13" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="SubtitleTrackList"/>
+                        <Button x:Name="AddSubtitleRow" Style="{StaticResource ZPopupRow}" Foreground="#FF9500" Click="OnAddSubtitleRow" AutomationProperties.Name="Add subtitle file...">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="16" Height="16"><Canvas Width="24" Height="24"><Path Data="M12,5 V19 M5,12 H19" Stroke="#FF9500" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas></Viewbox>
+                                <TextBlock Text="Add subtitle file…" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Border Style="{StaticResource ZPopupSep}"/>
+                        <Grid Margin="6,4">
+                            <TextBlock Text="Size" FontSize="13" VerticalAlignment="Center"/>
+                            <StackPanel x:Name="SubtitleSizeChips" Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="SubSizeS" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Content="S" Click="OnSubtitleSize" Tag="" ToolTip="Small - applies the next time Zephyr starts"/>
+                                <Button x:Name="SubSizeM" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Margin="6,0,0,0" Content="M" Click="OnSubtitleSize" Tag="on" ToolTip="Medium - applies the next time Zephyr starts"/>
+                                <Button x:Name="SubSizeL" Style="{StaticResource ZChip}" Height="26" Padding="10,0" Margin="6,0,0,0" Content="L" Click="OnSubtitleSize" Tag="" ToolTip="Large - applies the next time Zephyr starts"/>
+                            </StackPanel>
+                        </Grid>
+                        <Grid Margin="6,8,6,2">
+                            <TextBlock Text="Delay" FontSize="13" VerticalAlignment="Center"/>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button x:Name="SubDelayMinus" Style="{StaticResource ZBoxButton}" Click="OnSubtitleDelayMinus" ToolTip="Subtitles 0.1 s earlier" AutomationProperties.Name="Subtitle delay minus">
+                                    <Viewbox Width="14" Height="14"><Canvas Width="24" Height="24"><Path Data="M5,12 H19" Stroke="#D6D6DD" StrokeThickness="1.6" StrokeStartLineCap="Round"/></Canvas></Viewbox>
+                                </Button>
+                                <TextBlock x:Name="SubDelayText" Text="+0.0 s" FontSize="13" Width="44" TextAlignment="Center" Margin="8,0" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular"/>
+                                <Button x:Name="SubDelayPlus" Style="{StaticResource ZBoxButton}" Click="OnSubtitleDelayPlus" ToolTip="Subtitles 0.1 s later" AutomationProperties.Name="Subtitle delay plus">
+                                    <Viewbox Width="14" Height="14"><Canvas Width="24" Height="24"><Path Data="M12,5 V19 M5,12 H19" Stroke="#D6D6DD" StrokeThickness="1.6" StrokeStartLineCap="Round"/></Canvas></Viewbox>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="SpeedPopup" Style="{StaticResource ZPopupCard}" Width="330">
+                    <StackPanel>
+                        <Grid Style="{StaticResource ZPopupHeader}">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Path Stroke="#F5F5F7" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M4.2,17.5 A9,9 0 1 1 19.8,17.5 M12,13.2 L16,9 M12,5.5 V6.9 M6.4,8 L7.4,9 M17.6,8 L16.6,9 M4.6,13 H6 M18,13 H19.4"/><Path Fill="#F5F5F7" Data="M10.6,13.6 A1.4,1.4 0 1 1 13.4,13.6 A1.4,1.4 0 1 1 10.6,13.6 Z"/></Canvas></Viewbox>
+                                <TextBlock Text="Playback speed" FontSize="13" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock x:Name="SpeedHeaderValue" Text="1×" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Foreground="#FF9500" Typography.NumeralAlignment="Tabular"/>
+                        </Grid>
+                        <UniformGrid x:Name="SpeedChips" Columns="3" Margin="-4">
+                            <Button Style="{StaticResource ZChip}" Margin="4" Padding="0" Content="0.5×" Tag="" Click="OnSpeedChip"/>
+                            <Button Style="{StaticResource ZChip}" Margin="4" Padding="0" Content="0.75×" Tag="" Click="OnSpeedChip"/>
+                            <Button Style="{StaticResource ZChip}" Margin="4" Padding="0" Content="Normal" Tag="" Click="OnSpeedChip"/>
+                            <Button Style="{StaticResource ZChip}" Margin="4" Padding="0" Content="1.25×" Tag="" Click="OnSpeedChip"/>
+                            <Button Style="{StaticResource ZChip}" Margin="4" Padding="0" Content="1.5×" Tag="" Click="OnSpeedChip"/>
+                            <Button Style="{StaticResource ZChip}" Margin="4" Padding="0" Content="2×" Tag="" Click="OnSpeedChip"/>
+                        </UniformGrid>
+                        <Border Style="{StaticResource ZPopupSep}" Margin="2,14,2,12"/>
+                        <Grid Margin="4,0">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="0.25×" FontSize="12" Foreground="#8E8E98" VerticalAlignment="Center"/>
+                            <Slider x:Name="SpeedSlider" Grid.Column="1" Margin="10,0" Style="{StaticResource ZVolumeSlider}" Minimum="0.25" Maximum="4" Value="1" SmallChange="0.05" LargeChange="0.25" TickFrequency="0.05" IsSnapToTickEnabled="True" ValueChanged="OnSpeedSliderChanged"/>
+                            <TextBlock Grid.Column="2" Text="4×" FontSize="12" Foreground="#8E8E98" VerticalAlignment="Center"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+                <Border x:Name="SleepPopup" Style="{StaticResource ZPopupCard}" Width="290">
+                    <StackPanel>
+                        <Grid Style="{StaticResource ZPopupHeader}">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Path Stroke="#F5F5F7" StrokeThickness="1.6" StrokeLineJoin="Round" Data="M19.5,14.6 A8,8 0 0 1 9.4,4.5 A8,8 0 1 0 19.5,14.6 Z"/></Canvas></Viewbox>
+                                <TextBlock Text="Sleep timer" FontSize="13" FontWeight="SemiBold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            </StackPanel>
+                            <TextBlock x:Name="SleepHeaderValue" HorizontalAlignment="Right" VerticalAlignment="Center" FontSize="13" FontWeight="SemiBold" Foreground="#FF9500" Typography.NumeralAlignment="Tabular"/>
+                        </Grid>
+                        <StackPanel x:Name="SleepRows">
+                            <Button Style="{StaticResource ZPopupRow}" Content="Off" Tag="sel" Click="OnSleepRow"/>
+                            <Button Style="{StaticResource ZPopupRow}" Content="15 minutes" Click="OnSleepRow"/>
+                            <Button Style="{StaticResource ZPopupRow}" Content="30 minutes" Click="OnSleepRow"/>
+                            <Button Style="{StaticResource ZPopupRow}" Content="45 minutes" Click="OnSleepRow"/>
+                            <Button Style="{StaticResource ZPopupRow}" Content="1 hour" Click="OnSleepRow"/>
+                            <Button Style="{StaticResource ZPopupRow}" Content="1 hour 30" Click="OnSleepRow"/>
+                            <Button Style="{StaticResource ZPopupRow}" Content="End of this movie" Click="OnSleepRow"/>
+                        </StackPanel>
+                        <Border Style="{StaticResource ZPopupSep}"/>
+                        <TextBlock Text="Pauses the movie when time is up" FontSize="12" Foreground="#8E8E98" Margin="6,6,6,2"/>
+                    </StackPanel>
                 </Border>
             </Grid>
         </libvlc:VideoView.Content>
