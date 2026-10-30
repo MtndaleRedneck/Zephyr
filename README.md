@@ -2,7 +2,7 @@
 
 <img src="android/src/main/res/drawable-nodpi/app_logo.png" width="128" alt="Zephyr icon">
 
-A phone remote and a PC movie player that work together.
+A phone remote app and Zephyr Media Player for Windows, plus VLC phone remote support.
 
 ## Install
 
