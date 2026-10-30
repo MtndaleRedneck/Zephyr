@@ -10,6 +10,7 @@ import java.net.URL
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -422,7 +423,7 @@ class StreamServerAndroidTest {
             server.stop()
             server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
                 android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
-            })
+            }, providerSize = { _, _ -> payload.size.toLong() })
             server.providerDeadlineMs = 50 + iter * 60L // fire around the copy window
             server.start()
             val url = server.addMovie(Uri.parse("content://synthetic-pipe/commit$iter"), "commit$iter.mkv")
@@ -457,6 +458,74 @@ class StreamServerAndroidTest {
             }
         }
     }
+
+    /** M1/Tab: a provider that ends its stream EARLY vs its declared length -
+     *  the truncated copy must never be committed (validation before the
+     *  commit gate), never left as a temp, and the answer is a clear error. */
+    @Test fun shortProviderCopy_neverCommits() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        }, providerSize = { _, _ -> 8192L })
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/short"), "short.mkv")
+        val code = java.util.concurrent.atomic.AtomicInteger(-1)
+        val client = kotlin.concurrent.thread { runCatching { code.set(get(url).first) } }
+        try {
+            val opened = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (writers.size < 2 && android.os.SystemClock.elapsedRealtime() < opened) Thread.sleep(10)
+            assertTrue("copy pipe opened", writers.size >= 2)
+            // Half the declared length, then EOF.
+            android.os.ParcelFileDescriptor.AutoCloseOutputStream(writers[1]).use { it.write(ByteArray(4096)); it.flush() }
+            client.join(10_000)
+            assertFalse("client ended", client.isAlive)
+            assertEquals("truncated copy is a clear provider error", 502, code.get())
+            val left = context.cacheDir.listFiles().orEmpty().filter { it.name.startsWith("stream-") }
+            assertTrue("no committed entry from a short copy", left.none { !it.name.endsWith(".part") })
+            assertTrue("no leftover temp", left.none { it.name.endsWith(".part") })
+            val settle = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (StreamServer.providerBudget.availablePermits() < 8 && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertEquals("provider permit returned", 8, StreamServer.providerBudget.availablePermits())
+        } finally {
+            server.stop(); writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
+    }
+
+    /** M1/Tab: the stop drain is bounded even with a provider that never
+     *  returns - the drain thread itself never runs a close, so it must reach
+     *  its end (cache sweep + token release) within the drain budget instead
+     *  of parking one drain thread per stopped session. Pipe fakes cannot
+     *  emulate a physically blocked close (declared); this pins the threading
+     *  structure: stop returns promptly AND the drain terminates. */
+    @Test fun stopDrain_boundedWithNeverReturningProvider() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        server.stop()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+        })
+        server.providerDeadlineMs = 60_000 // no abandonment: the provider is "never" heard from
+        server.drainBudgetMs = 2_000
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/drain"), "drain.mkv")
+        val client = kotlin.concurrent.thread { runCatching { get(url) } }
+        try {
+            val opened = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (writers.size < 2 && android.os.SystemClock.elapsedRealtime() < opened) Thread.sleep(10)
+            assertTrue("copy pipe opened", writers.size >= 2)
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            server.stop()
+            assertTrue("stop returns promptly", android.os.SystemClock.elapsedRealtime() - t0 < 2000)
+            assertTrue("drain thread terminates instead of parking",
+                server.drainFinished.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            client.join(5000)
+        } finally {
+            writers.forEach { runCatching { it.close() } }; client.join(5000)
+        }
+    }
+
     /** M1 lifecycle across restart: after a stop with a stalled provider, a NEW
      *  server session serves normally. Honest limit: a pipe provider cannot stay
      *  truly parked (its close succeeds between poll cycles), so "old workers
