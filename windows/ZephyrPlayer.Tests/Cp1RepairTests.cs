@@ -105,10 +105,11 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(generation, view.PlayGeneration);
                 Assert.Equal(50, view.SharedVolume);
                 Assert.Equal(50, settings.LastVolume);
-                // libVLC's own read-back is -1 without a real audio output; when it
-                // answers, it must agree with the applied gain.
-                if (readback200 >= 0) Assert.Equal(100, readback200);
-                if (readback150 >= 0) Assert.Equal(75, readback150);
+                // libVLC's own Volume read-back is not evidence on a headless runner: it
+                // read 0 here with the dummy audio output (CI run 41019817391) and -1 in
+                // the real-desktop capture with no audio device, whatever was applied.
+                // It is recorded below, not asserted; the assertion is on the gain
+                // PlayerView hands to MediaPlayer.Volume on the settings-change path.
                 Note("boost-live", $"slider=50 boost100->gain 50; boost200->applied {applied200} libvlc_readback={readback200}; boost150->applied 75 libvlc_readback={readback150}; same media={ReferenceEquals(media, view.CurrentMedia)}; generation {generation}->{view.PlayGeneration}; state={player.State}");
             }, s => s.VolumeBoostMaxPct = 100);
         }
