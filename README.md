@@ -1,4 +1,4 @@
-<p align="center"><img src="android/src/main/res/drawable-nodpi/app_logo.png" alt="Zephyr icon" width="96"></p>
+<p align="center"><img src="docs/readme-icon.png" alt="Zephyr icon" width="96"></p>
 
 # Zephyr
 
