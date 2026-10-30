@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>ZephyrVlcRemote</AssemblyName>
     <ApplicationIcon>Assets\zephyr-vlc-remote.ico</ApplicationIcon>
-    <Version>1.0.0.0</Version>
+    <Version>1.0.1.0</Version>
     <Description>Zephyr VLC Remote for Windows: VLC control on this PC for the Zephyr Android app.</Description>
   </PropertyGroup>
   <ItemGroup>
