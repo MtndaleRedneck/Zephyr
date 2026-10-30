@@ -1097,13 +1097,22 @@ if ($shellH -ne [System.IntPtr]::Zero) {
     Start-Sleep -Milliseconds 700
     $stSlowLoading = Cp1Status
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-7-slow-phone-spinner.png"
-    $slowPlayed = $false
-    foreach ($i in 1..120) { $stS = Cp1Status; if ($stS -and $stS.state -eq 'Playing') { $slowPlayed = $true; break }; Start-Sleep -Milliseconds 500 }
+    # libVLC's "Playing" comes when its demuxer opens; the picture follows once
+    # buffering ends. Wait for the movie's clock to move (the picture is up), and
+    # keep sampling across the spinner -> picture switch (run 41035935547 stopped
+    # sampling at Playing + 0.8 s, before that switch).
+    $slowPlayed = $false; $slowPlayingMs = -1
+    foreach ($i in 1..120) {
+        $stS = Cp1Status
+        if ($stS -and $stS.state -eq 'Playing' -and $slowPlayingMs -lt 0) { $slowPlayingMs = [Environment]::TickCount64 - $tSlow }
+        if ($stS -and $stS.state -eq 'Playing' -and $stS.time -ge 1) { $slowPlayed = $true; break }
+        Start-Sleep -Milliseconds 500
+    }
     $slowMs = [Environment]::TickCount64 - $tSlow
-    Start-Sleep -Milliseconds 800
+    Start-Sleep -Milliseconds 1500
     Cp1FlashStop
-    Cp1Log "slow phone start: /play answered $($slowResp.StatusCode) after $slowAnswerMs ms; status while loading: $($stSlowLoading | ConvertTo-Json -Compress -Depth 4); Playing after $slowMs ms; final state=$($stS.state) title=[$($stS.title)]"
-    Cp1Gate ($slowResp.StatusCode -eq 200 -and $slowPlayed) "slow phone source (dribbled) was not stopped and played after $slowMs ms (spinner frame cp1-7-slow-phone-spinner.png)"
+    Cp1Log "slow phone start: /play answered $($slowResp.StatusCode) after $slowAnswerMs ms; status while loading: $($stSlowLoading | ConvertTo-Json -Compress -Depth 4); libVLC Playing after $slowPlayingMs ms; movie clock past 1 s after $slowMs ms; final state=$($stS.state) time=$($stS.time) title=[$($stS.title)]"
+    Cp1Gate ($slowResp.StatusCode -eq 200 -and $slowPlayed) "slow phone source (dribbled) was not stopped: its clock was running after $slowMs ms (spinner frame cp1-7-slow-phone-spinner.png, picture cp1-7b-slow-phone-playing.png)"
     $null = CaptureWindow $shellH "$env:RUNNER_TEMP/cp1-7b-slow-phone-playing.png"
 
     # Late PC-side failure (round 2, item 2): /play of a movie whose header passes
