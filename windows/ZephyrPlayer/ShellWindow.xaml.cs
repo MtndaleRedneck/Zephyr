@@ -464,6 +464,7 @@ namespace ZephyrPlayer
             }
             UpdateChromeForState();
             MarkFullscreenForTaskbar(on);
+            if (on) QueueDropWorkAreaRegion();
         }
 
         /// <summary>Render 03 is edge to edge: the taskbar must not sit over the bottom of
@@ -595,6 +596,38 @@ namespace ZephyrPlayer
         // ---------- maximize / full screen: work area vs whole monitor ----------
 
         private const int WM_GETMINMAXINFO = 0x0024;
+        private const int WM_WINDOWPOSCHANGED = 0x0047;
+        private const int WM_DWMCOMPOSITIONCHANGED = 0x031E;
+        [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr hwnd, IntPtr region, bool redraw);
+        [DllImport("user32.dll")] private static extern int GetWindowRgn(IntPtr hwnd, IntPtr region);
+        [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+
+        // Full screen must not keep WindowChrome's work-area clip. With GlassFrameThickness
+        // 0, WPF's WindowChrome gives a MAXIMIZED window a window region equal to the
+        // monitor's work area (WindowChromeWorker._SetRoundingRegion, on every size change).
+        // Full screen maximizes to the whole monitor (WM_GETMINMAXINFO below), so that
+        // region cut the taskbar's height off the bottom of the window, the video host
+        // and libVLC's picture included; LibVLCSharp's overlay is a separate window, so
+        // the bar and the gradient still drew there (subtitle reference run 41114711116:
+        // picture rows 0..1031 of 1080, a 48 px dark band). In full screen the region is
+        // dropped once WindowChrome has set it; windowed and maximized keep its region.
+        private bool _regionDropQueued;
+        private void QueueDropWorkAreaRegion()
+        {
+            if (_regionDropQueued) return;
+            _regionDropQueued = true;
+            // Queued, so it runs after WindowChrome's own handling of this size change.
+            Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(() =>
+            {
+                _regionDropQueued = false;
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (!_fullscreen || hwnd == IntPtr.Zero) return;
+                var probe = CreateRectRgn(0, 0, 0, 0);
+                try { if (probe != IntPtr.Zero && GetWindowRgn(hwnd, probe) == 0 /* no region */) return; }
+                finally { if (probe != IntPtr.Zero) DeleteObject(probe); }
+                SetWindowRgn(hwnd, IntPtr.Zero, true);
+            }));
+        }
         [StructLayout(LayoutKind.Sequential)] private struct POINT { public int X, Y; }
         [StructLayout(LayoutKind.Sequential)] private struct MINMAXINFO { public POINT ptReserved, ptMaxSize, ptMaxPosition, ptMinTrackSize, ptMaxTrackSize; }
         [StructLayout(LayoutKind.Sequential)] private struct RECT { public int Left, Top, Right, Bottom; }
@@ -648,6 +681,9 @@ namespace ZephyrPlayer
                 // During a view switch: the outgoing library's picture (ShowView).
                 return _holdBrush != IntPtr.Zero ? _holdBrush : BlackBrush;
             }
+            if (_fullscreen && (msg == WM_DWMCOMPOSITIONCHANGED
+                || (msg == WM_WINDOWPOSCHANGED && (Marshal.ReadInt32(lParam, 2 * IntPtr.Size + 16) & 0x0001 /* SWP_NOSIZE */) == 0)))
+                QueueDropWorkAreaRegion();
             if (msg != WM_GETMINMAXINFO) return IntPtr.Zero;
             var monitor = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
             if (monitor == IntPtr.Zero) return IntPtr.Zero;
