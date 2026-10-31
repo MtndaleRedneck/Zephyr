@@ -64,7 +64,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(0.0, hl.Opacity); Assert.Equal(0.0, pr.Opacity);
                 Assert.Equal(Colors.White, ((SolidColorBrush)hl.Background).Color);
                 Assert.IsType<LinearGradientBrush>(ok.Background);   // .btn.or accent
-                Save(dlg.Content as Visual ?? dlg, (int)dlg.ActualWidth, (int)dlg.ActualHeight, "cp4-dark-dialog-render.png");
+                Save(dlg, (int)dlg.ActualWidth, (int)dlg.ActualHeight, "cp4-dark-dialog-render.png");
                 dlg.Close();
             });
         }
@@ -108,7 +108,7 @@ namespace ZephyrPlayer.Tests
                     d.ShowInTaskbar = false;
                     d.ContentRendered += (_, __) =>
                     {
-                        try { Save(d.Content as Visual ?? d, (int)d.ActualWidth, (int)d.ActualHeight, "cp4-settings-write-failure.png"); } catch { }
+                        try { Save(d, (int)d.ActualWidth, (int)d.ActualHeight, "cp4-settings-write-failure.png"); } catch { }
                         d.Close();
                     };
                 };

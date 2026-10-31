@@ -29,7 +29,7 @@
             </Style>
         </ResourceDictionary>
     </Window.Resources>
-    <Border BorderBrush="#1AFFFFFF" BorderThickness="1">
+    <Border BorderBrush="#1AFFFFFF" BorderThickness="1" Background="#0E0E11">
         <Grid>
             <Grid.RowDefinitions><RowDefinition Height="32"/><RowDefinition Height="*"/></Grid.RowDefinitions>
             <!-- Caption: icon + "Zephyr Settings", close only. -->
