@@ -507,7 +507,7 @@ namespace ZephyrPlayer.Tests
                 Click(view, "SkipForwardButton");
                 Click(view, "SkipBackButton");
                 Click(view, "SecondarySkipForwardButton");
-                var control = new MainWindowPlaybackControl(view, player);
+                var control = new PlayerViewPlaybackControl(view, player);
                 control.Seek(5);
                 Pump(400);
                 var after = player.Time;
@@ -683,7 +683,7 @@ namespace ZephyrPlayer.Tests
                     if (url == phoneUrl2) { gate2.Wait(20000); return view.PrepareSource(ClipUrl, subs, token); }
                     return view.PrepareSource(url, subs, token);
                 };
-                var control = new MainWindowPlaybackControl(view, player);
+                var control = new PlayerViewPlaybackControl(view, player);
                 var log = new System.Text.StringBuilder();
                 void AssertNewTitleAndZeroTimeline()
                 {

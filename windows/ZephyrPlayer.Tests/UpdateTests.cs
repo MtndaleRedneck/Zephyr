@@ -246,5 +246,97 @@ namespace ZephyrPlayer.Tests
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 SelfUpdate.Download("1.2.0", "http://evil.example.com/x.exe", null));
         }
+
+        // ---------- CP4 item 94: the canonical repository and its historical name ----------
+
+        /// <summary>The live feed's shape, read from
+        /// https://api.github.com/repos/MtndaleRedneck/Zephyr/releases on 2026-10-31 (the
+        /// player-v1.4.0 entry, trimmed to the fields read; values as published).</summary>
+        private const string LiveFeed140 = @"[{""url"":""https://api.github.com/repos/MtndaleRedneck/Zephyr/releases/428641366"",""html_url"":""https://github.com/MtndaleRedneck/Zephyr/releases/tag/player-v1.4.0"",""id"":428641366,""tag_name"":""player-v1.4.0"",""target_commitish"":""0bec11b70f0d66c17236936d5140542548316222"",""name"":""Zephyr PC Player 1.4.0"",""draft"":false,""prerelease"":false,""created_at"":""2026-10-30T03:43:38Z"",""published_at"":""2026-10-30T04:03:08Z"",""assets"":[{""url"":""https://api.github.com/repos/MtndaleRedneck/Zephyr/releases/assets/690865491"",""id"":690865491,""name"":""Zephyr-PC-1.4.0.exe"",""content_type"":""application/octet-stream"",""state"":""uploaded"",""size"":164216642,""digest"":""sha256:bf201c3915b641fede6d4b1244c726fb41e181075e1389c52d7e4cc51873430b"",""created_at"":""2026-10-30T04:03:11Z"",""updated_at"":""2026-10-30T04:03:18Z"",""browser_download_url"":""https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe""}]}]";
+
+        [Fact]
+        public void LiveFeedShape_CanonicalAsset_Offered()
+        {
+            Feed(LiveFeed140);
+            var hit = UpdateCheck.LatestNewerThanOrThrow("1.3.0", _base + "/releases");
+            Assert.NotNull(hit);
+            Assert.Equal("1.4.0", hit!.Value.Version);
+            Assert.Equal("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe", hit.Value.ExeUrl);
+            Assert.Equal("bf201c3915b641fede6d4b1244c726fb41e181075e1389c52d7e4cc51873430b", hit.Value.Sha256);
+            Assert.Equal("up_to_date", UpdateCheck.CheckOutcomeOrThrow("1.4.0", _base + "/releases"));
+        }
+
+        [Fact]
+        public void LiveFeedShape_HistoricalZephyrDevAsset_Offered()
+        {
+            Feed(LiveFeed140.Replace("MtndaleRedneck/Zephyr/releases/download", "MtndaleRedneck/Zephyr-Dev/releases/download"));
+            var hit = UpdateCheck.LatestNewerThanOrThrow("1.3.0", _base + "/releases");
+            Assert.NotNull(hit);
+            Assert.Equal("https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe", hit!.Value.ExeUrl);
+        }
+
+        [Theory]
+        [InlineData("https://github.com/someoneelse/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")]   // other owner
+        [InlineData("https://github.com/mtndaleredneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // owner spelled differently
+        [InlineData("https://github.com/MtndaleRedneck/ZephyrPlayer/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // other repo
+        [InlineData("https://github.com/MtndaleRedneck/Zephyr-Devx/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // other repo
+        [InlineData("https://github.com/MtndaleRedneck/BingeMote/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")]  // other repo
+        [InlineData("https://objects.githubusercontent.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // other host
+        [InlineData("https://api.github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // other host
+        [InlineData("https://github.com.evil.example/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // other host
+        [InlineData("http://github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")]   // not https
+        [InlineData("https://github.com:8443/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe")] // port
+        [InlineData("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe?x=1")] // query
+        [InlineData("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.3.0/Zephyr-PC-1.4.0.exe")]   // other tag
+        public void Feed_RejectsOtherOwnerRepoHost(string assetUrl)
+        {
+            Feed(LiveFeed140.Replace("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v1.4.0/Zephyr-PC-1.4.0.exe", assetUrl));
+            Assert.Null(UpdateCheck.LatestNewerThanOrThrow("1.3.0", _base + "/releases"));
+            Assert.False(UpdateCheck.IsAcceptedAssetUrl(assetUrl, "player-v1.4.0", "Zephyr-PC-1.4.0.exe"));
+        }
+
+        [Fact]
+        public void AssetContract_AcceptsCanonicalAndHistoricalOnly()
+        {
+            Assert.Equal("MtndaleRedneck/Zephyr", UpdateCheck.Repo);
+            Assert.Equal("https://api.github.com/repos/MtndaleRedneck/Zephyr/releases?per_page=30", UpdateCheck.Api);
+            Assert.Equal("https://github.com/MtndaleRedneck/Zephyr/releases", UpdateCheck.ReleasePage);
+            Assert.True(UpdateCheck.IsAcceptedAssetUrl("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe", "player-v2.0.0", "Zephyr-PC-2.0.0.exe"));
+            Assert.True(UpdateCheck.IsAcceptedAssetUrl("https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe", "player-v2.0.0", "Zephyr-PC-2.0.0.exe"));
+            Assert.False(UpdateCheck.IsAcceptedAssetUrl("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.1.exe", "player-v2.0.0", "Zephyr-PC-2.0.0.exe"));
+            Assert.True(UpdateCheck.IsAcceptedReleaseDownload("https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe"));
+            Assert.True(UpdateCheck.IsAcceptedReleaseDownload("https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/player-v1.2.0/Zephyr-PC-1.2.0.exe"));
+            foreach (var bad in new[]
+            {
+                "https://github.com/other/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe",
+                "https://github.com/MtndaleRedneck/Other/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe",
+                "https://evil.example/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe",
+                "https://objects.githubusercontent.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe",
+                "http://github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe",
+                "https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe#x",
+                "https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/sub/Zephyr-PC-2.0.0.exe",
+                "https://user@github.com/MtndaleRedneck/Zephyr/releases/download/player-v2.0.0/Zephyr-PC-2.0.0.exe",
+                "https://github.com/MtndaleRedneck/Zephyr/archive/refs/tags/player-v2.0.0.zip",
+                "not a url",
+            })
+                Assert.False(UpdateCheck.IsAcceptedReleaseDownload(bad), bad);
+        }
+
+        [Fact]
+        public async Task Download_ProductionStart_MustBeTheRepositoryReleaseDownload()
+        {
+            // No host rule passed = production: other owners, repositories and hosts are refused
+            // before any request is made.
+            foreach (var bad in new[]
+            {
+                "https://github.com/other/Zephyr/releases/download/player-v9.0.0/Zephyr-PC-9.0.0.exe",
+                "https://github.com/MtndaleRedneck/Other/releases/download/player-v9.0.0/Zephyr-PC-9.0.0.exe",
+                "https://objects.githubusercontent.com/x/Zephyr-PC-9.0.0.exe",
+            })
+            {
+                var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => SelfUpdate.Download("9.0.0", bad, new string('c', 64)));
+                Assert.Contains("not trusted", ex.Message);
+            }
+        }
     }
 }

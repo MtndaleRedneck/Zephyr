@@ -21,11 +21,8 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="Button">
-                            <Border x:Name="Bg" Background="Transparent"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border>
-                            <ControlTemplate.Triggers>
-                                <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#1AFFFFFF"/></Trigger>
-                                <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bg" Property="Background" Value="#26FFFFFF"/></Trigger>
-                            </ControlTemplate.Triggers>
+                            <Grid><Border x:Name="Bg" Background="Transparent"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="0" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="0" IsHitTestVisible="False"/></Grid>
+                            <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger></ControlTemplate.Triggers>
                         </ControlTemplate>
                     </Setter.Value>
                 </Setter>
@@ -74,5 +71,8 @@
              outgoing library stays drawn under the incoming view until the switch has
              something to show (see ShellWindow.ShowView). -->
         <Grid x:Name="ViewHost" Grid.Row="1" Focusable="False"/>
+        <!-- CP3 item 69 (renders 05, 06, 06b): the shell dims behind the Settings window,
+             rgba(0,0,0,.84), faded in and out over 200 ms. -->
+        <Border x:Name="DimLayer" Grid.RowSpan="2" Background="#D6000000" Opacity="0" Visibility="Collapsed" IsHitTestVisible="True"/>
     </Grid>
 </Window>

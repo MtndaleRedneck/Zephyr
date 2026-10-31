@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 
 namespace ZephyrPlayer
@@ -599,9 +600,11 @@ namespace ZephyrPlayer
 
         private static Window DarkDialog(string text, string confirmLabel, string? cancelLabel, Action onConfirm)
         {
-            var bg = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1E));
-            var card = new SolidColorBrush(Color.FromRgb(0x26, 0x26, 0x2C));
-            var fg = new SolidColorBrush(Color.FromRgb(0xEB, 0xEB, 0xF0));
+            // CP4 item 84: the 2.0 theme (Settings surface #0E0E11, #F5F5F7 text, the .btn /
+            // .btn.or buttons with the shared hover/pressed layers). Behaviour is unchanged.
+            var bg = Frozen(new SolidColorBrush(Color.FromRgb(0x0E, 0x0E, 0x11)));
+            var fg = Frozen(new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)));
+            var body = Frozen(new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEB)));
             var dlg = new Window
             {
                 Title = "Zephyr Player",
@@ -611,49 +614,47 @@ namespace ZephyrPlayer
                 ResizeMode = ResizeMode.NoResize,
                 Background = bg,
                 Foreground = fg,
+                FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI"),
                 Topmost = true,
             };
             WindowChrome.ApplyDarkTitleBar(dlg);
-            var body = new TextBlock
+            var message = new TextBlock
             {
                 Text = text,
                 TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(20, 20, 20, 8),
+                Margin = new Thickness(22, 20, 22, 8),
                 FontSize = 13,
+                LineHeight = 19,
+                Foreground = body,
             };
             var buttons = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
                 HorizontalAlignment = HorizontalAlignment.Right,
-                Margin = new Thickness(20, 8, 20, 20),
+                Margin = new Thickness(20, 10, 20, 20),
             };
             Button MakeBtn(string label, bool primary)
             {
-                var back = primary ? new SolidColorBrush(Brand.Orange) : card;
-                var hover = primary
-                    ? new SolidColorBrush(Color.FromRgb(0xCC, 0x77, 0x00))
-                    : new SolidColorBrush(Color.FromRgb(0x33, 0x33, 0x3B));
-                var pressed = primary
-                    ? new SolidColorBrush(Color.FromRgb(0xA6, 0x63, 0x00))
-                    : new SolidColorBrush(Color.FromRgb(0x40, 0x40, 0x4A));
                 var b = new Button
                 {
                     Content = label,
                     Margin = new Thickness(8, 0, 0, 0),
                     Padding = new Thickness(16, 6, 16, 6),
-                    Background = back,
-                    Foreground = primary ? bg : fg,
+                    MinHeight = 32,
+                    FontSize = 13,
+                    FontWeight = primary ? FontWeights.SemiBold : FontWeights.Medium,
+                    Background = primary ? AccentGradient : Frozen(new SolidColorBrush(Color.FromArgb(0x0E, 0xFF, 0xFF, 0xFF))),
+                    Foreground = primary ? Frozen(new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x16))) : Frozen(new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEB))),
                     BorderThickness = new Thickness(1),
-                    BorderBrush = Brushes.Transparent,
+                    BorderBrush = primary ? Brushes.Transparent : Frozen(new SolidColorBrush(Color.FromArgb(0x0F, 0xFF, 0xFF, 0xFF))),
+                    Cursor = System.Windows.Input.Cursors.Hand,
                     // A real template: the stock one paints the light-blue classic hover
                     // chrome and the dotted focus box over the dark look (round-7 S7-2).
-                    // Keyboard focus instead gets a thin brand-colored ring, hover a
-                    // lighter fill, press a darker one (round-8 N-7).
-                    // Round-11 (measured on real pixels): the ring is an OUTER 2px ring
-                    // with a gap against the dark dialog background - white on #1B1B1E is
-                    // 17.2:1 in every fill state, so both buttons get white. A 1px ring on
-                    // the fill itself anti-aliased into it: 1.03:1, invisible.
-                    Template = DarkButtonTemplate(hover, pressed),
+                    // Keyboard focus gets an OUTER 2 px white ring with a gap (round-11:
+                    // 17:1 against the dialog in every state); hover and press lay the
+                    // shared white layers over the fill (Hover #FFFFFF12, Pressed #FFFFFF1F,
+                    // 120 ms ease, item 86), so the label keeps its contrast in every state.
+                    Template = DarkButtonTemplate(),
                     FocusVisualStyle = null,
                 };
                 return b;
@@ -671,11 +672,32 @@ namespace ZephyrPlayer
                 buttons.Children.Add(cancel);
             }
             var stack = new StackPanel();
-            stack.Children.Add(body);
+            stack.Children.Add(message);
             stack.Children.Add(buttons);
-            dlg.Content = stack;
+            dlg.Content = new Border { BorderBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF))), BorderThickness = new Thickness(0, 1, 0, 0), Child = stack };
             return dlg;
         }
+
+        /// <summary>A themed yes/no (the pairing reset): true only on the confirm button.
+        /// Cancel is the safe default for Esc; owned by [owner] when it is shown.</summary>
+        internal static bool Confirm(Window? owner, string text, string title, string confirmLabel, string cancelLabel)
+        {
+            var answer = false;
+            var dlg = DarkDialog(text, confirmLabel, cancelLabel, () => answer = true);
+            dlg.Title = title;
+            if (owner != null && owner.IsVisible) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            dlg.ShowDialog();
+            return answer;
+        }
+
+        private static readonly LinearGradientBrush AccentGradient = MakeAccent();
+        private static LinearGradientBrush MakeAccent()
+        {
+            var g = new LinearGradientBrush(Color.FromRgb(0xFF, 0xA2, 0x33), Color.FromRgb(0xFF, 0x95, 0x00), 90);
+            g.Freeze();
+            return g;
+        }
+        private static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
 #if PAIR_CODE_HOOK
         // CI ONLY: render the permission dialogs with REAL interaction state and save
@@ -850,9 +872,9 @@ namespace ZephyrPlayer
 #endif
 
         /// <summary>A minimal dark button chrome: rounded fill bound to the button's own
-        /// Background (lighter on hover, darker on press), centered text, a thin ring
-        /// when keyboard-focused, no light system chrome.</summary>
-        private static ControlTemplate DarkButtonTemplate(Brush hoverBackground, Brush pressedBackground)
+        /// Background, the shared hover/pressed white layers, centered text, an outer
+        /// ring when keyboard-focused, no light system chrome.</summary>
+        private static ControlTemplate DarkButtonTemplate()
         {
             var template = new ControlTemplate(typeof(Button));
             // Round-11: the focus ring wraps the chrome - 2px with a 2px gap, painting
@@ -861,18 +883,17 @@ namespace ZephyrPlayer
             ring.Name = "Ring";
             ring.SetValue(Border.BorderThicknessProperty, new Thickness(2));
             ring.SetValue(Border.BorderBrushProperty, Brushes.Transparent);
-            ring.SetValue(Border.CornerRadiusProperty, new CornerRadius(10));
+            ring.SetValue(Border.CornerRadiusProperty, new CornerRadius(11));
             ring.SetValue(Border.PaddingProperty, new Thickness(2));
+            var grid = new FrameworkElementFactory(typeof(Grid));
             var border = new FrameworkElementFactory(typeof(Border));
-            // Round-9 N9-7: the state setters must TARGET the named border. Setters on
-            // the button itself lose to the button's LOCAL Background/BorderBrush
-            // values (local value outranks a template trigger), so hover, pressed and
-            // the focus ring never painted.
+            // Round-9 N9-7: the template parts are NAMED and state changes target them;
+            // setters on the button itself lose to its local values.
             border.Name = "Chrome";
             border.SetValue(Border.BackgroundProperty, new TemplateBindingExtension(Control.BackgroundProperty));
             border.SetValue(Border.BorderBrushProperty, new TemplateBindingExtension(Control.BorderBrushProperty));
             border.SetValue(Border.BorderThicknessProperty, new TemplateBindingExtension(Control.BorderThicknessProperty));
-            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(6));
+            border.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
             border.SetValue(Border.PaddingProperty, new TemplateBindingExtension(Control.PaddingProperty));
             var text = new FrameworkElementFactory(typeof(TextBlock));
             text.Name = "Label";
@@ -881,21 +902,45 @@ namespace ZephyrPlayer
             text.SetValue(TextBlock.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             text.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
             border.AppendChild(text);
-            ring.AppendChild(border);
+            grid.AppendChild(border);
+            FrameworkElementFactory Layer(string name)
+            {
+                var l = new FrameworkElementFactory(typeof(Border));
+                l.Name = name;
+                l.SetValue(Border.BackgroundProperty, Brushes.White);
+                l.SetValue(UIElement.OpacityProperty, 0.0);
+                l.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
+                l.SetValue(UIElement.IsHitTestVisibleProperty, false);
+                return l;
+            }
+            grid.AppendChild(Layer("Hl"));
+            grid.AppendChild(Layer("Pr"));
+            ring.AppendChild(grid);
             template.VisualTree = ring;
-            var hover = new Trigger { Property = UIElement.IsMouseOverProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BackgroundProperty, hoverBackground, "Chrome"));
-            template.Triggers.Add(hover);
-            var press = new Trigger { Property = Button.IsPressedProperty, Value = true };
-            press.Setters.Add(new Setter(Border.BackgroundProperty, pressedBackground, "Chrome"));
-            // Dark text on the pressed fill measured 3.61:1; white measures 4.77:1
-            // (round-11). Hover keeps the dark text (7.8:1 on its fill).
-            press.Setters.Add(new Setter(TextBlock.ForegroundProperty, Brushes.White, "Label"));
-            template.Triggers.Add(press);
+            // Hover #FFFFFF12 (7.06 %), pressed #FFFFFF1F (a 5.48 % layer on top), 120 ms ease.
+            template.Triggers.Add(FadeTrigger(UIElement.IsMouseOverProperty, "Hl", 0.0706));
+            template.Triggers.Add(FadeTrigger(System.Windows.Controls.Primitives.ButtonBase.IsPressedProperty, "Pr", 0.0548));
             var focus = new Trigger { Property = UIElement.IsKeyboardFocusedProperty, Value = true };
             focus.Setters.Add(new Setter(Border.BorderBrushProperty, Brushes.White, "Ring"));
             template.Triggers.Add(focus);
             return template;
+        }
+
+        private static Trigger FadeTrigger(DependencyProperty property, string layer, double to)
+        {
+            Storyboard Fade(double value)
+            {
+                var a = new DoubleAnimation(value, TimeSpan.FromMilliseconds(120)) { EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut } };
+                Storyboard.SetTargetName(a, layer);
+                Storyboard.SetTargetProperty(a, new PropertyPath(UIElement.OpacityProperty));
+                var s = new Storyboard();
+                s.Children.Add(a);
+                return s;
+            }
+            var t = new Trigger { Property = property, Value = true };
+            t.EnterActions.Add(new BeginStoryboard { Storyboard = Fade(to) });
+            t.ExitActions.Add(new BeginStoryboard { Storyboard = Fade(0) });
+            return t;
         }
 
         private static bool UrlAclNamesUser(string sid)

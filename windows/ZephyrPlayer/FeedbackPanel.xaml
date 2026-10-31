@@ -1,55 +1,29 @@
 <UserControl x:Class="ZephyrPlayer.FeedbackPanel"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
->
+        FontFamily="Segoe UI Variable Text, Segoe UI" Foreground="#F5F5F7">
+    <!-- Settings > Feedback & bugs (CP3 item 82): the 1.4 feedback flow in the 2.0 theme.
+         What is sent and how is unchanged. -->
     <UserControl.Resources>
-        <SolidColorBrush x:Key="CardBrush" Color="#26262D"/>
-        <SolidColorBrush x:Key="OrangeBrush" Color="#FF9500"/>
-        <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/>
-        <SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
-        <Style x:Key="OrangeButton" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource OrangeBrush}"/>
-            <Setter Property="Foreground" Value="#1B1B1E"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="12,6"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="10" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary>
     </UserControl.Resources>
-    <Grid Margin="20,16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <TextBlock Grid.Row="0" Text="What happened?" Foreground="{StaticResource TextBrush}" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,8"/>
-        <TextBox x:Name="MessageTextBox" Grid.Row="1" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                 Background="{StaticResource CardBrush}" Foreground="{StaticResource TextBrush}" BorderThickness="0"
-                 Padding="12,10" FontSize="13" TextChanged="OnTextChanged"
-                 ToolTip="Don't include passwords, pairing codes, or other secrets."/>
-        <Border Grid.Row="2" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="12,8" Margin="0,12,0,12">
+    <StackPanel Margin="0,14,0,0">
+        <TextBlock Text="What happened?" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"/>
+        <TextBox x:Name="MessageTextBox" Style="{StaticResource ZTextField}" Height="150" Padding="10,8" VerticalContentAlignment="Stretch"
+                 AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" TextChanged="OnTextChanged"
+                 ToolTip="Don't include passwords, pairing codes, or other secrets." AutomationProperties.AutomationId="FeedbackMessage" AutomationProperties.Name="What happened?"/>
+        <Border Style="{StaticResource ZCard}" Margin="0,12,0,0" Padding="14,10">
             <StackPanel>
-                <TextBlock Text="Exactly what gets sent:" Foreground="{StaticResource OrangeBrush}" FontSize="11" FontWeight="SemiBold"/>
-                <TextBlock Text="Reports may become public - don't include passwords, pairing codes, or other secrets." Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                <TextBlock x:Name="PreviewText" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                <TextBlock Text="Exactly what gets sent:" Foreground="#FF9500" FontSize="12" FontWeight="SemiBold"/>
+                <TextBlock Text="Reports may become public - don't include passwords, pairing codes, or other secrets." Foreground="#8E8E98" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                <TextBlock x:Name="PreviewText" Foreground="#B4B4BE" FontSize="12" TextWrapping="Wrap" Margin="0,6,0,0"/>
             </StackPanel>
         </Border>
-        <WrapPanel Grid.Row="3" HorizontalAlignment="Right">
+        <WrapPanel HorizontalAlignment="Right" Margin="0,12,0,0">
             <TextBlock x:Name="FormNote" Text="The feedback form is being linked - use the GitHub issue for now."
-                       Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center"
-                       Visibility="Collapsed" Margin="0,0,10,0"/>
-            <Button x:Name="FormButton" Style="{StaticResource OrangeButton}" Content="Open feedback form" Click="OnForm" Margin="0,0,10,0"/>
-            <Button Style="{StaticResource OrangeButton}" Content="Open GitHub issue" Click="OnIssue"/>
+                       Foreground="#8E8E98" FontSize="12" VerticalAlignment="Center" Visibility="Collapsed" Margin="0,0,10,0"/>
+            <Button x:Name="FormButton" Style="{StaticResource ZTextButton}" Tag="or" Content="Open feedback form" Click="OnForm" Margin="0,0,8,0" AutomationProperties.AutomationId="FeedbackFormButton"/>
+            <Button x:Name="IssueButton" Style="{StaticResource ZTextButton}" Content="Open GitHub issue" Click="OnIssue" AutomationProperties.AutomationId="FeedbackIssueButton"/>
         </WrapPanel>
-    </Grid>
+    </StackPanel>
 </UserControl>

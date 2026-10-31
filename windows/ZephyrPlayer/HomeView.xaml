@@ -25,13 +25,14 @@
                         <Grid>
                             <Border x:Name="Bg" Height="36" CornerRadius="8" Padding="14,0" Background="Transparent">
                                 <ContentPresenter VerticalAlignment="Center"/>
-                            </Border>
+                            </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/>
                             <Border x:Name="Underline" Height="3" CornerRadius="1.5" Background="#FF9500" VerticalAlignment="Bottom" Margin="14,0,14,0" Visibility="Collapsed"/>
                         </Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#0BFFFFFF"/><Setter Property="Foreground" Value="#E6E6EB"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="#E6E6EB"/></Trigger>
                             <Trigger Property="Tag" Value="sel"><Setter TargetName="Bg" Property="Background" Value="#12FFFFFF"/><Setter TargetName="Underline" Property="Visibility" Value="Visible"/><Setter Property="Foreground" Value="#F5F5F7"/></Trigger>
-                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bg" Property="Background" Value="#17FFFFFF"/></Trigger>
+                            
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -48,12 +49,13 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bg" CornerRadius="8" Background="#0DFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1">
+                        <Grid><Border x:Name="Bg" CornerRadius="8" Background="#0DFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
+                        </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/></Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#17FFFFFF"/></Trigger>
-                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bg" Property="Background" Value="#21FFFFFF"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+                            
+                            
                             <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.38"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -71,12 +73,13 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bg" Height="32" CornerRadius="8" Padding="14,0" Background="#0EFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1">
+                        <Grid><Border x:Name="Bg" Height="32" CornerRadius="8" Padding="14,0" Background="#0EFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1">
                             <ContentPresenter VerticalAlignment="Center"/>
-                        </Border>
+                        </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/></Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#17FFFFFF"/></Trigger>
-                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Bg" Property="Background" Value="#21FFFFFF"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+                            
+                            
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -91,11 +94,12 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bg" Height="34" CornerRadius="8" Padding="16,0" Background="{StaticResource ZAccentGradient}">
+                        <Grid><Border x:Name="Bg" Height="34" CornerRadius="8" Padding="16,0" Background="{StaticResource ZAccentGradient}">
                             <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center"/>
-                        </Border>
+                        </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/></Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Opacity" Value="0.9"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+                            
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -110,11 +114,12 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bg" Background="Transparent" CornerRadius="6" Padding="4,3">
+                        <Grid><Border x:Name="Bg" Background="Transparent" CornerRadius="6" Padding="4,3">
                             <ContentPresenter VerticalAlignment="Center"/>
-                        </Border>
+                        </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="6" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="6" IsHitTestVisible="False"/></Grid>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Bg" Property="Background" Value="#0FFFFFFF"/><Setter Property="Foreground" Value="#F5F5F7"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter Property="Foreground" Value="#F5F5F7"/></Trigger>
                             <Trigger Property="Tag" Value="current"><Setter Property="Foreground" Value="#F5F5F7"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

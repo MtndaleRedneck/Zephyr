@@ -277,7 +277,7 @@ namespace ZephyrPlayer
                     return (outcome, token);
                 },
                 input: new SendInputSink(),
-                control: new MainWindowPlaybackControl(_player, player,
+                control: new PlayerViewPlaybackControl(_player, player,
                     showForPlayback: ShowPlayer),
                 settings: settings);
             // Firewall + listen permission (round-6 N-8): the per-user installer never
@@ -351,6 +351,10 @@ namespace ZephyrPlayer
             // ZEPHYR_CI_CAPTURE.
 #if CI_CAPTURE_HOOK
             var ciCapture = Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null;
+            // Capture build only (A3.4): force the public Wi-Fi notice so the banner can be
+            // captured on a runner whose network may not be Public.
+            var forcedWifi = ciCapture ? Environment.GetEnvironmentVariable("ZEPHYR_CI_PUBLIC_WIFI") : null;
+            if (!string.IsNullOrEmpty(forcedWifi)) { ConnectionState.PublicWifiName = forcedWifi; ConnectionState.NotifyChanged(); }
             foreach (var arg in ciCapture ? e.Args : Array.Empty<string>())
             {
                 if (arg == "--open-settings")
@@ -363,8 +367,9 @@ namespace ZephyrPlayer
                 }
                 else if (arg == "--open-pairing")
                 {
-                    var capturePair = new PairingWindow(gate, store, name => _pendingPhoneName = name) { Owner = _shell };
-                    capturePair.Show();
+                    // CP4 item 88: the standalone pairing window is gone; the hook opens the
+                    // one pairing surface users get, Settings > Paired phones.
+                    OpenSettings("remote");
                 }
                 else if (arg.StartsWith("--play=", StringComparison.Ordinal))
                 {
@@ -422,15 +427,17 @@ namespace ZephyrPlayer
             _shell.Hide();
         }
 
-        /// <summary>The one Settings window: compact, separate, owned by the shell,
-        /// non-modal (an open Settings window must not freeze playback controls).</summary>
+        /// <summary>The one Settings window (CP3 item 69): compact 900x600, separate, owned
+        /// by and centred on the shell, which dims behind it; non-modal (an open Settings
+        /// window must not freeze playback controls).</summary>
         public void OpenSettings(string section)
         {
             if (_settings == null || _store == null || _shell == null) return;
             if (_settingsWin != null) { _settingsWin.SelectSection(section); _settingsWin.Activate(); return; }
-            _settingsWin = new SettingsWindow(_settings, _store, ShowPairingWindow) { Owner = _shell };
-            _settingsWin.Closed += (_, __) => _settingsWin = null;
+            _settingsWin = new SettingsWindow(_settings, _store) { Owner = _shell };
+            _settingsWin.Closed += (_, __) => { _settingsWin = null; _shell?.SetDimmed(false); };
             _settingsWin.SelectSection(section);
+            _shell.SetDimmed(true);
             _settingsWin.Show();
         }
 

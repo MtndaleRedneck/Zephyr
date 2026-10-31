@@ -36,6 +36,11 @@ namespace ZephyrPlayer
         {
             if (sha256 == null || !System.Text.RegularExpressions.Regex.IsMatch(sha256, "^[0-9a-fA-F]{64}$"))
                 throw new InvalidOperationException("The release has no valid SHA-256. Nothing was downloaded.");
+            // CP4 item 94: in production the download must START at a release download of
+            // MtndaleRedneck/Zephyr (or its historical name Zephyr-Dev) on github.com; the
+            // redirect hops after it keep the host rule below. Tests pass their own host rule.
+            if (hostAllowed == null && !UpdateCheck.IsAcceptedReleaseDownload(exeUrl))
+                throw new InvalidOperationException("The download address was not trusted.");
             hostAllowed ??= host =>
                 host.Equals("github.com", StringComparison.OrdinalIgnoreCase) ||
                 host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase);

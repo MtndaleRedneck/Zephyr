@@ -494,50 +494,216 @@ if ($HomeOnly) {
 # Back to a clean first-run state for the sections below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 
-# 2) Settings over the app's own dark window (neutral backdrop), top + scrolled bottom.
+# ===================== 2.0 Checkpoint 3 / 4: Settings window evidence =====================
+# Real exe, real input (UI Automation invoke + real mouse clicks), judged on pixels,
+# window geometry and the settings/pairing files the app writes:
+#  cp3-settings-over-dimmed-shell.png  Settings 900x600 centred over the dimmed shell
+#  cp3-tab-<name>.png                  each of the six tabs
+#  cp3-preview-{skip,bar}-{before,after}.png  the LIVE PREVIEW changing with a real click
+#  cp3-hover-{off,on}.png              a themed button's hover layer (real cursor)
+#  cp3-tooltip.png                     the themed tooltip on the same button
+#  cp3-pair-code.png / -phone-card.png / -forgotten.png  pair over HTTP, the card, Forget
+#  cp3-shell-undimmed.png              the shell after Settings closed (dim gone)
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$cp3Fail = New-Object System.Collections.Generic.List[string]
+$cp3Notes = New-Object System.Collections.Generic.List[string]
+function Cp3Check($ok, $what) {
+    if ($ok) { $cp3Notes.Add("PASS $what") } else { $cp3Notes.Add("FAIL $what"); $cp3Fail.Add($what); Write-Host "::error::CP3 $what" }
+}
+function Cp3Rect($h) {
+    $r = [ZRECT]::new()
+    if ([ZWU32]::DwmGetWindowAttribute($h, 9, [ref]$r, 16) -ne 0) { [ZWU32]::GetWindowRect($h, [ref]$r) | Out-Null }
+    return $r
+}
+function Cp3Find($rootEl, $id) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    return $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+}
+function Cp3Invoke($rootEl, $id) {
+    $el = Cp3Find $rootEl $id
+    if ($el -eq $null) { Cp3Check $false "UIA element '$id' found"; return $false }
+    $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 600
+    return $true
+}
+function Cp3ClickScreen($x, $y) {
+    [ZWU32]::SetCursorPos([int]$x, [int]$y) | Out-Null
+    Start-Sleep -Milliseconds 250
+    [ZWU32]::mouse_event(0x0002, 0, 0, 0, [System.UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 60
+    [ZWU32]::mouse_event(0x0004, 0, 0, 0, [System.UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 600
+}
+function Cp3Click($rootEl, $id) {
+    # A REAL mouse click on the element's centre (chips and toggles act on Click, which
+    # UIA's Select/Toggle patterns do not raise).
+    $el = Cp3Find $rootEl $id
+    if ($el -eq $null) { Cp3Check $false "UIA element '$id' found"; return $false }
+    $b = $el.Current.BoundingRectangle
+    Cp3ClickScreen ($b.X + $b.Width / 2) ($b.Y + $b.Height / 2)
+    return $true
+}
+function Cp3Text($rootEl, $id) { $el = Cp3Find $rootEl $id; if ($el -eq $null) { return $null }; return $el.Current.Name }
+function Cp3Lum($path, $x, $y, $w, $h, [switch]$Max) {
+    # Mean (or max) of (R+G+B)/3 over a rect of a capture, clipped to the image.
+    $bmp = [System.Drawing.Bitmap]::FromFile($path)
+    try {
+        $x0 = [Math]::Max(0, [int]$x); $y0 = [Math]::Max(0, [int]$y)
+        $x1 = [Math]::Min($bmp.Width, [int]($x + $w)); $y1 = [Math]::Min($bmp.Height, [int]($y + $h))
+        $sum = 0.0; $n = 0; $mx = 0
+        for ($yy = $y0; $yy -lt $y1; $yy += 1) { for ($xx = $x0; $xx -lt $x1; $xx += 1) {
+            $c = $bmp.GetPixel($xx, $yy); $l = ($c.R + $c.G + $c.B) / 3.0; $sum += $l; $n++; if ($l -gt $mx) { $mx = $l } } }
+        if ($n -eq 0) { return 0 }
+        if ($Max) { return [int]$mx }
+        return [Math]::Round($sum / $n, 1)
+    } finally { $bmp.Dispose() }
+}
+function Cp3Diff($a, $b, $x, $y, $w, $h) {
+    # Count of pixels that differ by more than 40 (sum of channels) inside a rect.
+    $ba = [System.Drawing.Bitmap]::FromFile($a); $bb = [System.Drawing.Bitmap]::FromFile($b)
+    try {
+        $x1 = [Math]::Min([Math]::Min($ba.Width, $bb.Width), [int]($x + $w)); $y1 = [Math]::Min([Math]::Min($ba.Height, $bb.Height), [int]($y + $h))
+        $n = 0
+        for ($yy = [int]$y; $yy -lt $y1; $yy += 2) { for ($xx = [int]$x; $xx -lt $x1; $xx += 2) {
+            $p = $ba.GetPixel($xx, $yy); $q = $bb.GetPixel($xx, $yy)
+            if ([Math]::Abs($p.R - $q.R) + [Math]::Abs($p.G - $q.G) + [Math]::Abs($p.B - $q.B) -gt 40) { $n++ } } }
+        return $n
+    } finally { $ba.Dispose(); $bb.Dispose() }
+}
+function Cp3Settings { $f = Join-Path $cfgDir 'settings.json'; if (Test-Path $f) { return (Get-Content $f -Raw | ConvertFrom-Json) } else { return $null } }
+
+# A known phone already paired (the fixture written above) plus the forced public-Wi-Fi
+# notice (capture-build seam; the real probe may or may not see this runner as Public).
+[Environment]::SetEnvironmentVariable('ZEPHYR_CI_PUBLIC_WIFI', 'CI-Public-WiFi', 'Process')
 $p2 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-settings" -PassThru
-$null = Wait-MainWindow $p2 15
-# Process.MainWindowTitle names only the process's MAIN window; the settings
-# window is a second top-level window in the same process. Enumerate by title.
+$hwShell = Wait-MainWindow $p2 15
 $sw = [System.IntPtr]::Zero
 for ($i = 0; $i -lt 20 -and $sw -eq [System.IntPtr]::Zero; $i++) {
     $sw = [ZWU32]::FindByTitle($p2.Id, 'Zephyr Settings')
     if ($sw -eq [System.IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
 }
-if ($sw -eq [System.IntPtr]::Zero) { Write-Host "::error::settings window handle never appeared" }
-[ZWU32]::SetForegroundWindow($sw) | Out-Null
-[ZWU32]::SetWindowPos($sw, [System.IntPtr]::new(-1), 40, 4, 700, 690, 0) | Out-Null
-Start-Sleep -Milliseconds 700
+Cp3Check ($sw -ne [System.IntPtr]::Zero) "settings window appeared"
+Start-Sleep -Milliseconds 900   # the 200 ms dim fade, with margin
+$rs = Cp3Rect $sw; $rh = Cp3Rect $hwShell
+$sW = $rs.Right - $rs.Left; $sH = $rs.Bottom - $rs.Top
+$cdx = [Math]::Abs((($rs.Left + $rs.Right) / 2.0) - (($rh.Left + $rh.Right) / 2.0))
+$cdy = [Math]::Abs((($rs.Top + $rs.Bottom) / 2.0) - (($rh.Top + $rh.Bottom) / 2.0))
+$cp3Notes.Add("settings rect=($($rs.Left),$($rs.Top),$($rs.Right),$($rs.Bottom)) shell rect=($($rh.Left),$($rh.Top),$($rh.Right),$($rh.Bottom)) centre offset=($cdx,$cdy) screen=$($vs.Width)x$($vs.Height)")
+Cp3Check ([Math]::Abs($sW - 900) -le 2 -and [Math]::Abs($sH - 600) -le 2) "settings window is 900x600 (got ${sW}x${sH})"
+Cp3Check ($cdx -le 3 -and $cdy -le 3) "settings window centred on the shell (offset $cdx,$cdy)"
+$null = CaptureWindow $hwShell "$env:RUNNER_TEMP/cp3-settings-over-dimmed-shell.png"
 $sz3 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings.png"
-# The pinned bottom of the nav (Feedback & Updates, with the version) is a
-# section SWITCH now, not a scroll: invoke the real "Updates" nav button
-# through UI Automation and capture that section as the bottom evidence.
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$settingsRoot = [System.Windows.Automation.AutomationElement]::FromHandle($sw)
-$updCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'NavUpdates')
-$upd = $settingsRoot.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $updCond)
-if ($upd -ne $null) {
-    $upd.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-    Start-Sleep -Milliseconds 700
-} else { Write-Host "::error::NavUpdates button not found via UIA" }
-$sz4 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings-updates.png"
-StopZephyr
+$sroot = [System.Windows.Automation.AutomationElement]::FromHandle($sw)
+Cp3Check ((Cp3Text $sroot 'NavVersionText') -match '^Zephyr Player \d+\.\d+\.\d+$') "version line reads '$(Cp3Text $sroot 'NavVersionText')'"
+Cp3Check ((Cp3Find $sroot 'NavMovies') -eq $null) "no Movies nav item"
 
-# 2b) Pairing screen (1.2.0: the dedicated pairing window replaced the banner).
-$p2b = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-pairing" -PassThru
-$null = Wait-MainWindow $p2b 15
-$pw = [System.IntPtr]::Zero
-for ($i = 0; $i -lt 20 -and $pw -eq [System.IntPtr]::Zero; $i++) {
-    $pw = [ZWU32]::FindByTitle($p2b.Id, 'Zephyr Player - Pair your phone')
-    if ($pw -eq [System.IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
+# Each tab, by its nav item.
+$tabs = [ordered]@{ NavVolume='Volume'; NavSkip='Skip buttons'; NavBar='Playback bar'; NavRemote='Paired phones'; NavFeedback='Feedback & bugs'; NavUpdates='Updates' }
+foreach ($id in $tabs.Keys) {
+    if (Cp3Invoke $sroot $id) {
+        $title = Cp3Text $sroot 'SectionTitle'
+        Cp3Check ($title -eq $tabs[$id]) "$id opens '$($tabs[$id])' (title '$title')"
+        $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-tab-$($id.Substring(3).ToLowerInvariant()).png"
+    }
 }
-if ($pw -eq [System.IntPtr]::Zero) { Write-Host "::error::pairing window handle never appeared" }
-[ZWU32]::SetForegroundWindow($pw) | Out-Null
-[ZWU32]::SetWindowPos($pw, [System.IntPtr]::new(-1), 40, 4, 560, 600, 0) | Out-Null
+Copy-Item "$env:RUNNER_TEMP/cp3-tab-updates.png" "$env:RUNNER_TEMP/pc-desktop-settings-updates.png" -Force -ErrorAction SilentlyContinue
+$sz4 = if (Test-Path "$env:RUNNER_TEMP/pc-desktop-settings-updates.png") { 'captured' } else { '0 x 0' }
+
+# Paired phones: the public Wi-Fi notice and its read-only check button.
+$null = Cp3Invoke $sroot 'NavRemote'
+$bannerText = Cp3Text $sroot 'WifiBannerText'
+Cp3Check ($bannerText -match 'public' -and $bannerText -notmatch 'is blocked') "public Wi-Fi notice shown, honest wording ('$bannerText')"
+Cp3Check ((Cp3Find $sroot 'FirewallCheckButton') -ne $null) "notice carries the read-only firewall check button"
+Cp3Check ((Cp3Find $sroot 'Forget:CI phone') -ne $null) "fixture phone card with Forget"
+
+# LIVE PREVIEW: real clicks on chips and a toggle; the preview pixels and the settings file both move.
+$null = Cp3Invoke $sroot 'NavSkip'
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-preview-skip-before.png"
+$null = Cp3Click $sroot 'primaryskip:30'
+$null = Cp3Click $sroot 'secondaryskip:120'
+Start-Sleep -Milliseconds 500
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-preview-skip-after.png"
+$s1 = Cp3Settings
+Cp3Check ($s1 -ne $null -and $s1.PrimarySkipSeconds -eq 30 -and $s1.SecondarySkipSeconds -eq 120) "skip chips wrote PrimarySkipSeconds=30 SecondarySkipSeconds=120 (file: $($s1.PrimarySkipSeconds)/$($s1.SecondarySkipSeconds))"
+# The preview strip: content panel x 244..872, y 90..230 (window-relative, 100% DPI).
+$dSkip = Cp3Diff "$env:RUNNER_TEMP/cp3-preview-skip-before.png" "$env:RUNNER_TEMP/cp3-preview-skip-after.png" 244 90 628 140
+Cp3Check ($dSkip -gt 20) "skip preview pixels changed with the setting ($dSkip px)"
+$null = Cp3Invoke $sroot 'NavBar'
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-preview-bar-before.png"
+$null = Cp3Click $sroot 'barcolor:orange'
+$null = Cp3Click $sroot 'iconstyle:filled'
+$null = Cp3Click $sroot 'SpeedToggle'
+Start-Sleep -Milliseconds 500
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-preview-bar-after.png"
+$s2 = Cp3Settings
+Cp3Check ($s2 -ne $null -and $s2.BarColorStyle -eq 'orange' -and $s2.IconStyle -eq 'filled' -and $s2.ShowSpeed -eq $false) "bar choices wrote orange/filled/speed off (file: $($s2.BarColorStyle)/$($s2.IconStyle)/$($s2.ShowSpeed))"
+$dBar = Cp3Diff "$env:RUNNER_TEMP/cp3-preview-bar-before.png" "$env:RUNNER_TEMP/cp3-preview-bar-after.png" 244 90 628 140
+Cp3Check ($dBar -gt 20) "bar preview pixels changed with the settings ($dBar px)"
+
+# Hover: the real cursor over a themed button lays the #FFFFFF12 layer (120 ms).
+$null = Cp3Invoke $sroot 'NavUpdates'
+[ZWU32]::SetCursorPos($rs.Left + 600, $rs.Top + 560) | Out-Null
+Start-Sleep -Milliseconds 500
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-hover-off.png"
+$cb = (Cp3Find $sroot 'CheckUpdatesButton')
+if ($cb -ne $null) {
+    $bb = $cb.Current.BoundingRectangle
+    $bx = $bb.X - $rs.Left; $by = $bb.Y - $rs.Top
+    [ZWU32]::SetCursorPos([int]($bb.X + $bb.Width - 6), [int]($bb.Y + 6)) | Out-Null
+    Start-Sleep -Milliseconds 600
+    $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-hover-on.png"
+    $lOff = Cp3Lum "$env:RUNNER_TEMP/cp3-hover-off.png" ($bx + 3) ($by + 3) ($bb.Width - 6) ($bb.Height - 6)
+    $lOn = Cp3Lum "$env:RUNNER_TEMP/cp3-hover-on.png" ($bx + 3) ($by + 3) ($bb.Width - 6) ($bb.Height - 6)
+    Cp3Check ($lOn -ge $lOff + 4) "Check now hover brightens the button (mean $lOff -> $lOn)"
+    # Themed tooltip (item 87): the button's tooltip opens after its 1.5 s delay.
+    Start-Sleep -Milliseconds 1800
+    $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-tooltip.png"
+} else { Cp3Check $false "CheckUpdatesButton found" }
+[ZWU32]::SetCursorPos($rs.Left + 600, $rs.Top + 560) | Out-Null
+
+# Pair a phone over HTTP with the code on screen, see its card, then Forget it.
+$null = Cp3Invoke $sroot 'NavRemote'
+$nameBox = Cp3Find $sroot 'PhoneNameBox'
+if ($nameBox -ne $null) { $nameBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('CI Pixel') }
+$null = Cp3Invoke $sroot 'PairButton'
+Start-Sleep -Milliseconds 600
+$codeShown = Cp3Text $sroot 'PairCodeText'
+$code = ($codeShown -replace '\D', '')
+Cp3Check ($code.Length -eq 6) "pairing code shown ('$codeShown')"
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-code.png"
+Copy-Item "$env:RUNNER_TEMP/cp3-pair-code.png" "$env:RUNNER_TEMP/pc-desktop-pairing.png" -Force -ErrorAction SilentlyContinue
+$pairResp = try { Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/pair" -ContentType "application/json" -Body ('{"code":"' + $code + '"}') -SkipHttpErrorCheck -TimeoutSec 15 } catch { $null }
+$pairStatus = if ($pairResp) { [int]$pairResp.StatusCode } else { 0 }
+Cp3Check ($pairStatus -eq 200 -and $pairResp.Content -match '"token"') "POST /pair with the on-screen code -> $pairStatus"
+Start-Sleep -Milliseconds 1500
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-phone-card.png"
+$pairedText = Get-Content (Join-Path $cfgDir 'paired.json') -Raw -ErrorAction SilentlyContinue
+Cp3Check ($pairedText -match 'CI Pixel') "paired.json holds the new phone 'CI Pixel'"
+Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -ne $null) "new phone card with Forget"
+$null = Cp3Invoke $sroot 'Forget:CI Pixel'
+Start-Sleep -Milliseconds 800
+$pairedAfter = Get-Content (Join-Path $cfgDir 'paired.json') -Raw -ErrorAction SilentlyContinue
+Cp3Check ($pairedAfter -notmatch 'CI Pixel' -and $pairedAfter -match 'CI phone') "Forget removed 'CI Pixel' and kept 'CI phone'"
+Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -eq $null) "the forgotten phone's card is gone"
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-forgotten.png"
+$sz4b = if (Test-Path "$env:RUNNER_TEMP/pc-desktop-pairing.png") { 'captured' } else { '0 x 0' }
+
+# Close: the dim fades out with the window.
+[ZWU32]::PostMessage($sw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
 Start-Sleep -Milliseconds 900
-$sz4b = CaptureWindow $pw "$env:RUNNER_TEMP/pc-desktop-pairing.png"
+$null = CaptureWindow $hwShell "$env:RUNNER_TEMP/cp3-shell-undimmed.png"
+# Brightest pixel of the shell's caption (title text), dimmed vs not.
+$capW = [Math]::Min(260, $rh.Right - $rh.Left)
+$mDim = Cp3Lum "$env:RUNNER_TEMP/cp3-settings-over-dimmed-shell.png" 0 0 $capW 32 -Max
+$mLit = Cp3Lum "$env:RUNNER_TEMP/cp3-shell-undimmed.png" 0 0 $capW 32 -Max
+Cp3Check ($mLit -gt 120 -and $mDim -lt ($mLit * 0.5)) "shell dimmed behind Settings (caption max $mDim dimmed vs $mLit after close)"
 StopZephyr
+[Environment]::SetEnvironmentVariable('ZEPHYR_CI_PUBLIC_WIFI', $null, 'Process')
+$sFinal = Get-Content (Join-Path $cfgDir 'settings.json') -Raw -ErrorAction SilentlyContinue
+(@($cp3Notes) + @('', 'settings.json after the leg:', $sFinal, '', 'paired.json after the leg:', $pairedAfter)) | Set-Content "$env:RUNNER_TEMP/cp3-settings-notes.txt"
+# Put the shared fixtures back as the later legs expect them.
+Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 
 # 2b+) Tray ICON proof (round-3 P1): the icon must really exist in the
 # notification area, not only its menu. Crop the bottom-right corner of the
@@ -1954,4 +2120,5 @@ if (-not $barOnPaused) { Write-Host "::error::paused leg failed (golden=$($mPaus
 if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cursor leg failed (video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])%) - a still cursor over the video must not pin the bar"; $barGateFailed = $true }
 if ($cp1Fail.Count -gt 0) { Write-Host "::error::CP1 evidence gates failed: $($cp1Fail -join '; ')" }
 if ($cp2Fail.Count -gt 0) { Write-Host "::error::CP2 evidence gates failed: $($cp2Fail -join '; ')" }
-if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0 -or $cp2Fail.Count -gt 0) { exit 1 }
+if ($cp3Fail.Count -gt 0) { Write-Host "::error::CP3 Settings evidence gates failed: $($cp3Fail -join '; ')" }
+if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0 -or $cp2Fail.Count -gt 0 -or $cp3Fail.Count -gt 0) { exit 1 }

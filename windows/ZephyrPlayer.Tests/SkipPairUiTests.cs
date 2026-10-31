@@ -78,7 +78,7 @@ namespace ZephyrPlayer.Tests
             Sta(path =>
             {
                 var settings = new PlayerSettings(path);
-                var w = new SettingsWindow(settings, new PairedStore(), () => { });
+                var w = new SettingsWindow(settings, new PairedStore());
                 try
                 {
                     var primary = (WrapPanel)w.FindName("PrimarySkipPanel")!;
@@ -100,7 +100,7 @@ namespace ZephyrPlayer.Tests
                     // The left-nav shows one section at a time; a collapsed card
                     // measures 0 high and cannot be rendered. Open Skip first.
                     ((Button)w.FindName("NavSkip")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
-                    Capture((FrameworkElement)w.FindName("SkipSettingsCard")!, 500, "pc-skip-settings-pairs.png");
+                    Capture((FrameworkElement)w.FindName("SectionSkip")!, 640, "pc-skip-settings-pairs.png");
                 }
                 finally { w.Close(); }
             });

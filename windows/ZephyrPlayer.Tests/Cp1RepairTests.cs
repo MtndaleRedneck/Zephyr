@@ -124,7 +124,7 @@ namespace ZephyrPlayer.Tests
             {
                 // The production phone path: /control/play (and /play through App)
                 // reach PlayFromUrlAsync through the control's PlayAsync.
-                var control = new MainWindowPlaybackControl(view, player);
+                var control = new PlayerViewPlaybackControl(view, player);
                 var start = control.PlayAsync(phone.Url, null, Array.Empty<string>());
                 PumpUntil(() => start.IsCompleted, "failed phone start never completed");
                 Assert.True(start.IsFaulted, "the refused start must fault so the server answers an error");

@@ -45,9 +45,44 @@ namespace ZephyrPlayer
         private const string AssetPrefix = "Zephyr-PC";
         public const string ReleasePage = "https://github.com/" + Repo + "/releases";
 
-        /// <summary>The only production asset URL accepted: the canonical repo's own
-        /// release download for this exact tag and file name.</summary>
+        /// <summary>The canonical asset URL: the canonical repo's own release download for
+        /// this exact tag and file name.</summary>
         internal static string ExpectedAssetUrl(string tag, string name) => $"https://github.com/{Repo}/releases/download/{tag}/{name}";
+
+        /// <summary>The repository's name before the 2026-10-30 rename (MtndaleRedneck/Zephyr-Dev).
+        /// GitHub redirects it; a feed or asset that still names it is the same repository.</summary>
+        internal const string HistoricalRepo = "MtndaleRedneck/Zephyr-Dev";
+        /// <summary>Same owner, these two repository names only (CP4 item 94).</summary>
+        internal static readonly string[] AcceptedRepos = { Repo, HistoricalRepo };
+
+        /// <summary>CP4 item 94: an asset URL is accepted only as
+        /// https://github.com/MtndaleRedneck/Zephyr/releases/download/{tag}/{name} or the same
+        /// path under the historical /Zephyr-Dev/ name - exact owner, exact repository, exact
+        /// host (github.com, the host rule of SelfUpdate), https, this tag and this file. Any
+        /// other owner, repository, host, scheme, port, query or extra path is refused.</summary>
+        internal static bool IsAcceptedAssetUrl(string url, string tag, string name)
+        {
+            foreach (var repo in AcceptedRepos)
+                if (string.Equals(url, $"https://github.com/{repo}/releases/download/{tag}/{name}", StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>The start of a production download (SelfUpdate): any release download of
+        /// the accepted repositories, https on github.com, no query, no fragment, no port.</summary>
+        internal static bool IsAcceptedReleaseDownload(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return false;
+            if (u.Scheme != Uri.UriSchemeHttps || !u.IsDefaultPort || u.UserInfo.Length > 0) return false;
+            if (!string.Equals(u.Host, "github.com", StringComparison.Ordinal)) return false;
+            if (u.Query.Length > 0 || u.Fragment.Length > 0) return false;
+            var parts = u.AbsolutePath.Split('/');
+            // "", owner, repo, "releases", "download", tag, file
+            if (parts.Length != 7 || parts[0].Length != 0) return false;
+            if (parts[3] != "releases" || parts[4] != "download" || parts[5].Length == 0 || parts[6].Length == 0) return false;
+            var repo = parts[1] + "/" + parts[2];
+            return Array.Exists(AcceptedRepos, r => string.Equals(r, repo, StringComparison.Ordinal))
+                && string.Equals(url, u.GetLeftPart(UriPartial.Path), StringComparison.Ordinal);
+        }
 
         /// <summary>The published version newer than [current] shipping the installer, else null. Never throws.</summary>
         public static (string Version, string ExeUrl, string? Sha256)? LatestNewerThan(string current)
@@ -115,11 +150,10 @@ namespace ZephyrPlayer
                     var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                     if (name != $"{AssetPrefix}-{version}.exe") continue;
                     var url = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
-                    var expected = ExpectedAssetUrl(tag, name);
                     // Loopback feed tests may use a loopback asset; production never can.
                     bool testAsset = apiOverride != null && Uri.TryCreate(apiOverride, UriKind.Absolute, out var apiUri) && apiUri.IsLoopback
                         && Uri.TryCreate(url, UriKind.Absolute, out var assetUri) && assetUri.IsLoopback;
-                    if (url != expected && !testAsset) continue;
+                    if (!IsAcceptedAssetUrl(url, tag, name) && !testAsset) continue;
                     string? sha = null;
                     if (a.TryGetProperty("digest", out var dg))
                     {
