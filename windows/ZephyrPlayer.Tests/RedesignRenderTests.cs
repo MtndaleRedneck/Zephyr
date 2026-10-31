@@ -14,7 +14,10 @@ namespace ZephyrPlayer.Tests {
     try {
      var dir=Path.Combine(Path.GetTempPath(),"zephyr-redesign-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(dir);
      var settings=new PlayerSettings(Path.Combine(dir,"settings.json"));
-     var window=new SettingsWindow(settings,new PairedStore(Path.Combine(dir,"pairs.json")));
+     var pairs=new PairedStore(Path.Combine(dir,"pairs.json"));pairs.Add("tok-render","Pixel 8");
+     // The app sets the factory (the panel needs the shared gate); the render does the same.
+     var prevFactory=SettingsWindow.PairingFactory;SettingsWindow.PairingFactory=()=>new PairingPanel(new PairingGate(),pairs,_=>{});
+     SettingsWindow window;try{window=new SettingsWindow(settings,pairs);}finally{SettingsWindow.PairingFactory=prevFactory;}
      // CP3 item 69: the compact window is 900x600, not resizable.
      Assert.Equal(900,window.Width);Assert.Equal(600,window.Height);Assert.Equal(ResizeMode.NoResize,window.ResizeMode);
      Assert.Equal("Zephyr Settings",window.Title);
