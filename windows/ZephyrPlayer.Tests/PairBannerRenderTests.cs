@@ -49,9 +49,10 @@ namespace ZephyrPlayer.Tests
                     var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
                     store.Add("tok-1", "My phone");
                     var gate = new PairingGate();
-                    var w = new PairingWindow(gate, store, _ => { });
-                    // Loaded mints + shows a code; drive the lifecycle manually.
-                    w.Show(); w.Hide();
+                    // CP4 item 88: the one pairing surface is Settings > Paired phones (the panel).
+                    var w = new PairingPanel(gate, store, _ => { });
+                    var host = new Window { Content = w, Width = 600, Height = 700, Background = new SolidColorBrush(Color.FromRgb(0x12, 0x12, 0x15)), ShowInTaskbar = false };
+                    host.Show();
                     w.RefreshPhones();
                     var codePanel = (UIElement)w.FindName("CodePanel")!;
                     var list = (ItemsControl)w.FindName("PhoneList")!;
@@ -68,7 +69,8 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal(1, list.Items.Count);
                     // The big code text is 6 spaced digits.
                     var codeText = ((TextBlock)w.FindName("PairCodeText")!).Text;
-                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2"
+                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2" with thin spaces, word space in the middle
+                    Assert.Equal(' ', codeText[5]);
                     // Render the window content offscreen as CI evidence.
                     var root = (FrameworkElement)w.Content;
                     root.Measure(new Size(560, 600));
@@ -95,7 +97,7 @@ namespace ZephyrPlayer.Tests
                         if (r > 200 && g > 90 && g < 160 && b < 60) orange++;
                     }
                     Assert.True(orange > 150, $"orange code pixels {orange} - pairing code not rendered");
-                    w.Close();
+                    host.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
                 }
                 catch (Exception e) { error = e.ToString(); }
@@ -223,6 +225,124 @@ namespace ZephyrPlayer.Tests
                 try { System.IO.File.WriteAllText(f, error); } catch { }
                 Assert.True(false, "STA body error (full text also in " + f + "):\n" + error);
             }
+        }
+    }
+
+    public class Cp3PairedPhonesTests
+    {
+        private static void Sta(Action body)
+        {
+            Exception? error = null;
+            var t = new Thread(() => { try { body(); } catch (Exception e) { error = e; } finally { System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown(); } });
+            t.SetApartmentState(ApartmentState.STA); t.Start();
+            Assert.True(t.Join(30000), "STA body timed out");
+            if (error != null) throw new Exception("STA body failed", error);
+        }
+
+        private static T? Find<T>(DependencyObject root, Func<T, bool> match) where T : DependencyObject
+        {
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var c = VisualTreeHelper.GetChild(root, i);
+                if (c is T hit && match(hit)) return hit;
+                var deeper = Find(c, match);
+                if (deeper != null) return deeper;
+            }
+            return null;
+        }
+
+        [Fact]
+        public void FormatCode_ThinSpacesAndOneWordSpace()
+        {
+            Assert.Equal("4\u20098\u20092 9\u20091\u20093", PairingPanel.FormatCode("482913"));
+            Assert.Equal(11, PairingPanel.FormatCode("135792").Length);
+            Assert.Equal("4\u20098\u20092\u20099", PairingPanel.FormatCode("4829"));
+        }
+
+        [Fact]
+        public void PhoneStatus_RenderWording()
+        {
+            var now = new DateTime(2026, 10, 31, 15, 0, 0, DateTimeKind.Local);
+            Assert.Equal("Connected now", PairingPanel.PhoneStatus(true, null, now));
+            Assert.Equal("Not connected this session", PairingPanel.PhoneStatus(false, null, now));
+            Assert.StartsWith("Last seen today, ", PairingPanel.PhoneStatus(false, now.AddHours(-2).ToUniversalTime(), now));
+            Assert.Equal("Last seen yesterday", PairingPanel.PhoneStatus(false, now.AddDays(-1).ToUniversalTime(), now));
+            Assert.StartsWith("Last seen Oct", PairingPanel.PhoneStatus(false, now.AddDays(-5).ToUniversalTime(), now));
+        }
+
+        [Fact]
+        public void PhoneCard_Forget_RemovesThePhone()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-forget-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-a", "Kitchen phone");
+                store.Add("tok-b", "Ezzy's phone");
+                var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
+                host.Show(); host.UpdateLayout();
+                Assert.Equal(2, ((ItemsControl)panel.FindName("PhoneList")!).Items.Count);
+                var forget = Find<Button>(panel, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "Forget:Kitchen phone");
+                Assert.NotNull(forget);
+                Assert.Equal("Forget", forget!.Content);
+                forget.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                host.UpdateLayout();
+                Assert.Single(store.Entries());
+                Assert.Equal("Ezzy's phone", store.Entries()[0].Name);
+                Assert.Equal(1, ((ItemsControl)panel.FindName("PhoneList")!).Items.Count);
+                // Survives a reload from disk.
+                Assert.Single(new PairedStore(System.IO.Path.Combine(dir, "paired.json")).Entries());
+                var last = Find<Button>(panel, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "Forget:Ezzy's phone");
+                last!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                host.UpdateLayout();
+                Assert.Empty(store.Entries());
+                Assert.Equal(Visibility.Visible, ((TextBlock)panel.FindName("NoPhonesText")!).Visibility);
+                host.Close();
+            });
+        }
+
+        [Fact]
+        public void PublicWifiBanner_NoticeOnly_AndCheckIsReadOnly()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-wifi-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                var before = ConnectionState.PublicWifiName;
+                try
+                {
+                    ConnectionState.PublicWifiName = "CoffeeShop";
+                    var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                    var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
+                    host.Show(); host.UpdateLayout();
+                    var banner = (Border)panel.FindName("WifiBanner")!;
+                    Assert.Equal(Visibility.Visible, banner.Visibility);
+                    var text = ((TextBlock)panel.FindName("WifiBannerText")!).Text;
+                    Assert.Contains("public", text);
+                    Assert.Contains("can block", text);       // honest: may, not "is blocked"
+                    Assert.DoesNotContain("is blocked", text);
+                    string? said = null;
+                    Action<string> h = s => said = s;
+                    PairingPanel.SuppressDialogsForTest = true;
+                    PairingPanel.FirewallCheckResult += h;
+                    try { ((Button)panel.FindName("FirewallCheckButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); }
+                    finally { PairingPanel.FirewallCheckResult -= h; PairingPanel.SuppressDialogsForTest = false; }
+                    Assert.NotNull(said);
+                    Assert.DoesNotContain("shut", said!, StringComparison.OrdinalIgnoreCase);
+                    ConnectionState.PublicWifiName = null;
+                    panel.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                    host.Close();
+                    var panel2 = new PairingPanel(new PairingGate(), store, _ => { });
+                    var host2 = new Window { Content = panel2, Width = 640, Height = 600, ShowInTaskbar = false };
+                    host2.Show(); host2.UpdateLayout();
+                    Assert.Equal(Visibility.Collapsed, ((Border)panel2.FindName("WifiBanner")!).Visibility);
+                    host2.Close();
+                }
+                finally { ConnectionState.PublicWifiName = before; }
+            });
         }
     }
 }

@@ -43,6 +43,20 @@ namespace ZephyrPlayer
             RestoreBoundsFromSettings();
         }
 
+        /// <summary>Dim the shell behind Settings (render 06: rgba(0,0,0,.84)), 200 ms fade.
+        /// The native video host is not WPF content and is not dimmed; Settings closes
+        /// whenever a movie starts, so it never sits over playback.</summary>
+        public void SetDimmed(bool on)
+        {
+            IsDimmed = on;
+            var fade = new System.Windows.Media.Animation.DoubleAnimation(on ? 1 : 0, TimeSpan.FromMilliseconds(200));
+            if (on) DimLayer.Visibility = Visibility.Visible;
+            else fade.Completed += (_, __) => { if (!IsDimmed) DimLayer.Visibility = Visibility.Collapsed; };
+            DimLayer.BeginAnimation(OpacityProperty, fade);
+        }
+
+        public bool IsDimmed { get; private set; }
+
         /// <summary>The view currently on screen (library or player).</summary>
         public FrameworkElement? CurrentView => _current;
         private FrameworkElement? _current;

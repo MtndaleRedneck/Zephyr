@@ -1,9 +1,4 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
- <!-- Legacy keys (Settings, Pairing, Feedback still use them until their own checkpoints). -->
- <SolidColorBrush x:Key="WindowBrush" Color="#1B1B1E"/><SolidColorBrush x:Key="LayerBrush" Color="#232328"/>
- <LinearGradientBrush x:Key="CardBrush" StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#2E2E36" Offset="0"/><GradientStop Color="#26262D" Offset="1"/></LinearGradientBrush><SolidColorBrush x:Key="Card2Brush" Color="#2E2E36"/>
- <SolidColorBrush x:Key="NavSelectedBrush" Color="#2E2E36"/><SolidColorBrush x:Key="OrangeBrush" Color="#FF9500"/>
- <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/><SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
  <!-- 2.0 palette (approved v3 render HTML values). -->
  <SolidColorBrush x:Key="ZBaseBrush" Color="#060607"/>
  <SolidColorBrush x:Key="ZBarBrush" Color="#0A0A0C"/>
@@ -18,7 +13,197 @@
  <SolidColorBrush x:Key="ZHairlineBrush" Color="#0FFFFFFF"/>
  <SolidColorBrush x:Key="ZPopupBrush" Color="#F016161A"/>
  <LinearGradientBrush x:Key="ZAccentGradient" StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#FFA233" Offset="0"/><GradientStop Color="#FF9500" Offset="1"/></LinearGradientBrush>
- <Style TargetType="Window"><Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/></Style>
+ <Style TargetType="Window"><Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/><Setter Property="Foreground" Value="{StaticResource ZTextBrush}"/></Style>
+
+
+ <!-- 2.0 interaction states (item 86): every button gets Hover #FFFFFF12 and Pressed #FFFFFF1F as
+      white layers (Hl 7.06 %, plus Pr 5.48 % on top = 12.16 %), eased in 120 ms. -->
+ <QuadraticEase x:Key="ZEase" EasingMode="EaseOut"/>
+
+ <!-- Bar buttons: 38 px, radius 9 (render 02 .cb). -->
+ <Style x:Key="ZBarButton" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#E9E9EE"/><Setter Property="MinWidth" Value="38"/><Setter Property="Height" Value="38"/>
+  <Setter Property="Padding" Value="0"/><Setter Property="VerticalAlignment" Value="Center"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Background="Transparent" CornerRadius="9" Padding="{TemplateBinding Padding}"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="9" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="9" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger></ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Skip / play buttons: no box of their own (render 02 draws only the glyphs). -->
+ <Style x:Key="ZGlyphButton" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/><Setter Property="Padding" Value="0"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Background="Transparent" CornerRadius="10"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="10" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="10" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger></ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Pop-up rows (render 04 .row): 36 px, radius 8, 13.5 px; Tag="sel" = selected
+      (orange tint, #FFB347 SemiBold, check on the right). -->
+ <Style x:Key="ZPopupRow" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#E3E3E8"/><Setter Property="FontSize" Value="13.5"/>
+  <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Background="Transparent" CornerRadius="8" Height="36" Padding="10,0">
+    <Grid>
+     <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+     <ContentPresenter VerticalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+     <Path x:Name="Check" Grid.Column="1" Width="16" Height="16" Stretch="Uniform" Visibility="Collapsed" Data="M5,12.5 L9.5,17 L19,7.5" Stroke="#FF9500" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" VerticalAlignment="Center"/>
+    </Grid>
+   </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="Tag" Value="sel"><Setter TargetName="Bg" Property="Background" Value="#21FF9500"/><Setter Property="Foreground" Value="#FFB347"/><Setter Property="FontWeight" Value="SemiBold"/><Setter TargetName="Check" Property="Visibility" Value="Visible"/></Trigger>
+    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Chips (render 04 / 06 .chip): 30 px, radius 15; Tag="on" = orange gradient, #141416 SemiBold. -->
+ <Style x:Key="ZChip" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#D9D9E0"/><Setter Property="FontSize" Value="13"/><Setter Property="FontWeight" Value="Medium"/>
+  <Setter Property="Height" Value="30"/><Setter Property="Padding" Value="13,0"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Background="#0FFFFFFF" BorderBrush="#12FFFFFF" BorderThickness="1" CornerRadius="15" Padding="{TemplateBinding Padding}">
+    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+   </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="15" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="15" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="Tag" Value="on"><Setter TargetName="Bg" Property="Background" Value="{StaticResource ZAccentGradient}"/><Setter TargetName="Bg" Property="BorderBrush" Value="Transparent"/><Setter Property="Foreground" Value="#141416"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Small boxed +/- (render 04 .iconbtn.box 26 px). -->
+ <Style x:Key="ZBoxButton" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Width" Value="26"/><Setter Property="Height" Value="26"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Background="#0DFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1" CornerRadius="8"><ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/></Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers><Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger></ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Text buttons (render tokens .btn / .btn.or): 32 px, radius 8; Tag="or" = orange gradient. -->
+ <Style x:Key="ZTextButton" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#E6E6EB"/><Setter Property="FontSize" Value="13"/><Setter Property="FontWeight" Value="Medium"/>
+  <Setter Property="Height" Value="32"/><Setter Property="Padding" Value="14,0"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Height="{TemplateBinding Height}" Padding="{TemplateBinding Padding}" CornerRadius="8" Background="#0EFFFFFF" BorderBrush="#0FFFFFFF" BorderThickness="1">
+    <ContentPresenter VerticalAlignment="Center" HorizontalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+   </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="8" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="Tag" Value="or"><Setter TargetName="Bg" Property="Background" Value="{StaticResource ZAccentGradient}"/><Setter TargetName="Bg" Property="BorderBrush" Value="Transparent"/><Setter Property="Foreground" Value="#141416"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
+    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Muted underlined text link (the pairing code's Cancel). -->
+ <Style x:Key="ZLinkButton" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#8E8E98"/><Setter Property="FontSize" Value="12"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid><Border x:Name="Bg" Background="Transparent" CornerRadius="4" Padding="3,1"><TextBlock x:Name="Label" Text="{TemplateBinding Content}" TextDecorations="Underline" Foreground="{TemplateBinding Foreground}"/></Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="4" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="4" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Label" Property="Foreground" Value="#F5F5F7"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+
+ <!-- Settings window (renders 05, 06, 06b). Nav rows: 38 px, radius 7, 13.5 px #C4C4CC;
+      Tag="sel": rgba(255,255,255,.07) fill, #F5F5F7 Medium text, 3 px #FF9500 left bar. -->
+ <Style x:Key="ZNavItem" TargetType="Button">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#C4C4CC"/><Setter Property="FontSize" Value="13.5"/>
+  <Setter Property="Height" Value="38"/><Setter Property="Margin" Value="0,0,0,2"/>
+  <Setter Property="HorizontalContentAlignment" Value="Left"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Button">
+   <Grid>
+    <Border x:Name="Bg" Background="Transparent" CornerRadius="7"/>
+    <Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="7" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="7" IsHitTestVisible="False"/>
+    <Border x:Name="Pill" Width="3" Margin="0,10" CornerRadius="2" HorizontalAlignment="Left" Background="#FF9500" Visibility="Collapsed"/>
+    <ContentPresenter Margin="12,0" VerticalAlignment="Center" HorizontalAlignment="Left" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+   </Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="Tag" Value="sel"><Setter TargetName="Bg" Property="Background" Value="#12FFFFFF"/><Setter TargetName="Pill" Property="Visibility" Value="Visible"/><Setter Property="Foreground" Value="#F5F5F7"/><Setter Property="FontWeight" Value="Medium"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Choice chips as radio buttons (render 06 .chip, 30 px / radius 15; checked = orange gradient). -->
+ <Style x:Key="ZChipRadio" TargetType="RadioButton">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="Foreground" Value="#D9D9E0"/><Setter Property="FontSize" Value="13"/><Setter Property="FontWeight" Value="Medium"/>
+  <Setter Property="Height" Value="30"/><Setter Property="Padding" Value="13,0"/><Setter Property="Margin" Value="6,3,0,3"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+   <Grid><Border x:Name="Bg" Background="#0FFFFFFF" BorderBrush="#12FFFFFF" BorderThickness="1" CornerRadius="15" Padding="{TemplateBinding Padding}">
+    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" TextBlock.Foreground="{TemplateBinding Foreground}"/>
+   </Border><Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="15" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="15" IsHitTestVisible="False"/></Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="IsChecked" Value="True"><Setter TargetName="Bg" Property="Background" Value="{StaticResource ZAccentGradient}"/><Setter TargetName="Bg" Property="BorderBrush" Value="Transparent"/><Setter Property="Foreground" Value="#141416"/><Setter Property="FontWeight" Value="SemiBold"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- The Playback bar tab's smaller chips (render 06b: 28 px, 12.5 px, padding 0 11). -->
+ <Style x:Key="ZChipRadioSmall" TargetType="RadioButton" BasedOn="{StaticResource ZChipRadio}">
+  <Setter Property="Height" Value="28"/><Setter Property="FontSize" Value="12.5"/><Setter Property="Padding" Value="11,0"/>
+ </Style>
+ <!-- Toggle (render 06 .tog): 40x20, 1.5 px #8E8E98 ring with a 12 px #C9C9D1 knob; on = #FF9500 with a dark knob. -->
+ <Style x:Key="ZToggle" TargetType="CheckBox">
+  <Setter Property="Focusable" Value="False"/><Setter Property="Cursor" Value="Hand"/>
+  <Setter Property="VerticalAlignment" Value="Center"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="CheckBox">
+   <Grid Width="40" Height="20" Background="Transparent">
+    <Border x:Name="Track" CornerRadius="10" BorderThickness="1.5" BorderBrush="#8E8E98" Background="Transparent"/>
+    <Border x:Name="Hl" Background="#FFFFFF" Opacity="0" CornerRadius="10" IsHitTestVisible="False"/><Border x:Name="Pr" Background="#FFFFFF" Opacity="0" CornerRadius="10" IsHitTestVisible="False"/>
+    <Ellipse x:Name="Knob" Width="12" Height="12" Fill="#C9C9D1" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="4.5,0,0,0"/>
+   </Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsMouseOver" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0.0706" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Hl" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger><Trigger Property="IsPressed" Value="True"><Trigger.EnterActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0.0548" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.EnterActions><Trigger.ExitActions><BeginStoryboard><Storyboard><DoubleAnimation Storyboard.TargetName="Pr" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.12" EasingFunction="{StaticResource ZEase}"/></Storyboard></BeginStoryboard></Trigger.ExitActions></Trigger>
+    <Trigger Property="IsChecked" Value="True"><Setter TargetName="Track" Property="Background" Value="#FF9500"/><Setter TargetName="Track" Property="BorderBrush" Value="#FF9500"/><Setter TargetName="Knob" Property="Fill" Value="#141416"/><Setter TargetName="Knob" Property="Margin" Value="24.5,0,0,0"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
+ <!-- Settings card (render 06 .card): #1A1A1F -> #16161A, 1 px rgba(255,255,255,.07), radius 10, padding 14 16. -->
+ <LinearGradientBrush x:Key="ZCardBrush" StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#1A1A1F" Offset="0"/><GradientStop Color="#16161A" Offset="1"/></LinearGradientBrush>
+ <LinearGradientBrush x:Key="ZPhoneCardBrush" StartPoint="0,0" EndPoint="0,1"><GradientStop Color="#1C1C21" Offset="0"/><GradientStop Color="#17171B" Offset="1"/></LinearGradientBrush>
+ <Style x:Key="ZCard" TargetType="Border">
+  <Setter Property="Background" Value="{StaticResource ZCardBrush}"/><Setter Property="BorderBrush" Value="#12FFFFFF"/>
+  <Setter Property="BorderThickness" Value="1"/><Setter Property="CornerRadius" Value="10"/>
+  <Setter Property="Padding" Value="16,14"/><Setter Property="Margin" Value="0,8,0,0"/>
+ </Style>
+ <Style x:Key="ZCardIcon" TargetType="Border">
+  <Setter Property="Width" Value="34"/><Setter Property="Height" Value="34"/><Setter Property="CornerRadius" Value="8"/>
+  <Setter Property="Background" Value="#0DFFFFFF"/><Setter Property="VerticalAlignment" Value="Center"/>
+  <Setter Property="TextBlock.Foreground" Value="#D9D9E0"/>
+ </Style>
+ <Style x:Key="ZCardTitle" TargetType="TextBlock">
+  <Setter Property="FontSize" Value="14"/><Setter Property="FontWeight" Value="Medium"/><Setter Property="Foreground" Value="#F5F5F7"/>
+ </Style>
+ <Style x:Key="ZCardDesc" TargetType="TextBlock">
+  <Setter Property="FontSize" Value="12.5"/><Setter Property="Foreground" Value="#8E8E98"/><Setter Property="Margin" Value="0,3,0,0"/><Setter Property="TextWrapping" Value="Wrap"/>
+ </Style>
+ <!-- Text field (render 05): 34 px, #17171B, 1 px rgba(255,255,255,.1), radius 8; focused = 2 px orange bottom line. -->
+ <Style x:Key="ZTextField" TargetType="TextBox">
+  <Setter Property="Foreground" Value="#F5F5F7"/><Setter Property="CaretBrush" Value="#F5F5F7"/>
+  <Setter Property="SelectionBrush" Value="#FF9500"/><Setter Property="FontSize" Value="13.5"/>
+  <Setter Property="Height" Value="34"/><Setter Property="Padding" Value="10,0"/><Setter Property="VerticalContentAlignment" Value="Center"/>
+  <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox">
+   <Grid>
+    <Border x:Name="Box" Background="#17171B" BorderBrush="#1AFFFFFF" BorderThickness="1" CornerRadius="8"/>
+    <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Focusable="False"/>
+    <Border x:Name="Focus" Height="2" VerticalAlignment="Bottom" Margin="1,0" CornerRadius="0,0,8,8" Background="#FF9500" Visibility="Collapsed"/>
+   </Grid>
+   <ControlTemplate.Triggers>
+    <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Focus" Property="Visibility" Value="Visible"/></Trigger>
+    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="#29FFFFFF"/></Trigger>
+    <Trigger Property="IsReadOnly" Value="True"><Setter Property="Foreground" Value="#B4B4BE"/></Trigger>
+   </ControlTemplate.Triggers>
+  </ControlTemplate></Setter.Value></Setter>
+ </Style>
 
  <!-- One themed menu for every flyout (sort, speed, sleep, subtitles). -->
  <Style TargetType="ContextMenu">
@@ -97,16 +282,6 @@
   </Style.Triggers>
  </Style>
 
- <Style x:Key="PlaybackSlider" TargetType="Slider">
-  <Setter Property="MinHeight" Value="22"/><Setter Property="Template"><Setter.Value><ControlTemplate TargetType="Slider">
-   <Grid VerticalAlignment="Center" Background="Transparent"><Border Background="#525258" Height="3" CornerRadius="1.5"/>
-    <Track x:Name="PART_Track" Minimum="{TemplateBinding Minimum}" Maximum="{TemplateBinding Maximum}" Value="{TemplateBinding Value}" IsDirectionReversed="{TemplateBinding IsDirectionReversed}">
-     <Track.DecreaseRepeatButton><RepeatButton Command="Slider.DecreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" Height="3" CornerRadius="1.5"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.DecreaseRepeatButton>
-     <Track.Thumb><Thumb Width="16" Height="16" Focusable="False"><Thumb.Template><ControlTemplate TargetType="Thumb"><Ellipse Fill="#F5F5F7" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Slider}}" StrokeThickness="2.5"/></ControlTemplate></Thumb.Template></Thumb></Track.Thumb>
-     <Track.IncreaseRepeatButton><RepeatButton Command="Slider.IncreaseLarge" Focusable="False"><RepeatButton.Template><ControlTemplate TargetType="RepeatButton"><Border Background="Transparent"/></ControlTemplate></RepeatButton.Template></RepeatButton></Track.IncreaseRepeatButton>
-    </Track>
-   </Grid></ControlTemplate></Setter.Value></Setter>
- </Style>
  <!-- 2.0 player bar sliders (render 02 / 04). Tracks are drawn opaque at the colour the
       render's translucent track has over the bar card (rgba(255,255,255,.16) and .18 over
       rgba(12,12,15,.74) on dark video): the bar card itself is already 74 % opaque. -->

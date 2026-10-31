@@ -17,25 +17,10 @@ namespace ZephyrPlayer
     /// top-level window: leaving it means the shell swaps it out of the tree.</summary>
     public partial class PlayerView : UserControl
     {
-        private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
-        private static readonly SolidColorBrush IconDefault = new(Color.FromRgb(0xE9, 0xE9, 0xEE));
-        private static readonly SolidColorBrush Orange = new(Brand.Orange);
-        private static readonly SolidColorBrush OrangeTint = new(Color.FromArgb(0x1A, 0xFF, 0x95, 0x00));
-        private static readonly SolidColorBrush WhiteTint = new(Color.FromArgb(0x1A, 0xF5, 0xF5, 0xF7));
-        private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x14, 0x14, 0x16));
-
-        // Brushes are shared app-wide; Freeze makes them safe to touch from any
-        // thread (each test case runs on its own STA thread - unfrozen statics
-        // threw cross-thread Freezable exceptions, CI-observed).
-        static PlayerView()
-        {
-            RingDefault.Freeze();
-            IconDefault.Freeze();
-            Orange.Freeze();
-            OrangeTint.Freeze();
-            WhiteTint.Freeze();
-            Dark.Freeze();
-        }
+        // The bar's brushes (one set, owned by PlayerBar since CP3 item 73).
+        private static readonly SolidColorBrush RingDefault = PlayerBar.RingDefault;
+        private static readonly SolidColorBrush IconDefault = PlayerBar.IconDefault;
+        private static readonly SolidColorBrush Orange = PlayerBar.Orange;
 
         private readonly LibVLC _libvlc;
         private readonly MediaPlayer _player;
@@ -92,6 +77,7 @@ namespace ZephyrPlayer
         public PlayerView(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
         {
             InitializeComponent();
+            BindBar();
             ((Canvas)SecondarySkipBackIcon.Parent).Children.Add(_secondaryBackHighlight);
             ((Canvas)SecondarySkipForwardIcon.Parent).Children.Add(_secondaryForwardHighlight);
             // Seek press/release with handledEventsToo: with IsMoveToPointEnabled the
@@ -182,12 +168,19 @@ namespace ZephyrPlayer
             UpdatePlayPauseGlyph();
         }
 
+        /// <summary>Settings-write failure (P0-8, CP4 item 85): the app's own dark dialog,
+        /// not the stock light MessageBox. Owned by the shell when it is up.</summary>
         private void ShowSettingsWarning(string text, string caption)
         {
+            var dlg = FirewallSetup.NoteWindow(text, caption);
             var owner = Window.GetWindow(this);
-            if (owner != null && owner.IsVisible) MessageBox.Show(owner, text, caption, MessageBoxButton.OK, MessageBoxImage.Warning);
-            else MessageBox.Show(text, caption, MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (owner != null && owner.IsVisible) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            SettingsWarningShown?.Invoke(dlg);
+            dlg.ShowDialog();
         }
+
+        /// <summary>Test seam: the settings-write warning about to be shown.</summary>
+        internal static event Action<Window>? SettingsWarningShown;
 
         private int _playGeneration;
         private System.Threading.CancellationTokenSource? _preparation;
@@ -1718,94 +1711,144 @@ namespace ZephyrPlayer
             SetBadge(SleepButton, SleepLabel, _sleep.IsActive);
         }
 
+
+        // ---------- the bar (PlayerBar, CP3 item 73) ----------
+
+        /// <summary>The bar card itself (tests and the capture build read it).</summary>
+        public System.Windows.Controls.Border ControlBar => Bar.ControlBar;
+        private System.Windows.Controls.TextBlock ElapsedText => Bar.ElapsedText;
+        private System.Windows.Controls.Slider SeekBar => Bar.SeekBar;
+        private System.Windows.Controls.TextBlock RemainingText => Bar.RemainingText;
+        private System.Windows.Controls.Grid ControlsRow => Bar.ControlsRow;
+        private System.Windows.Controls.TextBlock TotalText => Bar.TotalText;
+        private System.Windows.Controls.StackPanel VolumeGroup => Bar.VolumeGroup;
+        private System.Windows.Controls.Button VolumeButton => Bar.VolumeButton;
+        private System.Windows.Shapes.Path VolumeBody => Bar.VolumeBody;
+        private System.Windows.Shapes.Path VolumeGlyph => Bar.VolumeGlyph;
+        private System.Windows.Controls.Slider VolumeSlider => Bar.VolumeSlider;
+        private System.Windows.Controls.TextBlock VolumeLabel => Bar.VolumeLabel;
+        private System.Windows.Controls.StackPanel CenterPlaybackControls => Bar.CenterPlaybackControls;
+        private System.Windows.Controls.Button SecondarySkipBackButton => Bar.SecondarySkipBackButton;
+        private System.Windows.Controls.Grid SecondaryBackBox => Bar.SecondaryBackBox;
+        private System.Windows.Media.RotateTransform SecondaryBackSpin => Bar.SecondaryBackSpin;
+        private System.Windows.Shapes.Path SecondarySkipBackIcon => Bar.SecondarySkipBackIcon;
+        private System.Windows.Shapes.Path SecondarySkipBackHead => Bar.SecondarySkipBackHead;
+        private System.Windows.Controls.TextBlock SecondarySkipBackLabel => Bar.SecondarySkipBackLabel;
+        private System.Windows.Controls.Button SkipBackButton => Bar.SkipBackButton;
+        private System.Windows.Controls.Grid SkipBackBox => Bar.SkipBackBox;
+        private System.Windows.Media.RotateTransform SkipBackSpin => Bar.SkipBackSpin;
+        private System.Windows.Shapes.Path SkipBackRing => Bar.SkipBackRing;
+        private System.Windows.Shapes.Path SkipBackArrow => Bar.SkipBackArrow;
+        private System.Windows.Controls.TextBlock SkipBackLabel => Bar.SkipBackLabel;
+        private System.Windows.Controls.Button PlayPauseButton => Bar.PlayPauseButton;
+        private System.Windows.Controls.Grid PlayBox => Bar.PlayBox;
+        private System.Windows.Shapes.Ellipse PlayRing => Bar.PlayRing;
+        private System.Windows.Shapes.Path PlayGlyph => Bar.PlayGlyph;
+        private System.Windows.Controls.Grid PauseGlyph => Bar.PauseGlyph;
+        private System.Windows.Controls.Button SkipForwardButton => Bar.SkipForwardButton;
+        private System.Windows.Controls.Grid SkipForwardBox => Bar.SkipForwardBox;
+        private System.Windows.Media.RotateTransform SkipForwardSpin => Bar.SkipForwardSpin;
+        private System.Windows.Shapes.Path SkipForwardRing => Bar.SkipForwardRing;
+        private System.Windows.Shapes.Path SkipForwardArrow => Bar.SkipForwardArrow;
+        private System.Windows.Controls.TextBlock SkipForwardLabel => Bar.SkipForwardLabel;
+        private System.Windows.Controls.Button SecondarySkipForwardButton => Bar.SecondarySkipForwardButton;
+        private System.Windows.Controls.Grid SecondaryForwardBox => Bar.SecondaryForwardBox;
+        private System.Windows.Media.RotateTransform SecondaryForwardSpin => Bar.SecondaryForwardSpin;
+        private System.Windows.Shapes.Path SecondarySkipForwardIcon => Bar.SecondarySkipForwardIcon;
+        private System.Windows.Shapes.Path SecondarySkipForwardHead => Bar.SecondarySkipForwardHead;
+        private System.Windows.Controls.TextBlock SecondarySkipForwardLabel => Bar.SecondarySkipForwardLabel;
+        private System.Windows.Controls.StackPanel RightGroup => Bar.RightGroup;
+        private System.Windows.Controls.Button CaptionsButton => Bar.CaptionsButton;
+        private System.Windows.Controls.Button SpeedButton => Bar.SpeedButton;
+        private System.Windows.Controls.TextBlock SpeedLabel => Bar.SpeedLabel;
+        private System.Windows.Controls.Button SleepButton => Bar.SleepButton;
+        private System.Windows.Controls.TextBlock SleepLabel => Bar.SleepLabel;
+        private System.Windows.Controls.Button FullscreenButton => Bar.FullscreenButton;
+        private System.Windows.Shapes.Path FullscreenGlyph => Bar.FullscreenGlyph;
+
+        /// <summary>The bar's parts keep their names in this view's name scope (FindName,
+        /// tests, the capture readback) and its handlers stay here, wired once.</summary>
+        private void BindBar()
+        {
+            RegisterName("ControlBar", Bar.ControlBar);
+            RegisterName("ElapsedText", Bar.ElapsedText);
+            RegisterName("SeekBar", Bar.SeekBar);
+            RegisterName("RemainingText", Bar.RemainingText);
+            RegisterName("ControlsRow", Bar.ControlsRow);
+            RegisterName("TotalText", Bar.TotalText);
+            RegisterName("VolumeGroup", Bar.VolumeGroup);
+            RegisterName("VolumeButton", Bar.VolumeButton);
+            RegisterName("VolumeBody", Bar.VolumeBody);
+            RegisterName("VolumeGlyph", Bar.VolumeGlyph);
+            RegisterName("VolumeSlider", Bar.VolumeSlider);
+            RegisterName("VolumeLabel", Bar.VolumeLabel);
+            RegisterName("CenterPlaybackControls", Bar.CenterPlaybackControls);
+            RegisterName("SecondarySkipBackButton", Bar.SecondarySkipBackButton);
+            RegisterName("SecondaryBackBox", Bar.SecondaryBackBox);
+            RegisterName("SecondaryBackSpin", Bar.SecondaryBackSpin);
+            RegisterName("SecondarySkipBackIcon", Bar.SecondarySkipBackIcon);
+            RegisterName("SecondarySkipBackHead", Bar.SecondarySkipBackHead);
+            RegisterName("SecondarySkipBackLabel", Bar.SecondarySkipBackLabel);
+            RegisterName("SkipBackButton", Bar.SkipBackButton);
+            RegisterName("SkipBackBox", Bar.SkipBackBox);
+            RegisterName("SkipBackSpin", Bar.SkipBackSpin);
+            RegisterName("SkipBackRing", Bar.SkipBackRing);
+            RegisterName("SkipBackArrow", Bar.SkipBackArrow);
+            RegisterName("SkipBackLabel", Bar.SkipBackLabel);
+            RegisterName("PlayPauseButton", Bar.PlayPauseButton);
+            RegisterName("PlayBox", Bar.PlayBox);
+            RegisterName("PlayRing", Bar.PlayRing);
+            RegisterName("PlayGlyph", Bar.PlayGlyph);
+            RegisterName("PauseGlyph", Bar.PauseGlyph);
+            RegisterName("SkipForwardButton", Bar.SkipForwardButton);
+            RegisterName("SkipForwardBox", Bar.SkipForwardBox);
+            RegisterName("SkipForwardSpin", Bar.SkipForwardSpin);
+            RegisterName("SkipForwardRing", Bar.SkipForwardRing);
+            RegisterName("SkipForwardArrow", Bar.SkipForwardArrow);
+            RegisterName("SkipForwardLabel", Bar.SkipForwardLabel);
+            RegisterName("SecondarySkipForwardButton", Bar.SecondarySkipForwardButton);
+            RegisterName("SecondaryForwardBox", Bar.SecondaryForwardBox);
+            RegisterName("SecondaryForwardSpin", Bar.SecondaryForwardSpin);
+            RegisterName("SecondarySkipForwardIcon", Bar.SecondarySkipForwardIcon);
+            RegisterName("SecondarySkipForwardHead", Bar.SecondarySkipForwardHead);
+            RegisterName("SecondarySkipForwardLabel", Bar.SecondarySkipForwardLabel);
+            RegisterName("RightGroup", Bar.RightGroup);
+            RegisterName("CaptionsButton", Bar.CaptionsButton);
+            RegisterName("SpeedButton", Bar.SpeedButton);
+            RegisterName("SpeedLabel", Bar.SpeedLabel);
+            RegisterName("SleepButton", Bar.SleepButton);
+            RegisterName("SleepLabel", Bar.SleepLabel);
+            RegisterName("FullscreenButton", Bar.FullscreenButton);
+            RegisterName("FullscreenGlyph", Bar.FullscreenGlyph);
+            Bar.ControlBar.SizeChanged += OnBarSizeChanged;
+            Bar.SeekBar.ValueChanged += OnSeekValueChanged;
+            Bar.VolumeButton.Click += OnMute;
+            Bar.VolumeSlider.ValueChanged += OnVolumeChanged;
+            Bar.SecondarySkipBackButton.Click += OnSecondarySkipBack;
+            Bar.SkipBackButton.Click += OnSkipBack;
+            Bar.PlayPauseButton.Click += OnPlayPause;
+            Bar.SkipForwardButton.Click += OnSkipForward;
+            Bar.SecondarySkipForwardButton.Click += OnSecondarySkipForward;
+            Bar.CaptionsButton.Click += OnCaptions;
+            Bar.SpeedButton.Click += OnSpeed;
+            Bar.SleepButton.Click += OnSleep;
+            Bar.FullscreenButton.Click += OnFullscreen;
+        }
+
         // ---------- bar styling (Settings, live; item 58) ----------
 
         private Brush _iconBrush = IconDefault;
 
-        private static void ApplyGlyphBrush(DependencyObject element, Brush brush)
-        {
-            if (element is System.Windows.Shapes.Path path)
-            {
-                if (path.Stroke != null) path.Stroke = brush;
-                if (path.Fill != null) path.Fill = brush;
-            }
-            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(element); i++) ApplyGlyphBrush(VisualTreeHelper.GetChild(element, i), brush);
-            if (element is ContentControl cc && cc.Content is DependencyObject content && VisualTreeHelper.GetChildrenCount(element) == 0) ApplyGlyphBrush(content, brush);
-            if (element is Panel panel && VisualTreeHelper.GetChildrenCount(element) == 0) foreach (UIElement child in panel.Children) ApplyGlyphBrush(child, brush);
-            if (element is Decorator dec && dec.Child != null && VisualTreeHelper.GetChildrenCount(element) == 0) ApplyGlyphBrush(dec.Child, brush);
-        }
+        private static void ApplyGlyphBrush(DependencyObject element, Brush brush) => PlayerBar.ApplyGlyphBrush(element, brush);
 
-        /// <summary>"10s" with a smaller unit letter, as render 02's skip glyphs. The
-        /// TextBlock's Text still reads "10s".</summary>
-        private static void SetSkipLabel(TextBlock tb, int seconds, double size)
-        {
-            var text = PlayerSettings.FormatSkip(seconds);
-            var unitAt = text.Length - 1;
-            // Text first (TextBlock.Text does not follow later Inline edits, CI run
-            // 41047779027), then the same characters as two runs for the drawing.
-            tb.Text = text;
-            tb.Inlines.Clear();
-            tb.Inlines.Add(new Run(text.Substring(0, unitAt)) { FontSize = size });
-            tb.Inlines.Add(new Run(text.Substring(unitAt)) { FontSize = Math.Round(size * 0.72, 1), FontWeight = FontWeights.SemiBold });
-        }
+        private void ApplySkipLabels() => Bar.ApplySkipLabels(_settings);
 
-        private void ApplySkipLabels()
-        {
-            var pri = (SkipBackBox.Width) / 42.0 * 12.6;
-            var sec = (SecondaryBackBox.Width) / 40.0 * 13.0;
-            SetSkipLabel(SkipBackLabel, _settings.PrimarySkipSeconds, pri);
-            SetSkipLabel(SkipForwardLabel, _settings.PrimarySkipSeconds, pri);
-            SetSkipLabel(SecondarySkipBackLabel, _settings.SecondarySkipSeconds, sec);
-            SetSkipLabel(SecondarySkipForwardLabel, _settings.SecondarySkipSeconds, sec);
-        }
-
-        /// <summary>The five colour sets (render 06b; "Default is the original") and
-        /// Outline/Solid. Original = render 02: white primary rings and labels, orange
-        /// secondary arrows and labels, orange Play. Orange / White = everything in that
-        /// colour. "White, orange rings" = orange rings, white labels. "Orange, white rings"
-        /// = white rings, orange labels.</summary>
+        /// <summary>Settings changed (or the view opened): the bar's own ApplyStyle (the
+        /// same one the Settings preview uses), then the state-driven parts.</summary>
         public void ApplyBarStyle()
         {
-            _secondaryBackHighlight.Stop();_secondaryForwardHighlight.Stop();
-            var style = _settings.BarColorStyle;
-            Brush priRing, priLabel, secRing, secLabel, play, icons;
-            switch (style)
-            {
-                case "orange": priRing = priLabel = secRing = secLabel = play = Orange; icons = Orange; break;
-                case "white": priRing = priLabel = secRing = secLabel = play = RingDefault; icons = IconDefault; break;
-                case "twotone": priRing = secRing = Orange; priLabel = secLabel = RingDefault; play = Orange; icons = IconDefault; break;
-                case "inverse": priRing = secRing = RingDefault; priLabel = secLabel = Orange; play = Orange; icons = Orange; break;
-                default: priRing = priLabel = RingDefault; secRing = secLabel = Orange; play = Orange; icons = IconDefault; break;
-            }
-            _iconBrush = icons;
-
-            SkipBackRing.Stroke = priRing; SkipForwardRing.Stroke = priRing;
-            SkipBackArrow.Fill = SkipBackArrow.Stroke = priRing;
-            SkipForwardArrow.Fill = SkipForwardArrow.Stroke = priRing;
-            SkipBackLabel.Foreground = priLabel; SkipForwardLabel.Foreground = priLabel;
-            SecondarySkipBackIcon.Stroke = secRing; SecondarySkipForwardIcon.Stroke = secRing;
-            SecondarySkipBackHead.Fill = SecondarySkipBackHead.Stroke = secRing;
-            SecondarySkipForwardHead.Fill = SecondarySkipForwardHead.Stroke = secRing;
-            SecondarySkipBackLabel.Foreground = secLabel; SecondarySkipForwardLabel.Foreground = secLabel;
-            ApplySkipLabels();
-            SecondarySkipBackButton.ToolTip = $"Back {_settings.SecondarySkipSeconds} s";
-            SecondarySkipForwardButton.ToolTip = $"Forward {_settings.SecondarySkipSeconds} s";
-
-            // Outline (render 02): ring r 10.4/24, 1.25 stroke, 10 % fill, coloured glyph.
-            // Solid: a filled disc with a dark glyph.
-            var hollow = _settings.IconStyle == "hollow";
-            var playColor = ((SolidColorBrush)play).Color;
-            PlayRing.Stroke = hollow ? play : Brushes.Transparent;
-            PlayRing.Fill = hollow ? (playColor == Brand.Orange ? OrangeTint : WhiteTint) : play;
-            PlayGlyph.Fill = PlayGlyph.Stroke = hollow ? play : Dark;
-            foreach (var child in PauseGlyph.Children)
-                if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? play : Dark;
-
-            VolumeButton.Foreground = icons; ApplyGlyphBrush(VolumeButton, icons);
-            FullscreenButton.Foreground = icons; ApplyGlyphBrush(FullscreenButton, icons);
-
-            SpeedButton.Visibility = _settings.ShowSpeed ? Visibility.Visible : Visibility.Collapsed;
-            SleepButton.Visibility = _settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
+            _secondaryBackHighlight.Stop(); _secondaryForwardHighlight.Stop();
+            _iconBrush = Bar.ApplyStyle(_settings);
             RefreshCaptionsUi();
             RefreshSpeedUi();
             RefreshSleepUi();

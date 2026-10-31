@@ -1,106 +1,83 @@
-<UserControl x:Class="ZephyrPlayer.PairingPanel" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+<UserControl x:Class="ZephyrPlayer.PairingPanel" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             FontFamily="Segoe UI Variable Text, Segoe UI" Foreground="#F5F5F7">
+    <!-- Settings > Paired phones (render 05, CP3 items 77-79). Behaviour is the 1.4 pairing
+         surface: name first, one live code from the shared gate, renewed before it dies,
+         Cancel, the paired phones with Forget, the hidden reset for unreadable pairings, and
+         the notice-only public Wi-Fi banner. -->
     <UserControl.Resources>
-      <ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries>
-        <Style x:Key="OrangeButton" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource OrangeBrush}"/>
-            <Setter Property="Foreground" Value="#1B1B1E"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="14,7"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}" CornerRadius="10" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <Style x:Key="LinkButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource MutedBrush}"/>
-            <Setter Property="Padding" Value="2,0"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <TextBlock Text="{TemplateBinding Content}" TextDecorations="Underline"
-                                   Foreground="{TemplateBinding Foreground}"/>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-      </ResourceDictionary>
+        <ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary>
     </UserControl.Resources>
-    <StackPanel Margin="20,16">
-
-        <!-- Pair new phone -->
-        <Border Background="{StaticResource CardBrush}" CornerRadius="12" Padding="16,12" Margin="0,0,0,12">
-            <StackPanel>
-                <TextBlock Text="Pair new phone" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" Margin="0,0,0,8"/>
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid Grid.Column="0">
-                        <TextBox x:Name="PhoneNameBox" VerticalContentAlignment="Center"
-                                 Background="#1B1B1E" Foreground="{StaticResource TextBrush}" BorderThickness="0"
-                                 Padding="10,7" FontSize="13" MaxLength="40"
-                                 TextChanged="OnPhoneNameChanged"/>
-
-                        <TextBlock x:Name="PhoneNameHint" Text="Type a name to pair" IsHitTestVisible="False"
-                                   Foreground="#6E6E76" VerticalAlignment="Center" Margin="11,0,0,0"/>
-                    </Grid>
-                    <Button x:Name="PairButton" Background="#D07600" Grid.Column="1" Style="{StaticResource OrangeButton}" Content="Pair" Click="OnPair" Margin="12,0,0,0"/>
-                </Grid>
-                <StackPanel x:Name="CodePanel" Visibility="Collapsed" Margin="0,10,0,0">
-                    <TextBlock Text="Enter this code in the Zephyr app on your phone. Works once, for 10 minutes." Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,8"/>
-                    <TextBlock Text="Pairing code:" Foreground="{StaticResource MutedBrush}"/><TextBlock x:Name="PairCodeText" Text="" Foreground="{StaticResource OrangeBrush}"
-                               FontSize="34" FontFamily="Consolas" FontWeight="Bold" HorizontalAlignment="Center"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,4,0,0">
-                        <TextBlock x:Name="ExpiresText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"/>
-                        <TextBlock Text="  ·  " Foreground="{StaticResource MutedBrush}" FontSize="12"/>
-                        <Button Style="{StaticResource LinkButton}" Content="Cancel" FontSize="12" Click="OnCancelCode"/>
-                    </StackPanel>
-                    <TextBlock x:Name="ThisPcText" Text="" Foreground="{StaticResource MutedBrush}" FontSize="12"
-                               HorizontalAlignment="Center" Margin="0,6,0,0"/>
-                </StackPanel>
-            </StackPanel>
+    <StackPanel>
+        <!-- Public Wi-Fi notice (render 05 styling: 1 px rgba(255,149,0,.5), rgba(255,149,0,.06), radius 10).
+             Notice only: the wording never claims a block, and the button only READS the
+             existing firewall setup (FirewallSetup.SetupIsCurrent); nothing is changed. -->
+        <Border x:Name="WifiBanner" Visibility="Collapsed" Margin="0,12,0,0" Padding="14,10" CornerRadius="10" BorderThickness="1" BorderBrush="#80FF9500" Background="#0FFF9500" AutomationProperties.AutomationId="WifiBanner">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock x:Name="WifiBannerText" AutomationProperties.AutomationId="WifiBannerText" FontSize="13" LineHeight="18" TextWrapping="Wrap" VerticalAlignment="Center"
+                           Text="Windows is treating this Wi-Fi as public, which can block your phone from finding this PC."/>
+                <Button x:Name="FirewallCheckButton" Grid.Column="1" Style="{StaticResource ZTextButton}" Tag="or" Margin="14,0,0,0" Content="Check firewall setup" Click="OnFirewallCheck" AutomationProperties.AutomationId="FirewallCheckButton"/>
+            </Grid>
         </Border>
 
-        <!-- Paired phones -->
-        <Border Background="{StaticResource CardBrush}" CornerRadius="12" Padding="16,12" Margin="0,0,0,12">
-            <StackPanel>
-                <TextBlock Text="Paired phones" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" Margin="0,0,0,6"/>
-                <TextBlock x:Name="NoPhonesText" Text="No phones paired yet." Foreground="{StaticResource MutedBrush}" FontSize="12" Visibility="Collapsed"/>
-                <ItemsControl x:Name="PhoneList">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Grid Margin="0,4">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="Auto"/>
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0"><TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="14"/><TextBlock Text="{Binding Detail}" Foreground="{StaticResource MutedBrush}" FontSize="12"/><TextBlock Text="{Binding Paired}" Foreground="{StaticResource MutedBrush}" FontSize="12"/></StackPanel>
-                                <Button Grid.Column="1" Style="{StaticResource LinkButton}" Content="Forget" FontSize="12"
-                                        Tag="{Binding Token}" Click="OnRemovePhone"/>
-                            </Grid>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
+        <!-- Pair a new phone (render 05) -->
+        <TextBlock Text="Pair a new phone" FontSize="14" FontWeight="SemiBold" Margin="0,18,0,0"/>
+        <TextBlock Text="Get Zephyr on your phone, give it a name here, then tap Pair." FontSize="12.5" Foreground="#8E8E98" Margin="0,3,0,0" TextWrapping="Wrap"/>
+        <Grid Margin="0,10,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+            <Grid>
+                <TextBox x:Name="PhoneNameBox" Style="{StaticResource ZTextField}" MaxLength="40" TextChanged="OnPhoneNameChanged" AutomationProperties.AutomationId="PhoneNameBox" AutomationProperties.Name="Phone name"/>
+                <TextBlock x:Name="PhoneNameHint" Text="Type a name to pair" IsHitTestVisible="False" Foreground="#6E6E76" FontSize="13.5" VerticalAlignment="Center" Margin="13,0,0,0"/>
+            </Grid>
+            <Button x:Name="PairButton" Grid.Column="1" Style="{StaticResource ZTextButton}" Tag="or" Height="34" Padding="22,0" Margin="10,0,0,0" Content="Pair" Click="OnPair" AutomationProperties.AutomationId="PairButton"/>
+        </Grid>
+        <StackPanel x:Name="CodePanel" Visibility="Collapsed" Margin="0,14,0,0">
+            <WrapPanel>
+                <TextBlock Text="Code:" FontSize="13" VerticalAlignment="Bottom" Margin="0,0,14,5"/>
+                <TextBlock x:Name="PairCodeText" FontSize="24" FontWeight="SemiBold" Foreground="#FF9500" Typography.NumeralAlignment="Tabular" VerticalAlignment="Bottom" Margin="0,0,14,0" AutomationProperties.AutomationId="PairCodeText"/>
+                <TextBlock Text="Type it in Zephyr on the phone. Works once, 10 min." FontSize="12" Foreground="#8E8E98" VerticalAlignment="Bottom" Margin="0,0,0,5"/>
+            </WrapPanel>
+            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                <TextBlock x:Name="ExpiresText" Text="" Foreground="#8E8E98" FontSize="12" VerticalAlignment="Center"/>
+                <TextBlock Text="  ·  " Foreground="#8E8E98" FontSize="12" VerticalAlignment="Center"/>
+                <Button x:Name="CancelCodeButton" Style="{StaticResource ZLinkButton}" Content="Cancel" Click="OnCancelCode" AutomationProperties.AutomationId="CancelCodeButton"/>
+                <TextBlock Text="  ·  " Foreground="#8E8E98" FontSize="12" VerticalAlignment="Center"/>
+                <TextBlock x:Name="ThisPcText" Text="" Foreground="#8E8E98" FontSize="12" VerticalAlignment="Center"/>
             </StackPanel>
-        </Border>
+        </StackPanel>
 
-        <Button x:Name="ResetPairingsButton" Content="Reset unreadable pairings" Click="OnResetPairings" Visibility="Collapsed" Margin="0,0,0,12" HorizontalAlignment="Left"/>
-        <!-- Status -->
-        <Border x:Name="WarningPanel" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="14,10">
+        <!-- Your phones (render 05): one card per phone from PairedStore -->
+        <TextBlock Text="Your phones" FontSize="14" FontWeight="SemiBold" Margin="0,20,0,8"/>
+        <TextBlock x:Name="NoPhonesText" Text="No phones paired yet." Foreground="#8E8E98" FontSize="12.5" Visibility="Collapsed"/>
+        <ItemsControl x:Name="PhoneList" Focusable="False" AutomationProperties.AutomationId="PhoneList">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border Background="{StaticResource ZPhoneCardBrush}" ToolTip="{Binding Paired}" BorderBrush="#0FFFFFFF" BorderThickness="1" CornerRadius="10" Padding="14,10" Margin="0,0,0,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource ZCardIcon}"><Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Rectangle Canvas.Left="7" Canvas.Top="2.8" Width="10" Height="18.4" RadiusX="2.4" RadiusY="2.4" Stroke="#D9D9E0" StrokeThickness="1.6"/><Path Data="M10.5,18 h3" Stroke="#D9D9E0" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox></Border>
+                            <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="{Binding Name}" FontSize="13.5" FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                                    <Ellipse Width="7" Height="7" Fill="#3FB950" Margin="0,0,6,0" VerticalAlignment="Center" Visibility="{Binding DotVisibility}"/>
+                                    <TextBlock Text="{Binding Detail}" FontSize="12" Foreground="#8E8E98"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <Button Grid.Column="2" Style="{StaticResource ZTextButton}" Content="Forget" Tag="{Binding Token}" Click="OnRemovePhone" VerticalAlignment="Center"
+                                    AutomationProperties.AutomationId="{Binding ForgetId}" AutomationProperties.Name="{Binding ForgetName}"/>
+                        </Grid>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+
+        <!-- Recovery (1.4, kept): only when saved pairings cannot be read. -->
+        <Button x:Name="ResetPairingsButton" Style="{StaticResource ZTextButton}" Content="Reset unreadable pairings" Click="OnResetPairings" Visibility="Collapsed" Margin="0,4,0,0" HorizontalAlignment="Left" AutomationProperties.AutomationId="ResetPairingsButton"/>
+        <!-- Status: store unreadable, no address, discovery off (the 1.4 notices). -->
+        <Border x:Name="WarningPanel" Style="{StaticResource ZCard}" Padding="14,10" Margin="0,12,0,0" Visibility="Collapsed">
             <DockPanel LastChildFill="True">
-                <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#4CAF50" VerticalAlignment="Center" Margin="0,0,8,0"/>
-                <TextBlock x:Name="StatusText" Text="" Foreground="{StaticResource TextBrush}" FontSize="12" TextWrapping="Wrap"/>
+                <Ellipse x:Name="StatusDot" Width="9" Height="9" Fill="#3FB950" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                <TextBlock x:Name="StatusText" Text="" FontSize="12.5" TextWrapping="Wrap"/>
             </DockPanel>
         </Border>
     </StackPanel>
