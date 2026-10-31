@@ -239,6 +239,34 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if ((Get-Content "$env:RUNNER_TEMP/player-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
+          # 2.0.0 release identity (read-only): the exact installer name and the shipped exe's
+          # version resource, with the installer's sha256 and size in the log and in
+          # release-identity.txt (uploaded with windows-ui-evidence).
+          $relExpect = '2.0.0'
+          $relOut = "$env:RUNNER_TEMP/release-identity.txt"
+          function NoteRel($s) { Write-Output $s; $s | Add-Content $relOut }
+          NoteRel "commit ${{ github.sha }}; csproj Version=$v (expected $relExpect)"
+          if ($v -cne $relExpect) { throw "csproj Version is $v, expected $relExpect" }
+          $relFiles = @(Get-ChildItem windows/Output -File)
+          NoteRel ("windows/Output holds: " + (($relFiles | ForEach-Object { $_.Name }) -join ', '))
+          if ($relFiles.Count -ne 1 -or $relFiles[0].Name -cne "Zephyr-PC-$relExpect.exe") { throw "installer output is not exactly one file named Zephyr-PC-$relExpect.exe" }
+          $relSetup = $relFiles[0]
+          $relSetupSha = (Get-FileHash $relSetup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          NoteRel "INSTALLER name=$($relSetup.Name) bytes=$($relSetup.Length) sha256=$relSetupSha setupProductVersion=$($relSetup.VersionInfo.ProductVersion)"
+          $relExe = Get-Item windows/out/ZephyrPlayer.exe
+          $relExeFv = $relExe.VersionInfo.FileVersion
+          $relExePv = $relExe.VersionInfo.ProductVersion
+          NoteRel "EXE ZephyrPlayer.exe FileVersion=$relExeFv ProductVersion=$relExePv bytes=$($relExe.Length) sha256=$((Get-FileHash $relExe.FullName -Algorithm SHA256).Hash.ToLowerInvariant())"
+          if ($relExeFv -cne "$relExpect.0") { throw "shipped exe FileVersion is $relExeFv, expected $relExpect.0" }
+          $relSetupPvRaw = $relSetup.VersionInfo.ProductVersion
+          # Inno Setup pads its version-info strings with trailing spaces (published Zephyr-PC-1.4.0.exe reads "1.4.0" + 45 spaces); compare without that padding, log the raw value.
+          $relSetupPv = $relSetupPvRaw.TrimEnd()
+          if ($relSetupPv -cne $relExpect) { throw "installer ProductVersion is '$relSetupPv', expected exactly $relExpect" }
+          $relCommit = '${{ github.sha }}'
+          if ($relCommit -cnotmatch '^[0-9a-f]{40}$') { throw "github.sha '$relCommit' is not a full 40-character commit SHA" }
+          $relWantPv = "$relExpect+$relCommit"
+          if ($relExePv -cne $relWantPv) { throw "shipped exe ProductVersion is '$relExePv', expected exactly '$relWantPv'" }
+          NoteRel "RELEASE_IDENTITY: PASS - Zephyr-PC-$relExpect.exe (installer ProductVersion $relSetupPv, sha256 $relSetupSha, $($relSetup.Length) bytes), exe FileVersion $relExeFv, ProductVersion $relExePv (exactly $relExpect+<full commit SHA>)"
       - name: Icon proof (exe + installer embed the approved assets/icon.ico)
         if: always()
         timeout-minutes: 4
@@ -573,6 +601,16 @@ jobs:
           $unauth = $false
           try { Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -TimeoutSec 3 -UseBasicParsing | Out-Null } catch { $unauth = ($_.Exception.Response.StatusCode.value__ -eq 401) }
           if (-not $unauth) { throw 'unauthenticated /control/status was not 401 after upgrade' }
+          # The running app after the upgrade reports 2.0.0 (its own process image and the
+          # Add/Remove Programs entry).
+          $procNew110 = @(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed })[0]
+          if (-not $procNew110) { throw 'no running ZephyrPlayer from the installed path to read the version from' }
+          $runFv110 = $procNew110.MainModule.FileVersionInfo.FileVersion
+          $runPv110 = $procNew110.MainModule.FileVersionInfo.ProductVersion
+          $arpVer110 = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1' -ErrorAction SilentlyContinue).DisplayVersion
+          Write-Output "running app after the 1.1.0 upgrade: pid=$($procNew110.Id) FileVersion=$runFv110 ProductVersion=$runPv110; Add/Remove Programs DisplayVersion=$arpVer110"
+          $wantPv110 = '2.0.0+${{ github.sha }}'
+          if ($runFv110 -cne '2.0.0.0' -or $runPv110 -cne $wantPv110 -or $arpVer110 -cne '2.0.0') { throw "after the 1.1.0 upgrade the running app does not report 2.0.0 (FileVersion=$runFv110 ProductVersion=$runPv110 DisplayVersion=$arpVer110)" }
           Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - original CI 1.1.0 installer recovered from run40413487207, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
@@ -665,6 +703,37 @@ jobs:
           # upgrades in place. Settings values and the pairing token must carry over.
           $notes = "$env:RUNNER_TEMP/upgrade-140-notes.txt"
           function Note140($s) { Write-Output $s; $s | Add-Content $notes }
+          # 2.0.0 release checks (read-only): the update status the running app reports
+          # against the LIVE feed. A feed failure (GitHub rate limit, network) is
+          # INCONCLUSIVE, never a pass.
+          function ReadUpdateCheck140() {
+            # Bounded by a 15 s wall-clock deadline (a request may start only before it and is itself capped at 3 s), so one read takes at most ~18 s; no sleep after the deadline. Expiry returns the last value ('checking' or empty), which is INCONCLUSIVE, never a pass.
+            $ucVal140 = $null
+            $ucDeadline140 = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $ucDeadline140) {
+              try { $ucVal140 = (Invoke-RestMethod -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-140-token' } -TimeoutSec 3).update_check } catch { $ucVal140 = $null }
+              if ($ucVal140 -and $ucVal140 -ne 'checking') { break }
+              $ucLeftMs140 = [int](($ucDeadline140 - (Get-Date)).TotalMilliseconds)
+              if ($ucLeftMs140 -le 0) { break }
+              Start-Sleep -Milliseconds ([Math]::Min(1000, $ucLeftMs140))
+            }
+            return $ucVal140
+          }
+          # Explicit classification, never a pass by elimination: the exact expected value
+          # is EXPECTED; empty, still 'checking' when the read window closed (timeout), any
+          # 'failed:' outcome (network, timeout, GitHub rate limit) or a value naming a rate
+          # limit or timeout is INCONCLUSIVE; ANY other value is UNEXPECTED.
+          function ClassifyUpdate140([string]$ucIn140, [string]$ucWant140) {
+            if ([string]::IsNullOrWhiteSpace($ucIn140)) { return 'INCONCLUSIVE' }
+            if ($ucIn140 -ceq 'checking') { return 'INCONCLUSIVE' }
+            if ($ucIn140.StartsWith('failed:')) { return 'INCONCLUSIVE' }
+            if ($ucIn140 -match 'rate.?limit|timed? ?out|timeout') { return 'INCONCLUSIVE' }
+            if ($ucIn140 -ceq $ucWant140) { return 'EXPECTED' }
+            return 'UNEXPECTED'
+          }
+          # Every update-status verdict also goes to release-identity.txt, so an UNEXPECTED
+          # line surfaces in final review even where it does not gate.
+          function NoteUc140($ucLine140) { Note140 $ucLine140; $ucLine140 | Add-Content "$env:RUNNER_TEMP/release-identity.txt" }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
           $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
@@ -717,6 +786,16 @@ jobs:
           $pairText140 = Get-Content $pairingPath -Raw
           $pairShape140 = if ($pairText140.TrimStart().StartsWith('["')) { 'plain token array (1.4.0 did not rewrite it)' } else { '1.4.0 entry format (rewritten by 1.4.0)' }
           Note140 "on 1.4.0: paired token authorized /control/status (200); paired.json now = $pairShape140, sha256=$((Get-FileHash $pairingPath -Algorithm SHA256).Hash)"
+          $ucOld140 = ReadUpdateCheck140
+          $ucOldShown140 = if ($ucOld140) { $ucOld140 } else { '<none>' }
+          $ucOldClass140 = ClassifyUpdate140 $ucOld140 'no_release'
+          if ($ucOldClass140 -ceq 'EXPECTED') {
+            NoteUc140 "UPDATE_STATUS on published 1.4.0 (live feed): update_check=$ucOldShown140 - EXPECTED no_release (recorded, not gated)"
+          } elseif ($ucOldClass140 -ceq 'INCONCLUSIVE') {
+            NoteUc140 "UPDATE_STATUS on published 1.4.0 (live feed): update_check=$ucOldShown140 - INCONCLUSIVE (the feed could not be read; expected no_release; not gated)"
+          } else {
+            NoteUc140 "UPDATE_STATUS_UNEXPECTED on published 1.4.0 (live feed): update_check=$ucOldShown140 - UNEXPECTED (expected no_release; recorded, not gated; for final review)"
+          }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
           $settingsBefore = Get-Content $settingsPath -Raw
@@ -763,6 +842,27 @@ jobs:
           if ($lost.Count -gt 0) { throw "upgrade changed 1.4.0 settings: $($lost -join ', ')" }
           $pairAfter = (Get-FileHash $pairingPath -Algorithm SHA256).Hash
           Note140 "paired.json sha256 before=$pairBefore after=$pairAfter ($(if ($pairBefore -eq $pairAfter) { 'unchanged' } else { 'rewritten by the candidate' }))"
+          # The running app after the upgrade reports 2.0.0 (its own process image and the
+          # Add/Remove Programs entry), and its live update status is ahead_of_feed.
+          $procNew140 = @(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed })[0]
+          if (-not $procNew140) { throw 'no running ZephyrPlayer from the installed path to read the version from' }
+          $runFv140 = $procNew140.MainModule.FileVersionInfo.FileVersion
+          $runPv140 = $procNew140.MainModule.FileVersionInfo.ProductVersion
+          $arpVer140 = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1' -ErrorAction SilentlyContinue).DisplayVersion
+          Note140 "running app after the 1.4.0 upgrade: pid=$($procNew140.Id) FileVersion=$runFv140 ProductVersion=$runPv140; Add/Remove Programs DisplayVersion=$arpVer140"
+          $wantPv140 = '2.0.0+${{ github.sha }}'
+          if ($runFv140 -cne '2.0.0.0' -or $runPv140 -cne $wantPv140 -or $arpVer140 -cne '2.0.0') { throw "after the 1.4.0 upgrade the running app does not report 2.0.0 (FileVersion=$runFv140 ProductVersion=$runPv140 DisplayVersion=$arpVer140)" }
+          $ucNew140 = ReadUpdateCheck140
+          $ucNewShown140 = if ($ucNew140) { $ucNew140 } else { '<none>' }
+          $ucNewClass140 = ClassifyUpdate140 $ucNew140 'ahead_of_feed'
+          if ($ucNewClass140 -ceq 'EXPECTED') {
+            NoteUc140 "UPDATE_STATUS on installed 2.0.0 after the 1.4.0 upgrade (live feed): update_check=ahead_of_feed - PASS (no newer version, no self-downgrade)"
+          } elseif ($ucNewClass140 -ceq 'INCONCLUSIVE') {
+            NoteUc140 "UPDATE_STATUS on installed 2.0.0 after the 1.4.0 upgrade (live feed): update_check=$ucNewShown140 - INCONCLUSIVE (the feed could not be read; not a pass)"
+          } else {
+            NoteUc140 "UPDATE_STATUS_UNEXPECTED on installed 2.0.0 after the 1.4.0 upgrade (live feed): update_check=$ucNewShown140 - UNEXPECTED (expected ahead_of_feed before publication; gating)"
+            throw "installed 2.0.0 reported update_check=$ucNewShown140 against the live feed, expected ahead_of_feed before publication"
+          }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Note140 "PUBLISHED_140_UPGRADE_CONTINUITY: PASS - published player-v1.4.0 installed, ran, authorized its paired token (200); THIS build's installer replaced the exe in place ($pvOld -> $pvNew); all $($want.Count) settings values unchanged; the 1.4.0 token still authorizes /control/status (200), no token and a wrong token get 401."
 
@@ -781,6 +881,37 @@ jobs:
           # upgrades in place. Settings values and the pairing token must carry over.
           $notes = "$env:RUNNER_TEMP/upgrade-120-notes.txt"
           function Note120($s) { Write-Output $s; $s | Add-Content $notes }
+          # 2.0.0 release checks (read-only): the update status the running app reports
+          # against the LIVE feed. A feed failure (GitHub rate limit, network) is
+          # INCONCLUSIVE, never a pass.
+          function ReadUpdateCheck120() {
+            # Bounded by a 15 s wall-clock deadline (a request may start only before it and is itself capped at 3 s), so one read takes at most ~18 s; no sleep after the deadline. Expiry returns the last value ('checking' or empty), which is INCONCLUSIVE, never a pass.
+            $ucVal120 = $null
+            $ucDeadline120 = (Get-Date).AddSeconds(15)
+            while ((Get-Date) -lt $ucDeadline120) {
+              try { $ucVal120 = (Invoke-RestMethod -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-120-token' } -TimeoutSec 3).update_check } catch { $ucVal120 = $null }
+              if ($ucVal120 -and $ucVal120 -ne 'checking') { break }
+              $ucLeftMs120 = [int](($ucDeadline120 - (Get-Date)).TotalMilliseconds)
+              if ($ucLeftMs120 -le 0) { break }
+              Start-Sleep -Milliseconds ([Math]::Min(1000, $ucLeftMs120))
+            }
+            return $ucVal120
+          }
+          # Explicit classification, never a pass by elimination: the exact expected value
+          # is EXPECTED; empty, still 'checking' when the read window closed (timeout), any
+          # 'failed:' outcome (network, timeout, GitHub rate limit) or a value naming a rate
+          # limit or timeout is INCONCLUSIVE; ANY other value is UNEXPECTED.
+          function ClassifyUpdate120([string]$ucIn120, [string]$ucWant120) {
+            if ([string]::IsNullOrWhiteSpace($ucIn120)) { return 'INCONCLUSIVE' }
+            if ($ucIn120 -ceq 'checking') { return 'INCONCLUSIVE' }
+            if ($ucIn120.StartsWith('failed:')) { return 'INCONCLUSIVE' }
+            if ($ucIn120 -match 'rate.?limit|timed? ?out|timeout') { return 'INCONCLUSIVE' }
+            if ($ucIn120 -ceq $ucWant120) { return 'EXPECTED' }
+            return 'UNEXPECTED'
+          }
+          # Every update-status verdict also goes to release-identity.txt, so an UNEXPECTED
+          # line surfaces in final review even where it does not gate.
+          function NoteUc120($ucLine120) { Note120 $ucLine120; $ucLine120 | Add-Content "$env:RUNNER_TEMP/release-identity.txt" }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
           $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
@@ -836,6 +967,16 @@ jobs:
           $pairText120 = Get-Content $pairingPath -Raw
           $pairShape120 = if ($pairText120.TrimStart().StartsWith('["')) { 'plain token array (1.2.0 did not rewrite it)' } else { '1.2.0 entry format (rewritten by 1.2.0)' }
           Note120 "on 1.2.0: paired token authorized /control/status (200); paired.json now = $pairShape120, sha256=$((Get-FileHash $pairingPath -Algorithm SHA256).Hash)"
+          $ucOld120 = ReadUpdateCheck120
+          $ucOldShown120 = if ($ucOld120) { $ucOld120 } else { '<none>' }
+          $ucOldClass120 = ClassifyUpdate120 $ucOld120 'no_release'
+          if ($ucOldClass120 -ceq 'EXPECTED') {
+            NoteUc120 "UPDATE_STATUS on published 1.2.0 (live feed): update_check=$ucOldShown120 - EXPECTED no_release (recorded, not gated)"
+          } elseif ($ucOldClass120 -ceq 'INCONCLUSIVE') {
+            NoteUc120 "UPDATE_STATUS on published 1.2.0 (live feed): update_check=$ucOldShown120 - INCONCLUSIVE (the feed could not be read; expected no_release; not gated)"
+          } else {
+            NoteUc120 "UPDATE_STATUS_UNEXPECTED on published 1.2.0 (live feed): update_check=$ucOldShown120 - UNEXPECTED (expected no_release; recorded, not gated; for final review)"
+          }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
           $settingsBefore = Get-Content $settingsPath -Raw
@@ -882,6 +1023,27 @@ jobs:
           if ($lost.Count -gt 0) { throw "upgrade changed 1.2.0 settings: $($lost -join ', ')" }
           $pairAfter = (Get-FileHash $pairingPath -Algorithm SHA256).Hash
           Note120 "paired.json sha256 before=$pairBefore after=$pairAfter ($(if ($pairBefore -eq $pairAfter) { 'unchanged' } else { 'rewritten by the candidate' }))"
+          # The running app after the upgrade reports 2.0.0 (its own process image and the
+          # Add/Remove Programs entry), and its live update status is ahead_of_feed.
+          $procNew120 = @(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed })[0]
+          if (-not $procNew120) { throw 'no running ZephyrPlayer from the installed path to read the version from' }
+          $runFv120 = $procNew120.MainModule.FileVersionInfo.FileVersion
+          $runPv120 = $procNew120.MainModule.FileVersionInfo.ProductVersion
+          $arpVer120 = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1' -ErrorAction SilentlyContinue).DisplayVersion
+          Note120 "running app after the 1.2.0 upgrade: pid=$($procNew120.Id) FileVersion=$runFv120 ProductVersion=$runPv120; Add/Remove Programs DisplayVersion=$arpVer120"
+          $wantPv120 = '2.0.0+${{ github.sha }}'
+          if ($runFv120 -cne '2.0.0.0' -or $runPv120 -cne $wantPv120 -or $arpVer120 -cne '2.0.0') { throw "after the 1.2.0 upgrade the running app does not report 2.0.0 (FileVersion=$runFv120 ProductVersion=$runPv120 DisplayVersion=$arpVer120)" }
+          $ucNew120 = ReadUpdateCheck120
+          $ucNewShown120 = if ($ucNew120) { $ucNew120 } else { '<none>' }
+          $ucNewClass120 = ClassifyUpdate120 $ucNew120 'ahead_of_feed'
+          if ($ucNewClass120 -ceq 'EXPECTED') {
+            NoteUc120 "UPDATE_STATUS on installed 2.0.0 after the 1.2.0 upgrade (live feed): update_check=ahead_of_feed - PASS (no newer version, no self-downgrade)"
+          } elseif ($ucNewClass120 -ceq 'INCONCLUSIVE') {
+            NoteUc120 "UPDATE_STATUS on installed 2.0.0 after the 1.2.0 upgrade (live feed): update_check=$ucNewShown120 - INCONCLUSIVE (the feed could not be read; not a pass)"
+          } else {
+            NoteUc120 "UPDATE_STATUS_UNEXPECTED on installed 2.0.0 after the 1.2.0 upgrade (live feed): update_check=$ucNewShown120 - UNEXPECTED (expected ahead_of_feed before publication; gating)"
+            throw "installed 2.0.0 reported update_check=$ucNewShown120 against the live feed, expected ahead_of_feed before publication"
+          }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Note120 "PUBLISHED_120_UPGRADE_CONTINUITY: PASS - published player-v1.2.0 installed, ran, authorized its paired token (200); THIS build's installer replaced the exe in place ($pvOld -> $pvNew); all $($want.Count) settings values unchanged; the 1.2.0 token still authorizes /control/status (200), no token and a wrong token get 401."
 
@@ -950,9 +1112,61 @@ jobs:
           $exe6 = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           $fw6 = Start-Process $exe6 -ArgumentList "--install-firewall `"$sid6`"" -Wait -PassThru
           if ($fw6.ExitCode -ne 0) { throw "T6 setup exit $($fw6.ExitCode)" }
+          # 2.0.0 release payload (read-only): this fresh install of the exact installer
+          # carries LICENSE.txt and THIRD-PARTY-NOTICES.txt identical to the checkout LICENSE and
+          # THIRD-PARTY-NOTICES.txt (sha256 compared); snapshot what it put down and the
+          # user settings, so the uninstall below can be judged (owned files gone, Add/Remove
+          # Programs entry gone, user settings kept).
+          $relOut = "$env:RUNNER_TEMP/release-identity.txt"
+          function NoteT6($s) { Write-Output $s; $s | Add-Content $relOut }
+          $relFail6 = @()
+          $dir6 = Split-Path $exe6
+          $arpKey6 = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1'
+          $arpVer6 = (Get-ItemProperty $arpKey6 -ErrorAction SilentlyContinue).DisplayVersion
+          NoteT6 "fresh 2.0.0 install: Add/Remove Programs entry present=$(Test-Path $arpKey6) DisplayVersion=$arpVer6"
+          if ($arpVer6 -cne '2.0.0') { $relFail6 += "Add/Remove Programs DisplayVersion is '$arpVer6' before uninstall, expected 2.0.0" }
+          $outRoot6 = (Resolve-Path windows/out).Path
+          $owned6 = @(Get-ChildItem $outRoot6 -Recurse -File | ForEach-Object { $_.FullName.Substring($outRoot6.Length + 1) }) + @('THIRD-PARTY-NOTICES.txt', 'LICENSE.txt', 'unins000.exe', 'unins000.dat')
+          # Each installed copy is hashed and compared to the checkout file it was built from;
+          # the sha256 and sizes are of the exact bytes, line endings included, so a
+          # line-ending conversion shows here. This is a payload check, not a legal review.
+          $payPairs6 = @(@('THIRD-PARTY-NOTICES.txt', 'THIRD-PARTY-NOTICES.txt'), @('LICENSE.txt', 'LICENSE'))
+          foreach ($payPair6 in $payPairs6) {
+            $payInstName6 = $payPair6[0]; $paySrcName6 = $payPair6[1]
+            $payInstPath6 = Join-Path $dir6 $payInstName6
+            $paySrcSha6 = (Get-FileHash $paySrcName6 -Algorithm SHA256).Hash.ToLowerInvariant()
+            $paySrcLen6 = (Get-Item $paySrcName6).Length
+            if (Test-Path $payInstPath6) {
+              $payInstSha6 = (Get-FileHash $payInstPath6 -Algorithm SHA256).Hash.ToLowerInvariant()
+              $payInstLen6 = (Get-Item $payInstPath6).Length
+              NoteT6 "PAYLOAD installed $payInstName6 bytes=$payInstLen6 sha256=$payInstSha6; checkout $paySrcName6 bytes=$paySrcLen6 sha256=$paySrcSha6; $(if ($payInstSha6 -ceq $paySrcSha6) { 'MATCH' } else { 'MISMATCH' })"
+              if ($payInstSha6 -cne $paySrcSha6) { $relFail6 += "installed $payInstName6 (sha256 $payInstSha6, $payInstLen6 bytes) differs from checkout $paySrcName6 (sha256 $paySrcSha6, $paySrcLen6 bytes)" }
+            } else {
+              NoteT6 "PAYLOAD installed $payInstName6 MISSING; checkout $paySrcName6 bytes=$paySrcLen6 sha256=$paySrcSha6"
+              $relFail6 += "$payInstName6 missing from the installed payload"
+            }
+          }
+          $cfg6 = Join-Path $env:APPDATA 'ZephyrPlayer'
+          $userSettings6 = Join-Path $cfg6 'settings.json'
+          if (-not (Test-Path $userSettings6)) { New-Item -ItemType Directory -Force $cfg6 | Out-Null; [IO.File]::WriteAllText($userSettings6, '{"LastVolume":61}') }
+          $userSettingsSha6 = (Get-FileHash $userSettings6 -Algorithm SHA256).Hash
+          $userFiles6 = @(Get-ChildItem $cfg6 -Recurse -File | ForEach-Object { $_.FullName.Substring($cfg6.Length + 1) })
+          NoteT6 "user data before uninstall (%APPDATA%\ZephyrPlayer): $($userFiles6 -join ', ')"
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP\uninstall-t6a.log" -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6 uninstaller timed out' }
           Start-Sleep -Seconds 3
+          # After the uninstall: every installer-owned file is gone, the Add/Remove Programs
+          # entry is gone, and the user's settings are kept (by design).
+          $left6 = @(if (Test-Path $dir6) { Get-ChildItem $dir6 -Recurse -Force -File | ForEach-Object { $_.FullName.Substring($dir6.Length + 1) } })
+          $ownedLeft6 = @($left6 | Where-Object { $owned6 -contains $_ })
+          NoteT6 "after uninstall: install folder exists=$(Test-Path $dir6); files left=$(if ($left6.Count) { $left6 -join ', ' } else { 'none' })"
+          if ($ownedLeft6.Count -gt 0) { $relFail6 += "installer-owned files left after uninstall: $($ownedLeft6 -join ', ')" }
+          foreach ($other6 in @($left6 | Where-Object { $owned6 -notcontains $_ })) { NoteT6 "  left, not installer-owned (written at runtime): $other6" }
+          if (Test-Path $arpKey6) { $relFail6 += 'the Add/Remove Programs entry (HKCU Zephyr Player_is1) is still present after uninstall' }
+          $userLost6 = @($userFiles6 | Where-Object { -not (Test-Path (Join-Path $cfg6 $_)) })
+          $userKept6 = (Test-Path $userSettings6) -and ((Get-FileHash $userSettings6 -Algorithm SHA256).Hash -eq $userSettingsSha6)
+          NoteT6 "after uninstall: Add/Remove Programs entry present=$(Test-Path $arpKey6); settings.json kept unchanged=$userKept6; user files missing=$(if ($userLost6.Count) { $userLost6 -join ', ' } else { 'none' })"
+          if (-not $userKept6 -or $userLost6.Count -gt 0) { $relFail6 += 'user settings were not kept by the uninstall' }
           $left = (netsh http show urlacl url=http://+:47823/) 2>&1 | Out-String
           if ($left -match 'SDDL:') { throw 'T6: our own 47823 reservation was LEFT behind by the fresh-install uninstall' }
           Write-Output 'T6 FRESH: our own reservation was removed by the uninstall.'
@@ -987,6 +1201,8 @@ jobs:
           netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
           netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
           Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
+          if ($relFail6.Count -gt 0) { NoteT6 "RELEASE_PAYLOAD_UNINSTALL: FAIL - $($relFail6 -join '; ')"; throw "2.0.0 payload/uninstall checks failed: $($relFail6 -join '; ')" }
+          NoteT6 'RELEASE_PAYLOAD_UNINSTALL: PASS - installed LICENSE.txt and THIRD-PARTY-NOTICES.txt match the checkout LICENSE and THIRD-PARTY-NOTICES.txt by sha256; uninstall removed every installer-owned file and the Add/Remove Programs entry; user settings kept.'
 
       - name: Legacy HKLM uninstall entry behavior proof (upgrade, setup declined)
         if: always()
@@ -1114,6 +1330,7 @@ jobs:
             ${{ runner.temp }}/upgrade-120-notes.txt
             ${{ runner.temp }}/installer-old120.log
             ${{ runner.temp }}/installer-120-upgrade.log
+            ${{ runner.temp }}/release-identity.txt
             ${{ runner.temp }}/cp3-*.png
             ${{ runner.temp }}/cp3-*.txt
             ${{ runner.temp }}/cp4-*.png

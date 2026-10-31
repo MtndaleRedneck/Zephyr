@@ -35,6 +35,8 @@ WizardStyle=modern
 ; The whole publish dir: the exe alone crashes seconds after launch - the
 ; LibVLC native dlls and plugins tree sit next to it and must install too.
 Source: "out\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\Zephyr Player"; Filename: "{app}\ZephyrPlayer.exe"
