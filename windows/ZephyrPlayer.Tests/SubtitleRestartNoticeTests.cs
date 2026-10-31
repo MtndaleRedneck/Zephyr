@@ -162,11 +162,24 @@ namespace ZephyrPlayer.Tests
                 var text = PlayerBarLogic.SubtitleRestartNotice("L");
                 var dlg = FirewallSetup.NoteWindow(text, PlayerBarLogic.SubtitleRestartTitle);
                 Assert.Equal("Subtitle size saved", dlg.Title);
-                var stack = (StackPanel)dlg.Content;
+                // The themed DarkDialog wraps its content in a 1 px top-line Border (CP4 item 84).
+                var frame = Assert.IsType<Border>(dlg.Content);
+                var stack = Assert.IsType<StackPanel>(frame.Child);
                 Assert.Equal(text, ((TextBlock)stack.Children[0]).Text);
                 var buttons = (StackPanel)stack.Children[1];
                 Assert.Single(buttons.Children);
                 Assert.Equal("OK", ((Button)buttons.Children[0]).Content);
+                // Exactly one button anywhere in the dialog, and it is the OK.
+                var all = new System.Collections.Generic.List<Button>();
+                void Walk(object node)
+                {
+                    if (node is Button b) all.Add(b);
+                    if (node is DependencyObject d)
+                        foreach (var child in LogicalTreeHelper.GetChildren(d)) Walk(child);
+                }
+                Walk(dlg);
+                Assert.Single(all);
+                Assert.Equal("OK", all[0].Content);
                 dlg.Close();
             });
         }

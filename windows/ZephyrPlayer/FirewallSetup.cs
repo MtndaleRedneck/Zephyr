@@ -674,7 +674,7 @@ namespace ZephyrPlayer
             var stack = new StackPanel();
             stack.Children.Add(message);
             stack.Children.Add(buttons);
-            dlg.Content = stack;
+            dlg.Content = new Border { BorderBrush = Frozen(new SolidColorBrush(Color.FromArgb(0x1A, 0xFF, 0xFF, 0xFF))), BorderThickness = new Thickness(0, 1, 0, 0), Child = stack };
             return dlg;
         }
 
