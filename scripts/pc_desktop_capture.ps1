@@ -573,8 +573,17 @@ function Cp3Diff($a, $b, $x, $y, $w, $h) {
 }
 function Cp3Settings { $f = Join-Path $cfgDir 'settings.json'; if (Test-Path $f) { return (Get-Content $f -Raw | ConvertFrom-Json) } else { return $null } }
 
-# A known phone already paired (the fixture written above) plus the forced public-Wi-Fi
+# A known phone already paired, seeded HERE for this leg (the full run is not -HomeOnly,
+# so nothing above writes one), in the plain entry format PairedStore reads (and then
+# migrates to protected tokens on its own). The pre-leg paired.json is put back after the
+# leg so the later legs see exactly what they saw before. Plus the forced public-Wi-Fi
 # notice (capture-build seam; the real probe may or may not see this runner as Public).
+$cp3PairedPath = Join-Path $cfgDir 'paired.json'
+$cp3PairedBefore = if (Test-Path $cp3PairedPath) { [IO.File]::ReadAllText($cp3PairedPath) } else { $null }
+[IO.File]::WriteAllText($cp3PairedPath, '[{"token":"cp3-fixture","name":"CI phone"}]')
+$cp3Seeded = if (Test-Path $cp3PairedPath) { [IO.File]::ReadAllText($cp3PairedPath) } else { '' }
+$cp3Notes.Add("paired.json seeded before the CP3 app start: $cp3Seeded")
+Cp3Check ($cp3Seeded -match '"name":"CI phone"') "fixture phone 'CI phone' written to paired.json before the app starts"
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_PUBLIC_WIFI', 'CI-Public-WiFi', 'Process')
 $p2 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-settings" -PassThru
 $hwShell = Wait-MainWindow $p2 15
@@ -615,7 +624,9 @@ $null = Cp3Invoke $sroot 'NavRemote'
 $bannerText = Cp3Text $sroot 'WifiBannerText'
 Cp3Check ($bannerText -match 'public' -and $bannerText -notmatch 'is blocked') "public Wi-Fi notice shown, honest wording ('$bannerText')"
 Cp3Check ((Cp3Find $sroot 'FirewallCheckButton') -ne $null) "notice carries the read-only firewall check button"
-Cp3Check ((Cp3Find $sroot 'Forget:CI phone') -ne $null) "fixture phone card with Forget"
+$cp3FixtureLoaded = ((Cp3Find $sroot 'Forget:CI phone') -ne $null)
+Cp3Check $cp3FixtureLoaded "fixture phone card with Forget"
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-fixture-card.png"
 
 # LIVE PREVIEW: real clicks on chips and a toggle; the preview pixels and the settings file both move.
 $null = Cp3Invoke $sroot 'NavSkip'
@@ -681,10 +692,16 @@ $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-phone-card.png"
 $pairedText = Get-Content (Join-Path $cfgDir 'paired.json') -Raw -ErrorAction SilentlyContinue
 Cp3Check ($pairedText -match 'CI Pixel') "paired.json holds the new phone 'CI Pixel'"
 Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -ne $null) "new phone card with Forget"
+Cp3Check ($pairedText -match 'CI phone' -and (Cp3Find $sroot 'Forget:CI phone') -ne $null) "both cards before Forget: 'CI phone' (fixture) and 'CI Pixel' (new)"
 $null = Cp3Invoke $sroot 'Forget:CI Pixel'
 Start-Sleep -Milliseconds 800
 $pairedAfter = Get-Content (Join-Path $cfgDir 'paired.json') -Raw -ErrorAction SilentlyContinue
-Cp3Check ($pairedAfter -notmatch 'CI Pixel' -and $pairedAfter -match 'CI phone') "Forget removed 'CI Pixel' and kept 'CI phone'"
+if ($cp3FixtureLoaded) {
+    Cp3Check ($pairedAfter -notmatch 'CI Pixel' -and $pairedAfter -match 'CI phone') "Forget removed 'CI Pixel' and kept 'CI phone'"
+    Cp3Check ((Cp3Find $sroot 'Forget:CI phone') -ne $null) "the fixture card 'CI phone' is still shown after Forget"
+} else {
+    Cp3Check $false "Forget preservation not judged: the fixture 'CI phone' never loaded"
+}
 Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -eq $null) "the forgotten phone's card is gone"
 $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-forgotten.png"
 $sz4b = if (Test-Path "$env:RUNNER_TEMP/pc-desktop-pairing.png") { 'captured' } else { '0 x 0' }
@@ -704,6 +721,7 @@ $sFinal = Get-Content (Join-Path $cfgDir 'settings.json') -Raw -ErrorAction Sile
 (@($cp3Notes) + @('', 'settings.json after the leg:', $sFinal, '', 'paired.json after the leg:', $pairedAfter)) | Set-Content "$env:RUNNER_TEMP/cp3-settings-notes.txt"
 # Put the shared fixtures back as the later legs expect them.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
+if ($cp3PairedBefore -eq $null) { Remove-Item $cp3PairedPath -Force -ErrorAction SilentlyContinue } else { [IO.File]::WriteAllText($cp3PairedPath, $cp3PairedBefore) }
 
 # 2b+) Tray ICON proof (round-3 P1): the icon must really exist in the
 # notification area, not only its menu. Crop the bottom-right corner of the
