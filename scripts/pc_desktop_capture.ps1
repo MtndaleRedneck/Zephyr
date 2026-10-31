@@ -571,6 +571,16 @@ function Cp3Diff($a, $b, $x, $y, $w, $h) {
         return $n
     } finally { $ba.Dispose(); $bb.Dispose() }
 }
+function Cp3CardBox($rootEl, $forgetId) {
+    # A phone card's row in capture-image coordinates (CaptureWindow crops the frame rect
+    # inset by 2 px), from the card's Forget button and the phone list, read while the
+    # element is reachable. Later "is the card still shown" checks compare these pixels.
+    $btnEl = Cp3Find $rootEl $forgetId; $listEl = Cp3Find $rootEl 'PhoneList'
+    if ($btnEl -eq $null -or $listEl -eq $null) { return $null }
+    $btnR = $btnEl.Current.BoundingRectangle; $listR = $listEl.Current.BoundingRectangle
+    $offX = $rs.Left + 2; $offY = $rs.Top + 2
+    return @{ X = [int]($listR.X - $offX); Y = [int]($btnR.Y - 10 - $offY); Wd = [int]($btnR.Right - $listR.X); Ht = [int]($btnR.Height + 20) }
+}
 function Cp3Settings { $f = Join-Path $cfgDir 'settings.json'; if (Test-Path $f) { return (Get-Content $f -Raw | ConvertFrom-Json) } else { return $null } }
 
 # A known phone already paired, seeded HERE for this leg (the full run is not -HomeOnly,
@@ -626,6 +636,7 @@ Cp3Check ($bannerText -match 'public' -and $bannerText -notmatch 'is blocked') "
 Cp3Check ((Cp3Find $sroot 'FirewallCheckButton') -ne $null) "notice carries the read-only firewall check button"
 $cp3FixtureLoaded = ((Cp3Find $sroot 'Forget:CI phone') -ne $null)
 Cp3Check $cp3FixtureLoaded "fixture phone card with Forget"
+$cp3FixBox = Cp3CardBox $sroot 'Forget:CI phone'
 $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-fixture-card.png"
 
 # LIVE PREVIEW: real clicks on chips and a toggle; the preview pixels and the settings file both move.
@@ -692,18 +703,30 @@ $null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-phone-card.png"
 $pairedText = Get-Content (Join-Path $cfgDir 'paired.json') -Raw -ErrorAction SilentlyContinue
 Cp3Check ($pairedText -match 'CI Pixel') "paired.json holds the new phone 'CI Pixel'"
 Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -ne $null) "new phone card with Forget"
-Cp3Check ($pairedText -match 'CI phone' -and (Cp3Find $sroot 'Forget:CI phone') -ne $null) "both cards before Forget: 'CI phone' (fixture) and 'CI Pixel' (new)"
+# "Still shown" for the fixture card is judged on its pixels, not on a UIA lookup: after the
+# list refresh the UIA lookup of the unchanged card's Forget button came back empty in run
+# 41166647052 while the card was on screen (recorded below as a note, not a gate).
+$cp3PixelBox = Cp3CardBox $sroot 'Forget:CI Pixel'
+$cp3FixBoxText = if ($cp3FixBox) { "$($cp3FixBox.X),$($cp3FixBox.Y) $($cp3FixBox.Wd)x$($cp3FixBox.Ht)" } else { 'none' }
+$cp3PixelBoxText = if ($cp3PixelBox) { "$($cp3PixelBox.X),$($cp3PixelBox.Y) $($cp3PixelBox.Wd)x$($cp3PixelBox.Ht)" } else { 'none' }
+$cp3Notes.Add("card boxes (capture px): CI phone $cp3FixBoxText, CI Pixel $cp3PixelBoxText")
+$cp3Notes.Add("NOTE (not a gate) UIA lookup of 'Forget:CI phone' after pairing: $(if ((Cp3Find $sroot 'Forget:CI phone') -ne $null) { 'found' } else { 'not found' })")
+$dFixPair = if ($cp3FixBox) { Cp3Diff "$env:RUNNER_TEMP/cp3-fixture-card.png" "$env:RUNNER_TEMP/cp3-pair-phone-card.png" $cp3FixBox.X $cp3FixBox.Y $cp3FixBox.Wd $cp3FixBox.Ht } else { -1 }
+Cp3Check ($pairedText -match 'CI phone' -and $dFixPair -ge 0 -and $dFixPair -le 20) "both cards before Forget: 'CI phone' (fixture card pixels unchanged, $dFixPair px differ) and 'CI Pixel' (new)"
 $null = Cp3Invoke $sroot 'Forget:CI Pixel'
 Start-Sleep -Milliseconds 800
 $pairedAfter = Get-Content (Join-Path $cfgDir 'paired.json') -Raw -ErrorAction SilentlyContinue
+Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -eq $null) "the forgotten phone's card is gone"
+$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-forgotten.png"
+$cp3Notes.Add("NOTE (not a gate) UIA lookup of 'Forget:CI phone' after Forget: $(if ((Cp3Find $sroot 'Forget:CI phone') -ne $null) { 'found' } else { 'not found' })")
 if ($cp3FixtureLoaded) {
     Cp3Check ($pairedAfter -notmatch 'CI Pixel' -and $pairedAfter -match 'CI phone') "Forget removed 'CI Pixel' and kept 'CI phone'"
-    Cp3Check ((Cp3Find $sroot 'Forget:CI phone') -ne $null) "the fixture card 'CI phone' is still shown after Forget"
+    $dFixAfter = if ($cp3FixBox) { Cp3Diff "$env:RUNNER_TEMP/cp3-fixture-card.png" "$env:RUNNER_TEMP/cp3-pair-forgotten.png" $cp3FixBox.X $cp3FixBox.Y $cp3FixBox.Wd $cp3FixBox.Ht } else { -1 }
+    $dPixelGone = if ($cp3PixelBox) { Cp3Diff "$env:RUNNER_TEMP/cp3-pair-phone-card.png" "$env:RUNNER_TEMP/cp3-pair-forgotten.png" $cp3PixelBox.X $cp3PixelBox.Y $cp3PixelBox.Wd $cp3PixelBox.Ht } else { -1 }
+    Cp3Check ($dFixAfter -ge 0 -and $dFixAfter -le 20 -and $dPixelGone -ge 200) "the fixture card 'CI phone' is still shown after Forget ($dFixAfter px differ; the forgotten card's row changed $dPixelGone px)"
 } else {
     Cp3Check $false "Forget preservation not judged: the fixture 'CI phone' never loaded"
 }
-Cp3Check ((Cp3Find $sroot 'Forget:CI Pixel') -eq $null) "the forgotten phone's card is gone"
-$null = CaptureWindow $sw "$env:RUNNER_TEMP/cp3-pair-forgotten.png"
 $sz4b = if (Test-Path "$env:RUNNER_TEMP/pc-desktop-pairing.png") { 'captured' } else { '0 x 0' }
 
 # Close: the dim fades out with the window.
