@@ -1,0 +1,31 @@
+name: publish-vlc-remote-1.0.1
+on:
+  push:
+    branches: [release-publish-vlc-remote-1.0.1]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch and verify exact installer
+        run: |
+          set -e
+          curl -sSL --fail -o ZephyrVLCRemote-PC-1.0.1.exe "https://zephyr-rc.sites.tab.bot/ZephyrVLCRemote-PC-1.0.1.exe"
+          sum=$(sha256sum ZephyrVLCRemote-PC-1.0.1.exe | cut -d' ' -f1); size=$(stat -c %s ZephyrVLCRemote-PC-1.0.1.exe)
+          echo "sha256=$sum size=$size"
+          test "$sum" = "83f3babe5bc38dbb258bcdd60eef53bb8f3638998325b91b989d6c9af2973790"
+          test "$size" = "47089269"
+      - name: Guard
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          if gh release view vlc-remote-v1.0.1 >/dev/null 2>&1; then echo exists; exit 1; fi
+      - name: Create release
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh release create vlc-remote-v1.0.1 ZephyrVLCRemote-PC-1.0.1.exe --target 22184969bdef5ac9baf2914c7b894826d250985d --title "Zephyr VLC Remote 1.0.1" --notes-file .github/release-notes-vlc-remote-1.0.1.md --latest=false
+      - name: Readback
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh api "repos/${{ github.repository }}/releases?per_page=5" --jq '.[]|{tag:.tag_name,draft,prerelease,assets:[.assets[]|{name,size,digest}]}'
