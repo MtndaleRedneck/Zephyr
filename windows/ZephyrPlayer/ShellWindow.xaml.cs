@@ -39,7 +39,18 @@ namespace ZephyrPlayer
                 SwitchTrace.WatchShell(new WindowInteropHelper(this).Handle);
             };
             StateChanged += (_, __) => UpdateChromeForState();
-            PreviewKeyDown += (_, e) => ViewKeyDown?.Invoke(this, e);
+            PreviewKeyDown += (_, e) =>
+            {
+                // 2.0.2: while Back is handing off, the screen still shows a picture of the
+                // library, not the live one. A key in that window would act on a library
+                // nobody can see, so it is swallowed (system keys such as Alt+F4 still pass).
+                if (LeavePending && e.Key != Key.System) { e.Handled = true; return; }
+                ViewKeyDown?.Invoke(this, e);
+            };
+            // Same for the mouse inside the view area (the caption buttons stay live).
+            ViewHost.PreviewMouseDown += SwallowWhileLeaving;
+            ViewHost.PreviewMouseUp += SwallowWhileLeaving;
+            ViewHost.PreviewMouseWheel += SwallowWhileLeaving;
             RestoreBoundsFromSettings();
         }
 
@@ -56,6 +67,11 @@ namespace ZephyrPlayer
         }
 
         public bool IsDimmed { get; private set; }
+
+        private void SwallowWhileLeaving(object sender, InputEventArgs e)
+        {
+            if (LeavePending) e.Handled = true;
+        }
 
         /// <summary>The view currently on screen (library or player).</summary>
         public FrameworkElement? CurrentView => _current;
@@ -100,7 +116,11 @@ namespace ZephyrPlayer
                 // while the start was loading): it is already in the tree.
                 SwitchTrace.Mark("back.begin");
                 if (!ViewHost.Children.Contains(view)) ViewHost.Children.Insert(0, view);
-                view.IsHitTestVisible = true;
+                // 2.0.2: the library takes no clicks until the handoff completes. Until
+                // then the screen shows only a picture of it, so a click, wheel or key
+                // would land on a library the user cannot see (CompleteLeave turns it
+                // back on; so does CancelPendingLeave when the library stays).
+                view.IsHitTestVisible = false;
                 _heldUnder = null;
                 view.UpdateLayout();
                 SwitchTrace.Mark("library.laid-out", $"{view.ActualWidth:0}x{view.ActualHeight:0}");
@@ -342,6 +362,7 @@ namespace ZephyrPlayer
             SwitchTrace.Mark("player.removed");
             leaving.SetSwitchTransparent(false);
             leaving.IsHitTestVisible = true;
+            if (_current != null && _current is not PlayerView) _current.IsHitTestVisible = true;
             if (host != IntPtr.Zero && IsWindow(host) && IsWindowVisible(host))
             {
                 SetWindowPos(host, IntPtr.Zero, 0, 0, 0, 0, 0x0080 /*HIDEWINDOW*/ | 0x0001 /*NOSIZE*/ | 0x0002 /*NOMOVE*/ | 0x0004 /*NOZORDER*/ | 0x0010 /*NOACTIVATE*/);
@@ -380,6 +401,8 @@ namespace ZephyrPlayer
             _leavingHost = IntPtr.Zero;
             if (leaving == null) return;
             leaving.IsHitTestVisible = true;
+            // A Back that never completed: the library it left current is live again.
+            if (_current != null && _current is not PlayerView) _current.IsHitTestVisible = true;
             if (!ReferenceEquals(leaving, incoming))
             {
                 ViewHost.Children.Remove(leaving);
