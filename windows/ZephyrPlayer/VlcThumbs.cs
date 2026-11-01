@@ -10,6 +10,7 @@ using System.Threading;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using LibVLCSharp.Shared;
+using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 
 namespace ZephyrPlayer
 {

@@ -515,7 +515,6 @@ namespace ZephyrPlayer
         }
 
         [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
-        [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
 
         /// <summary>DWMWA_TRANSITIONS_FORCEDISABLED for the duration of a full-screen switch:
         /// no zoom animation that could show the desktop. Best effort.</summary>
