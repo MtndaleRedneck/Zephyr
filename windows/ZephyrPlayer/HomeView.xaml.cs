@@ -510,12 +510,25 @@ namespace ZephyrPlayer
                             var media = safe.Media;
                             // Keep native release on this worker, never on LibVLC's ParsedChanged
                             // callback thread (Parse's completion can run continuations inline).
-                            // 2.0.1: the movie is fed through our own stream input, which libVLC
-                            // treats as non-local: ParseLocal alone never reads its length, so
-                            // badges were missing (Ezzy's Nov 1 screen). Allow the full parse.
-                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal | LibVLCSharp.Shared.MediaParseOptions.ParseNetwork, 5000).GetAwaiter().GetResult(); }
+                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 5000).GetAwaiter().GetResult(); }
                             finally { media.ParseStop(); }
                             var duration = media.Duration;
+                            if (duration <= 0)
+                            {
+                                // 2.0.1: libVLC 3 skips the preparser for media fed through our
+                                // own stream input (parsed status "skipped"), so 2.0.0 never read
+                                // a length and tiles only had a badge after being played (Ezzy's
+                                // Nov 1 screen). Open it silently (this LibVLC has no video or
+                                // audio output) until the demuxer knows the length.
+                                using var probe = new LibVLCSharp.Shared.MediaPlayer(media);
+                                if (probe.Play())
+                                {
+                                    var until = DateTime.UtcNow.AddSeconds(4);
+                                    while (DateTime.UtcNow < until && (duration = probe.Length) <= 0 && generation == _thumbGeneration)
+                                        System.Threading.Thread.Sleep(30);
+                                    try { probe.Stop(); } catch { }
+                                }
+                            }
                             if (duration <= 0) continue;
                             _history.Save(path, 0, duration, metadataOnly: true);
                             Dispatcher.BeginInvoke(new Action(() => { if (generation == _thumbGeneration) entry.SetMetadata(_history.Get(path)?.PositionMs ?? 0, duration); }));

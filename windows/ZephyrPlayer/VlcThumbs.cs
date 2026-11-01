@@ -96,6 +96,8 @@ namespace ZephyrPlayer
 
         /// <summary>Decode one frame. Tries 10 %, then 25 % and 40 % when the frame
         /// is (nearly) black, which is common at fades and title cards.</summary>
+        private static readonly byte[] Rv32 = { (byte)'R', (byte)'V', (byte)'3', (byte)'2' };
+
         internal static BitmapSource? Grab(string path, int width, TimeSpan timeout)
         {
             lock (_gate)
@@ -107,27 +109,23 @@ namespace ZephyrPlayer
                         "--avcodec-hw=none", "--quiet");
                     using var src = new SafeMediaSource(_vlc, new Uri(path).AbsoluteUri);
                     var media = src.Media;
-                    try { media.Parse(MediaParseOptions.ParseLocal | MediaParseOptions.ParseNetwork, 3000).GetAwaiter().GetResult(); } catch { }
+                    try { media.Parse(MediaParseOptions.ParseLocal, 3000).GetAwaiter().GetResult(); } catch { }
                     finally { try { media.ParseStop(); } catch { } }
-                    uint vw = 0, vh = 0, sarNum = 1, sarDen = 1;
-                    try
-                    {
-                        var video = media.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video);
-                        vw = video.Data.Video.Width; vh = video.Data.Video.Height;
-                        if (video.Data.Video.SarNum > 0 && video.Data.Video.SarDen > 0) { sarNum = video.Data.Video.SarNum; sarDen = video.Data.Video.SarDen; }
-                    }
-                    catch { }
-                    var aspect = vw > 0 && vh > 0 ? vw * (double)sarNum / sarDen / vh : 16.0 / 9.0;
-                    if (aspect < 0.5 || aspect > 3.5) aspect = 16.0 / 9.0;
-                    var w = Math.Max(64, width & ~1);
-                    var h = Math.Max(36, (int)Math.Round(w / aspect) & ~1);
-                    var pitch = w * 4;
                     var duration = media.Duration;
                     if (duration > 0)
                         media.AddOption(":start-time=" + (duration * 0.10 / 1000.0).ToString("0.0", CultureInfo.InvariantCulture));
                     media.AddOption(":no-audio");
 
-                    var buffer = Marshal.AllocHGlobal(pitch * h);
+                    // The frame size comes from the decoder through the format callback: libVLC 3
+                    // skips the preparser for media fed through our stream input, so the tracks
+                    // (and the movie's shape) are unknown until it decodes. A 2.39:1 film then
+                    // gets a 2.39:1 thumbnail instead of being squeezed into 16:9.
+                    var target = Math.Max(64, width & ~1);
+                    var w = target;
+                    var h = Math.Max(36, (int)Math.Round(target / (16.0 / 9.0)) & ~1);
+                    var pitch = w * 4;
+                    var buffer = IntPtr.Zero;
+                    var buffers = new System.Collections.Generic.List<IntPtr>();
                     byte[]? copy = null;
                     var shown = new ManualResetEventSlim(false);
                     var want = 1;
@@ -135,7 +133,21 @@ namespace ZephyrPlayer
                     try
                     {
                         using var mp = new MediaPlayer(media) { EnableHardwareDecoding = false };
-                        mp.SetVideoFormat("RV32", (uint)w, (uint)h, (uint)pitch);
+                        mp.SetVideoFormatCallbacks(
+                            (ref IntPtr opaque, IntPtr chroma, ref uint fw, ref uint fh, ref uint pitches, ref uint lines) =>
+                            {
+                                var asp = fw > 0 && fh > 0 ? fw / (double)fh : 16.0 / 9.0;
+                                if (asp < 0.5 || asp > 3.5) asp = 16.0 / 9.0;
+                                w = target;
+                                h = Math.Max(36, (int)Math.Round(target / asp) & ~1);
+                                pitch = w * 4;
+                                Marshal.Copy(Rv32, 0, chroma, 4);
+                                fw = (uint)w; fh = (uint)h; pitches = (uint)pitch; lines = (uint)h;
+                                buffer = Marshal.AllocHGlobal(pitch * h);
+                                lock (buffers) buffers.Add(buffer);
+                                return 1;
+                            },
+                            null);
                         mp.SetVideoCallbacks(
                             (opaque, planes) => { Marshal.WriteIntPtr(planes, buffer); return IntPtr.Zero; },
                             null,
@@ -179,7 +191,7 @@ namespace ZephyrPlayer
                     }
                     finally
                     {
-                        Marshal.FreeHGlobal(buffer);
+                        lock (buffers) foreach (var b in buffers) Marshal.FreeHGlobal(b);
                         shown.Dispose();
                     }
                 }
