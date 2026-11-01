@@ -96,8 +96,6 @@ namespace ZephyrPlayer
 
         /// <summary>Decode one frame. Tries 10 %, then 25 % and 40 % when the frame
         /// is (nearly) black, which is common at fades and title cards.</summary>
-        private static readonly byte[] Rv32 = { (byte)'R', (byte)'V', (byte)'3', (byte)'2' };
-
         internal static BitmapSource? Grab(string path, int width, TimeSpan timeout)
         {
             lock (_gate)
@@ -116,16 +114,16 @@ namespace ZephyrPlayer
                         media.AddOption(":start-time=" + (duration * 0.10 / 1000.0).ToString("0.0", CultureInfo.InvariantCulture));
                     media.AddOption(":no-audio");
 
-                    // The frame size comes from the decoder through the format callback: libVLC 3
-                    // skips the preparser for media fed through our stream input, so the tracks
-                    // (and the movie's shape) are unknown until it decodes. A 2.39:1 film then
-                    // gets a 2.39:1 thumbnail instead of being squeezed into 16:9.
+                    // libVLC 3 skips the preparser for media fed through our stream input, so the
+                    // movie's shape is unknown until it decodes. Decode into a square buffer
+                    // (the whole picture, scaled), then once a frame is shown read the real
+                    // size and squash the square to the movie's shape: a 2.39:1 film gets a
+                    // 2.39:1 thumbnail, a 4:3 one a 4:3 thumbnail, each from >= 320 source rows.
                     var target = Math.Max(64, width & ~1);
                     var w = target;
-                    var h = Math.Max(36, (int)Math.Round(target / (16.0 / 9.0)) & ~1);
+                    var h = target;
                     var pitch = w * 4;
-                    var buffer = IntPtr.Zero;
-                    var buffers = new System.Collections.Generic.List<IntPtr>();
+                    var buffer = Marshal.AllocHGlobal(pitch * h);
                     byte[]? copy = null;
                     var shown = new ManualResetEventSlim(false);
                     var want = 1;
@@ -133,21 +131,7 @@ namespace ZephyrPlayer
                     try
                     {
                         using var mp = new MediaPlayer(media) { EnableHardwareDecoding = false };
-                        mp.SetVideoFormatCallbacks(
-                            (ref IntPtr opaque, IntPtr chroma, ref uint fw, ref uint fh, ref uint pitches, ref uint lines) =>
-                            {
-                                var asp = fw > 0 && fh > 0 ? fw / (double)fh : 16.0 / 9.0;
-                                if (asp < 0.5 || asp > 3.5) asp = 16.0 / 9.0;
-                                w = target;
-                                h = Math.Max(36, (int)Math.Round(target / asp) & ~1);
-                                pitch = w * 4;
-                                Marshal.Copy(Rv32, 0, chroma, 4);
-                                fw = (uint)w; fh = (uint)h; pitches = (uint)pitch; lines = (uint)h;
-                                buffer = Marshal.AllocHGlobal(pitch * h);
-                                lock (buffers) buffers.Add(buffer);
-                                return 1;
-                            },
-                            null);
+                        mp.SetVideoFormat("RV32", (uint)w, (uint)h, (uint)pitch);
                         mp.SetVideoCallbacks(
                             (opaque, planes) => { Marshal.WriteIntPtr(planes, buffer); return IntPtr.Zero; },
                             null,
@@ -182,16 +166,38 @@ namespace ZephyrPlayer
                             shown.Reset();
                             mp.Position = tries[attempt++];
                         }
+                        var aspect = 16.0 / 9.0;
+                        try
+                        {
+                            uint px = 0, py = 0;
+                            if (mp.Size(0, ref px, ref py) && px > 0 && py > 0)
+                            {
+                                double sar = 1;
+                                try
+                                {
+                                    var video = media.Tracks.FirstOrDefault(t => t.TrackType == TrackType.Video);
+                                    if (video.Data.Video.SarNum > 0 && video.Data.Video.SarDen > 0) sar = video.Data.Video.SarNum / (double)video.Data.Video.SarDen;
+                                }
+                                catch { }
+                                aspect = px * sar / py;
+                            }
+                        }
+                        catch { }
+                        if (aspect < 0.5 || aspect > 3.5) aspect = 16.0 / 9.0;
                         try { mp.Stop(); } catch { }
                         if (best == null) return null;
                         for (var i = 3; i < best.Length; i += 4) best[i] = 255; // RV32 leaves X undefined
-                        var bmp = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, best, pitch);
-                        bmp.Freeze();
-                        return bmp;
+                        var square = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, best, pitch);
+                        var outH = Math.Max(36, (int)Math.Round(w / aspect) & ~1);
+                        var shaped = new TransformedBitmap(square, new ScaleTransform(1, outH / (double)h));
+                        // Bake it into plain pixels (encoders and tiles get a simple bitmap).
+                        var baked = new WriteableBitmap(shaped);
+                        baked.Freeze();
+                        return baked;
                     }
                     finally
                     {
-                        lock (buffers) foreach (var b in buffers) Marshal.FreeHGlobal(b);
+                        Marshal.FreeHGlobal(buffer);
                         shown.Dispose();
                     }
                 }
