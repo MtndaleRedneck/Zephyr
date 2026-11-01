@@ -94,6 +94,35 @@ public class VolumeMuteTests
         }
     }
 
+    // 2.0.2: a drag (dozens of slider steps) writes the settings file once, after the
+    // slider rests, and raises no settings Changed (no bar/library/Settings rebuild).
+    [Fact]
+    public void VolumeDrag_WritesSettingsOnce_AfterTheSliderRests_NoChangedEvent()
+    {
+        Sta((w, settings) =>
+        {
+            var changed = 0;
+            settings.Changed += (_, __) => changed++;
+            var writesBefore = w.VolumeSaveCount;
+            for (var v = 99; v >= 40; v--) w.SetVolumeTied(v);
+            Assert.Equal(writesBefore, w.VolumeSaveCount);
+            var until = Environment.TickCount64 + 3000;
+            while (w.VolumeSaveCount == writesBefore && Environment.TickCount64 < until)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => frame.Continue = false));
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+                Thread.Sleep(20);
+            }
+            Assert.Equal(writesBefore + 1, w.VolumeSaveCount);
+            Assert.Equal(40, settings.LastVolume);
+            Assert.Equal(0, changed);
+            // Nothing pending: a flush writes nothing more.
+            w.FlushVolumeSave();
+            Assert.Equal(writesBefore + 1, w.VolumeSaveCount);
+        });
+    }
+
     [Fact]
     public void Slider_And_Phone_Drive_OwnVolume_Label_ShowsPercent()
     {
@@ -103,6 +132,9 @@ public class VolumeMuteTests
             w.SetVolumeTied(62);
             Assert.Equal(62, w.SharedVolume);
             Assert.Equal("62%", label.Text);
+            // 2.0.2: the remembered volume is saved once the slider rests, not per step.
+            Assert.NotEqual(62, settings.LastVolume);
+            w.FlushVolumeSave();
             Assert.Equal(62, settings.LastVolume);
             w.SetVolumeTied(140); // phone values clamp to 0-100
             Assert.Equal(100, w.SharedVolume);

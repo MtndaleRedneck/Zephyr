@@ -153,6 +153,12 @@ namespace ZephyrPlayer
             // current slider value, on the playing movie - never a reopen.
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
             _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved"));
+            // 2.0.2: releasing a volume drag saves the remembered volume at once.
+            VolumeSlider.AddHandler(System.Windows.Controls.Primitives.Thumb.DragCompletedEvent,
+                new System.Windows.Controls.Primitives.DragCompletedEventHandler((_, __) => FlushVolumeSave()));
+            // 2.0.2: a settings file that cannot be written (disk full, no access) is said
+            // once instead of closing the app.
+            _settings.SaveFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Your settings could not be saved. The settings file could not be written (the disk may be full or the folder not writable). Zephyr Player keeps working; changes may not be kept after you quit.", "Settings could not be saved"));
 
             // Remembered volume restored on open: the player's own 0-100 %, with the
             // Settings boost (100-200 %) applied on top as extra decoder gain.
@@ -198,6 +204,7 @@ namespace ZephyrPlayer
             SwitchTrace.Mark("stop.begin");
             ++_playGeneration; _preparation?.Cancel();
             HideResumeNotice();
+            FlushVolumeSave();
             DropEndOfMovieSleep();
             DetachNativeStart();
             EndLoading();
@@ -931,6 +938,37 @@ namespace ZephyrPlayer
             ApplyPlayerGain();
             RefreshVolumeUi();
             if (_volumeSync) return;
+            ScheduleVolumeSave();
+        }
+
+        // 2.0.2: the remembered volume is saved once the slider rests (500 ms after the last
+        // step, on drag release, and on stop/quit), not on every tick of a drag, key or
+        // phone step.
+        internal static TimeSpan VolumeSaveDelay = TimeSpan.FromMilliseconds(500);
+        private DispatcherTimer? _volumeSave;
+        private bool _volumeDirty;
+        internal int VolumeSaveCount { get; private set; }
+
+        private void ScheduleVolumeSave()
+        {
+            _volumeDirty = true;
+            if (_volumeSave == null)
+            {
+                _volumeSave = new DispatcherTimer(DispatcherPriority.Background, Dispatcher) { Interval = VolumeSaveDelay };
+                _volumeSave.Tick += (_, __) => FlushVolumeSave();
+            }
+            _volumeSave.Stop();
+            _volumeSave.Interval = VolumeSaveDelay;
+            _volumeSave.Start();
+        }
+
+        /// <summary>Write the remembered volume now if a change is pending.</summary>
+        internal void FlushVolumeSave()
+        {
+            _volumeSave?.Stop();
+            if (!_volumeDirty || _settings is null) return;
+            _volumeDirty = false;
+            VolumeSaveCount++;
             _settings.LastVolume = (int)Math.Round(VolumeSlider.Value);
         }
 

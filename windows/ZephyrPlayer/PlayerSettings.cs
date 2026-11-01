@@ -23,10 +23,16 @@ namespace ZephyrPlayer
         public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone", "inverse" };
         public static readonly string[] IconStyles = { "hollow", "filled" };
 
-        /// <summary>Raised on the setting thread after any change is written.</summary>
+        /// <summary>Raised on the setting thread after any change is written (not for the
+        /// remembered volume, which only the player itself reads).</summary>
         public event EventHandler? Changed;
         public event EventHandler? WriteFailed;
+        /// <summary>2.0.2: the settings file could not be written (disk full, folder not
+        /// writable, file locked). Raised once until a write succeeds again; the app keeps
+        /// running and the file keeps its last saved values.</summary>
+        public event EventHandler<Exception>? SaveFailed;
         private bool _warned;
+        private bool _saveFailWarned;
 
         public PlayerSettings(string? path = null) { _path = path ?? DefaultPath; }
 
@@ -126,7 +132,9 @@ namespace ZephyrPlayer
         public int LastVolume
         {
             get { lock (_lock) { var v = Read().LastVolume ?? 100; return Math.Clamp(v, 0, 100); } }
-            set { Write(d => d with { LastVolume = Math.Clamp(value, 0, 100) }); }
+            // 2.0.2: the volume is the player's own; nothing else on screen shows it, so its
+            // write raises no Changed (no bar, library or Settings rebuild per volume step).
+            set { Write(d => d with { LastVolume = Math.Clamp(value, 0, 100) }, notify: false); }
         }
 
         /// <summary>2.0.1 (Ezzy: "Why is this a box?"): the Volume card is a real switch.
@@ -198,24 +206,43 @@ namespace ZephyrPlayer
 
         private static Data Empty() => new(null, null, null, null, null, null, null, null, null);
 
-        private void Write(Func<Data, Data> update)
+        private void Write(Func<Data, Data> update, bool notify = true)
         {
+            Exception? failure = null;
+            bool raiseFailure = false;
             lock (_lock)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
                 var current = Read();
                 if (_readFailed) { if (!_warned) { _warned = true; WriteFailed?.Invoke(this, EventArgs.Empty); } return; }
                 _warned = false;
                 var next = update(current);
                 var tmp = _path + ".tmp-" + Guid.NewGuid().ToString("N");
                 try {
+                    Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
                     File.WriteAllText(tmp, JsonSerializer.Serialize(next));
                     if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
                     else File.Move(tmp, _path);
                     _lastGood = next;
-                } finally { if (File.Exists(tmp)) File.Delete(tmp); }
+                    _saveFailWarned = false;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException || ex is NotSupportedException)
+                {
+                    // 2.0.2: a failed write never takes the app down (it was reached from UI
+                    // setters and every volume step). The file keeps its last saved values
+                    // and the user is told once.
+                    failure = ex;
+                    raiseFailure = !_saveFailWarned;
+                    _saveFailWarned = true;
+                }
+                finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
             }
-            Changed?.Invoke(this, EventArgs.Empty);
+            if (failure != null)
+            {
+                System.Diagnostics.Trace.TraceWarning("Settings write failed: " + failure.GetType().Name + ": " + failure.Message);
+                if (raiseFailure) SaveFailed?.Invoke(this, failure);
+                return;
+            }
+            if (notify) Changed?.Invoke(this, EventArgs.Empty);
         }
     }
 }

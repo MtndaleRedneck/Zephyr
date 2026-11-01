@@ -104,7 +104,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Same(media, view.CurrentMedia);
                 Assert.Equal(generation, view.PlayGeneration);
                 Assert.Equal(50, view.SharedVolume);
-                Assert.Equal(50, settings.LastVolume);
+                PumpUntil(() => settings.LastVolume == 50, "the remembered volume was not saved once the slider rested");
                 // libVLC's own Volume read-back is not evidence on a headless runner: it
                 // read 0 here with the dummy audio output (CI run 41019817391) and -1 in
                 // the real-desktop capture with no audio device, whatever was applied.
