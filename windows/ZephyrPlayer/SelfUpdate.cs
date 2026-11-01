@@ -1,7 +1,8 @@
 // Downloads an update's installer, verifies the release SHA-256, hands it to
 // Windows. Ported from the BingeMote helper's SelfUpdate. Only GitHub hosts are
 // followed (test seam overrides the host check for loopback). Nothing installs
-// on its own: the installer still shows and Windows asks for permission once.
+// on its own: the user starts it from Settings > Updates, and the per-user
+// installer then runs silently (no permission prompt) and reopens the app.
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -122,8 +123,8 @@ namespace ZephyrPlayer
             catch { stream.Dispose(); Verified.TryRemove(path, out _); try { File.Delete(path); } catch { } throw; }
         }
 
-        /// <summary>Open the downloaded installer (one Windows permission prompt) and
-        /// quit so it can replace the running exe. The installer relaunches the app.</summary>
+        /// <summary>Open the downloaded installer (per-user, silent) and quit so it can
+        /// replace the running exe. The installer relaunches the app.</summary>
         public static void LaunchAndQuit(string path)
         {
             // Keep a read-only, non-delete-sharing handle through process creation.
@@ -134,7 +135,17 @@ namespace ZephyrPlayer
                 UseShellExecute = true,
                 Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS",
             });
-            System.Windows.Application.Current?.Shutdown();
+            RequestQuit();
+        }
+
+        /// <summary>2.0.2: the app's own Quit (App.QuitApp: playback stopped, overlay hidden,
+        /// window bounds saved, then Shutdown), set by the App at launch.</summary>
+        internal static Action? Quit;
+
+        internal static void RequestQuit()
+        {
+            if (Quit != null) Quit();
+            else System.Windows.Application.Current?.Shutdown();
         }
     }
 }

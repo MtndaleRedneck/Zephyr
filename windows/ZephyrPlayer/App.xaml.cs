@@ -24,6 +24,7 @@ namespace ZephyrPlayer
         private PlayerSettings? _settings;
         private bool _reallyQuit;
         private bool _startupDone;
+        private System.Windows.Threading.DispatcherTimer? _updateTimer;
         private volatile string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
@@ -353,21 +354,17 @@ namespace ZephyrPlayer
                 NetworkCheck.QueueCheck(p => { ConnectionState.PublicWifiName = p.Name; ConnectionState.NotifyChanged(); });
             };
             // Auto-update check on launch. Missing releases and failures remain
-            // distinct from a verified current published installer.
-            _ = Task.Run(() =>
-            {
-                UpdateState.Outcome = "checking";
-                try
-                {
-                    var current = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
-                    UpdateState.Outcome = UpdateCheck.CheckOutcomeOrThrow(current);
-                }
-                catch (Exception ex)
-                {
-                    // Diagnosable failure, not a fake "no update" (private-feed 404s land here too).
-                    UpdateState.Outcome = "failed: " + ex.GetType().Name;
-                }
-            });
+            // distinct from a verified current published installer (a failure is
+            // recorded as "failed: <reason>", never a fake "no update").
+            _ = BackgroundUpdateCheck.Run(first: true);
+            // 2.0.2: and every 6 hours while the app runs (it can sit in the tray for days);
+            // RestoreApp also checks when the window comes back from the tray.
+            _updateTimer = new System.Windows.Threading.DispatcherTimer { Interval = BackgroundUpdateCheck.Interval };
+            _updateTimer.Tick += (_, __) => _ = BackgroundUpdateCheck.Run();
+            _updateTimer.Start();
+            // 2.0.2: the in-app update quits through the app's own Quit (playback stopped,
+            // overlay hidden, window saved) before the installer replaces the exe.
+            SelfUpdate.Quit = QuitApp;
             _shell.Show();
             _startupDone = true;
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
@@ -484,6 +481,7 @@ namespace ZephyrPlayer
         private void RestoreApp()
         {
             if (_reallyQuit || _shell == null) return;
+            if (BackgroundUpdateCheck.DueOnRestore(DateTime.UtcNow)) _ = BackgroundUpdateCheck.Run();
             _shell.Show();
             if (_shell.WindowState == WindowState.Minimized) _shell.WindowState = WindowState.Normal;
             _shell.Activate();
@@ -493,6 +491,7 @@ namespace ZephyrPlayer
         {
             _player?.SavePlaybackProgress();
             _reallyQuit = true;
+            _updateTimer?.Stop();
             try { _player?.HideOverlayWindow(); _player?.StopPlaybackSource(); } catch { }
             try { _settingsWin?.Close(); } catch { }
             try { _shell?.Close(); } catch { }
