@@ -49,6 +49,17 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void Grab_WideMovie_KeepsItsShape()
+        {
+            // 480x200 (2.4:1): the thumbnail follows the decoded frame, not an assumed 16:9.
+            var b = VlcThumbs.Grab(Fixture("thumb-wide.mkv"), 320, TimeSpan.FromSeconds(15));
+            Assert.NotNull(b);
+            Assert.Equal(320, b!.PixelWidth);
+            Assert.InRange(b.PixelHeight, 130, 138);
+            Evidence(b, "thumb-wide.mkv");
+        }
+
+        [Fact]
         public void Get_CachesTheFrameOnDisk_SecondCallIsACacheHit()
         {
             var dir = Path.Combine(Path.GetTempPath(), "zephyr-thumbs-" + Guid.NewGuid().ToString("N"));
