@@ -61,7 +61,7 @@ namespace ZephyrPlayer
             _sections["bar"] = (NavBar, SectionBar, "Playback bar", "Changes show in the preview right away.");
             _sections["remote"] = (NavRemote, SectionRemote, "Paired phones", "");
             _sections["feedback"] = (NavFeedback, SectionFeedback, "Feedback & bugs", "Write what happened. You see exactly what gets sent before anything leaves this PC.");
-            _sections["updates"] = (NavUpdates, SectionUpdates, "Updates", "Zephyr also checks automatically every time it opens.");
+            _sections["updates"] = (NavUpdates, SectionUpdates, "Updates", "Zephyr also checks automatically when it opens and every few hours.");
 
             // LIVE PREVIEW (item 73): the real bar in preview mode, one per tab.
             SkipPreviewBox.Child = PreviewFrame(_skipPreview);

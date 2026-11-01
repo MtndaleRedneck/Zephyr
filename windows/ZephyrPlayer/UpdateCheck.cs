@@ -14,7 +14,15 @@ namespace ZephyrPlayer
     {
         /// <summary>null = never ran; "checking"; "failed: <reason>"; "no_release"; "up_to_date" (installed == newest published);
         /// "ahead_of_feed" (installed newer than anything published - no published-version claim); or "available: <version>".</summary>
-        public static volatile string? Outcome;
+        public static string? Outcome
+        {
+            get => _outcome;
+            set { var old = _outcome; _outcome = value; if (!string.Equals(old, value, StringComparison.Ordinal)) Changed?.Invoke(); }
+        }
+        private static volatile string? _outcome;
+        /// <summary>2.0.2: raised (on the setting thread) when Outcome changes, so the library's
+        /// small "Update available" notice can follow it.</summary>
+        public static event Action? Changed;
         public sealed record Offer(string Version, string ExeUrl, string? Sha256);
         public static Offer? AvailableOffer;
         public static string Display(string? outcome) => outcome switch
@@ -177,5 +185,56 @@ namespace ZephyrPlayer
                 if (!int.TryParse(parts[i], out nums[i]) || nums[i] is < 0 or > 9999) return null;
             return nums;
         }
+    }
+
+    /// <summary>2.0.2: the automatic check runs at launch, every 6 hours while the app runs
+    /// (it lives in the tray for days), and when the app is brought back from the tray (at
+    /// most every 30 minutes). A later check that fails keeps an offer already found, so a
+    /// network blip does not hide a known update.</summary>
+    internal static class BackgroundUpdateCheck
+    {
+        internal static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+        internal static readonly TimeSpan MinGapOnRestore = TimeSpan.FromMinutes(30);
+        /// <summary>Test seam: replaces the feed check (installed version in, outcome out).</summary>
+        internal static Func<string, string>? CheckOverride;
+        private static int _running;
+        internal static DateTime LastRunUtc { get; private set; } = DateTime.MinValue;
+        internal static int RunCount { get; private set; }
+
+        internal static bool DueOnRestore(DateTime nowUtc) => nowUtc - LastRunUtc >= MinGapOnRestore;
+
+        internal static string InstalledVersion() =>
+            System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
+
+        /// <summary>One check, unless one is already running. [first] is the launch check
+        /// (shows "checking" first, as before).</summary>
+        internal static System.Threading.Tasks.Task Run(bool first = false)
+        {
+            if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1) return System.Threading.Tasks.Task.CompletedTask;
+            LastRunUtc = DateTime.UtcNow;
+            RunCount++;
+            var current = InstalledVersion();
+            return System.Threading.Tasks.Task.Run(() =>
+            {
+                var previous = UpdateState.Outcome;
+                var previousOffer = UpdateState.AvailableOffer;
+                try
+                {
+                    if (first) UpdateState.Outcome = "checking";
+                    string outcome;
+                    try { outcome = CheckOverride != null ? CheckOverride(current) : UpdateCheck.CheckOutcomeOrThrow(current); }
+                    catch (Exception ex) { outcome = "failed: " + ex.GetType().Name; }
+                    if (outcome.StartsWith("failed:", StringComparison.Ordinal) && previous != null && previous.StartsWith("available: ", StringComparison.Ordinal) && previousOffer != null)
+                    {
+                        UpdateState.AvailableOffer = previousOffer;
+                        outcome = previous;
+                    }
+                    UpdateState.Outcome = outcome;
+                }
+                finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
+            });
+        }
+
+        internal static void ResetForTest() { LastRunUtc = DateTime.MinValue; RunCount = 0; CheckOverride = null; System.Threading.Interlocked.Exchange(ref _running, 0); }
     }
 }

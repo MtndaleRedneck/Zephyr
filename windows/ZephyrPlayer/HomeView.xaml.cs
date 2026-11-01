@@ -95,8 +95,25 @@ namespace ZephyrPlayer
             // resume bars and phone status, like the old window's Activated.
             Loaded += (_, __) => { statusTimer.Start(); OnShown(); };
             Unloaded += (_, __) => statusTimer.Stop();
+            // 2.0.2: the small "Update available" notice follows the automatic check.
+            Action onUpdate = () => Dispatcher.InvokeAsync(RefreshUpdateNotice);
+            Loaded += (_, __) => { UpdateState.Changed -= onUpdate; UpdateState.Changed += onUpdate; RefreshUpdateNotice(); };
+            Unloaded += (_, __) => UpdateState.Changed -= onUpdate;
+            RefreshUpdateNotice();
             Refresh();
         }
+
+        /// <summary>2.0.2: shown only while a newer published version is known.</summary>
+        internal void RefreshUpdateNotice()
+        {
+            var version = UpdateState.AvailableVersion;
+            UpdateNoticeButton.Visibility = version != null ? Visibility.Visible : Visibility.Collapsed;
+            UpdateNoticeButton.ToolTip = version != null ? $"Zephyr Player {version} is ready to install" : null;
+        }
+
+        internal bool IsUpdateNoticeShown => UpdateNoticeButton.Visibility == Visibility.Visible;
+
+        private void OnUpdateNotice(object sender, RoutedEventArgs e) => _openSettings?.Invoke("updates");
 
         private string _lastFolder = "";
 
