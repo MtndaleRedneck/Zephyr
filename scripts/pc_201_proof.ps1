@@ -155,6 +155,11 @@ function UiaInvoke($proc, $id) { $el = UiaFind $proc $id; if ($el -eq $null) { r
 function Status { try { return Invoke-RestMethod -Uri "http://127.0.0.1:47823/control/status" -Headers @{ Authorization = "Bearer ci-capture-token" } -TimeoutSec 5 } catch { return $null } }
 
 $exe = (Resolve-Path 'windows/capture-out/ZephyrPlayer.exe').Path
+# The app's own first-run permission step, headless (as pc_desktop_capture.ps1 does);
+# otherwise the "One Windows permission" window stands in front of everything.
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$fw = Start-Process $exe -ArgumentList '--install-firewall', $sid -PassThru -Wait -WindowStyle Hidden
+Note "firewall/listen setup exit $($fw.ExitCode)"
 Note "screen $([P201]::W)x$([P201]::H); exe $exe"
 
 # ---------- a real library (H.264 + HEVC MKVs, nested, a poster) ----------
@@ -196,6 +201,7 @@ $p = Start-Process -FilePath $exe -PassThru
 $hw = WaitWin $p 'Zephyr Player' 30
 $startMs = [Environment]::TickCount64 - $t0
 Gate ($hw -ne [IntPtr]::Zero) "main window up in $startMs ms (cold start, real library)"
+Note "app windows: $(([P201]::Handles([uint32]$p.Id) | ForEach-Object { $sb = New-Object System.Text.StringBuilder 128; [void][P201]::GetWindowTextW($_, $sb, 128); '[' + $sb + ']' }) -join ' ')"
 [P201]::ShowWindow($hw, 3) | Out-Null   # maximized, as Ezzy runs it
 [P201]::SetForegroundWindow($hw) | Out-Null
 $deadline = [Environment]::TickCount64 + 60000
@@ -214,7 +220,8 @@ for ($y = [int]($bmp.Height * 0.2); $y -lt [int]($bmp.Height * 0.95); $y += 4) {
     $c = $bmp.GetPixel($x, $y); $total++
     $mx = [math]::Max($c.R, [math]::Max($c.G, $c.B)); $mn = [math]::Min($c.R, [math]::Min($c.G, $c.B))
     $orange = ($c.R -gt 200 -and $c.G -gt 120 -and $c.G -lt 170 -and $c.B -lt 40)
-    if ($mx - $mn -gt 80 -and -not $orange) { $colour++ } } }
+    $magenta = ($c.R -gt 200 -and $c.G -lt 70 -and $c.B -gt 200)
+    if ($mx - $mn -gt 80 -and -not $orange -and -not $magenta) { $colour++ } } }
 $bmp.Dispose()
 $pct = [math]::Round(100.0 * $colour / [math]::Max(1, $total), 1)
 Gate ($pct -ge 4) "Home grid shows real movie frames: $pct % of the grid is picture colour (blank 2.0.0 tiles are ~0 %) (home-maximized.png)"
