@@ -30,7 +30,7 @@
         <Border x:Name="ControlBar" x:FieldModifier="internal"
                 VerticalAlignment="Bottom" Margin="20" Padding="18,10,18,9" CornerRadius="16"
                 Background="Transparent" BorderBrush="#16FFFFFF" BorderThickness="1" Opacity="0"
-                UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+                UseLayoutRounding="False" TextOptions.TextFormattingMode="Display">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="16"/>

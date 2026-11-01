@@ -149,7 +149,11 @@ namespace ZephyrPlayer
                             });
                         if (!mp.Play()) return null;
                         var deadline = DateTime.UtcNow + timeout;
-                        var tries = new[] { 0.25f, 0.40f };
+                        // Stream-backed media often has no duration before playback, so the
+                        // start-time cannot apply and the first frame is the movie's black
+                        // opening: then look at 10 % first. Seeking by position works once
+                        // playing, whatever the duration says.
+                        var tries = duration > 0 ? new[] { 0.25f, 0.40f } : new[] { 0.10f, 0.25f, 0.40f };
                         var attempt = 0;
                         byte[]? best = null; double bestLuma = -1;
                         while (true)
@@ -159,7 +163,7 @@ namespace ZephyrPlayer
                             var frame = Volatile.Read(ref copy)!;
                             var luma = MeanLuma(frame);
                             if (luma > bestLuma) { best = frame; bestLuma = luma; }
-                            if (luma >= 18 || attempt >= tries.Length || duration <= 0) break;
+                            if (luma >= 18 || attempt >= tries.Length) break;
                             // Dark frame: look a little further in.
                             Volatile.Write(ref copy, null);
                             Volatile.Write(ref want, Volatile.Read(ref count) + 2); // skip the frame shown at the seek
