@@ -286,6 +286,7 @@ namespace ZephyrPlayer.Tests
                 var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
                 host.Show(); host.UpdateLayout();
                 var list = (ItemsControl)panel.FindName("PhoneList")!;
+                void Settle() => System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
                 bool InTree(string id)
                 {
                     var root = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(list);
@@ -296,6 +297,9 @@ namespace ZephyrPlayer.Tests
                         string? own; try { own = p.GetAutomationId(); } catch (NullReferenceException) { own = null; }
                         if (own == id) return true;
                         System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>? kids;
+                        // A UIA client re-reads children after a structure change; in-process the
+                        // peers keep their first answer until told, so ask afresh each walk.
+                        try { p.ResetChildrenCache(); } catch (NullReferenceException) { }
                         try { kids = p.GetChildren(); } catch (NullReferenceException) { kids = null; }
                         foreach (var c in kids ?? new System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>()) if (Walk(c)) return true;
                         return false;
@@ -312,11 +316,11 @@ namespace ZephyrPlayer.Tests
                     return;
                 }
                 store.Add("tok-b", "CI Pixel");
-                panel.RefreshPhones(); host.UpdateLayout();
+                panel.RefreshPhones(); host.UpdateLayout(); Settle();
                 Assert.True(InTree("Forget:CI Pixel"), "the new card is not in the automation tree");
                 Assert.True(InTree("Forget:CI phone"), "the unchanged card left the automation tree after a refresh");
                 store.Remove("tok-b");
-                panel.RefreshPhones(); host.UpdateLayout();
+                panel.RefreshPhones(); host.UpdateLayout(); Settle();
                 Assert.False(InTree("Forget:CI Pixel"));
                 Assert.True(InTree("Forget:CI phone"), "the kept card left the automation tree after a Forget");
                 host.Close();
