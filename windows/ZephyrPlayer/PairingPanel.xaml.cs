@@ -161,8 +161,8 @@ namespace ZephyrPlayer
         public void RefreshPhones()
         {
             var entries = _store.Entries();
-            PhoneList.ItemsSource = entries.Select(e => new {
-                e.Name, e.Token,
+            PhoneList.ItemsSource = entries.Select(e => new PhoneCard {
+                Name = e.Name, Token = e.Token,
                 Detail = PhoneStatus(_store.IsConnected(e.Token), _store.LastSeen(e.Token), DateTime.Now),
                 DotVisibility = _store.IsConnected(e.Token) ? Visibility.Visible : Visibility.Collapsed,
                 Paired = e.PairedAt is DateTime date ? "Paired " + date.ToLocalTime().ToString("d") : "Previously paired",
@@ -170,6 +170,22 @@ namespace ZephyrPlayer
                 ForgetName = "Forget " + e.Name,
             }).ToList();
             NoPhonesText.Visibility = entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        /// <summary>One phone card. 2.0.2: a class (reference equality) instead of an anonymous
+        /// type (value equality). WPF's item automation peers are matched to items by Equals,
+        /// so after a refresh an unchanged card matched its OLD peer, whose container was gone,
+        /// and UI Automation (screen readers, and CI's card lookups) no longer found that card's
+        /// Forget button while it was on screen (the two known CP3 lookup failures).</summary>
+        internal sealed class PhoneCard
+        {
+            public string Name { get; init; } = "";
+            public string Token { get; init; } = "";
+            public string Detail { get; init; } = "";
+            public Visibility DotVisibility { get; init; }
+            public string Paired { get; init; } = "";
+            public string ForgetId { get; init; } = "";
+            public string ForgetName { get; init; } = "";
         }
 
         /// <summary>Render 05's card line: "Connected now", "Last seen today, 3:41 PM",

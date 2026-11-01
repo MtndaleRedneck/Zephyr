@@ -270,6 +270,47 @@ namespace ZephyrPlayer.Tests
             Assert.StartsWith("Last seen Oct", PairingPanel.PhoneStatus(false, now.AddDays(-5).ToUniversalTime(), now));
         }
 
+        // 2.0.2: after the list refreshes (a new phone pairs, one is forgotten), every card's
+        // Forget button is still in the UI Automation tree (it went missing for unchanged
+        // cards: CI's two CP3 lookup failures, and the same for screen readers).
+        [Fact]
+        public void PhoneCards_StayInTheAutomationTree_AfterARefresh()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-uia-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-a", "CI phone");
+                var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
+                host.Show(); host.UpdateLayout();
+                var list = (ItemsControl)panel.FindName("PhoneList")!;
+                bool InTree(string id)
+                {
+                    var root = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(list);
+                    bool Walk(System.Windows.Automation.Peers.AutomationPeer p)
+                    {
+                        if (p.GetAutomationId() == id) return true;
+                        foreach (var c in p.GetChildren() ?? new System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>()) if (Walk(c)) return true;
+                        return false;
+                    }
+                    return Walk(root);
+                }
+                Assert.True(InTree("Forget:CI phone"));
+                store.Add("tok-b", "CI Pixel");
+                panel.RefreshPhones(); host.UpdateLayout();
+                Assert.True(InTree("Forget:CI Pixel"), "the new card is not in the automation tree");
+                Assert.True(InTree("Forget:CI phone"), "the unchanged card left the automation tree after a refresh");
+                store.Remove("tok-b");
+                panel.RefreshPhones(); host.UpdateLayout();
+                Assert.False(InTree("Forget:CI Pixel"));
+                Assert.True(InTree("Forget:CI phone"), "the kept card left the automation tree after a Forget");
+                host.Close();
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            });
+        }
+
         [Fact]
         public void PhoneCard_Forget_RemovesThePhone()
         {
