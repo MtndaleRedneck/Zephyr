@@ -23,6 +23,7 @@ namespace ZephyrPlayer
         private PairedStore? _store;
         private PlayerSettings? _settings;
         private bool _reallyQuit;
+        private bool _startupDone;
         private volatile string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
@@ -89,7 +90,18 @@ namespace ZephyrPlayer
             SwitchTrace.StartFromEnvironment();
 #endif
             DispatcherUnhandledException += (_, ev) =>
+            {
                 LogCrash("dispatcher", ev.Exception.ToString());
+                // 2.0.2: once the app is up, an exception thrown by a UI handler is logged
+                // and the app keeps running (the tray app is also the phone remote). Not
+                // during startup, not for corrupting exceptions, and not when they repeat
+                // in a burst (then it closes as before rather than loop).
+                if (_startupDone && CrashGuard.ShouldHandle(ev.Exception, DateTime.UtcNow))
+                {
+                    ev.Handled = true;
+                    LogCrash("dispatcher-handled", "kept running after " + ev.Exception.GetType().Name);
+                }
+            };
             AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
                 LogCrash("unhandled", ev.ExceptionObject?.ToString() ?? "?");
             TaskScheduler.UnobservedTaskException += (_, ev) =>
@@ -309,13 +321,27 @@ namespace ZephyrPlayer
                     return;
                 }
             }
-            _server.Start();
+            // 2.0.2: the phone server failing to start (its address already taken, for
+            // example by Zephyr in another Windows account) no longer closes the app: the
+            // PC library still plays, and the user is told once.
+            var serverUp = true;
+            try { _server.Start(); }
+            catch (Exception ex) when (ex is System.Net.HttpListenerException || ex is InvalidOperationException || ex is ObjectDisposedException)
+            {
+                serverUp = false;
+                LogCrash("server-start", ex.ToString());
+                try { FirewallSetup.Note("The phone remote could not start on this PC. Another program, or Zephyr Player in another Windows account, may be using its network port. Movies on this PC still play; quit Zephyr Player from the tray icon and open it again to retry."); } catch { }
+            }
             // "Find my PC" on the phone: the player's OWN discovery port (8490)
             // only. 8489 is never bound - the BingeMote helper keeps it
             // unconditionally, in both start orders. A failed own-port bind
             // surfaces in the UI instead of vanishing.
-            try { _discovery = new DiscoveryResponder(_server.Port); ConnectionState.DiscoveryOff = false; }
-            catch (Exception) { _discovery = null; ConnectionState.DiscoveryOff = true; }
+            if (!serverUp) { _discovery = null; ConnectionState.DiscoveryOff = true; }
+            else
+            {
+                try { _discovery = new DiscoveryResponder(_server.Port); ConnectionState.DiscoveryOff = false; }
+                catch (Exception) { _discovery = null; ConnectionState.DiscoveryOff = true; }
+            }
             ConnectionState.NotifyChanged();
             // Public-Wi-Fi NOTICE (owner-settled: notice only, no Windows-setting
             // changes): at launch and whenever the network changes.
@@ -343,6 +369,7 @@ namespace ZephyrPlayer
                 }
             });
             _shell.Show();
+            _startupDone = true;
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
             // otherwise): the shell goes up first, then Settings on Paired phones over it.
             SettingsWindow.PairingFactory = () => new PairingPanel(_gate!, store, name => _pendingPhoneName = name);
@@ -480,5 +507,36 @@ namespace ZephyrPlayer
             _restoreSignal?.Dispose();
             base.OnExit(e);
         }
+    }
+
+    /// <summary>2.0.2: which UI-thread exceptions the app survives (logged, Handled). Not the
+    /// ones that mean the process itself is damaged, and not more than a few in a short
+    /// burst (a handler that throws on every frame would otherwise spin forever).</summary>
+    internal static class CrashGuard
+    {
+        internal const int BurstLimit = 5;
+        internal static readonly TimeSpan BurstWindow = TimeSpan.FromSeconds(30);
+        private static readonly System.Collections.Generic.Queue<DateTime> Recent = new();
+        private static readonly object Sync = new();
+
+        internal static bool IsCorrupting(Exception ex) =>
+            ex is OutOfMemoryException || ex is StackOverflowException || ex is AccessViolationException
+            || ex is InvalidProgramException || ex is BadImageFormatException || ex is TypeInitializationException
+            || ex is System.Runtime.InteropServices.SEHException || ex is System.Threading.ThreadAbortException
+            || (ex.InnerException != null && IsCorrupting(ex.InnerException));
+
+        internal static bool ShouldHandle(Exception ex, DateTime nowUtc)
+        {
+            if (IsCorrupting(ex)) return false;
+            lock (Sync)
+            {
+                while (Recent.Count > 0 && nowUtc - Recent.Peek() > BurstWindow) Recent.Dequeue();
+                if (Recent.Count >= BurstLimit) return false;
+                Recent.Enqueue(nowUtc);
+                return true;
+            }
+        }
+
+        internal static void ResetForTest() { lock (Sync) Recent.Clear(); }
     }
 }
