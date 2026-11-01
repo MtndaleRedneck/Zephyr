@@ -406,7 +406,7 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(780, PlayerBarLogic.PillDrawnWidth(1920), 3);
             Assert.Equal(780, PlayerBarLogic.PillDrawnWidth(1024), 3);   // the 1024x768 runner
             Assert.Equal(752, PlayerBarLogic.PillDrawnWidth(800), 3);
-            Assert.Equal(1000, PlayerBarLogic.PillLayoutWidth(1920), 3);
+            Assert.Equal(780, PlayerBarLogic.PillLayoutWidth(1920), 3);   // 2.0.1: laid out at its drawn width, scale 1
             Assert.True(PlayerBarLogic.PillLayoutWidth(640) * PlayerBarLogic.PillScale <= 640 - 48 + 0.001);
         }
 

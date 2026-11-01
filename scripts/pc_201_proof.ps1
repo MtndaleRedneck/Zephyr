@@ -18,8 +18,11 @@ $fails = New-Object System.Collections.Generic.List[string]
 function Note($s) { Write-Host $s; Add-Content $notes $s }
 function Gate($ok, $s) { if ($ok) { Note "PASS $s" } else { Note "FAIL $s"; $fails.Add($s) } }
 
-Add-Type -AssemblyName System.Drawing, UIAutomationClient, UIAutomationTypes
-Add-Type -ReferencedAssemblies System.Drawing, UIAutomationClient, UIAutomationTypes, WindowsBase -TypeDefinition @'
+Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+# pwsh compiles against reference assemblies: name the real homes of the drawing types.
+$p201Src = @'
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -79,28 +82,44 @@ public static class P201 {
             return n;
         } finally { b.UnlockBits(d); }
     }
-    /// Sample the whole screen for ms milliseconds; count frames showing the magenta desktop.
-    public static string Sample(int ms, string dir, string phase, System.Windows.Automation.InvokePattern trigger) {
-        int frames = 0, flagged = 0, worst = 0; bool saved = false;
-        using (var b = new Bitmap(W, H)) using (var g = Graphics.FromImage(b)) {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-            bool fired = false; long firstFlagMs = -1, lastFlagMs = -1;
-            while (sw.ElapsedMilliseconds < ms) {
-                if (!fired && sw.ElapsedMilliseconds >= 150) { fired = true; ThreadPool.QueueUserWorkItem(_ => { try { trigger.Invoke(); } catch { } }); }
-                g.CopyFromScreen(0, 0, 0, 0, b.Size);
-                frames++;
-                int m = Magenta(b);
-                if (m > 30) {
-                    flagged++; if (m > worst) worst = m;
-                    if (firstFlagMs < 0) firstFlagMs = sw.ElapsedMilliseconds; lastFlagMs = sw.ElapsedMilliseconds;
-                    if (!saved) { b.Save(System.IO.Path.Combine(dir, "flash-" + phase + ".png"), ImageFormat.Png); saved = true; }
+    public static System.Collections.Generic.List<IntPtr> Handles(uint pid) {
+        var list = new System.Collections.Generic.List<IntPtr>();
+        EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) list.Add(h); return true; }, IntPtr.Zero);
+        return list;
+    }
+    /// Sample the whole screen on a background thread for ms milliseconds; the caller
+    /// triggers the transition on its own thread meanwhile, then calls Join().
+    static Thread _t; static string _res;
+    public static void Begin(int ms, string dir, string phase) {
+        _res = null;
+        _t = new Thread(() => {
+            int frames = 0, flagged = 0, worst = 0; bool saved = false; long first = -1, last = -1;
+            using (var b = new Bitmap(W, H)) using (var g = Graphics.FromImage(b)) {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                while (sw.ElapsedMilliseconds < ms) {
+                    g.CopyFromScreen(0, 0, 0, 0, b.Size);
+                    frames++;
+                    int m = Magenta(b);
+                    if (m > 30) {
+                        flagged++; if (m > worst) worst = m;
+                        if (first < 0) first = sw.ElapsedMilliseconds; last = sw.ElapsedMilliseconds;
+                        if (!saved) { b.Save(System.IO.Path.Combine(dir, "flash-" + phase + ".png"), ImageFormat.Png); saved = true; }
+                    }
                 }
             }
-            return string.Format("frames={0} flagged={1} worst_magenta_samples={2} flagged_window_ms={3}..{4} (over {5} ms)", frames, flagged, worst, firstFlagMs, lastFlagMs, ms);
-        }
+            _res = string.Format("frames={0} flagged={1} worst_magenta_samples={2} flagged_window_ms={3}..{4} (over {5} ms)", frames, flagged, worst, first, last, ms);
+        });
+        _t.IsBackground = true; _t.Start();
     }
+    public static string Join() { _t.Join(); return _res; }
 }
 '@
+$compiled = $false
+foreach ($refs in @(@('System.Drawing.Common', 'System.Drawing.Primitives'), @([System.Drawing.Bitmap].Assembly.Location, [System.Drawing.Rectangle].Assembly.Location))) {
+    try { Add-Type -ReferencedAssemblies $refs -ErrorAction Stop -TypeDefinition $p201Src; $compiled = $true; Note "helpers compiled against: $($refs -join ', ')"; break }
+    catch { Write-Host "helper compile with [$($refs -join ', ')] failed: $_" }
+}
+if (-not $compiled) { Note "FAIL helper compile (see log)"; exit 1 }
 
 function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
 function WaitWin($proc, $title, $sec) {
@@ -108,14 +127,15 @@ function WaitWin($proc, $title, $sec) {
     while ([Environment]::TickCount64 - $t -lt $sec * 1000) { $h = [P201]::Find([uint32]$proc.Id, $title); if ($h -ne [IntPtr]::Zero) { return $h }; Start-Sleep -Milliseconds 100 }
     return [IntPtr]::Zero
 }
-function UiaFind($proc, $id) {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
-    $pc = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $proc.Id)
-    foreach ($w in $root.FindAll([System.Windows.Automation.TreeScope]::Children, $pc)) {
-        $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
-        $el = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c)
-        if ($el -ne $null) { return $el }
-    }
+function UiaFind($proc, $id, $sec = 8) {
+    $c = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    $t = [Environment]::TickCount64
+    do {
+        foreach ($h in [P201]::Handles([uint32]$proc.Id)) {
+            try { $w = [System.Windows.Automation.AutomationElement]::FromHandle($h); $el = $w.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $c); if ($el -ne $null) { return $el } } catch { }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ([Environment]::TickCount64 - $t -lt $sec * 1000)
     return $null
 }
 function UiaInvoke($proc, $id) { $el = UiaFind $proc $id; if ($el -eq $null) { return $false }; try { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke(); return $true } catch { return $false } }
@@ -185,10 +205,10 @@ for ($y = [int]($bmp.Height * 0.2); $y -lt [int]($bmp.Height * 0.95); $y += 4) {
 $bmp.Dispose()
 $pct = [math]::Round(100.0 * $colour / [math]::Max(1, $total), 1)
 Gate ($pct -ge 4) "Home grid shows real movie frames: $pct % of the grid is picture colour (blank 2.0.0 tiles are ~0 %) (home-maximized.png)"
-$pairDup = UiaFind $p 'NavPair'
-Gate ($pairDup -eq $null) "no separate 'Pair phones' button (NavPair absent); the phone pill is the one way in"
-$phone = UiaFind $p 'NavPhone'
-Gate ($phone -ne $null) "phone pill present (NavPhone)"
+$pairDup = UiaFind $p 'PairButton' 2
+Gate ($pairDup -eq $null) "no separate 'Pair phones' button (PairButton absent); the phone pill is the one way in"
+$phone = UiaFind $p 'PhoneCard'
+Gate ($phone -ne $null) "phone pill present (PhoneCard) reading '$($phone.Current.Name)'"
 $crumb = UiaFind $p 'Breadcrumb'
 $crumbText = ''
 if ($crumb -ne $null) {
@@ -244,10 +264,10 @@ Note "player state before the flash test: state=$($st.state) fullscreen=$($st.ui
 [P201]::Shot("$out/player-maximized.png")
 $bad = 0; $runs = 0
 for ($i = 1; $i -le 3; $i++) {
-    $fsEl = UiaFind $p 'FullscreenButton'
-    if ($fsEl -eq $null) { Note "cycle ${i}: FullscreenButton not found"; continue }
+    $fsEl = UiaFind $p 'FullscreenButton' 15
+    if ($fsEl -eq $null) { Note "cycle ${i}: FullscreenButton not found; windows: $(([P201]::Handles([uint32]$p.Id) | ForEach-Object { $sb = New-Object System.Text.StringBuilder 128; [void][P201]::GetWindowTextW($_, $sb, 128); '[' + $sb + ']' }) -join ' ')"; continue }
     $inv = $fsEl.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $res = [P201]::Sample(1600, $out, "enter$i", $inv)
+    [P201]::Begin(1600, $out, "enter$i"); Start-Sleep -Milliseconds 150; $inv.Invoke(); $res = [P201]::Join()
     $st = Status; $runs++
     Note "ENTER full screen #${i}: $res; fullscreen now=$($st.ui.fullscreen)"
     if ($res -notmatch 'flagged=0 ') { $bad++ }
@@ -256,7 +276,7 @@ for ($i = 1; $i -le 3; $i++) {
     $fsEl = UiaFind $p 'FullscreenButton'
     if ($fsEl -eq $null) { Note "cycle ${i}: FullscreenButton not found in full screen"; continue }
     $inv = $fsEl.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
-    $res = [P201]::Sample(1600, $out, "exit$i", $inv)
+    [P201]::Begin(1600, $out, "exit$i"); Start-Sleep -Milliseconds 150; $inv.Invoke(); $res = [P201]::Join()
     $st = Status; $runs++
     Note "EXIT full screen #${i}: $res; fullscreen now=$($st.ui.fullscreen)"
     if ($res -notmatch 'flagged=0 ') { $bad++ }
