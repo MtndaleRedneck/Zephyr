@@ -234,8 +234,42 @@ namespace ZephyrPlayer.Tests
             var fired = 0;
             s.Changed += (_, __) => fired++;
             s.ShowSpeed = false;
+            Assert.Equal(1, fired);
+            // 2.0.2: the remembered volume is written without Changed (nothing else shows it,
+            // so no screen rebuilds per volume step), and it is still saved.
             s.LastVolume = 33;
-            Assert.Equal(2, fired);
+            Assert.Equal(1, fired);
+            Assert.Equal(33, new PlayerSettings(_path).LastVolume);
+        }
+
+        [Fact]
+        public void WriteFailure_IsReported_Once_AndNeverThrows()
+        {
+            // The settings "file" path is a directory: every write fails with an I/O error.
+            var dir = Path.Combine(Path.GetTempPath(), "zephyr-202-savefail-" + Guid.NewGuid().ToString("N"));
+            var blocked = Path.Combine(dir, "settings.json");
+            Directory.CreateDirectory(blocked);
+            try
+            {
+                var s = new PlayerSettings(blocked);
+                var failed = new System.Collections.Generic.List<Exception>();
+                var changed = 0;
+                s.SaveFailed += (_, ex) => failed.Add(ex);
+                s.Changed += (_, __) => changed++;
+                var ex1 = Record.Exception(() => { s.ShowSpeed = true; s.LastVolume = 40; s.LibraryFolder = "x"; });
+                Assert.Null(ex1);
+                Assert.Single(failed);
+                Assert.Equal(0, changed);
+                // A file that can be written again clears the warning; the next failure is said again.
+                Directory.Delete(blocked);
+                s.ShowSpeed = true;
+                Assert.Equal(1, changed);
+                File.Delete(blocked);
+                Directory.CreateDirectory(blocked);
+                s.ShowSpeed = false;
+                Assert.Equal(2, failed.Count);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
     }
 }
