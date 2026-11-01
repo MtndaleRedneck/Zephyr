@@ -355,6 +355,114 @@ namespace ZephyrPlayer.Tests
             }, 120000);
         }
 
+        /// <summary>2.0.2 (Back-delay click): from the moment Back is pressed until the
+        /// handoff completes, the screen shows only a picture of the library, so the live
+        /// library must take no input. During the pending leave the library is not
+        /// hit-testable (a click on a tile reaches nothing), and mouse and key input inside
+        /// the view area is swallowed (Enter on a selected movie opens nothing). Once the
+        /// handoff completes the same tile is hit and the same Enter opens the movie.</summary>
+        [Fact]
+        public void Back_WhileHandoffPending_LibraryTakesNoInput_ThenWorksAfter()
+        {
+            Sta(() =>
+            {
+                Core.Initialize();
+                using var libvlc = new LibVLC("--no-video", "--aout=dummy");
+                using var player = new MediaPlayer(libvlc);
+                var dir = Path.Combine(Path.GetTempPath(), "zephyr-202-backinput-" + Guid.NewGuid().ToString("N"));
+                var lib = Path.Combine(dir, "Movies");
+                Directory.CreateDirectory(lib);
+                File.WriteAllBytes(Path.Combine(lib, "Movie A.mp4"), new byte[1024]);
+                var settings = new PlayerSettings(Path.Combine(dir, "settings.json")) { LibraryFolder = lib };
+                var store = new PairedStore(Path.Combine(dir, "paired.json"));
+                var opened = new System.Collections.Generic.List<string>();
+                var shell = new ShellWindow(settings);
+                var home = new HomeView(settings, store, u => opened.Add(u), () => { }, loadDurations: false);
+                var view = new PlayerView(libvlc, player, settings);
+                var clip = new Uri(Path.Combine(AppContext.BaseDirectory, "fixtures", "clip.mp4")).AbsoluteUri;
+                shell.ShowView(home);
+                shell.Show();
+                Pump(400);
+                try
+                {
+                    var list = (ListBox)home.FindName("MovieList")!;
+                    PumpUntil(() => list.Items.Count > 0, "the library never listed the movie");
+
+                    shell.ShowView(view);
+                    var start = view.PlayFromUrlAsync(clip, null, Array.Empty<string>());
+                    PumpUntil(() => start.IsCompleted, "start never completed", 15000);
+                    PumpUntil(() => player.State == VLCState.Playing && shell.HeldUnderView == null, "clip never played", 15000);
+
+                    // Back. Nothing is pumped between here and the probes, so the handoff
+                    // (completed on the dispatcher) is still pending while they run.
+                    shell.ShowView(home, () => { view.StopPlaybackSource(); view.HideOverlayWindow(); });
+                    Assert.True(shell.LeavePending, "the handoff finished in the same pass as Back");
+                    Assert.False(home.IsHitTestVisible, "the library takes clicks while only its picture is on screen");
+
+                    list.SelectedIndex = 0;
+                    list.UpdateLayout();
+                    var item = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0);
+                    Assert.NotNull(item);
+                    item.Focus();
+                    var host = shell.ViewHost;
+                    var center = item.TranslatePoint(new Point(item.ActualWidth / 2, item.ActualHeight / 2), host);
+                    void Reselect()
+                    {
+                        // The library may rebuild its list when it comes back on screen.
+                        list.SelectedIndex = 0;
+                        list.UpdateLayout();
+                        item = (ListBoxItem)list.ItemContainerGenerator.ContainerFromIndex(0);
+                        Assert.NotNull(item);
+                        item.Focus();
+                        center = item.TranslatePoint(new Point(item.ActualWidth / 2, item.ActualHeight / 2), host);
+                    }
+                    bool HitsItem()
+                    {
+                        var hit = host.InputHitTest(center) as DependencyObject;
+                        while (hit != null && !ReferenceEquals(hit, item)) hit = VisualTreeHelper.GetParent(hit);
+                        return hit != null;
+                    }
+                    Assert.False(HitsItem(), "a click on the tile during the Back handoff reached the tile");
+
+                    var down = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left) { RoutedEvent = UIElement.PreviewMouseDownEvent, Source = item };
+                    item.RaiseEvent(down);
+                    Assert.True(down.Handled, "a mouse press in the view area was not swallowed during the handoff");
+                    var wheel = new MouseWheelEventArgs(Mouse.PrimaryDevice, 0, -120) { RoutedEvent = UIElement.PreviewMouseWheelEvent, Source = item };
+                    item.RaiseEvent(wheel);
+                    Assert.True(wheel.Handled, "a wheel turn in the view area was not swallowed during the handoff");
+
+                    bool PressEnter()
+                    {
+                        var src = PresentationSource.FromVisual(shell)!;
+                        var preview = new KeyEventArgs(Keyboard.PrimaryDevice, src, 0, Key.Enter) { RoutedEvent = Keyboard.PreviewKeyDownEvent, Source = item };
+                        item.RaiseEvent(preview);
+                        if (preview.Handled) return false;
+                        // What WPF does with an unhandled preview: the bubbling KeyDown follows.
+                        item.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, src, 0, Key.Enter) { RoutedEvent = Keyboard.KeyDownEvent, Source = item });
+                        return true;
+                    }
+                    Assert.False(PressEnter(), "Enter reached the library during the handoff");
+                    Assert.Empty(opened);
+
+                    // After the handoff: the same tile is hit and Enter opens the movie.
+                    PumpUntil(() => !shell.LeavePending, "the Back handoff never completed", 10000);
+                    Assert.True(home.IsHitTestVisible, "the library stayed unclickable after the handoff");
+                    Pump(200);
+                    Reselect();
+                    Assert.True(HitsItem(), "the tile is not hit after the handoff");
+                    Assert.True(PressEnter());
+                    Assert.Single(opened);
+                    try { File.WriteAllText(Path.Combine(OutDir, "202-back-input.txt"), $"pending: hitTile=False mouse=swallowed wheel=swallowed enter=swallowed opened=0; after: hitTile=True opened={opened.Count}"); } catch { }
+                }
+                finally
+                {
+                    view.ReleasePlayback();
+                    shell.Close();
+                    try { Directory.Delete(dir, true); } catch { }
+                }
+            }, 120000);
+        }
+
         // ---------- remembered geometry ----------
 
         [Fact]
