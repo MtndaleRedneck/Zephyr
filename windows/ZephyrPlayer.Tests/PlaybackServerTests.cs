@@ -60,6 +60,49 @@ namespace ZephyrPlayer.Tests
             return c;
         }
 
+        // 2.0.2: one failed accept no longer ends the phone server for good.
+        [Fact]
+        public async Task AcceptError_IsLogged_AndTheServerKeepsAnswering()
+        {
+            var server = new PlaybackServer(
+                onPlay: (url, pos, subs) => Task.CompletedTask,
+                validateToken: t => t == GoodToken,
+                port: TestPort, loopbackOnly: true);
+            var calls = 0;
+            server.AcceptForTest = l =>
+            {
+                if (System.Threading.Interlocked.Increment(ref calls) == 1) throw new HttpListenerException(64, "injected: the network name is no longer available");
+                return l.GetContextAsync();
+            };
+            server.Start();
+            using (server)
+            using (var client = Client(GoodToken))
+            {
+                client.Timeout = TimeSpan.FromSeconds(10);
+                Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/unknown")).StatusCode);
+                Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/unknown")).StatusCode);
+                Assert.Equal(1, server.LoopErrors);
+            }
+        }
+
+        // 2.0.2: the app survives a phone server that cannot start (App catches exactly
+        // this): a second server on a taken address throws HttpListenerException.
+        [Fact]
+        public void Start_OnATakenAddress_ThrowsHttpListenerException()
+        {
+            var (first, _) = Start(out _);
+            using (first)
+            {
+                var second = new PlaybackServer(
+                    onPlay: (url, pos, subs) => Task.CompletedTask,
+                    validateToken: t => t == GoodToken,
+                    port: TestPort, loopbackOnly: true);
+                var ex = Record.Exception(() => second.Start());
+                Assert.IsType<HttpListenerException>(ex);
+                second.Dispose();
+            }
+        }
+
         [Fact]
         public async Task BrowserOriginAndUnboundHost_AreRejected()
         {
