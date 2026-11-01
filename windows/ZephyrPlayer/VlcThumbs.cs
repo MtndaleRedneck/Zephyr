@@ -107,7 +107,7 @@ namespace ZephyrPlayer
                         "--avcodec-hw=none", "--quiet");
                     using var src = new SafeMediaSource(_vlc, new Uri(path).AbsoluteUri);
                     var media = src.Media;
-                    try { media.Parse(MediaParseOptions.ParseLocal, 3000).GetAwaiter().GetResult(); } catch { }
+                    try { media.Parse(MediaParseOptions.ParseLocal | MediaParseOptions.ParseNetwork, 3000).GetAwaiter().GetResult(); } catch { }
                     finally { try { media.ParseStop(); } catch { } }
                     uint vw = 0, vh = 0, sarNum = 1, sarDen = 1;
                     try

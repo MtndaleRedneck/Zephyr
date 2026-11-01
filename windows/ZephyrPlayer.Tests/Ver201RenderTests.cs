@@ -67,10 +67,14 @@ namespace ZephyrPlayer.Tests
                         object? Prop(object o, string n) => o.GetType().GetProperty(n)!.GetValue(o);
                         var deadline = DateTime.UtcNow.AddSeconds(45);
                         while (DateTime.UtcNow < deadline && list.Items.Cast<object>().Any(e => (bool)Prop(e, "Dir")! ? Prop(e, "Peek") == null : Prop(e, "Thumb") == null)) Pump(250);
+                        Assert.True(w.DurationWork.Wait(20000), "duration worker did not finish");
+                        Pump(300);
                         foreach (var e in list.Items.Cast<object>())
                         {
                             var isDir = (bool)Prop(e, "Dir")!;
                             Assert.True((isDir ? Prop(e, "Peek") : Prop(e, "Thumb")) != null, $"no picture for {Prop(e, "Name")}");
+                            // Time badge on every movie (2.0.0 read no length through its stream input).
+                            if (!isDir) Assert.True(Equals(Prop(e, "DurationVis"), Visibility.Visible), $"no time badge for {Prop(e, "Name")}");
                         }
                         // The whole path above the library root, not "C: > ... > Movies".
                         var crumbs = (ItemsControl)w.FindName("Breadcrumb")!;

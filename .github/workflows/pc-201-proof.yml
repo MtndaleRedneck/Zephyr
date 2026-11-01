@@ -27,6 +27,8 @@ jobs:
   proof:
     runs-on: windows-latest
     timeout-minutes: 40
+    # The baseline leg is expected to fail its gates (it is the 2.0.0 code).
+    continue-on-error: ${{ matrix.leg == 'baseline' }}
     strategy:
       fail-fast: false
       matrix:

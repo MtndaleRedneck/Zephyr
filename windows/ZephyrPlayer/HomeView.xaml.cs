@@ -510,7 +510,10 @@ namespace ZephyrPlayer
                             var media = safe.Media;
                             // Keep native release on this worker, never on LibVLC's ParsedChanged
                             // callback thread (Parse's completion can run continuations inline).
-                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 5000).GetAwaiter().GetResult(); }
+                            // 2.0.1: the movie is fed through our own stream input, which libVLC
+                            // treats as non-local: ParseLocal alone never reads its length, so
+                            // badges were missing (Ezzy's Nov 1 screen). Allow the full parse.
+                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal | LibVLCSharp.Shared.MediaParseOptions.ParseNetwork, 5000).GetAwaiter().GetResult(); }
                             finally { media.ParseStop(); }
                             var duration = media.Duration;
                             if (duration <= 0) continue;
