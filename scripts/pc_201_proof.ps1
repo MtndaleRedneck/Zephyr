@@ -115,14 +115,22 @@ public static class P201 {
 }
 '@
 $compiled = $false
-# Only names that exist beside this pwsh (its System.Drawing.Common version decides
-# whether System.Private.Windows.Core is needed).
+# Only names that exist beside this pwsh; System.Drawing.Common's version decides which
+# System.Private.Windows.* assemblies it needs, and the compiler names any missing one.
 $named = @('System.Drawing.Common', 'System.Drawing.Primitives', 'System.Collections', 'System.Threading.Thread', 'System.Threading',
-    'System.Runtime.InteropServices', 'System.Runtime', 'System.Console', 'System.Runtime.Extensions', 'System.ComponentModel.Primitives',
-    'System.Private.Windows.Core') | Where-Object { (Test-Path (Join-Path $PSHOME "$_.dll")) -or (Test-Path (Join-Path $PSHOME "ref/$_.dll")) }
-foreach ($refs in @(,$named)) {
-    try { Add-Type -ReferencedAssemblies $refs -ErrorAction Stop -TypeDefinition $p201Src; $compiled = $true; Note "helpers compiled against: $($refs -join ', ')"; break }
-    catch { Write-Host "helper compile with [$($refs -join ', ')] failed: $_" }
+    'System.Runtime.InteropServices', 'System.Runtime', 'System.Console', 'System.Runtime.Extensions', 'System.ComponentModel.Primitives')
+$named += @(Get-ChildItem $PSHOME -Filter 'System.Private.Windows*.dll' -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName })
+$named = @($named | Select-Object -Unique | Where-Object { (Test-Path (Join-Path $PSHOME "$_.dll")) -or (Test-Path (Join-Path $PSHOME "ref/$_.dll")) })
+$compiled = $false
+for ($attempt = 1; $attempt -le 6 -and -not $compiled; $attempt++) {
+    try { Add-Type -ReferencedAssemblies $named -ErrorAction Stop -TypeDefinition $p201Src; $compiled = $true; Note "helpers compiled against: $($named -join ', ')" }
+    catch {
+        $msg = "$_"
+        Write-Host "helper compile attempt $attempt failed: $msg"
+        $miss = [regex]::Matches($msg, "reference to assembly '([^,']+)") | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique
+        if (-not $miss) { break }
+        $named = @($named + $miss | Select-Object -Unique)
+    }
 }
 if (-not $compiled) { Note "FAIL helper compile (see log)"; exit 1 }
 

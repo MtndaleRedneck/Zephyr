@@ -711,9 +711,18 @@ $sz4b = if (Test-Path "$env:RUNNER_TEMP/pc-desktop-pairing.png") { 'captured' } 
 Start-Sleep -Milliseconds 900
 $null = CaptureWindow $hwShell "$env:RUNNER_TEMP/cp3-shell-undimmed.png"
 # Brightest pixel of the shell's caption (title text), dimmed vs not.
-$capW = [Math]::Min(260, $rh.Right - $rh.Left)
-$mDim = Cp3Lum "$env:RUNNER_TEMP/cp3-settings-over-dimmed-shell.png" 0 0 $capW 32 -Max
-$mLit = Cp3Lum "$env:RUNNER_TEMP/cp3-shell-undimmed.png" 0 0 $capW 32 -Max
+# 2.0.1: Settings is 650 tall, so on the 1024x768 runner it overlaps the shell's
+# caption (its own bright caption would be measured). Judge the caption strip the
+# Settings window does not cover: right of it (the shell's close glyph), else left.
+$capX = 0; $capW = [Math]::Min(260, $rh.Right - $rh.Left)
+if ($rs.Top -lt $rh.Top + 32) {
+    $rightFree = $rh.Right - $rs.Right
+    $leftFree = $rs.Left - $rh.Left
+    if ($rightFree -ge 12) { $capX = $rs.Right - $rh.Left + 1; $capW = $rightFree - 1 }
+    elseif ($leftFree -ge 12) { $capX = 0; $capW = $leftFree - 1 }
+}
+$mDim = Cp3Lum "$env:RUNNER_TEMP/cp3-settings-over-dimmed-shell.png" $capX 0 $capW 32 -Max
+$mLit = Cp3Lum "$env:RUNNER_TEMP/cp3-shell-undimmed.png" $capX 0 $capW 32 -Max
 Cp3Check ($mLit -gt 120 -and $mDim -lt ($mLit * 0.5)) "shell dimmed behind Settings (caption max $mDim dimmed vs $mLit after close)"
 StopZephyr
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_PUBLIC_WIFI', $null, 'Process')
