@@ -356,6 +356,20 @@ namespace ZephyrPlayer
             // Auto-update check on launch. Missing releases and failures remain
             // distinct from a verified current published installer (a failure is
             // recorded as "failed: <reason>", never a fake "no update").
+#if CI_CAPTURE_HOOK
+            // Capture build only: CI shows the "Update available" notice without a newer
+            // published release (the live feed answers ahead_of_feed for a candidate).
+            if (Environment.GetEnvironmentVariable("ZEPHYR_CI_CAPTURE") != null)
+            {
+                var ciUpdate = Environment.GetEnvironmentVariable("ZEPHYR_CI_UPDATE_AVAILABLE");
+                if (!string.IsNullOrEmpty(ciUpdate))
+                    BackgroundUpdateCheck.CheckOverride = _ =>
+                    {
+                        UpdateState.AvailableOffer = new UpdateState.Offer(ciUpdate, $"https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v{ciUpdate}/Zephyr-PC-{ciUpdate}.exe", "ci");
+                        return "available: " + ciUpdate;
+                    };
+            }
+#endif
             _ = BackgroundUpdateCheck.Run(first: true);
             // 2.0.2: and every 6 hours while the app runs (it can sit in the tray for days);
             // RestoreApp also checks when the window comes back from the tray.

@@ -1751,6 +1751,87 @@ Cp2Log ("CP2 verdict: " + $(if ($cp2Fail.Count -eq 0) { "ALL GATES PASS" } else 
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 Remove-Item (Join-Path $cfgDir 'paired.json') -Force -ErrorAction SilentlyContinue
 
+# =====================================================================================
+# 2.0.2: the "Update available" notice in the library bar and the library resume
+# ("Resumed from m:ss" + Start over), on the real hooked exe with real input. The
+# capture build is told an update exists (ZEPHYR_CI_UPDATE_AVAILABLE, compiled out of
+# the shipped exe); the movie's saved spot is seeded at 4:12 of a 10:00 clip.
+# Evidence: pc-202-update-notice.png, pc-202-resume-start-over.png,
+# pc-202-after-start-over.png, pc-202-notes.txt.
+# =====================================================================================
+$r202Fail = New-Object System.Collections.Generic.List[string]
+$r202Note = "$env:RUNNER_TEMP/pc-202-notes.txt"
+function R202Log($s) { Write-Host "2.0.2: $s"; $s | Add-Content $r202Note }
+function R202Gate($ok, $s) { if ($ok) { R202Log "PASS $s" } else { R202Log "FAIL $s"; $r202Fail.Add($s); Write-Host "::error::2.0.2 $s" } }
+try {
+    StopZephyr
+    $lib202 = Join-Path $env:RUNNER_TEMP 'Movies-202'
+    Remove-Item $lib202 -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force $lib202 | Out-Null
+    $movie202 = Join-Path $lib202 'Resume Test.mp4'
+    Copy-Item "$env:RUNNER_TEMP/clip.mp4" $movie202
+    $f202 = Get-Item $movie202
+    $lib202Json = $lib202 -replace '\\','\\'
+    [IO.File]::WriteAllText((Join-Path $cfgDir 'settings.json'), "{`"LibraryFolder`":`"$lib202Json`"}")
+    '[{"token":"r202-fixture","name":"CI phone"}]' | Set-Content (Join-Path $cfgDir 'paired.json')
+    $hist202 = @{}
+    $hist202[$f202.FullName.ToUpperInvariant()] = @{ PositionMs = 252000; DurationMs = 600000; FileSize = $f202.Length; ModifiedUtc = $f202.LastWriteTimeUtc }
+    $hist202 | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $cfgDir 'playback-history.json')
+    [Environment]::SetEnvironmentVariable('ZEPHYR_CI_UPDATE_AVAILABLE', '2.0.3', 'Process')
+    [ZWU32]::SetCursorPos(5, 5) | Out-Null
+    $pC = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
+    [Environment]::SetEnvironmentVariable('ZEPHYR_CI_UPDATE_AVAILABLE', $null, 'Process')
+    $h202 = Wait-MainWindow $pC 20
+    Close-PairingWindow $pC
+    R202Gate ($h202 -ne [System.IntPtr]::Zero) "shell window up (hwnd $h202)"
+    if ($h202 -ne [System.IntPtr]::Zero) {
+        $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+        $cw = [math]::Min(1280, $wa.Width); $ch = [math]::Min(800, $wa.Height)
+        [ZWU32]::SetWindowPos($h202, [System.IntPtr]::Zero, $wa.Left + [int](($wa.Width - $cw) / 2), $wa.Top + [int](($wa.Height - $ch) / 2), $cw, $ch, $SWP_NOZORDER) | Out-Null
+        [ZWU32]::SetForegroundWindow($h202) | Out-Null
+        Start-Sleep -Seconds 2
+
+        # Update notice: present in the library bar, says "Update available".
+        $note202 = $null
+        foreach ($i in 1..20) { $note202 = Cp2FindId 'NavUpdateAvailable'; if ($note202 -ne $null) { break }; Start-Sleep -Milliseconds 300 }
+        R202Gate ($note202 -ne $null) "library bar shows the 'Update available' notice when an update is known"
+        $st202 = Cp1Status
+        R202Log "status update_check=$($st202.update_check) update_available=$($st202.update_available)"
+        $null = CaptureWindow $h202 "$env:RUNNER_TEMP/pc-202-update-notice.png"
+
+        # Library resume: double-click the tile; the movie picks up at 4:12 and says so.
+        $null = Cp1DoubleClickTile $h202 'Resume Test'
+        $u202 = $null
+        foreach ($i in 1..40) { $st202 = Cp1Status; if ($st202 -and $st202.state -eq 'Playing' -and $st202.time -ge 240) { $u202 = $st202.ui; break }; Start-Sleep -Milliseconds 500 }
+        R202Gate ($st202 -and $st202.state -eq 'Playing' -and $st202.time -ge 240 -and $st202.time -le 290) "library double-click resumed at the saved spot (time=$($st202.time) s, saved 252 s, state=$($st202.state))"
+        R202Gate ($u202 -ne $null -and $u202.resume_notice -eq $true -and $u202.resumed_from -eq 252) "'Resumed from 4:12' notice with Start over is on screen (ui: $(Cp2Json $u202))"
+        $so202 = Cp2FindId 'StartOverButton'
+        $txt202 = Cp2FindId 'ResumeText'
+        R202Gate ($so202 -ne $null -and $so202.Current.Name -eq 'Start over') "Start over button found in the player ('$($so202.Current.Name)'), text '$($txt202.Current.Name)'"
+        Start-Sleep -Milliseconds 400
+        $null = CaptureWindow $h202 "$env:RUNNER_TEMP/pc-202-resume-start-over.png"
+
+        # Start over: a real click; the movie goes back to 0:00, the notice leaves.
+        if ($so202 -ne $null) {
+            $b202 = $so202.Current.BoundingRectangle
+            Cp1ClickPoint ($b202.X + $b202.Width / 2) ($b202.Y + $b202.Height / 2)
+        }
+        $after202 = $null
+        foreach ($i in 1..20) { $after202 = Cp1Status; if ($after202 -and $after202.time -lt 30 -and $after202.ui.resume_notice -eq $false) { break }; Start-Sleep -Milliseconds 300 }
+        R202Gate ($after202 -and $after202.time -lt 30 -and $after202.ui.resume_notice -eq $false -and $after202.ui.start_over_count -eq 1 -and $after202.state -eq 'Playing') "Start over (real click) went back to the start and closed the notice (time=$($after202.time) s, start_over_count=$($after202.ui.start_over_count), state=$($after202.state))"
+        $null = CaptureWindow $h202 "$env:RUNNER_TEMP/pc-202-after-start-over.png"
+    }
+}
+catch { R202Gate $false "2.0.2 section threw: $($_.Exception.Message)" }
+finally {
+    [Environment]::SetEnvironmentVariable('ZEPHYR_CI_UPDATE_AVAILABLE', $null, 'Process')
+    StopZephyr
+    Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $cfgDir 'paired.json') -Force -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $cfgDir 'playback-history.json') -Force -ErrorAction SilentlyContinue
+}
+R202Log ("2.0.2 verdict: " + $(if ($r202Fail.Count -eq 0) { "ALL GATES PASS" } else { "FAILED: " + ($r202Fail -join '; ') }))
+
 # 2d) PHONE-START BAR PROOF (Tab evidence ask): playback is started and paused over
 # real HTTP with the CI token - NO mouse events at all. The bar must show on start,
 # hide on its own ~3s timer while playing, and stay while paused.
@@ -2148,4 +2229,4 @@ if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cu
 if ($cp1Fail.Count -gt 0) { Write-Host "::error::CP1 evidence gates failed: $($cp1Fail -join '; ')" }
 if ($cp2Fail.Count -gt 0) { Write-Host "::error::CP2 evidence gates failed: $($cp2Fail -join '; ')" }
 if ($cp3Fail.Count -gt 0) { Write-Host "::error::CP3 Settings evidence gates failed: $($cp3Fail -join '; ')" }
-if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0 -or $cp2Fail.Count -gt 0 -or $cp3Fail.Count -gt 0) { exit 1 }
+if ($incomplete -or $barGateFailed -or $cp1Fail.Count -gt 0 -or $cp2Fail.Count -gt 0 -or $cp3Fail.Count -gt 0 -or $r202Fail.Count -gt 0) { exit 1 }
