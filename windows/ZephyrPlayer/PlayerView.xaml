@@ -103,6 +103,14 @@
                 <Border x:Name="Osd" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,76,0,0" Background="#F016161A" BorderBrush="#17FFFFFF" BorderThickness="1" CornerRadius="10" Padding="14,7" Opacity="0" IsHitTestVisible="False">
                     <TextBlock x:Name="OsdText" Foreground="#F5F5F7" FontSize="13" FontWeight="SemiBold"/>
                 </Border>
+                <!-- 2.0.2: a library movie resumed from its saved spot says so for a few seconds,
+                     with Start over (same card look as the notice above, just below it). -->
+                <Border x:Name="ResumeNotice" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,118,0,0" Background="#F016161A" BorderBrush="#17FFFFFF" BorderThickness="1" CornerRadius="10" Padding="14,5,5,5" Visibility="Collapsed" AutomationProperties.AutomationId="ResumeNotice">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="ResumeText" Foreground="#F5F5F7" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.AutomationId="ResumeText"/>
+                        <Button x:Name="StartOverButton" Style="{StaticResource ZTextButton}" Height="28" Padding="12,0" Margin="12,0,0,0" Content="Start over" Click="OnStartOver" AutomationProperties.AutomationId="StartOverButton" AutomationProperties.Name="Start over"/>
+                    </StackPanel>
+                </Border>
                 <!-- The bar: a floating card, NOT a full-width scrim (render 02). Inset 20, radius 16,
                      padding 10 18 9, rgba(12,12,15,.74), 1 px rgba(255,255,255,.085), shadow 0 18 50
                      rgba(0,0,0,.55). Fullscreen: the same content laid out at up to 1000 px and drawn
