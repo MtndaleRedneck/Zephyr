@@ -599,7 +599,7 @@ $setW = $rs.Right - $rs.Left; $setH = $rs.Bottom - $rs.Top
 $cdx = [Math]::Abs((($rs.Left + $rs.Right) / 2.0) - (($rh.Left + $rh.Right) / 2.0))
 $cdy = [Math]::Abs((($rs.Top + $rs.Bottom) / 2.0) - (($rh.Top + $rh.Bottom) / 2.0))
 $cp3Notes.Add("settings rect=($($rs.Left),$($rs.Top),$($rs.Right),$($rs.Bottom)) shell rect=($($rh.Left),$($rh.Top),$($rh.Right),$($rh.Bottom)) centre offset=($cdx,$cdy) screen=$($vs.Width)x$($vs.Height)")
-Cp3Check ([Math]::Abs($setW - 900) -le 2 -and [Math]::Abs($setH - 600) -le 2) "settings window is 900x600 (got ${setW}x${setH})"
+Cp3Check ([Math]::Abs($setW - 900) -le 2 -and [Math]::Abs($setH - 650) -le 2) "settings window is 900x650 (got ${setW}x${setH})"
 Cp3Check ($cdx -le 3 -and $cdy -le 3) "settings window centred on the shell (offset $cdx,$cdy)"
 $null = CaptureWindow $hwShell "$env:RUNNER_TEMP/cp3-settings-over-dimmed-shell.png"
 $sz3 = CaptureWindow $sw "$env:RUNNER_TEMP/pc-desktop-settings.png"

@@ -4,6 +4,7 @@
         xmlns:libvlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         xmlns:local="clr-namespace:ZephyrPlayer"
         Background="Black" Focusable="False" FontFamily="Segoe UI Variable Text, Segoe UI" Foreground="#F5F5F7"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True"
         MouseMove="OnMouseMove" MouseDoubleClick="OnVideoDoubleClick">
     <!-- 2.0: the player is a VIEW inside the one ShellWindow (no second top-level
          window). Leaving the player removes this view from the tree, which raises
@@ -19,7 +20,7 @@
                  solid see-through fill here (Instinct correction, section 9). -->
             <Style x:Key="ZPopupCard" TargetType="Border">
                 <Setter Property="Background" Value="#F016161A"/>
-                <Setter Property="BorderBrush" Value="#17FFFFFF"/>
+                <Setter Property="BorderBrush" Value="#24FFFFFF"/>
                 <Setter Property="BorderThickness" Value="1"/>
                 <Setter Property="CornerRadius" Value="14"/>
                 <Setter Property="Padding" Value="14"/>
@@ -27,7 +28,9 @@
                 <Setter Property="HorizontalAlignment" Value="Left"/>
                 <Setter Property="Visibility" Value="Collapsed"/>
                 <Setter Property="TextBlock.Foreground" Value="#F5F5F7"/>
-                <Setter Property="Effect"><Setter.Value><DropShadowEffect BlurRadius="60" ShadowDepth="24" Direction="270" Opacity="0.6" Color="Black"/></Setter.Value></Setter>
+                <!-- 2.0.1: no Effect on the card (it blurred every label in it); a stronger
+                     edge carries the separation instead. -->
+                <Setter Property="UseLayoutRounding" Value="True"/>
             </Style>
             <Style x:Key="ZPopupHeader" TargetType="Grid">
                 <Setter Property="Margin" Value="4,2,4,12"/>
@@ -90,7 +93,8 @@
                             <Viewbox Width="18" Height="18"><Canvas Width="24" Height="24"><Path Data="M19,12 H5 M11,6 L5,12 L11,18" Stroke="#D6D6DD" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox>
                         </Button>
                         <TextBlock x:Name="MovieTitle" Foreground="#F5F5F7" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center" LineHeight="32" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="900">
-                            <TextBlock.Effect><DropShadowEffect x:Name="TitleShadow" BlurRadius="4" ShadowDepth="1" Direction="270" Opacity="0" Color="Black"/></TextBlock.Effect>
+                            <!-- 2.0.1: the shadow is attached only in full screen (ApplyLayoutMode);
+                                 windowed, an invisible Effect still blurred the title. -->
                         </TextBlock>
                         <TextBlock x:Name="MovieMeta" Foreground="#9C9CA6" FontSize="12.5" VerticalAlignment="Center" Margin="12,0,0,0"/>
                     </StackPanel>
