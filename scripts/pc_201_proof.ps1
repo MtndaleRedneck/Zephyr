@@ -115,7 +115,12 @@ public static class P201 {
 }
 '@
 $compiled = $false
-foreach ($refs in @(@('System.Drawing.Common', 'System.Drawing.Primitives', 'System.Collections'), @([System.Drawing.Bitmap].Assembly.Location, [System.Drawing.Rectangle].Assembly.Location))) {
+# Only names that exist beside this pwsh (its System.Drawing.Common version decides
+# whether System.Private.Windows.Core is needed).
+$named = @('System.Drawing.Common', 'System.Drawing.Primitives', 'System.Collections', 'System.Threading.Thread', 'System.Threading',
+    'System.Runtime.InteropServices', 'System.Runtime', 'System.Console', 'System.Runtime.Extensions', 'System.ComponentModel.Primitives',
+    'System.Private.Windows.Core') | Where-Object { (Test-Path (Join-Path $PSHOME "$_.dll")) -or (Test-Path (Join-Path $PSHOME "ref/$_.dll")) }
+foreach ($refs in @(,$named)) {
     try { Add-Type -ReferencedAssemblies $refs -ErrorAction Stop -TypeDefinition $p201Src; $compiled = $true; Note "helpers compiled against: $($refs -join ', ')"; break }
     catch { Write-Host "helper compile with [$($refs -join ', ')] failed: $_" }
 }
