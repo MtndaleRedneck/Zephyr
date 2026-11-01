@@ -225,16 +225,17 @@ for ($y = [int]($bmp.Height * 0.2); $y -lt [int]($bmp.Height * 0.95); $y += 4) {
 $bmp.Dispose()
 $pct = [math]::Round(100.0 * $colour / [math]::Max(1, $total), 1)
 Gate ($pct -ge 4) "Home grid shows real movie frames: $pct % of the grid is picture colour (blank 2.0.0 tiles are ~0 %) (home-maximized.png)"
-$pairDup = UiaFind $p 'PairButton' 2
-Gate ($pairDup -eq $null) "no separate 'Pair phones' button (PairButton absent); the phone pill is the one way in"
-$phone = UiaFind $p 'PhoneCard'
-Gate ($phone -ne $null) "phone pill present (PhoneCard) reading '$($phone.Current.Name)'"
+$pairDup = UiaFind $p 'NavPair' 2
+if ($pairDup -eq $null) { $pairDup = UiaFind $p 'PairButton' 1 }
+Gate ($pairDup -eq $null) "no separate 'Pair phones' button (NavPair/PairButton absent); the phone pill is the one way in"
+$phone = UiaFind $p 'NavPhone'
+Gate ($phone -ne $null) "phone pill present (NavPhone) reading '$($phone.Current.Name)'"
 $crumb = UiaFind $p 'Breadcrumb'
 $crumbText = ''
 if ($crumb -ne $null) {
     $tw = [System.Windows.Automation.TreeWalker]::RawViewWalker
     $names = @(); $e = $tw.GetFirstChild($crumb)
-    while ($e -ne $null) { $nm = $e.Current.Name; if ($nm) { $names += $nm }; $e = $tw.GetNextSibling($e) }
+    while ($e -ne $null) { $nm = $e.Current.Name; if ($nm -and $nm -notmatch '^System\.Windows') { $names += $nm }; $e = $tw.GetNextSibling($e) }
     $crumbText = ($names -join ' > ')
 }
 if (-not $crumbText) {
@@ -246,7 +247,7 @@ if (-not $crumbText) {
     $crumbText = ($found -join ' > ')
 }
 Note "path bar reads: $crumbText"
-Gate (($crumbText -match 'Videos' -and $crumbText -match 'Ezzy' -and $crumbText -match 'Movies') -or ($crumbText -match '\.\.\.' -and $crumbText -match 'Movies')) "path bar shows the real path (folds to ... only when too narrow): '$crumbText'"
+Gate ($crumbText -match 'Ezzy' -and $crumbText -match 'Videos' -and $crumbText -match 'Movies') "path bar shows the real folders (Ezzy, Videos, Movies): '$crumbText'"
 $maxBtn = UiaFind $p 'CaptionMaximize'
 Note "caption maximize/restore button found=$($maxBtn -ne $null) tooltip/name='$($maxBtn.Current.Name)'"
 # Open a folder with a poster: the poster is the folder art.
@@ -267,12 +268,16 @@ foreach ($sec in @('NavVolume', 'NavSkip', 'NavBar', 'NavUpdates')) {
     if ($sv -ne $null) { try { $scrollable = $sv.GetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern).Current.VerticallyScrollable } catch { $scrollable = $null } }
     Gate ($ok -and $scrollable -eq $false) "Settings $sec has no scroll bar (vertically scrollable=$scrollable) (settings-$sec-window.png)"
 }
+$null = UiaInvoke $p 'NavVolume'; Start-Sleep -Milliseconds 600
 $rem = UiaFind $p 'RememberToggle'
 Gate ($rem -ne $null) "Volume: 'Remember last volume' is a real switch (RememberToggle present)"
 StopZephyr
 
 # ---------- 3. Full screen flash ----------
-$movie = (Join-Path $lib 'Coyote vs Acme.mkv')
+# A grey-only movie: any magenta on screen can only be the desktop.
+$movie = 'C:\ZLib\flash-probe.mkv'
+& ffmpeg -v error -y -f lavfi -i 'testsrc2=size=1280x720:rate=24:duration=60' -vf 'hue=s=0' -c:v libx264 -preset ultrafast -crf 30 -pix_fmt yuv420p $movie
+Note "flash probe movie: grey testsrc2, $([math]::Round((Get-Item $movie).Length / 1KB)) KB"
 $url = ([Uri]$movie).AbsoluteUri
 $p = Start-Process -FilePath $exe -ArgumentList "--play=$url" -PassThru
 $hw = WaitWin $p 'Zephyr Player' 30
