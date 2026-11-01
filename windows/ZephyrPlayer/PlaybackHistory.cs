@@ -56,6 +56,19 @@ namespace ZephyrPlayer
                 catch { } // An unreadable/removable library must not interrupt playback.
             }
         }
+        /// <summary>2.0.2: where a library start picks up. The saved spot, unless it is in the
+        /// first 10 seconds (nothing worth resuming) or past 95 % of the movie (the end or the
+        /// credits: start from 0:00 instead). Null means start from the beginning.</summary>
+        internal static long? ResumeSeconds(Item? item)
+        {
+            if (item == null || item.DurationMs <= 0) return null;
+            if (item.PositionMs < ResumeMinMs) return null;
+            if (item.PositionMs >= item.DurationMs * ResumeNearEndFraction) return null;
+            return item.PositionMs / 1000;
+        }
+        internal const long ResumeMinMs = 10_000;
+        internal const double ResumeNearEndFraction = 0.95;
+
         internal static string DurationLabel(long ms) => ms <= 0 ? "" : ms >= 3600000
             ? $"{ms / 3600000}:{ms / 60000 % 60:00}:{ms / 1000 % 60:00}"
             : $"{ms / 60000}:{ms / 1000 % 60:00}";

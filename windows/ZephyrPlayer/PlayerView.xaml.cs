@@ -197,6 +197,7 @@ namespace ZephyrPlayer
         {
             SwitchTrace.Mark("stop.begin");
             ++_playGeneration; _preparation?.Cancel();
+            HideResumeNotice();
             DropEndOfMovieSleep();
             DetachNativeStart();
             EndLoading();
@@ -216,9 +217,9 @@ namespace ZephyrPlayer
 
         /// <summary>Local (library) start. Failure handling lives in the shared
         /// PlayFromUrlAsync path, so nothing is left to do here.</summary>
-        public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles)
+        public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
         {
-            try { await PlayFromUrlAsync(url,positionSeconds,subtitles); }
+            try { await PlayFromUrlAsync(url,positionSeconds,subtitles,offerStartOver); }
             catch { }
         }
 
@@ -226,9 +227,12 @@ namespace ZephyrPlayer
         /// A failure of the CURRENT start ends loading and shows the error surface
         /// before the exception reaches the caller (PlaybackServer answers 400/408).
         /// A start that was superseded or stopped never touches the newer state.</summary>
-        public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
+        public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
         {
             var generation=++_playGeneration;
+            // 2.0.2: a library resume says so with Start over; any other start drops that notice.
+            HideResumeNotice();
+            _startOverGeneration = offerStartOver ? generation : 0;
             DropEndOfMovieSleep(); // a new start leaves the movie "End of this movie" was set on
             // "Try again" on the error state re-runs exactly this start (item 68).
             _lastStart = (url, positionSeconds, (string[])subtitles.Clone());
@@ -586,7 +590,10 @@ namespace ZephyrPlayer
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
             if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
+            {
                 _player.Time = positionSeconds.Value * 1000;
+                if (_startOverGeneration == generation) ShowResumeNotice(positionSeconds.Value);
+            }
             _clock.Start();
             // Phone-started playback shows the bar once (review blocker 3): the PC
             // mouse may never move, so the idle timer alone can't reveal it.
@@ -1420,6 +1427,59 @@ namespace ZephyrPlayer
             if (ReferenceEquals(_openPopup, SubtitlesPopup)) BuildSubtitleRows();
         }
 
+        // ---------- 2.0.2: "Resumed from 42:10 · Start over" ----------
+
+        /// <summary>How long the resume notice stays before it fades (it also leaves on Start
+        /// over, a new start, Back or stop).</summary>
+        internal static TimeSpan ResumeNoticeTime = TimeSpan.FromSeconds(8);
+        private int _startOverGeneration;
+        private DispatcherTimer? _resumeTimer;
+        /// <summary>Test seam: the position the current start resumed from (null: none shown).</summary>
+        internal long? ResumedFromSeconds { get; private set; }
+        internal bool IsResumeNoticeShown => ResumeNotice.Visibility == Visibility.Visible;
+        internal int StartOverCount { get; private set; }
+
+        private void ShowResumeNotice(long seconds)
+        {
+            ResumedFromSeconds = seconds;
+            ResumeText.Text = "Resumed from " + Format(seconds * 1000);
+            ResumeNotice.BeginAnimation(OpacityProperty, null);
+            ResumeNotice.Opacity = 1;
+            ResumeNotice.Visibility = Visibility.Visible;
+            _resumeTimer?.Stop();
+            _resumeTimer = new DispatcherTimer { Interval = ResumeNoticeTime };
+            _resumeTimer.Tick += (_, __) =>
+            {
+                _resumeTimer?.Stop();
+                var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(300));
+                fade.Completed += (_, ___) => { if (ResumeNotice.Opacity <= 0.01) HideResumeNotice(); };
+                ResumeNotice.BeginAnimation(OpacityProperty, fade);
+            };
+            _resumeTimer.Start();
+        }
+
+        private void HideResumeNotice()
+        {
+            _resumeTimer?.Stop();
+            _resumeTimer = null;
+            ResumedFromSeconds = null;
+            ResumeNotice.BeginAnimation(OpacityProperty, null);
+            ResumeNotice.Opacity = 1;
+            ResumeNotice.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>Start over: back to 0:00 in the same start (no reopen).</summary>
+        internal void StartOver()
+        {
+            HideResumeNotice();
+            StartOverCount++;
+            _player.Time = 0;
+            if (_player.Length > 0) _history.Save(_currentSource, 0, _player.Length);
+            UpdatePosition();
+        }
+
+        private void OnStartOver(object sender, RoutedEventArgs e) => StartOver();
+
         private void ShowOsd(string text)
         {
             OsdText.Text = text;
@@ -1907,6 +1967,9 @@ namespace ZephyrPlayer
                 ["pill_drawn_width"] = Math.Round(PillDrawnWidth, 1),
                 ["reflow"] = _reflowLevel,
                 ["last_seek_fraction"] = Math.Round(LastSeekFraction, 4),
+                ["resume_notice"] = IsResumeNoticeShown,
+                ["resumed_from"] = ResumedFromSeconds,
+                ["start_over_count"] = StartOverCount,
             };
         }
     }

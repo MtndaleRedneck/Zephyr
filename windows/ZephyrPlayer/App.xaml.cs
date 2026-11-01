@@ -198,8 +198,11 @@ namespace ZephyrPlayer
                 playLocal: url =>
                 {
                     ShowPlayer();
+                    // 2.0.2: a library movie picks up where it was left (the spot its tile's
+                    // bar shows), with Start over on screen. Phone starts are unchanged.
+                    var resume = PlaybackHistory.ResumeSeconds(new PlaybackHistory().Get(url));
                     // P0-3: local movies bring their own sidecar subtitles along.
-                    _player!.PlayFromUrl(url, null, SafeMediaSource.LocalSidecars(url));
+                    _player!.PlayFromUrl(url, resume, SafeMediaSource.LocalSidecars(url), offerStartOver: resume.HasValue);
                 },
                 openPairing: ShowPairingWindow,
                 openSettings: OpenSettings);

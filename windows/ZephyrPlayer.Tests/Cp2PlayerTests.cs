@@ -208,6 +208,62 @@ namespace ZephyrPlayer.Tests
             });
         }
 
+        // ---------- 2.0.2: library resume with Start over ----------
+
+        [Fact]
+        public void LibraryResume_ShowsResumedFrom_StartOverGoesBackToZero_PhoneStartShowsNothing()
+        {
+            WithPlayer((view, player, settings, host) =>
+            {
+                // A library resume (offerStartOver): the movie picks up at 0:02 and says so.
+                var start = view.PlayFromUrlAsync(ClipUrl, 2, Array.Empty<string>(), offerStartOver: true);
+                PumpUntil(() => start.IsCompleted, "start did not complete");
+                start.GetAwaiter().GetResult();
+                PumpUntil(() => player.State == VLCState.Playing, "clip did not play");
+                Assert.True(view.IsResumeNoticeShown, "no resume notice after a library resume");
+                Assert.Equal(2L, view.ResumedFromSeconds);
+                Assert.Equal("Resumed from 0:02", El<TextBlock>(view, "ResumeText").Text);
+                var button = El<Button>(view, "StartOverButton");
+                Assert.Equal("Start over", button.Content);
+                PumpUntil(() => player.Time >= 1500, $"the resume did not seek (time {player.Time} ms)", 4000);
+
+                // Start over: back to 0:00 in the same start, notice gone.
+                var media = view.CurrentMedia;
+                Click(view, "StartOverButton");
+                Assert.False(view.IsResumeNoticeShown);
+                Assert.Equal(1, view.StartOverCount);
+                Assert.Same(media, view.CurrentMedia);
+                PumpUntil(() => player.Time >= 0 && player.Time < 1500, $"Start over did not go back to the start (time {player.Time} ms)", 4000);
+                var afterStartOver = player.Time;
+
+                // A phone start with a position (unchanged behaviour): no notice.
+                var phone = view.PlayFromUrlAsync(ClipUrl, 2, Array.Empty<string>());
+                PumpUntil(() => phone.IsCompleted, "phone start did not complete");
+                PumpUntil(() => player.State == VLCState.Playing, "phone start did not play");
+                Assert.False(view.IsResumeNoticeShown, "a phone start showed the library resume notice");
+                Assert.Null(view.ResumedFromSeconds);
+
+                // The notice leaves on its own after its time.
+                var old = PlayerView.ResumeNoticeTime;
+                PlayerView.ResumeNoticeTime = TimeSpan.FromMilliseconds(400);
+                try
+                {
+                    var again = view.PlayFromUrlAsync(ClipUrl, 2, Array.Empty<string>(), offerStartOver: true);
+                    PumpUntil(() => again.IsCompleted, "third start did not complete");
+                    Assert.True(view.IsResumeNoticeShown);
+                    PumpUntil(() => !view.IsResumeNoticeShown, "the resume notice never left on its own", 4000);
+                    // Stop drops it too.
+                    var fourth = view.PlayFromUrlAsync(ClipUrl, 2, Array.Empty<string>(), offerStartOver: true);
+                    PumpUntil(() => fourth.IsCompleted, "fourth start did not complete");
+                    Assert.True(view.IsResumeNoticeShown);
+                    view.StopPlaybackSource();
+                    Assert.False(view.IsResumeNoticeShown, "the resume notice outlived stop");
+                }
+                finally { PlayerView.ResumeNoticeTime = old; }
+                Note("202-library-resume", $"resumed from 2 s: notice shown, Start over -> {afterStartOver} ms, phone start: no notice, auto-hide and stop: hidden");
+            });
+        }
+
         // ---------- speed ----------
 
         [Fact]
