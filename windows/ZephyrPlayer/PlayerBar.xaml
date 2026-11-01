@@ -11,11 +11,26 @@
             <ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </UserControl.Resources>
+    <Grid>
+        <!-- 2.0.1 (Ezzy: "Everything looks low res"): the drop shadow and the glass fill
+             live on their own layer UNDER the bar. A WPF Effect on the bar itself rendered
+             every label and glyph in it through an offscreen bitmap (soft, no ClearType).
+             This layer follows the bar's size, place, corners and fade. -->
+        <Border x:Name="BarShadow" IsHitTestVisible="False" Background="#BD0C0C0F"
+                CornerRadius="{Binding CornerRadius, ElementName=ControlBar}"
+                Margin="{Binding Margin, ElementName=ControlBar}"
+                HorizontalAlignment="{Binding HorizontalAlignment, ElementName=ControlBar}"
+                VerticalAlignment="{Binding VerticalAlignment, ElementName=ControlBar}"
+                Width="{Binding ActualWidth, ElementName=ControlBar}"
+                Height="{Binding ActualHeight, ElementName=ControlBar}"
+                Opacity="{Binding Opacity, ElementName=ControlBar}"
+                Visibility="{Binding Visibility, ElementName=ControlBar}">
+            <Border.Effect><DropShadowEffect BlurRadius="50" ShadowDepth="18" Direction="270" Opacity="0.55" Color="Black"/></Border.Effect>
+        </Border>
         <Border x:Name="ControlBar" x:FieldModifier="internal"
                 VerticalAlignment="Bottom" Margin="20" Padding="18,10,18,9" CornerRadius="16"
-                Background="#BD0C0C0F" BorderBrush="#16FFFFFF" BorderThickness="1" Opacity="0"
-               >
-            <Border.Effect><DropShadowEffect BlurRadius="50" ShadowDepth="18" Direction="270" Opacity="0.55" Color="Black"/></Border.Effect>
+                Background="Transparent" BorderBrush="#16FFFFFF" BorderThickness="1" Opacity="0"
+                UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="16"/>
@@ -144,4 +159,5 @@
                 </Grid>
             </Grid>
         </Border>
+    </Grid>
 </UserControl>

@@ -395,7 +395,11 @@ namespace ZephyrPlayer.Tests
             if (OperatingSystem.IsWindows())
             {
                 Assert.Equal(new[] { "D:" }, HomeView.RootPrefix(@"D:\Movies"));
-                Assert.Equal(new[] { "C:", "..." }, HomeView.RootPrefix(@"C:\Users\me\Videos\Movies"));
+                Assert.Equal(new[] { "C:", "Users", "me", "Videos" }, HomeView.RootPrefix(@"C:\Users\me\Videos\Movies")); // 2.0.1: the whole path
+                // 2.0.1: only a trail too wide for the row folds its middle into "...".
+                Assert.Equal(new[] { 0, 1, 2, 3, 4 }, HomeView.FoldPlan(new double[] { 40, 60, 50, 70, 80 }, 30, 1000));
+                Assert.Equal(new[] { 0, -1, 3, 4 }, HomeView.FoldPlan(new double[] { 40, 60, 50, 70, 80 }, 30, 230));
+                Assert.Equal(new[] { 0, -1, 4 }, HomeView.FoldPlan(new double[] { 40, 60, 50, 70, 80 }, 30, 160));
             }
         }
 

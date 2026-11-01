@@ -8,7 +8,7 @@ using Xunit;
 namespace ZephyrPlayer.Tests {
  public class RedesignRenderTests {
   [Theory]
-  [InlineData(900,600,96)] [InlineData(900,600,120)] [InlineData(900,600,144)] [InlineData(900,600,192)]
+  [InlineData(900,650,96)] [InlineData(900,650,120)] [InlineData(900,650,144)] [InlineData(900,650,192)]
   public void Settings_All_Sections_Render(int width,int height,int dpi) {
    Exception? error=null;var thread=new Thread(()=>{
     try {
@@ -18,8 +18,9 @@ namespace ZephyrPlayer.Tests {
      // The app sets the factory (the panel needs the shared gate); the render does the same.
      var prevFactory=SettingsWindow.PairingFactory;SettingsWindow.PairingFactory=()=>new PairingPanel(new PairingGate(),pairs,_=>{});
      SettingsWindow window;try{window=new SettingsWindow(settings,pairs);}finally{SettingsWindow.PairingFactory=prevFactory;}
-     // CP3 item 69: the compact window is 900x600, not resizable.
-     Assert.Equal(900,window.Width);Assert.Equal(600,window.Height);Assert.Equal(ResizeMode.NoResize,window.ResizeMode);
+     // CP3 item 69: compact, not resizable. 2.0.1: 650 tall so no section scrolls for a
+     // few pixels (Ezzy, Nov 1: "Scroll bar for basically nothing").
+     Assert.Equal(900,window.Width);Assert.Equal(650,window.Height);Assert.Equal(ResizeMode.NoResize,window.ResizeMode);
      Assert.Equal("Zephyr Settings",window.Title);
      foreach(var section in new[]{"volume","skip","bar","remote","feedback","updates"}) {
       window.SelectSection(section);
@@ -29,6 +30,11 @@ namespace ZephyrPlayer.Tests {
       var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(image));
       using(var file=File.Create(Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP")??Path.GetTempPath(),$"pc-redesign-{section}-{width}-{dpi}.png")))png.Save(file);
       Assert.True(root.ActualWidth>0);
+      // 2.0.1: the fixed-size sections fit without a scroll bar at every DPI.
+      if(section is "volume" or "skip" or "bar" or "updates"){
+       var scroll=(System.Windows.Controls.ScrollViewer)window.FindName("SectionScroll");
+       Assert.True(scroll.ScrollableHeight<=0.5,$"{section} at {dpi} dpi scrolls {scroll.ScrollableHeight:0.#} px for nothing");
+      }
      }
      window.Close();
     }catch(Exception ex){error=ex;}finally{System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();}

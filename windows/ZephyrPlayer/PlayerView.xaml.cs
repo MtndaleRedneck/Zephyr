@@ -157,7 +157,7 @@ namespace ZephyrPlayer
             // Remembered volume restored on open: the player's own 0-100 %, with the
             // Settings boost (100-200 %) applied on top as extra decoder gain.
             _volumeSync = true;
-            VolumeSlider.Value = _settings.LastVolume;
+            VolumeSlider.Value = _settings.StartVolume;
             _volumeSync = false;
             ApplyPlayerGain();
             ApplyBarStyle();
@@ -1625,7 +1625,7 @@ namespace ZephyrPlayer
             HomeButton.Tag = new SolidColorBrush(fs ? Color.FromArgb(0x8C, 20, 20, 24) : Color.FromArgb(0x14, 255, 255, 255));
             HomeButton.BorderBrush = new SolidColorBrush(Color.FromArgb(0x14, 255, 255, 255));
             HomeButton.BorderThickness = new Thickness(fs ? 1 : 0);
-            TitleShadow.Opacity = fs ? 0.6 : 0;
+            MovieTitle.Effect = fs ? new System.Windows.Media.Effects.DropShadowEffect { BlurRadius = 4, ShadowDepth = 1, Direction = 270, Opacity = 0.6, Color = Colors.Black } : null;
             MovieMeta.Visibility = fs ? Visibility.Collapsed : Visibility.Visible;
             BottomGradient.Visibility = fs && !_errorShown ? Visibility.Visible : Visibility.Collapsed;
             // Centre cluster: 44/46/50 px, gap 14, Play margin 0 8 (windowed) or 40/42/46,

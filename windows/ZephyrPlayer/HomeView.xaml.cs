@@ -176,25 +176,49 @@ namespace ZephyrPlayer
             // Phone pill: phone name + green dot + "Connected" (render 01); grey dot otherwise.
             var entries = _store.Entries().ToList();
             var active = entries.FirstOrDefault(e => _store.IsConnected(e.Token));
-            PhoneCardName.Text = active?.Name ?? (paired > 0 ? entries[0].Name : "No phone");
-            PhoneCardStatus.Text = active != null ? "Connected" : paired > 0 ? "Not connected" : "Not paired";
+            // One pill for phones (2.0.1): with nothing paired it IS the pair button.
+            PhoneCardName.Text = active?.Name ?? (paired > 0 ? entries[0].Name : "Pair a phone");
+            PhoneCardStatus.Text = active != null ? "Connected" : paired > 0 ? "Not connected" : "";
             PhoneConnectedDot.Fill = active != null ? ConnectedDot : IdleDot;
-            PhoneCard.ToolTip = paired > 0 ? "Paired phones" : "Pair a phone";
+            PhoneConnectedDot.Visibility = paired > 0 ? Visibility.Visible : Visibility.Collapsed;
+            PhoneCardStatus.Visibility = paired > 0 ? Visibility.Visible : Visibility.Collapsed;
+            PhoneCard.ToolTip = paired > 0 ? "Paired phones: connect, add or remove" : "Pair a phone";
         }
 
         // ---------- breadcrumb ----------
 
-        /// <summary>Path parts shown before the library root: the drive, then "..." when
-        /// the root sits deeper (render 01 reads "D: > Movies"). Pure, for tests.</summary>
+        /// <summary>Every real folder above the library root, drive first
+        /// (C:\Users\Ezzy\Videos\Movies gives C:, Users, Ezzy, Videos). 2.0.1: the
+        /// whole path is shown (Ezzy, Nov 1: "Should show path"); the bar only folds the
+        /// middle into "..." when it would not fit (FitBreadcrumb). Pure, for tests.</summary>
         internal static string[] RootPrefix(string folder)
         {
             var trimmed = folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             var parent = Path.GetDirectoryName(trimmed);
             if (string.IsNullOrEmpty(parent)) return Array.Empty<string>();
-            var drive = Path.GetPathRoot(trimmed)?.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) ?? "";
-            var parentTrim = parent.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            if (drive.Length == 0) return new[] { "..." };
-            return parentTrim.Equals(drive, StringComparison.OrdinalIgnoreCase) ? new[] { drive } : new[] { drive, "..." };
+            var root = Path.GetPathRoot(trimmed) ?? "";
+            var drive = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var rest = parent.Length > root.Length ? parent.Substring(root.Length) : "";
+            var parts = new List<string>();
+            if (drive.Length > 0) parts.Add(drive);
+            parts.AddRange(rest.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries));
+            return parts.ToArray();
+        }
+
+        /// <summary>Which crumbs to show when the full trail is too wide: indices of
+        /// the parts kept, in order, with -1 standing for one "..." (first part, the
+        /// ellipsis, then as many trailing parts as fit). Pure, for tests.</summary>
+        internal static int[] FoldPlan(double[] widths, double ellipsisWidth, double available)
+        {
+            var n = widths.Length;
+            var all = Enumerable.Range(0, n).ToArray();
+            if (n <= 2 || widths.Sum() <= available) return all;
+            // Keep the first part and the last part always; add trailing parts while they fit.
+            var used = widths[0] + ellipsisWidth + widths[n - 1];
+            var keepFrom = n - 1;
+            while (keepFrom - 1 > 1 && used + widths[keepFrom - 1] <= available) { keepFrom--; used += widths[keepFrom]; }
+            if (keepFrom <= 1) return all;
+            return new[] { 0, -1 }.Concat(Enumerable.Range(keepFrom, n - keepFrom)).ToArray();
         }
 
         private System.Windows.Controls.Viewbox Chevron() => new()
@@ -206,6 +230,9 @@ namespace ZephyrPlayer
                 Children = { new System.Windows.Shapes.Path { Data = Geometry.Parse("M 9 6 l 6 6 -6 6"), Stroke = new SolidColorBrush(Color.FromRgb(0x5C, 0x5C, 0x66)), StrokeThickness = 1.6, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round } },
             },
         };
+
+        private readonly List<FrameworkElement> _crumbParts = new();
+        private string _crumbFolder = "";
 
         private void BuildBreadcrumb(string folder)
         {
@@ -219,13 +246,10 @@ namespace ZephyrPlayer
                 rel = rel.Length == 0 ? part : rel + "/" + part;
                 crumbs.Add(new Crumb(part, rel));
             }
-            Breadcrumb.Items.Clear();
-            var first = true;
+            _crumbParts.Clear();
             foreach (var prefix in RootPrefix(folder))
             {
-                if (!first) Breadcrumb.Items.Add(Chevron());
-                first = false;
-                Breadcrumb.Items.Add(new System.Windows.Controls.TextBlock
+                _crumbParts.Add(new System.Windows.Controls.TextBlock
                 {
                     Text = prefix, Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0x9C, 0xA6)), FontSize = 13.5,
                     VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0),
@@ -233,13 +257,63 @@ namespace ZephyrPlayer
             }
             for (var i = 0; i < crumbs.Count; i++)
             {
-                if (!first) Breadcrumb.Items.Add(Chevron());
-                first = false;
                 var crumb = crumbs[i];
                 var b = new System.Windows.Controls.Button { Content = crumb.Label, Style = (Style)FindResource("CrumbButton"), Tag = i == crumbs.Count - 1 ? "current" : null };
                 b.Click += (_, __) => NavigateTo(crumb.Rel, pushHistory: true);
-                Breadcrumb.Items.Add(b);
+                _crumbParts.Add(b);
             }
+            var full = folder.TrimEnd(Path.DirectorySeparatorChar);
+            if (_currentRel.Length > 0) full = Path.Combine(full, _currentRel.Replace('/', Path.DirectorySeparatorChar));
+            _crumbFolder = full;
+            Breadcrumb.ToolTip = full;
+            FitBreadcrumb();
+        }
+
+        /// <summary>Lays the trail out in full, or folds the middle into one "..."
+        /// when the command row has no room (2.0.1). Re-run on every size change.</summary>
+        private void FitBreadcrumb()
+        {
+            if (Breadcrumb == null) return;
+            Breadcrumb.Items.Clear();
+            if (_crumbParts.Count == 0) return;
+            var inf = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            var chevron = Chevron(); chevron.Measure(inf);
+            var chevronW = chevron.DesiredSize.Width + chevron.Margin.Left + chevron.Margin.Right;
+            var widths = _crumbParts.Select(p => { p.Measure(inf); return p.DesiredSize.Width + chevronW; }).ToArray();
+            var dots = MakeDots(); dots.Measure(inf);
+            var plan = FoldPlan(widths, dots.DesiredSize.Width + chevronW, BreadcrumbRoom());
+            var first = true;
+            foreach (var idx in plan)
+            {
+                if (!first) Breadcrumb.Items.Add(Chevron());
+                first = false;
+                Breadcrumb.Items.Add(idx < 0 ? MakeDots() : _crumbParts[idx]);
+            }
+        }
+
+        private System.Windows.Controls.TextBlock MakeDots() => new()
+        {
+            Text = "...", Foreground = new SolidColorBrush(Color.FromRgb(0x9C, 0x9C, 0xA6)), FontSize = 13.5,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0), ToolTip = _crumbFolder,
+        };
+
+        /// <summary>Width the trail may use: the command row minus every other control in it.</summary>
+        private double BreadcrumbRoom()
+        {
+            if (CommandRow == null || CommandRow.ActualWidth <= 0) return double.PositiveInfinity;
+            double others = 0;
+            foreach (UIElement c in CommandRow.Children)
+            {
+                if (ReferenceEquals(c, Breadcrumb) || c.Visibility == Visibility.Collapsed || c is not FrameworkElement fe) continue;
+                c.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                others += c.DesiredSize.Width; // DesiredSize includes the margin
+            }
+            return Math.Max(120, CommandRow.ActualWidth - others - 24);
+        }
+
+        private void OnCommandRowSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5) FitBreadcrumb();
         }
 
         // ---------- entries ----------
@@ -383,14 +457,26 @@ namespace ZephyrPlayer
                         if (img == null)
                         {
                             var full = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
+                            // 2.0.1: folder artwork first, then Windows' thumbnail, then our own
+                            // libVLC frame (cached) - Windows has none for most MKVs.
                             if (entry.Dir)
                             {
-                                var firstVideo = PeekFirstVideo(full);
-                                if (firstVideo != null) img = ShellThumbs.Get(firstVideo, 192);
+                                var art = VlcThumbs.FolderArt(full);
+                                if (art != null) img = VlcThumbs.LoadArt(art, 320);
+                                if (img == null)
+                                {
+                                    var firstVideo = PeekFirstVideo(full);
+                                    if (firstVideo != null)
+                                    {
+                                        img = ShellThumbs.Get(firstVideo, 256);
+                                        if (img == null && _loadDurations) img = VlcThumbs.Get(firstVideo, 320);
+                                    }
+                                }
                             }
                             else
                             {
                                 img = ShellThumbs.Get(full, 256);
+                                if (img == null && _loadDurations) img = VlcThumbs.Get(full, 320);
                             }
                         }
                     }
@@ -417,14 +503,14 @@ namespace ZephyrPlayer
                     {
                         if (generation != _thumbGeneration) return;
                         var path = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
-                        if (_history.Get(path) != null) continue;
+                        if (_history.Get(path) is { DurationMs: > 0 }) continue; // 2.0.1: a saved spot with no length still gets its badge
                         try
                         {
                             using var safe = new SafeMediaSource(vlc, new Uri(path).AbsoluteUri);
                             var media = safe.Media;
                             // Keep native release on this worker, never on LibVLC's ParsedChanged
                             // callback thread (Parse's completion can run continuations inline).
-                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500).GetAwaiter().GetResult(); }
+                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 5000).GetAwaiter().GetResult(); }
                             finally { media.ParseStop(); }
                             var duration = media.Duration;
                             if (duration <= 0) continue;

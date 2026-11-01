@@ -132,7 +132,7 @@ namespace ZephyrPlayer.Tests
                 // The pill (render 03): the bar laid out at up to 1000 px and drawn at 0.78,
                 // i.e. 780 px at most, and never wider than the screen minus 2 x 24 (U2).
                 Assert.True(window.ControlBar.Width <= 1000.001, "pill layout wider than 1000");
-                Assert.Equal(0.78, ((ScaleTransform)window.ControlBar.LayoutTransform).ScaleX, 3);
+                Assert.Equal(1.0, ((ScaleTransform)window.ControlBar.LayoutTransform).ScaleX, 3); // 2.0.1: drawn 1:1, not shrunk
                 Assert.True(window.PillDrawnWidth <= 780.001 && window.PillDrawnWidth <= SystemParameters.PrimaryScreenWidth - 48 + 0.001, "pill not clamped: " + window.PillDrawnWidth);
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;

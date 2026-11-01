@@ -1,0 +1,74 @@
+name: PC 2.0.1 proof
+
+# Focused evidence for Ezzy's Nov 1 list (Zephyr PC 2.0.1): the new/changed unit and
+# render tests, then a real-desktop run of the hooked CI build on a real library of
+# H.264 and HEVC MKVs (thumbnails, path bar, phone pill, Settings scroll, full-screen
+# flash sampling). Manual only. The full release gate stays windows.yml.
+# app_ref: build the PLAYER from another ref (e.g. the 2.0.0 tag commit) with this
+# branch's proof script, to show the same checks against the old code.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: 'Build windows/ZephyrPlayer from this ref instead (baseline); empty = this commit'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pc-201-proof-${{ github.ref }}-${{ inputs.app_ref }}
+  cancel-in-progress: false
+
+jobs:
+  proof:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - name: Baseline player source (only when app_ref is set)
+        if: ${{ inputs.app_ref != '' }}
+        shell: pwsh
+        run: |
+          git checkout ${{ inputs.app_ref }} -- windows/ZephyrPlayer
+          git log -1 --format='baseline player source from %H %s' ${{ inputs.app_ref }}
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Install ffmpeg (builds the real MKV library)
+        run: choco install ffmpeg --no-progress -y
+      - name: Focused tests (2.0.1 items + render evidence at 96/120/144/192 dpi)
+        if: ${{ inputs.app_ref == '' }}
+        id: tests
+        timeout-minutes: 15
+        run: >
+          dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
+          --filter "FullyQualifiedName~VlcThumbs|FullyQualifiedName~RedesignRender|FullyQualifiedName~Cp1Shell|FullyQualifiedName~SkipPairUi|FullyQualifiedName~Cp2Player|FullyQualifiedName~HomeWindowRender|FullyQualifiedName~Ver201"
+          --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
+          --logger "trx;LogFileName=proof-tests.trx"
+          --logger "console;verbosity=normal"
+      - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
+        if: always()
+        timeout-minutes: 10
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+      - name: Real-desktop proof (real MKVs, full-screen flash sampling)
+        if: always()
+        timeout-minutes: 12
+        shell: pwsh
+        run: scripts/pc_201_proof.ps1 -Label "${{ inputs.app_ref != '' && format('baseline {0}', inputs.app_ref) || format('candidate {0}', github.sha) }}"
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pc-201-proof${{ inputs.app_ref != '' && '-baseline' || '' }}
+          path: |
+            ${{ runner.temp }}/proof201/
+            ${{ runner.temp }}/pc-redesign-*.png
+            ${{ runner.temp }}/thumb-*.png
+            ${{ runner.temp }}/ver201-*.png
+            windows/ZephyrPlayer.Tests/TestResults/
+          if-no-files-found: warn

@@ -129,6 +129,17 @@ namespace ZephyrPlayer
             set { Write(d => d with { LastVolume = Math.Clamp(value, 0, 100) }); }
         }
 
+        /// <summary>2.0.1 (Ezzy: "Why is this a box?"): the Volume card is a real switch.
+        /// On (default, the 2.0.0 behaviour) = open at the last volume; off = always 100 %.</summary>
+        public bool RememberVolume
+        {
+            get { lock (_lock) return Read().RememberVolume ?? true; }
+            set { Write(d => d with { RememberVolume = value }); }
+        }
+
+        /// <summary>The volume a new player starts at.</summary>
+        public int StartVolume => RememberVolume ? LastVolume : 100;
+
         public string LibrarySort
         {
             get { lock (_lock) return Read().LibrarySort == "created" ? "created" : "name"; }
@@ -167,7 +178,8 @@ namespace ZephyrPlayer
             bool? ButtonFlash = null,
             string? ShellBounds = null,
             bool? AnimateOnPress = null,
-            string? SubtitleSize = null);
+            string? SubtitleSize = null,
+            bool? RememberVolume = null);
 
         private bool _readFailed;
         private Data? _lastGood;

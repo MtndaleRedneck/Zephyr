@@ -36,9 +36,11 @@ namespace ZephyrPlayer
 
         // ---------- fullscreen pill (render 03, Instinct U2) ----------
 
-        /// <summary>The pill is the windowed bar laid out at up to 1000 px and drawn at 0.78:
-        /// at most 780 px wide, never wider than the screen minus a 24 px gap each side.</summary>
-        public const double PillScale = 0.78, PillLayoutMax = 1000, PillSideGap = 24, PillBottom = 28;
+        /// <summary>The pill: at most 780 px wide, never wider than the screen minus a 24 px
+        /// gap each side. 2.0.1: laid out at that width and drawn at 1:1. 2.0.0 laid it out
+        /// at 1000 px and shrank it to 0.78, which drew 12 px text at ~9 px (part of Ezzy's
+        /// "everything looks low res"). Same footprint, crisp text and glyphs.</summary>
+        public const double PillScale = 1.0, PillLayoutMax = 780, PillSideGap = 24, PillBottom = 28;
         public static double PillDrawnWidth(double viewport) => Math.Max(0, Math.Min(PillLayoutMax * PillScale, viewport - 2 * PillSideGap));
         public static double PillLayoutWidth(double viewport) => PillDrawnWidth(viewport) / PillScale;
 

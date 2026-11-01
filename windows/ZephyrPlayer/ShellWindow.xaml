@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Zephyr Player" Icon="/ZephyrPlayer;component/assets/icon.ico"
         Width="1600" Height="1000" MinWidth="760" MinHeight="480"
-        Background="#060607" ResizeMode="CanResize" WindowStartupLocation="Manual">
+        Background="#060607" ResizeMode="CanResize" WindowStartupLocation="Manual"
+        TextOptions.TextFormattingMode="Display" UseLayoutRounding="True">
     <!-- The ONE top-level window of the app (2.0, P0-1/P0-2). Library and player are
          views swapped in place inside ViewHost; nothing hides one window to show another. -->
     <WindowChrome.WindowChrome>
@@ -47,22 +48,25 @@
             <RowDefinition x:Name="CaptionRow" Height="32"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
-        <!-- Caption bar 32 px #0A0A0C: icon 18 px + "Zephyr Player" 12 px Medium #C9C9D1 (render 01). -->
+        <!-- Caption bar 32 px #0A0A0C: icon + "Zephyr Player" 12 px Medium #C9C9D1 (render 01).
+             2.0.1 (Ezzy: "Weird icon"): the window buttons are Windows' own caption glyphs
+             (Segoe Fluent Icons, Segoe MDL2 Assets on Windows 10), hinted at every scale;
+             the hand-drawn 10 px restore glyph merged into one box at 100 %. -->
         <Border x:Name="CaptionBar" Background="#0A0A0C">
             <Grid>
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <Image x:Name="CaptionIcon" Width="18" Height="18" RenderOptions.BitmapScalingMode="HighQuality"/>
+                    <Image x:Name="CaptionIcon" Width="16" Height="16" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <TextBlock Text="Zephyr Player" Margin="10,0,0,0" FontSize="12" FontWeight="Medium" Foreground="#C9C9D1" VerticalAlignment="Center" FontFamily="Segoe UI Variable Text, Segoe UI"/>
                 </StackPanel>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button x:Name="MinimizeButton" Style="{StaticResource CaptionButton}" Click="OnMinimize" ToolTip="Minimize" AutomationProperties.AutomationId="CaptionMinimize">
-                        <Path Data="M0,5.5 H10" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" Width="10" Height="10" SnapsToDevicePixels="True"/>
+                        <TextBlock Text="&#xE921;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10" VerticalAlignment="Center" HorizontalAlignment="Center" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"/>
                     </Button>
                     <Button x:Name="MaximizeButton" Style="{StaticResource CaptionButton}" Click="OnMaximize" ToolTip="Maximize" AutomationProperties.AutomationId="CaptionMaximize">
-                        <Path x:Name="MaximizeGlyph" Data="M2,0.5 H8 A1.5,1.5 0 0 1 9.5,2 V8 A1.5,1.5 0 0 1 8,9.5 H2 A1.5,1.5 0 0 1 0.5,8 V2 A1.5,1.5 0 0 1 2,0.5 Z" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" Width="10" Height="10" SnapsToDevicePixels="True"/>
+                        <TextBlock x:Name="MaximizeGlyph" Text="&#xE922;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10" VerticalAlignment="Center" HorizontalAlignment="Center" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"/>
                     </Button>
                     <Button x:Name="CloseButton" Style="{StaticResource CloseCaptionButton}" Click="OnCloseButton" ToolTip="Close" AutomationProperties.AutomationId="CaptionClose">
-                        <Path Data="M0.5,0.5 L9.5,9.5 M9.5,0.5 L0.5,9.5" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" Width="10" Height="10"/>
+                        <TextBlock Text="&#xE8BB;" FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="10" VerticalAlignment="Center" HorizontalAlignment="Center" TextOptions.TextFormattingMode="Display" TextOptions.TextRenderingMode="ClearType"/>
                     </Button>
                 </StackPanel>
             </Grid>

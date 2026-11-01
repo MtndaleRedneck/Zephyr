@@ -31,7 +31,7 @@ namespace ZephyrPlayer
             InitializeComponent();
             _settings = settings;
             ZephyrPlayer.WindowChrome.ApplyDarkTitleBar(this);
-            CaptionIcon.Source = IconFrame(36);
+            BindCaptionIcon(this, CaptionIcon);
             SourceInitialized += (_, __) =>
             {
                 var source = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
@@ -462,9 +462,15 @@ namespace ZephyrPlayer
                 CaptionRow.Height = new GridLength(0);
                 CaptionBar.Visibility = Visibility.Collapsed;
                 if (chrome != null) { chrome.CaptionHeight = 0; chrome.ResizeBorderThickness = new Thickness(0); }
-                // Re-enter Maximized so Windows asks WM_GETMINMAXINFO again (monitor rect now).
-                if (WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
-                WindowState = WindowState.Maximized;
+                // 2.0.1 (Ezzy, Nov 1: "a flash when entering and exiting fullscreen"): 2.0.0
+                // went Maximized -> Normal -> Maximized here so Windows would re-ask
+                // WM_GETMINMAXINFO. The Normal step drew the window at its restored size for
+                // ~0.3 s (his video: the desktop shows round it). A maximized window now
+                // grows straight to the monitor rect and never leaves Maximized, and DWM's
+                // min/max animations are off for the switch.
+                SuppressTransitions(true);
+                if (WindowState != WindowState.Maximized) WindowState = WindowState.Maximized;
+                else if (!FitMaximizedTo(wholeMonitor: true)) { WindowState = WindowState.Normal; WindowState = WindowState.Maximized; }
             }
             else
             {
@@ -473,9 +479,13 @@ namespace ZephyrPlayer
                 CaptionRow.Height = new GridLength(32);
                 CaptionBar.Visibility = Visibility.Visible;
                 if (chrome != null) { chrome.CaptionHeight = 32; chrome.ResizeBorderThickness = new Thickness(6); }
-                WindowState = WindowState.Normal;
-                if (_stateBeforeFullscreen == WindowState.Maximized) WindowState = WindowState.Maximized;
+                SuppressTransitions(true);
+                if (_stateBeforeFullscreen != WindowState.Maximized) WindowState = WindowState.Normal;
+                else if (WindowState != WindowState.Maximized) WindowState = WindowState.Maximized;
+                else if (!FitMaximizedTo(wholeMonitor: false)) { WindowState = WindowState.Normal; WindowState = WindowState.Maximized; }
             }
+            // Animations back on once the switch has been drawn.
+            Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => SuppressTransitions(false)));
             UpdateChromeForState();
             MarkFullscreenForTaskbar(on);
             if (on) QueueDropWorkAreaRegion();
@@ -504,6 +514,44 @@ namespace ZephyrPlayer
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("taskbar fullscreen mark failed: " + ex.GetType().Name); }
         }
 
+        [DllImport("dwmapi.dll")] private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+        [DllImport("user32.dll", SetLastError = true)] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
+
+        /// <summary>DWMWA_TRANSITIONS_FORCEDISABLED for the duration of a full-screen switch:
+        /// no zoom animation that could show the desktop. Best effort.</summary>
+        private void SuppressTransitions(bool off)
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd == IntPtr.Zero) return;
+                int v = off ? 1 : 0;
+                DwmSetWindowAttribute(hwnd, 3 /* DWMWA_TRANSITIONS_FORCEDISABLED */, ref v, sizeof(int));
+            }
+            catch { }
+        }
+
+        /// <summary>Resize a MAXIMIZED window in place to the whole monitor (full screen) or
+        /// its work area (back to maximized), without leaving the maximized state, so no
+        /// frame ever shows the window at its restored size. False = could not (caller
+        /// falls back to the old state flip).</summary>
+        internal bool FitMaximizedTo(bool wholeMonitor)
+        {
+            try
+            {
+                var hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd == IntPtr.Zero) return false;
+                var monitor = MonitorFromWindow(hwnd, 2 /* MONITOR_DEFAULTTONEAREST */);
+                if (monitor == IntPtr.Zero) return false;
+                var info = new MONITORINFO { cbSize = Marshal.SizeOf<MONITORINFO>() };
+                if (!GetMonitorInfo(monitor, ref info)) return false;
+                var a = wholeMonitor ? info.rcMonitor : info.rcWork;
+                const uint flags = 0x0004 /* NOZORDER */ | 0x0010 /* NOACTIVATE */ | 0x0200 /* NOOWNERZORDER */ | 0x0020 /* FRAMECHANGED */;
+                return SetWindowPos(hwnd, IntPtr.Zero, a.Left, a.Top, a.Right - a.Left, a.Bottom - a.Top, flags);
+            }
+            catch { return false; }
+        }
+
         [ComImport, Guid("602D4995-B13A-429b-A66E-1935E44F4317"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
         private interface ITaskbarList2
         {
@@ -522,9 +570,7 @@ namespace ZephyrPlayer
         {
             var max = WindowState == WindowState.Maximized;
             MaximizeButton.ToolTip = max ? "Restore" : "Maximize";
-            MaximizeGlyph.Data = Geometry.Parse(max
-                ? "M2.5,2.5 H8.5 V8.5 H2.5 Z M2.5,1.5 V0.5 H9.5 V7.5 H8.5"
-                : "M2,0.5 H8 A1.5,1.5 0 0 1 9.5,2 V8 A1.5,1.5 0 0 1 8,9.5 H2 A1.5,1.5 0 0 1 0.5,8 V2 A1.5,1.5 0 0 1 2,0.5 Z");
+            MaximizeGlyph.Text = max ? "\uE923" /* ChromeRestore */ : "\uE922" /* ChromeMaximize */;
         }
 
         private void OnMinimize(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -593,6 +639,24 @@ namespace ZephyrPlayer
         }
 
         // ---------- icon frame (the approved .ico, picked at the size it is drawn) ----------
+
+        /// <summary>2.0.1: the caption icon uses the .ico frame made for the screen's exact
+        /// pixel size (16 DIP: 16 px at 100 %, 24 at 150 %, 32 at 200 %), refreshed when the
+        /// window moves to a monitor with another scale. 2.0.0 squeezed the 40 px frame
+        /// into 18 px, which blurs.</summary>
+        internal static void BindCaptionIcon(Window w, System.Windows.Controls.Image img)
+        {
+            void Apply()
+            {
+                double scale = 1;
+                try { scale = VisualTreeHelper.GetDpi(w).DpiScaleX; } catch { }
+                var src = IconFrame((int)Math.Round(16 * Math.Max(1, scale)));
+                if (src != null) img.Source = src;
+            }
+            Apply();
+            w.Loaded += (_, __) => Apply();
+            w.DpiChanged += (_, __) => Apply();
+        }
 
         internal static ImageSource? IconFrame(int pixels)
         {

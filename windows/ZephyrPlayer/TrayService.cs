@@ -23,14 +23,41 @@ namespace ZephyrPlayer
         public event Action? OpenRequested;
         public event Action? QuitRequested;
 
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern uint GetDpiForSystem();
+        [System.Runtime.InteropServices.DllImport("user32.dll")] private static extern int GetSystemMetricsForDpi(int index, uint dpi);
+
+        /// <summary>The app icon at the notification area's real pixel size (SM_CXSMICON at
+        /// the system DPI: 16 px at 100 %, 24 at 150 %, 32 at 200 %). Null = fall back.</summary>
+        internal static System.Drawing.Icon? TrayIconForDpi()
+        {
+            try
+            {
+                uint dpi = 96;
+                try { dpi = GetDpiForSystem(); } catch { }
+                int size;
+                try { size = GetSystemMetricsForDpi(49 /* SM_CXSMICON */, dpi); } catch { size = 0; }
+                if (size <= 0) size = (int)Math.Round(16 * dpi / 96.0);
+                var info = Application.GetResourceStream(new Uri("pack://application:,,,/ZephyrPlayer;component/assets/icon.ico"));
+                if (info == null) return null;
+                using var stream = info.Stream;
+                return new System.Drawing.Icon(stream, size, size);
+            }
+            catch { return null; }
+        }
+
         public TrayService()
         {
             _icon = new TaskbarIcon
             {
-                IconSource = new BitmapImage(new Uri("pack://application:,,,/assets/icon.ico")),
                 ToolTipText = "Zephyr Player",
                 ContextMenu = BuildMenu(),
             };
+            // 2.0.1 (Ezzy: "All icons are low res"): IconSource decoded the .ico's FIRST
+            // frame (16 px) and Windows stretched it to 24/32 px at 150/200 %. The tray now
+            // gets the .ico frame made for the screen's tray size.
+            var crisp = TrayIconForDpi();
+            if (crisp != null) _icon.Icon = crisp;
+            else _icon.IconSource = new BitmapImage(new Uri("pack://application:,,,/assets/icon.ico"));
             _icon.TrayLeftMouseDown += (_, __) => OpenRequested?.Invoke();
             _icon.TrayMouseDoubleClick += (_, __) => OpenRequested?.Invoke();
             // Built in code, so the icon is never in a visual tree and its Loaded

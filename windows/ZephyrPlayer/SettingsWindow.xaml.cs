@@ -45,8 +45,14 @@ namespace ZephyrPlayer
             _settings = settings;
             _store = store;
             ZephyrPlayer.WindowChrome.ApplyDarkTitleBar(this);
-            SourceInitialized += (_, __) => RoundCorners();
-            CaptionIcon.Source = ShellWindow.IconFrame(36);
+            SourceInitialized += (_, __) =>
+            {
+                RoundCorners();
+                // 2.0.1: never taller than the screen's work area (a 1366x768 laptop at 125 %).
+                var room = SystemParameters.WorkArea.Height - 16;
+                if (room > 300 && Height > room) Height = room;
+            };
+            ShellWindow.BindCaptionIcon(this, CaptionIcon);
             NavVersionText.Text = VersionLine;
             VersionText.Text = VersionLine;
 
@@ -87,12 +93,13 @@ namespace ZephyrPlayer
             SelectSection("volume");
         }
 
-        /// <summary>The bar is laid out at the player's windowed width and scaled down
-        /// into the 118 px preview strip (render 06 / 06b).</summary>
+        /// <summary>The bar is laid out at a narrow player width and scaled down into the
+        /// 118 px preview strip (render 06 / 06b). 2.0.1: laid out at 760 instead of 940,
+        /// so the strip shrinks it to about 0.8 instead of 0.64 (its text was ~7 px).</summary>
         private FrameworkElement PreviewFrame(PlayerBar bar)
         {
             bar.ShowAsPreview(_settings);
-            return new Grid { Width = 940, Children = { bar } };
+            return new Grid { Width = 760, Children = { bar } };
         }
 
         // Windows 11 draws the radius-12 look itself (DWMWA_WINDOW_CORNER_PREFERENCE =
@@ -142,6 +149,7 @@ namespace ZephyrPlayer
             AnimateToggle.IsChecked = _settings.AnimateOnPress;
             FlashToggle.IsChecked = _settings.ButtonFlash;
             SpeedToggle.IsChecked = _settings.ShowSpeed;
+            RememberToggle.IsChecked = _settings.RememberVolume;
             SleepToggle.IsChecked = _settings.ShowSleepTimer;
             _skipPreview.ApplyStyle(_settings);
             _barPreview.ApplyStyle(_settings);
@@ -176,6 +184,7 @@ namespace ZephyrPlayer
             else if (ReferenceEquals(sender, FlashToggle)) _settings.ButtonFlash = FlashToggle.IsChecked == true;
             else if (ReferenceEquals(sender, SpeedToggle)) _settings.ShowSpeed = SpeedToggle.IsChecked == true;
             else if (ReferenceEquals(sender, SleepToggle)) _settings.ShowSleepTimer = SleepToggle.IsChecked == true;
+            else if (ReferenceEquals(sender, RememberToggle)) _settings.RememberVolume = RememberToggle.IsChecked == true;
         }
 
         /// <summary>Test / readback seam: what both previews draw right now.</summary>
