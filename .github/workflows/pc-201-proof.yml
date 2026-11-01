@@ -3,46 +3,55 @@ name: PC 2.0.1 proof
 # Focused evidence for Ezzy's Nov 1 list (Zephyr PC 2.0.1): the new/changed unit and
 # render tests, then a real-desktop run of the hooked CI build on a real library of
 # H.264 and HEVC MKVs (thumbnails, path bar, phone pill, Settings scroll, full-screen
-# flash sampling). Manual only. The full release gate stays windows.yml.
-# app_ref: build the PLAYER from another ref (e.g. the 2.0.0 tag commit) with this
-# branch's proof script, to show the same checks against the old code.
+# flash sampling). The full release gate stays windows.yml (dispatched separately).
 
 on:
-  workflow_dispatch:
-    inputs:
-      app_ref:
-        description: 'Build windows/ZephyrPlayer from this ref instead (baseline); empty = this commit'
-        required: false
-        default: ''
+  # A workflow that is not on the default branch cannot be dispatched, so this one
+  # runs on pushes to the 2.0.1 branch.
+  push:
+    branches: [zephyr-2.0.1]
+    paths:
+      - 'windows/ZephyrPlayer/**'
+      - 'windows/ZephyrPlayer.Tests/**'
+      - 'scripts/pc_201_proof.ps1'
+      - '.github/workflows/pc-201-proof.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: pc-201-proof-${{ github.ref }}-${{ inputs.app_ref }}
-  cancel-in-progress: false
+  group: pc-201-proof-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   proof:
     runs-on: windows-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        # candidate = this commit; baseline = the released 2.0.0 player (tag commit b3ce4e9)
+        # through the same proof script, so each check is shown failing on the old code.
+        leg: [candidate, baseline]
+    env:
+      APP_REF: ${{ matrix.leg == 'baseline' && 'b3ce4e9893c7f7c5d56a009532ff49e9c808e6e5' || '' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
       - name: Baseline player source (only when app_ref is set)
-        if: ${{ inputs.app_ref != '' }}
+        if: ${{ matrix.leg == 'baseline' }}
         shell: pwsh
         run: |
-          git checkout ${{ inputs.app_ref }} -- windows/ZephyrPlayer
-          git log -1 --format='baseline player source from %H %s' ${{ inputs.app_ref }}
+          git checkout $env:APP_REF -- windows/ZephyrPlayer
+          git log -1 --format='baseline player source from %H %s' $env:APP_REF
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
       - name: Install ffmpeg (builds the real MKV library)
         run: choco install ffmpeg --no-progress -y
       - name: Focused tests (2.0.1 items + render evidence at 96/120/144/192 dpi)
-        if: ${{ inputs.app_ref == '' }}
+        if: ${{ matrix.leg == 'candidate' }}
         id: tests
         timeout-minutes: 15
         run: >
@@ -59,12 +68,12 @@ jobs:
         if: always()
         timeout-minutes: 12
         shell: pwsh
-        run: scripts/pc_201_proof.ps1 -Label "${{ inputs.app_ref != '' && format('baseline {0}', inputs.app_ref) || format('candidate {0}', github.sha) }}"
+        run: scripts/pc_201_proof.ps1 -Label "${{ matrix.leg }} ${{ matrix.leg == 'baseline' && 'b3ce4e9 (2.0.0)' || github.sha }}"
       - name: Upload evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pc-201-proof${{ inputs.app_ref != '' && '-baseline' || '' }}
+          name: pc-201-proof-${{ matrix.leg }}
           path: |
             ${{ runner.temp }}/proof201/
             ${{ runner.temp }}/pc-redesign-*.png
