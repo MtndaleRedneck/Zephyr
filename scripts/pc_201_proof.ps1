@@ -82,10 +82,10 @@ public static class P201 {
             return n;
         } finally { b.UnlockBits(d); }
     }
-    public static System.Collections.Generic.List<IntPtr> Handles(uint pid) {
-        var list = new System.Collections.Generic.List<IntPtr>();
-        EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h)) list.Add(h); return true; }, IntPtr.Zero);
-        return list;
+    public static IntPtr[] Handles(uint pid) {
+        var arr = new IntPtr[64]; int n = 0;
+        EnumWindows((h, l) => { uint p; GetWindowThreadProcessId(h, out p); if (p == pid && IsWindowVisible(h) && n < arr.Length) arr[n++] = h; return true; }, IntPtr.Zero);
+        var res = new IntPtr[n]; Array.Copy(arr, res, n); return res;
     }
     /// Sample the whole screen on a background thread for ms milliseconds; the caller
     /// triggers the transition on its own thread meanwhile, then calls Join().
@@ -115,7 +115,7 @@ public static class P201 {
 }
 '@
 $compiled = $false
-foreach ($refs in @(@('System.Drawing.Common', 'System.Drawing.Primitives'), @([System.Drawing.Bitmap].Assembly.Location, [System.Drawing.Rectangle].Assembly.Location))) {
+foreach ($refs in @(@('System.Drawing.Common', 'System.Drawing.Primitives', 'System.Collections'), @([System.Drawing.Bitmap].Assembly.Location, [System.Drawing.Rectangle].Assembly.Location))) {
     try { Add-Type -ReferencedAssemblies $refs -ErrorAction Stop -TypeDefinition $p201Src; $compiled = $true; Note "helpers compiled against: $($refs -join ', ')"; break }
     catch { Write-Host "helper compile with [$($refs -join ', ')] failed: $_" }
 }
