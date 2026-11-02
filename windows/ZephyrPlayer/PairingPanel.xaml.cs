@@ -161,7 +161,7 @@ namespace ZephyrPlayer
         public void RefreshPhones()
         {
             var entries = _store.Entries();
-            PhoneList.ItemsSource = entries.Select(e => new PhoneCard {
+            var cards = entries.Select(e => new PhoneCard {
                 Name = e.Name, Token = e.Token,
                 Detail = PhoneStatus(_store.IsConnected(e.Token), _store.LastSeen(e.Token), DateTime.Now),
                 DotVisibility = _store.IsConnected(e.Token) ? Visibility.Visible : Visibility.Collapsed,
@@ -169,6 +169,11 @@ namespace ZephyrPlayer
                 ForgetId = "Forget:" + e.Name,
                 ForgetName = "Forget " + e.Name,
             }).ToList();
+            // 2.0.2: the panel's tick refreshes every second; replacing an unchanged list rebuilt
+            // every card each second, so UI Automation (screen readers, CI's card lookups) kept
+            // losing the Forget buttons mid-lookup. Only swap the list when a card changed.
+            if (!(PhoneList.ItemsSource is System.Collections.Generic.List<PhoneCard> shown && shown.Select(c => c.Key).SequenceEqual(cards.Select(c => c.Key))))
+                PhoneList.ItemsSource = cards;
             NoPhonesText.Visibility = entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
 
@@ -186,6 +191,7 @@ namespace ZephyrPlayer
             public string Paired { get; init; } = "";
             public string ForgetId { get; init; } = "";
             public string ForgetName { get; init; } = "";
+            internal string Key => string.Join("\u0001", Name, Token, Detail, DotVisibility, Paired);
         }
 
         /// <summary>Render 05's card line: "Connected now", "Last seen today, 3:41 PM",
