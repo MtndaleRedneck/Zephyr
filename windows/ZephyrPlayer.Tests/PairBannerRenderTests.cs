@@ -328,6 +328,31 @@ namespace ZephyrPlayer.Tests
             });
         }
 
+        // 2.0.2: the panel refreshes its list every second; an unchanged list is kept as is
+        // (cards are not rebuilt under UI Automation), a changed one is swapped.
+        [Fact]
+        public void PhoneList_UnchangedRefresh_KeepsTheCards_ChangedRefreshSwapsThem()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-keep-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-a", "CI phone");
+                var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                var list = (ItemsControl)panel.FindName("PhoneList")!;
+                panel.RefreshPhones();
+                var first = list.ItemsSource;
+                panel.RefreshPhones();
+                Assert.Same(first, list.ItemsSource);
+                store.Add("tok-b", "CI Pixel");
+                panel.RefreshPhones();
+                Assert.NotSame(first, list.ItemsSource);
+                Assert.Equal(2, list.Items.Count);
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            });
+        }
+
         [Fact]
         public void PhoneCard_Forget_RemovesThePhone()
         {
