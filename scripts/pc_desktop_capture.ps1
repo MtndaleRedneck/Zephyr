@@ -517,8 +517,17 @@ function Cp3Rect($h) {
     return $r
 }
 function Cp3Find($rootEl, $id) {
+    # A single FindFirst can miss an element that is on screen while the window is
+    # re-laying out (a tab switch, a list refresh): seen on CI run 41364473977 for 'NavSkip'
+    # right after the Remote tab, and for a card that the previous check had just found.
+    # Look again for up to ~3 s; an element that is really missing still fails.
     $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
-    return $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+    for ($i = 0; $i -lt 10; $i++) {
+        $el = $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+        if ($el -ne $null) { return $el }
+        Start-Sleep -Milliseconds 300
+    }
+    return $null
 }
 function Cp3Invoke($rootEl, $id) {
     $el = Cp3Find $rootEl $id
