@@ -73,6 +73,8 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG && intent.hasExtra("pcdemo")) store.pcName = "MY-PC"
         // Screenshot rig: a stand-in VLC pairing so the status pill can render Connected. Debug only.
         if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
+        // Screenshot rig: the helper pair-code shot needs NO saved pairing (the code field then sits above the fold). Debug only.
+        if (BuildConfig.DEBUG && intent.hasExtra("pairdemo")) { try { store.helperToken = ""; store.pcName = "" } catch (e: SecureStoreUnavailable) { } }
         remote = RemoteState(this, store, lifecycleScope)
         if (BuildConfig.DEBUG && intent.getBooleanExtra("demostatus", false)) remote.debugSeedStatus()
         if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { remote.debugForcePaired = true; remote.refreshPairing() }
