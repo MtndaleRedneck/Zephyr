@@ -163,7 +163,11 @@ internal static class Program
             var dir = i + 2 < args.Length ? args[i + 2] : null;
             // Logs from this elevated copy belong in the USER's data folder, not the
             // approving admin's profile.
-            if (!string.IsNullOrWhiteSpace(dir)) DataDir = dir;
+            // Only a folder inside that user's own profile is accepted (validated again inside
+            // RunElevated); anything else leaves this process on its own data folder.
+            string? vsid = null;
+            try { if (!string.IsNullOrWhiteSpace(sid)) vsid = new System.Security.Principal.SecurityIdentifier(sid).Value; } catch { }
+            if (!string.IsNullOrWhiteSpace(dir) && vsid != null && FirewallSetup.IsDataDirInsideProfile(vsid, dir)) DataDir = dir;
             return FirewallSetup.RunElevated(sid, dir);
         }
         if (args.Contains("--remove-firewall"))

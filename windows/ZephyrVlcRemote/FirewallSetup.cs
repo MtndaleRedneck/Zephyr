@@ -47,7 +47,11 @@ internal static class FirewallSetup
                 Console.Error.WriteLine("The listen permission needs a Windows account to scope to; none was available.");
                 return 3;
             }
-            var dataDir = userDataDir ?? Program.DataDir;
+            // The data folder arrives from the unelevated parent. This elevated copy writes two
+            // small files there, so it only accepts a folder inside that user's own profile
+            // (no ".." tricks, no reparse points); anything else falls back to this process's
+            // own data folder.
+            var dataDir = userDataDir != null && IsDataDirInsideProfile(sid, userDataDir) ? userDataDir : Program.DataDir;
             // Classify the port reservation FIRST (round-9 N9-5): when it belongs to
             // another app or another Windows user, setup stops BEFORE touching any
             // machine-wide rule - rewriting the shared rules first would break the
@@ -579,6 +583,43 @@ internal static class FirewallSetup
         return rules != null && rules.Count > 0;
     }
 
+    /// <summary>True when <paramref name="dir"/> is an absolute path under the profile folder of
+    /// <paramref name="sid"/> (from the ProfileList registry key) with no reparse point on any
+    /// existing component.</summary>
+    internal static bool IsDataDirInsideProfile(string sid, string dir)
+    {
+        try
+        {
+            string? profile;
+            using (var k = Microsoft.Win32.Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\" + sid))
+                profile = k?.GetValue("ProfileImagePath") as string;
+            return profile != null && IsPathInside(profile, dir) && !HasReparsePoint(profile, dir);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Pure path check: absolute, normalized, strictly inside <paramref name="root"/>.</summary>
+    internal static bool IsPathInside(string root, string dir)
+    {
+        if (string.IsNullOrWhiteSpace(root) || string.IsNullOrWhiteSpace(dir)) return false;
+        if (!Path.IsPathRooted(dir) || !Path.IsPathRooted(root)) return false;
+        var r = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        var d = Path.GetFullPath(dir).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+        return d.Length > r.Length && d.StartsWith(r, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool HasReparsePoint(string root, string dir)
+    {
+        var cur = new DirectoryInfo(Path.GetFullPath(dir));
+        var stop = Path.GetFullPath(root).TrimEnd('\\', '/');
+        while (cur != null && !string.Equals(cur.FullName.TrimEnd('\\', '/'), stop, StringComparison.OrdinalIgnoreCase))
+        {
+            if (cur.Exists && (cur.Attributes & FileAttributes.ReparsePoint) != 0) return true;
+            cur = cur.Parent;
+        }
+        return false;
+    }
+
     private static int Run(string file, string args)
     {
         var psi = new ProcessStartInfo(file, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -587,8 +628,14 @@ internal static class FirewallSetup
         // (and therefore WaitForExit) forever (round-8 N-13).
         var stdout = p.StandardOutput.ReadToEndAsync();
         var stderr = p.StandardError.ReadToEndAsync();
-        p.WaitForExit();
-        Task.WaitAll(stdout, stderr);
+        // A hung netsh must not hang setup (or the unelevated parent waiting on it) forever.
+        if (!p.WaitForExit(30_000))
+        {
+            try { p.Kill(entireProcessTree: true); } catch { }
+            Program.Log("firewall setup: " + file + " did not finish in 30 s and was stopped.");
+            return -1;
+        }
+        Task.WaitAll(new Task[] { stdout, stderr }, 5_000);
         return p.ExitCode;
     }
 }
