@@ -197,6 +197,9 @@ class RemoteState(
                 pickedSubtitle = null
             }
             connecting = false
+            // Play/pause is inert until a poll has just succeeded (see togglePause); the Zephyr
+            // path must stamp it too or the button never fires.
+            lastConnectedAt = android.os.SystemClock.elapsedRealtime()
             // A good poll also clears "pair again" (N2): after a re-pair the hero must
             // not keep accusing the NEW pairing until an app restart.
             PairingStatePolicy.onSuccess().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
@@ -207,6 +210,7 @@ class RemoteState(
             // The PC removed this phone's pairing - say "pair again", not "can't reach"
             // (N2: a 401 is NOT an outage, and must clear any outage already showing).
             connecting = false
+            lastConnectedAt = 0L
             PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
         } catch (e: Exception) {
             if (store.selectedSource != Source.ZEPHYR) return
