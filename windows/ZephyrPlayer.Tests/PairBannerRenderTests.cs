@@ -121,7 +121,7 @@ namespace ZephyrPlayer.Tests
             {
                 try
                 {
-                    Core.Initialize();
+                    NativeVlc.Init();
                     var libvlc = new LibVLC();
                     var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
                     // Explicit "original" pick: the shipping default is orange now, and this

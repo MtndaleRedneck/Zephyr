@@ -162,7 +162,7 @@ namespace ZephyrPlayer.Tests
         public void Audio_Volume_Mute()
         {
             var wav = WriteSineWav(Path.Combine(Path.GetTempPath(), "zephyr-test-tone.wav"));
-            Core.Initialize();
+            NativeVlc.Init();
             using var libvlc = new LibVLC("--no-video");
             using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
             using var media = new Media(libvlc, wav, FromType.FromPath);
@@ -185,7 +185,7 @@ namespace ZephyrPlayer.Tests
             // 5s clip: a 2s clip seeks to its midpoint, and resuming that close to EOF
             // races EndReached on the headless pipeline (CI-observed).
             var wav = WriteSineWav(Path.Combine(Path.GetTempPath(), "zephyr-test-tone.wav"), 5);
-            Core.Initialize();
+            NativeVlc.Init();
             using var libvlc = new LibVLC("--no-video");
             using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
             using var media = new Media(libvlc, wav, FromType.FromPath);
@@ -269,7 +269,7 @@ namespace ZephyrPlayer.Tests
 
             try
             {
-                Core.Initialize();
+                NativeVlc.Init();
                 using var libvlc = new LibVLC("--no-video");
                 using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
                 using var safe = new SafeMediaSource(libvlc, "http://127.0.0.1:48123/clip.mp4");

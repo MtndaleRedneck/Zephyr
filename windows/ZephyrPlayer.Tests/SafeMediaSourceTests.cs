@@ -126,7 +126,7 @@ public sealed class SafeMediaSourceTests
     {
         var bytes=File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mp4"));
         using var fixture=new Fixture((ctx,_)=>{ctx.Response.StatusCode=200;ctx.Response.ContentLength64=bytes.Length;ctx.Response.OutputStream.Write(bytes,0,Math.Min(4096,bytes.Length));ctx.Response.Abort();});
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
         try {
             using var source=new SafeMediaSource(vlc,fixture.Url);
             try {player.Play(source.Media);Thread.Sleep(500);}
@@ -153,7 +153,7 @@ public sealed class SafeMediaSourceTests
     public void ExplicitDemuxOnCallbacks_DoesNotFetchPlaylist(string demux)
     {
         using var target=new Fixture((ctx,_)=>{ctx.Response.StatusCode=404;});
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
         using var bytes=new MemoryStream(Encoding.UTF8.GetBytes("#EXTM3U\n"+target.Url+"\n"));
         using var input=new StreamMediaInput(bytes);
         using var media=new Media(vlc,input,":demux="+demux,":no-sub-autodetect-file");
@@ -164,7 +164,7 @@ public sealed class SafeMediaSourceTests
     [Fact]
     public void CallbackMovie_StartsAndSeeks_WithStrictDemux()
     {
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
         vlc.Log+=(_,e)=>Console.WriteLine("CALLBACK_NATIVE "+e.Level+" "+e.Message);
         var path=Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mp4");
         using var source=new SafeMediaSource(vlc,new Uri(path).AbsoluteUri);
@@ -175,14 +175,14 @@ public sealed class SafeMediaSourceTests
     [Fact]
     public void M3uNamedMkv_IsRejectedBeforeNativeAccess()
     {
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");
         var path=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".mkv");File.WriteAllText(path,"#EXTM3U\nhttp://127.0.0.1:9/probe");
         try {Assert.Throws<InvalidDataException>(()=>new SafeMediaSource(vlc,new Uri(path).AbsoluteUri));}finally{File.Delete(path);}
     }
     [Fact]
     public void M3uNamedSrt_IsRejectedBeforeAddSlave()
     {
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");
         using var source=new SafeMediaSource(vlc,new Uri(Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mp4")).AbsoluteUri);
         var path=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".srt");File.WriteAllText(path,"#EXTM3U\nhttp://127.0.0.1:9/probe");
         try {Assert.Throws<InvalidDataException>(()=>source.AddSubtitle(new Uri(path).AbsoluteUri));}finally{File.Delete(path);}
@@ -199,7 +199,7 @@ public sealed class SafeMediaSourceTests
         var text=prefix.Replace("{0}",target.Url)+"\n1\n00:00:00,000 --> 00:00:03,000\nCredits\n";
         var path=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".srt");File.WriteAllText(path,text);
         try{
-            Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+            NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
             using var safe=new SafeMediaSource(vlc,new Uri(Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mp4")).AbsoluteUri);
             Assert.Throws<InvalidDataException>(()=>safe.AddSubtitle(new Uri(path).AbsoluteUri));
             try{Assert.True(player.Play(safe.Media));Thread.Sleep(300);}finally{safe.Abort();player.Stop();}
@@ -219,7 +219,7 @@ public sealed class SafeMediaSourceTests
         var extension=SafeMediaSource.SubtitleExtension(text);Assert.True(extension is ".srt" or ".vtt");
         var path=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+extension);File.WriteAllText(path,text);
         try{
-            Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+            NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
             using var safe=new SafeMediaSource(vlc,new Uri(Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mp4")).AbsoluteUri);
             safe.AddSubtitle(new Uri(path).AbsoluteUri);
             try{Assert.True(player.Play(safe.Media));Assert.True(SpinWait.SpinUntil(()=>player.State==VLCState.Playing,8000));Thread.Sleep(2200);}
@@ -230,7 +230,7 @@ public sealed class SafeMediaSourceTests
     [Fact]
     public void OrdinaryMkv_CallbackPlaybackWorksWithExternalFeaturesDisabled()
     {
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
         using var safe=new SafeMediaSource(vlc,new Uri(Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mkv")).AbsoluteUri);
         try{Assert.True(player.Play(safe.Media));Assert.True(SpinWait.SpinUntil(()=>player.State==VLCState.Playing,8000));Assert.True(SpinWait.SpinUntil(()=>player.Time>300,4000),"callback MKV did not advance decoded time");}
         finally{safe.Abort();player.Stop();}
@@ -243,7 +243,7 @@ public sealed class SafeMediaSourceTests
         var mutated=ExternalMp4Reference(bytes,target.Url);
         var path=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".mp4");File.WriteAllBytes(path,mutated);
         try{
-            Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+            NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
             using var safe=new SafeMediaSource(vlc,new Uri(path).AbsoluteUri);
             try{player.Play(safe.Media);Thread.Sleep(1000);}finally{safe.Abort();player.Stop();}
             Assert.Equal(0,target.Requests);
@@ -283,7 +283,7 @@ public sealed class SafeMediaSourceTests
             var siblingBytes=File.ReadAllBytes(sibling);var uidAt=siblingBytes.AsSpan().IndexOf(new byte[]{0x73,0xa4,0x90});Assert.True(uidAt>=0);
             Assert.True(chapterBytes.AsSpan().IndexOf(siblingBytes.AsSpan(uidAt+3,16))>=0,"external chapter UID must match sibling");
             using var lockedSibling=new FileStream(sibling,FileMode.Open,FileAccess.Read,FileShare.None);
-            Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+            NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
             // Callback access already lacks a local filename; this is defense-in-depth,
             // not proof that the two mkv options were necessary or sufficient.
             var preload=0;vlc.Log+=(_,args)=>{if(args.Message.Contains("Preloading local dir",StringComparison.Ordinal))Interlocked.Increment(ref preload);};
@@ -295,7 +295,7 @@ public sealed class SafeMediaSourceTests
     [Fact]
     public void NativeParser_CancelThenDispose_DrainsCallbacks()
     {
-        Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");
+        NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");
         var path=new Uri(Path.Combine(AppContext.BaseDirectory,"fixtures","clip.mp4")).AbsoluteUri;
         for(var i=0;i<20;i++) {
             using var safe=new SafeMediaSource(vlc,path);using var cancel=new CancellationTokenSource();
@@ -310,7 +310,7 @@ public sealed class SafeMediaSourceTests
         Exception? failure=null;
         var thread=new Thread(()=>{
             try{
-                Core.Initialize();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
+                NativeVlc.Init();using var vlc=new LibVLC("--no-video","--aout=dummy","--verbose=2");using var player=new LibVLCSharp.Shared.MediaPlayer(vlc);
                 var settingsPath=Path.Combine(Path.GetTempPath(),Guid.NewGuid()+".json");
                 var window=new MainWindow(vlc,player,new PlayerSettings(settingsPath),new VolumeService());
                 window.Show();

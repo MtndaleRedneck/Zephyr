@@ -64,7 +64,7 @@ public class VolumeMuteTests
         {
             try
             {
-                Core.Initialize();
+                NativeVlc.Init();
                 var libvlc = new LibVLC();
                 var player = new MediaPlayer(libvlc);
                 var w = new MainWindow(libvlc, player, new PlayerSettings(path), volume);

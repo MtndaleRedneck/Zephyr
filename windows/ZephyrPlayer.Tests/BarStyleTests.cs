@@ -25,7 +25,7 @@ namespace ZephyrPlayer.Tests
             {
                 try
                 {
-                    Core.Initialize();
+                    NativeVlc.Init();
                     var libvlc = new LibVLC();
                     var player = new MediaPlayer(libvlc);
                     var settings = new PlayerSettings(path);

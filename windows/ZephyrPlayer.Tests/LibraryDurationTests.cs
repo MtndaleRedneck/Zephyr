@@ -8,7 +8,7 @@ namespace ZephyrPlayer.Tests
     {
         [Fact] public async Task RealFixtureHasParsedDurationWithoutPlaying()
         {
-            Core.Initialize();
+            NativeVlc.Init();
             using var vlc = new LibVLC("--no-video", "--no-audio");
             using var media = new Media(vlc, Path.Combine(System.AppContext.BaseDirectory, "fixtures", "clip.mp4"), FromType.FromPath);
             await media.Parse(MediaParseOptions.ParseLocal, 1500);

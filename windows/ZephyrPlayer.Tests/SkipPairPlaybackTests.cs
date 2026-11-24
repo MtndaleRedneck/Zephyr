@@ -55,7 +55,7 @@ namespace ZephyrPlayer.Tests
                 {
                     var wav = Path.Combine(dir, "seek-proof.wav");
                     WriteWav(wav);
-                    Core.Initialize();
+                    NativeVlc.Init();
                     using var vlc = new LibVLC("--no-video", "--aout=dummy");
                     using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
                     var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));

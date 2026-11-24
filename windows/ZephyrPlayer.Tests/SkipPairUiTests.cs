@@ -108,7 +108,7 @@ namespace ZephyrPlayer.Tests
         public void Pause_Bars_Stay_Separated_And_Fullscreen_Pill_Is_Bounded()
         {
             Sta(path => {
-                Core.Initialize(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
+                NativeVlc.Init(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
                 var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
                 var pause = (Grid)window.FindName("PauseGlyph")!;
                 pause.Visibility = Visibility.Visible;
@@ -143,7 +143,7 @@ namespace ZephyrPlayer.Tests
         {
             Sta(path =>
             {
-                Core.Initialize();
+                NativeVlc.Init();
                 using var libvlc = new LibVLC();
                 using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
                 var settings = new PlayerSettings(path) { ShowSpeed = extras, ShowSleepTimer = extras };
