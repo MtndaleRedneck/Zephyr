@@ -571,10 +571,8 @@ internal static class Program
 
     internal static void LoadConfig()
     {
-        // Settled migration: a first run on a PC that had the BingeMote helper keeps the
-        // phone's VLC pairings plus the Wi-Fi and movies-folder choices. Read-only on the
-        // legacy side; it never runs once we have a config of our own.
-        if (!File.Exists(ConfigPath)) BingeMigration.TryImport(BingeMigration.DefaultLegacyPath, ConfigPath);
+        // A fresh install starts unpaired: nothing is carried over from another product,
+        // so every phone is authorized by an explicit Pair on this PC.
         try
         {
             if (!File.Exists(ConfigPath)) return;
