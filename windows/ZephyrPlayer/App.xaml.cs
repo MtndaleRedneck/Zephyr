@@ -126,12 +126,12 @@ namespace ZephyrPlayer
             restoreListener.Start();
 
             Core.Initialize();
-            var libvlc = new LibVLC();
+            var settings = new PlayerSettings();
+            var libvlc = new LibVLC(HardwareDecoding.Options(settings.HardwareDecoding));
             var player = new MediaPlayer(libvlc);
             player.EnableMouseInput = false;
             player.EnableKeyInput = false;
             var store = new PairedStore();
-            var settings = new PlayerSettings();
             var gate = new PairingGate();
             _libvlc = libvlc;
             _mediaPlayer = player;

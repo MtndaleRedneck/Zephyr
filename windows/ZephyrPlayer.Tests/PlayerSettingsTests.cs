@@ -212,3 +212,33 @@ namespace ZephyrPlayer.Tests
         }
     }
 }
+
+namespace ZephyrPlayer.Tests
+{
+    public class HardwareAndSleepSettingTests
+    {
+        [Fact]
+        public void Defaults_AreAutoAndPreventSleepOn_AndRoundTrip()
+        {
+            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid() + ".json");
+            try
+            {
+                var s = new PlayerSettings(path);
+                Assert.Equal("auto", s.HardwareDecoding);
+                Assert.True(s.PreventSleep);
+                s.HardwareDecoding = "off"; s.PreventSleep = false; s.HardwareDecoding = "bogus";
+                var again = new PlayerSettings(path);
+                Assert.Equal("off", again.HardwareDecoding);
+                Assert.False(again.PreventSleep);
+            }
+            finally { System.IO.File.Delete(path); }
+        }
+
+        [Fact]
+        public void Options_AutoAddsNothing_OffDisablesAvcodecHardware()
+        {
+            Assert.Empty(HardwareDecoding.Options("auto"));
+            Assert.Equal(new[] { "--avcodec-hw=none" }, HardwareDecoding.Options("off"));
+        }
+    }
+}

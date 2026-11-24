@@ -76,7 +76,7 @@ namespace ZephyrPlayer
             _volume = volume ?? new VolumeService();
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); };
+            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _sleepTimer.Stop(); _sleep.Update(false); };
             _cursorWatch.Tick += (_, __) =>
             {
                 if (!IsVisible || !GetCursorPos(out var point)) return;
@@ -115,10 +115,15 @@ namespace ZephyrPlayer
             {
                 _idleTimer.Stop(); _idleTimer.Start(); // resume the hide countdown
             });
+            _sleepTimer.Tick += (_, __) => RefreshSleepGuard();
+            _sleepTimer.Start();
+            StateChanged += (_, __) => RefreshSleepGuard();
+            _player.Stopped += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
+            _player.EndReached += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
 
-            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(ApplyBarStyle);
+            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(() => { ApplyBarStyle(); RefreshSleepGuard(); });
             _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => MessageBox.Show(this, "Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved", MessageBoxButton.OK, MessageBoxImage.Warning));
 
             // Remembered volume restored on open. With the
@@ -129,6 +134,11 @@ namespace ZephyrPlayer
             ApplyBarStyle();
             UpdatePlayPauseGlyph();
         }
+
+        private readonly SleepGuard _sleep = new();
+        private readonly System.Windows.Threading.DispatcherTimer _sleepTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+        private void RefreshSleepGuard() =>
+            _sleep.Update(SleepGuard.ShouldHold(_settings.PreventSleep, IsPlayingMedia, WindowState == WindowState.Minimized));
 
         private int _playGeneration;
         private System.Threading.CancellationTokenSource? _preparation;

@@ -21,6 +21,7 @@ namespace ZephyrPlayer
         public static readonly int[] PrimarySkipChoices = { 5, 10, 15, 30 };
         public static readonly int[] SecondarySkipChoices = { 15, 30, 60, 120, 180 };
         public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone", "inverse" };
+        public static readonly string[] HardwareChoices = { "auto", "off" };
         public static readonly string[] IconStyles = { "hollow", "filled" };
 
         /// <summary>Raised on the setting thread after any change is written.</summary>
@@ -87,6 +88,20 @@ namespace ZephyrPlayer
             set { Write(d => d with { ButtonFlash = value }); }
         }
 
+        /// <summary>Keep the PC awake (not the screen) while a movie is open. On by default.</summary>
+        public bool PreventSleep
+        {
+            get { lock (_lock) return Read().PreventSleep ?? true; }
+            set { Write(d => d with { PreventSleep = value }); }
+        }
+
+        /// <summary>"auto" (default) or "off". Read when a movie starts; there is no other value.</summary>
+        public string HardwareDecoding
+        {
+            get { lock (_lock) return Read().HardwareDecoding == "off" ? "off" : "auto"; }
+            set { if (Array.IndexOf(HardwareChoices, value) < 0) return; Write(d => d with { HardwareDecoding = value }); }
+        }
+
         public bool ShowSpeed
         {
             get { lock (_lock) return Read().ShowSpeed ?? false; }
@@ -132,7 +147,9 @@ namespace ZephyrPlayer
             int? SecondarySkipSeconds = null,
             string? LibrarySort = null,
             bool? FoldersFirst = null,
-            bool? ButtonFlash = null);
+            bool? ButtonFlash = null,
+            bool? PreventSleep = null,
+            string? HardwareDecoding = null);
 
         private bool _readFailed;
         private Data? _lastGood;

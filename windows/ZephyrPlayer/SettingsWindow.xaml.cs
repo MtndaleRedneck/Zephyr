@@ -62,9 +62,9 @@ namespace ZephyrPlayer
         {
             _sections["movies"] = (NavMovies, SectionMovies, "Movies folder");
             _sections["volume"] = (NavVolume, SectionVolume, "Volume");
-            _sections["skip"] = (NavSkip, SkipSettingsCard, "Skip buttons");
-            _sections["bar"] = (NavBar, SectionBar, "Playback bar");
-            _sections["remote"] = (NavRemote, SectionRemote, "Paired phones");
+            _sections["skip"] = (NavSkip, SkipSettingsCard, "Playback");
+            _sections["bar"] = (NavBar, SectionBar, "Controls");
+            _sections["remote"] = (NavRemote, SectionRemote, "Phones");
             _sections["feedback"] = (NavFeedback, SectionFeedback, "Feedback & bugs");
             _sections["updates"] = (NavUpdates, SectionUpdates, "Updates");
             SelectSection("volume");
@@ -109,6 +109,8 @@ namespace ZephyrPlayer
             BuildChoices(SecondarySkipPanel, PlayerSettings.SecondarySkipChoices, SkipLabel, () => _settings.SecondarySkipSeconds, v => _settings.SecondarySkipSeconds = v, "secondaryskip");
             BuildChoices(BarColorPanel, PlayerSettings.BarColorStyles, Label, () => _settings.BarColorStyle, v => _settings.BarColorStyle = v, "barcolor");
             BuildChoices(IconStylePanel, PlayerSettings.IconStyles, Label, () => _settings.IconStyle, v => _settings.IconStyle = v, "iconstyle");
+            BuildChoices(HardwarePanel, PlayerSettings.HardwareChoices, v => v == "off" ? "Off" : "Auto", () => _settings.HardwareDecoding, v => _settings.HardwareDecoding = v, "hardware");
+            PreventSleepToggle.IsChecked = _settings.PreventSleep;
             FlashToggle.IsChecked = _settings.ButtonFlash;
             SpeedToggle.IsChecked = _settings.ShowSpeed;
             SleepToggle.IsChecked = _settings.ShowSleepTimer;
@@ -140,6 +142,8 @@ namespace ZephyrPlayer
         }
 
         private void OnFlashToggle(object sender, RoutedEventArgs e) => _settings.ButtonFlash = FlashToggle.IsChecked == true;
+
+        private void OnPlaybackToggle(object sender, RoutedEventArgs e) => _settings.PreventSleep = PreventSleepToggle.IsChecked == true;
 
         private void OnToggle(object sender, RoutedEventArgs e)
         {
