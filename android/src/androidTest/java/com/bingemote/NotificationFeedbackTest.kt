@@ -112,6 +112,8 @@ class HapticTickTest {
         internal fun seedPrefs(ctx: Context, haptics: Boolean, port: Int) {
             ctx.getSharedPreferences("settings", Context.MODE_PRIVATE).edit()
                 .putBoolean("setupDone", true)
+                // A earlier suite in the same app data may have left Zephyr selected; these VLC fixtures need VLC.
+                .putString("selectedSource", "vlc")
                 .putString("host", "127.0.0.1")
                 .putInt("vlcPort", port)
                 .putBoolean("lockScreenControls", true)
