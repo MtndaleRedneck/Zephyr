@@ -75,7 +75,9 @@ class SubtitleSheetTest {
         assertTrue(device.hasObject(By.text("English")))
         // After the drop: everything below Off must go, including the stale tracks
         // the last status still carries.
-        assertTrue(device.wait(Until.gone(By.text("Movie.en")), 30000))
+        val dropped = device.wait(Until.gone(By.text("Movie.en")), 30000)
+        if (!dropped) Triage.tree("sheet still shows Movie.en after connection drop")
+        assertTrue(dropped)
         Thread.sleep(1000)
         assertTrue(device.hasObject(By.text("Off")))
         assertFalse(device.hasObject(By.text("Movie.en")))

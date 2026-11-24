@@ -11,7 +11,7 @@ object Triage {
             val out = java.io.ByteArrayOutputStream()
             UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).dumpWindowHierarchy(out)
             val xml = out.toString()
-            val rows = Regex("<node [^>]*>").findAll(xml).map { it.value }.filter { !it.contains("package=\"com.android.systemui\"") }.mapNotNull { n ->
+            val rows = Regex("<node [^>]*>").findAll(xml).map { it.value }.filter { it.contains("package=\"${InstrumentationRegistry.getInstrumentation().targetContext.packageName}\"") }.mapNotNull { n ->
                 val t = Regex("\\btext=\"([^\"]*)\"").find(n)?.groupValues?.get(1).orEmpty()
                 val d = Regex("content-desc=\"([^\"]*)\"").find(n)?.groupValues?.get(1).orEmpty()
                 val b = Regex("bounds=\"([^\"]*)\"").find(n)?.groupValues?.get(1).orEmpty()
