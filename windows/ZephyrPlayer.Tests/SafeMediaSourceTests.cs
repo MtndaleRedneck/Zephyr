@@ -101,7 +101,11 @@ public sealed class SafeMediaSourceTests
         using var deadline=new CancellationTokenSource();
         using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);
         deadline.CancelAfter(400);var watch=System.Diagnostics.Stopwatch.StartNew();var b=new byte[10];
-        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{while(true)source.Read(b,0,b.Length);}));
+        var bodyBytes=0;
+        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{while(true){var n=source.Read(b,0,b.Length);if(n<=0)break;bodyBytes+=n;}}));
+        // Body-entered signal: the 3 body bytes were actually delivered before the stall, so the
+        // cancellation hit a read inside the body, not the constructor/header phase.
+        Assert.Equal(3,bodyBytes);
         Assert.True(watch.Elapsed<TimeSpan.FromSeconds(3),$"stalled read took {watch.Elapsed}");
     }
     [Fact]
