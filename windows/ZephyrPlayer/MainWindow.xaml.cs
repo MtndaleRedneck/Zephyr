@@ -141,14 +141,14 @@ namespace ZephyrPlayer
         private readonly System.Windows.Threading.DispatcherTimer _awakeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private bool _closed;
         /// <summary>Event-driven (play, pause, stop, end, error, minimize, setting change, close). The 2 second timer runs
-        /// only while the PC should be held awake and the system call has failed, to retry it; it never polls otherwise,
+        /// only while the wanted state and the actual hold differ (a failed take or a failed release), to retry it; it never polls otherwise,
         /// and nothing touches the player after the window is closed.</summary>
         private void RefreshSleepGuard()
         {
             if (_closed) return;
             var want = SleepGuard.ShouldHold(_settings.PreventSleep, IsPlayingMedia, WindowState == WindowState.Minimized);
             _sleep.Update(want);
-            if (want && !_sleep.Held) _awakeTimer.Start(); else _awakeTimer.Stop();
+            if (want != _sleep.Held) _awakeTimer.Start(); else _awakeTimer.Stop();
         }
 
         private int _playGeneration;

@@ -95,7 +95,7 @@ namespace ZephyrPlayer
             set { Write(d => d with { PreventSleep = value }); }
         }
 
-        /// <summary>"auto" (default) or "off". Read when a movie starts; there is no other value.</summary>
+        /// <summary>"auto" (default) or "off". Read once when Zephyr Player starts (LibVLC is created then); there is no other value.</summary>
         public string HardwareDecoding
         {
             get { lock (_lock) return Read().HardwareDecoding == "off" ? "off" : "auto"; }

@@ -34,6 +34,16 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void FailedRelease_KeepsHeldTrue_AndIsRetriedOnNextUpdate()
+        {
+            var n = 0;
+            var g = new SleepGuard(f => ++n == 2 ? 0u : 1u); // take ok, first release fails, second release ok
+            g.Update(true); Assert.True(g.Held);
+            g.Update(false); Assert.True(g.Held);   // failed release: still held, so the window must keep retrying
+            g.Update(false); Assert.False(g.Held);
+        }
+
+        [Fact]
         public void OtherThread_CannotReleaseWhatTheOwnerHolds()
         {
             var calls = 0;
