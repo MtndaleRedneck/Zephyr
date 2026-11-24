@@ -92,7 +92,8 @@ namespace ZephyrPlayer.Tests
                     {
                         if (px[i] > 60 || px[i + 1] > 60 || px[i + 2] > 60) lit++;
                     }
-                    Assert.True(px[(600 * 940 + 600) * 4 + 2] < 0x20, "window background is not dark");
+                    var bgAt = (600 * 940 + 600) * 4; // B,G,R,A: exactly the intended #0B0B0D, opaque (not transparent/black by accident)
+                    Assert.True(px[bgAt] == 0x0D && px[bgAt + 1] == 0x0B && px[bgAt + 2] == 0x0B && px[bgAt + 3] == 0xFF, $"window fill is {px[bgAt + 2]:X2}{px[bgAt + 1]:X2}{px[bgAt]:X2}/{px[bgAt + 3]:X2}, expected 0B0B0D opaque");
                     Assert.True(lit > 4000, $"lit pixels {lit} - home grid not rendered");
                     // Finish native metadata work before tearing down its owning STA.
                     Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
