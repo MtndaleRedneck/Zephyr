@@ -49,7 +49,6 @@ fun ZephyrSetupScreen(
             Text("Set up Zephyr Player", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
         }
-        Text("Step $step of 2", color = Orange, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
 
         if (step == 1) {

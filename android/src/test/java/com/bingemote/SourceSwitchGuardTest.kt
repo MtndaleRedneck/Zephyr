@@ -29,12 +29,4 @@ class SourceSwitchGuardTest {
         for (t in listOf("subtitleRequest++", "subtitleListRequest++", "subtitleFolder = null", "subtitleListInFlight = false"))
             assertTrue(t, b.contains(t))
     }
-
-    @Test fun `helper pair writes token before host and port and handles a broken store`() {
-        val s = src("SetupScreen.kt")
-        val t = s.indexOf("store.helperToken = paired.token")
-        val h = s.indexOf("store.host = target.host", t)
-        assertTrue("token must be written first", t in 0 until h)
-        assertTrue(s.contains("catch (e: SecureStoreUnavailable)"))
-    }
 }

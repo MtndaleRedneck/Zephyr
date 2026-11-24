@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -121,25 +122,27 @@ fun SetupScreen(
         scope.launch {
             try {
                 val paired = withContext(Dispatchers.IO) { HelperClient.pair(target.host, target.port, code) }
-                // Token FIRST: a broken secure store throws before host/port change, so a
-                // failed save leaves the prior pairing exactly as it was.
-                val prior = Triple(store.host, store.helperPort, store.helperToken)
-                try {
-                    store.helperToken = paired.token
-                    store.host = target.host
-                    store.helperPort = target.port
-                } catch (e: SecureStoreUnavailable) {
-                    store.host = prior.first; store.helperPort = prior.second
-                    pairing = false
-                    say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was changed - on your PC, remove this phone in Zephyr VLC Remote, then pair again.", true)
-                    return@launch
+                val fields = object : PairFields {
+                    override var host: String get() = store.host; set(v) { store.host = v }
+                    override var helperPort: Int get() = store.helperPort; set(v) { store.helperPort = v }
+                    override var helperToken: String get() = store.helperToken; set(v) { store.helperToken = v }
+                    override var pcName: String get() = store.pcName; set(v) { store.pcName = v }
+                    override var vlcPassword: String get() = store.vlcPassword; set(v) { store.vlcPassword = v }
                 }
-                store.pcName = paired.name.ifBlank { target.name }
+                when (HelperPairSave.save(fields, target.host, target.port, paired.token,
+                    paired.name.ifBlank { target.name }, paired.vlcPassword)) {
+                    HelperPairSave.Outcome.SAVED -> {}
+                    HelperPairSave.Outcome.FAILED_PRIOR_KEPT -> {
+                        pairing = false; say(HelperPairSave.PRIOR_KEPT_MESSAGE, true); return@launch
+                    }
+                    HelperPairSave.Outcome.FAILED_RESTORE_UNCERTAIN -> {
+                        pairing = false; say(HelperPairSave.UNCERTAIN_MESSAGE, true); return@launch
+                    }
+                }
                 remote.publishAddress(target.host, target.port, paired.token)
                 // Automatic-first: the PC generated the VLC password and handed it over with
                 // the pair. Older helpers need an update before automatic setup can finish.
                 if (paired.vlcPassword != null) {
-                    store.vlcPassword = paired.vlcPassword
                     autoSetup = true
                     autoState = "checking"
                     autoPending = paired.vlcPending
@@ -182,11 +185,6 @@ fun SetupScreen(
                 TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
             }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Step $step of 2",
-            color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-        )
         Spacer(Modifier.height(18.dp))
 
         when (step) {
@@ -308,7 +306,12 @@ fun SetupScreen(
                         // Number pad for the code (it opened the full keyboard).
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
                         visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
-                        colors = fieldColors(),
+                        // Orange outline like the Your PC > Pair again tile (user request).
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextC, unfocusedTextColor = TextC,
+                            focusedBorderColor = Orange, unfocusedBorderColor = Orange,
+                            cursorColor = Orange,
+                        ),
                     )
                     Spacer(Modifier.height(10.dp))
                     OrangeButton(if (pairing) "Pairing\u2026" else "Pair", enabled = !pairing, onClick = { pair() })

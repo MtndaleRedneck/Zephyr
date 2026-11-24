@@ -43,6 +43,7 @@ com.zephyr.remote.ZephyrWireTest
 com.zephyr.remote.ZephyrDiscoveryTest
 com.bingemote.StreamTargetTest
 com.bingemote.SubtitleClientTest
+com.bingemote.SourceSwitchSubtitleTest
 com.bingemote.SubtitleJournalTest
 com.bingemote.SubtitleSheetTest
 com.bingemote.NotificationFeedbackTest

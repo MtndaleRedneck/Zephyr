@@ -308,7 +308,7 @@ private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier =
             Modifier
                 .size(9.dp)
                 .clip(CircleShape)
-                .background(if (!paired) Dimmed else if (connected) Orange else ErrorRed),
+                .background(if (!paired) Dimmed else if (connected) ConnectedGreen else ErrorRed),
         )
         Spacer(Modifier.width(8.dp))
         Text(
@@ -318,6 +318,9 @@ private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier =
         )
     }
 }
+
+/** Header Connected dot (same green as the Your PC screen). */
+private val ConnectedGreen = Color(0xFF4CAF50)
 
 /** Live seek-drag facts shared between the bar (the gesture owner) and the
  * play/pause circle (the cancel target while a drag is active). */
