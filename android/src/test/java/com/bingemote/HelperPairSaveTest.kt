@@ -28,6 +28,19 @@ class HelperPairSaveTest {
     private fun snapshot(f: Fields) = listOf(f.host, f.helperPort.toString(), f.helperToken, f.pcName, f.vlcPassword)
     private val prior = listOf("oldhost", "8492", "oldtoken", "oldname", "oldvlc")
 
+    @Test fun unreadablePriorStopsBeforeAnyWrite() {
+        val f = object : PairFields {
+            val writes = mutableListOf<String>()
+            override var host = "oldhost"; set(v) { writes += "host"; field = v }
+            override var helperPort = 8492; set(v) { writes += "port"; field = v }
+            override var helperToken = "oldtoken"; set(v) { writes += "token"; field = v }
+            override var pcName = "n"; set(v) { writes += "name"; field = v }
+            override var vlcPassword: String get() = throw SecureStoreUnavailable(); set(v) { writes += "vlc" }
+        }
+        assertEquals(HelperPairSave.Outcome.FAILED_PRIOR_KEPT, HelperPairSave.save(f, "h", 1, "tok", "pc", "pw"))
+        assertEquals(emptyList<String>(), f.writes)
+    }
+
     @Test fun refusedFirstCommitRollsBackAndDurableRestoreReportsPriorKept() {
         val f = Fields(); f.flushSeq = { n -> n > 1 } // new values not durable, restored values are
         assertEquals(HelperPairSave.Outcome.FAILED_PRIOR_KEPT, HelperPairSave.save(f, "h", 1, "tok", "pc", "pw"))

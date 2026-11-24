@@ -30,7 +30,9 @@ class Store internal constructor(
      *  NOTHING is ever auto-deleted: the encrypted file and the master key stay exactly
      *  as they are, the app keeps working on an in-memory stand-in, and recovery is a
      *  plain error + re-pair, by hand, never a wipe. */
-    val secureStoreBroken: Boolean get() = secrets is InMemoryPrefs
+    private val storeOpenFailed: Boolean = secrets is InMemoryPrefs
+    /** Failed to open this launch, or a secret read failed since (the box then refuses writes). */
+    val secureStoreBroken: Boolean get() = storeOpenFailed || secretBox.isBroken
 
     /** Fail-closed gate for every secret write: while the store is broken a write
      *  THROWS instead of landing in memory and vanishing at restart (no fake-persisted
@@ -38,12 +40,12 @@ class Store internal constructor(
     private val secretBox = FailClosedSecrets(
         reader = { k -> secrets.getString(k, null) },
         writer = { k, v -> val ed = secrets.edit(); if (v == null) ed.remove(k) else ed.putString(k, v); ed.apply() },
-        broken = secureStoreBroken,
+        broken = storeOpenFailed,
     )
 
     /** Blocks until pending plain and secret writes are on disk; false when either commit is refused.
      *  Pairing uses it so "saved" means durable, not just queued. */
-    fun commitPairing(): Boolean = try { prefs.edit().commit() && !secureStoreBroken && secrets.edit().commit() } catch (e: Exception) { false }
+    fun commitPairing(): Boolean = try { prefs.edit().commit() && !secretBox.isBroken && secrets.edit().commit() } catch (e: Exception) { false }
 
     var pcName: String
         get() = prefs.getString("pcName", "") ?: ""
@@ -188,9 +190,13 @@ class Store internal constructor(
             if (plain.isNotEmpty()) {
                 // Migration only when the encrypted store is healthy; while broken the
                 // plaintext value is honestly on disk, so it still reads, unmigrated.
-                if (!secureStoreBroken) {
-                    secretBox.write("zephyrToken", plain)
-                    prefs.edit().remove("zephyrToken").apply()
+                // Current health, not the startup flag: a failed read earlier in this process also
+                // poisons the box, and then the write would throw out of this getter.
+                if (!secretBox.isBroken) {
+                    try {
+                        secretBox.write("zephyrToken", plain)
+                        prefs.edit().remove("zephyrToken").apply()
+                    } catch (e: SecureStoreUnavailable) { /* stays plaintext on disk, still reads, unmigrated */ }
                 }
                 return plain
             }

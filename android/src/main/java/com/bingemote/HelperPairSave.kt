@@ -21,19 +21,28 @@ internal object HelperPairSave {
     enum class Outcome { SAVED, FAILED_PRIOR_KEPT, FAILED_RESTORE_UNCERTAIN }
 
     fun save(f: PairFields, host: String, port: Int, token: String, pcName: String, vlcPassword: String?): Outcome {
+        // Read every prior value BEFORE any write. A protected read that fails here (and poisons the
+        // secret store) must not happen after the new token is already written, where the rollback
+        // would then be refused. Nothing has changed yet, so this is a clean "prior kept".
+        val priorToken: String; val priorHost: String; val priorPort: Int; val priorName: String; val priorVlc: String?
+        try {
+            priorToken = f.helperToken; priorHost = f.host; priorPort = f.helperPort; priorName = f.pcName
+            priorVlc = if (vlcPassword != null) f.vlcPassword else null
+        } catch (e: Exception) {
+            return Outcome.FAILED_PRIOR_KEPT
+        }
         val undo = ArrayDeque<() -> Boolean>() // each restores one written field, true when confirmed
-        fun <T> step(read: () -> T, write: (T) -> Unit, value: T) {
-            val prior = read()
+        fun <T> step(read: () -> T, write: (T) -> Unit, prior: T, value: T) {
             // Register before writing: a write that throws midway may still have changed state.
             undo.addLast { runCatching { write(prior) }; runCatching { read() == prior }.getOrDefault(false) }
             write(value)
         }
         return try {
-            step({ f.helperToken }, { f.helperToken = it }, token)
-            step({ f.host }, { f.host = it }, host)
-            step({ f.helperPort }, { f.helperPort = it }, port)
-            step({ f.pcName }, { f.pcName = it }, pcName)
-            if (vlcPassword != null) step({ f.vlcPassword }, { f.vlcPassword = it }, vlcPassword)
+            step({ f.helperToken }, { f.helperToken = it }, priorToken, token)
+            step({ f.host }, { f.host = it }, priorHost, host)
+            step({ f.helperPort }, { f.helperPort = it }, priorPort, port)
+            step({ f.pcName }, { f.pcName = it }, priorName, pcName)
+            if (vlcPassword != null) step({ f.vlcPassword }, { f.vlcPassword = it }, priorVlc!!, vlcPassword)
             // apply() alone cannot say the write reached disk; a refused commit rolls everything back.
             if (!f.flush()) throw IllegalStateException("pairing not durable")
             Outcome.SAVED
