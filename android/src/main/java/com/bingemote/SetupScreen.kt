@@ -131,8 +131,9 @@ fun SetupScreen(
                     override fun flush(): Boolean = store.commitPairing()
                     override fun healthy(): Boolean = !store.secureStoreBroken
                 }
-                when (HelperPairSave.save(fields, target.host, target.port, paired.token,
-                    paired.name.ifBlank { target.name }, paired.vlcPassword)) {
+                val saveOutcome = withContext(Dispatchers.IO) { HelperPairSave.save(fields, target.host, target.port, paired.token,
+                    paired.name.ifBlank { target.name }, paired.vlcPassword) }
+                when (saveOutcome) {
                     HelperPairSave.Outcome.SAVED -> {}
                     HelperPairSave.Outcome.FAILED_PRIOR_KEPT -> {
                         pairing = false; say(HelperPairSave.PRIOR_KEPT_MESSAGE, true); return@launch
