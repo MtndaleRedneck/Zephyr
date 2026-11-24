@@ -7,6 +7,9 @@ on:
       - 'windows/ZephyrPlayer/**'
       - 'windows/ZephyrPlayer.Tests/**'
       - '.github/workflows/player.yml'
+      - 'windows/*.props'
+      - 'windows/*.targets'
+      - 'global.json'
 
 # Zephyr Player rebuild branch: build and test on .NET 10. Only one-day screenshot PNGs are uploaded (public repo: run artifacts are publicly downloadable); never installers.
 permissions:
@@ -20,7 +23,18 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 10.0.x
+      - name: Regenerate the lock file (only when the commit message says [regen-lock])
+        if: ${{ contains(github.event.head_commit.message, '[regen-lock]') }}
+        run: dotnet restore windows/ZephyrPlayer/ZephyrPlayer.csproj -r win-x64 -p:PublishSingleFile=true -p:RestoreLockedMode=false --force-evaluate
+      - name: Lock file for review (regeneration only, one day)
+        if: ${{ contains(github.event.head_commit.message, '[regen-lock]') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: player-lock
+          path: windows/ZephyrPlayer/packages.lock.json
+          retention-days: 1
       - name: Restore with locked packages (fails if the lock file drifts)
+        if: ${{ !contains(github.event.head_commit.message, '[regen-lock]') }}
         run: dotnet restore windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -p:RestoreLockedMode=true
       - name: Build Player
         run: dotnet build windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release --no-restore

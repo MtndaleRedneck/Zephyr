@@ -84,14 +84,25 @@ public sealed class SafeMediaSourceTests
         Assert.Throws<InvalidDataException>(()=>source.Seek(10,SeekOrigin.Begin));
     }
     [Fact]
-    public void TotalPreparationDeadline_StopsDribblingBody()
+    public void PreparationDeadline_StopsWaitingForTheFirstResponse()
     {
-        using var fixture=new Fixture((ctx,_)=>{ctx.Response.StatusCode=200;ctx.Response.ContentLength64=100;for(int i=0;i<100;i++){ctx.Response.OutputStream.WriteByte(1);ctx.Response.OutputStream.Flush();Thread.Sleep(50);}});
-        using var deadline=new CancellationTokenSource(300);
-        var watch=System.Diagnostics.Stopwatch.StartNew();var b=new byte[10];
-        // The deadline covers connecting too, so a slow first response may cancel inside the constructor.
-        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);while(true)source.Read(b,0,b.Length);}));
-        Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2));
+        // The server holds the response headers back: the deadline must end the constructor itself.
+        using var fixture=new Fixture((ctx,_)=>{Thread.Sleep(2500);ctx.Response.StatusCode=200;ctx.Response.ContentLength64=3;ctx.Response.OutputStream.Write(new byte[3]);});
+        using var deadline=new CancellationTokenSource(300);var watch=System.Diagnostics.Stopwatch.StartNew();
+        Assert.ThrowsAny<OperationCanceledException>(()=>new PeerRangeStream(new Uri(fixture.Url),deadline.Token));
+        Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2),$"constructor took {watch.Elapsed}");
+    }
+    [Fact]
+    public void PreparationDeadline_StopsAStalledBodyAfterTheConstructorReturned()
+    {
+        // Headers and a few bytes arrive at once, then the body stalls. The constructor must return
+        // (reached barrier), and the deadline must then end the read.
+        using var fixture=new Fixture((ctx,_)=>{ctx.Response.StatusCode=200;ctx.Response.ContentLength64=100;ctx.Response.OutputStream.Write(new byte[3]);ctx.Response.OutputStream.Flush();Thread.Sleep(6000);});
+        using var deadline=new CancellationTokenSource();
+        using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);
+        deadline.CancelAfter(400);var watch=System.Diagnostics.Stopwatch.StartNew();var b=new byte[10];
+        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{while(true)source.Read(b,0,b.Length);}));
+        Assert.True(watch.Elapsed<TimeSpan.FromSeconds(3),$"stalled read took {watch.Elapsed}");
     }
     [Fact]
     public void ConcurrentAbort_ReleasesStalledReadAndCallbackOwnership()

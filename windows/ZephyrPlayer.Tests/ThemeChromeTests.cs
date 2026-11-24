@@ -41,15 +41,38 @@ namespace ZephyrPlayer.Tests {
     }
    });
   }
+  static byte[] Pixel(FrameworkElement host,int x,int y){
+   host.Measure(new Size(host.Width,host.Height));host.Arrange(new Rect(0,0,host.Width,host.Height));host.UpdateLayout();
+   var bmp=new RenderTargetBitmap((int)host.Width,(int)host.Height,96,96,PixelFormats.Pbgra32);bmp.Render(host);
+   var px=new byte[4];bmp.CopyPixels(new Int32Rect(x,y,1,1),px,4,0);return px;
+  }
+  static Border ButtonHost(bool themed){
+   var b=new Button{Content="OK",Width=120,Height=40};
+   var host=new Border{Background=new SolidColorBrush(Color.FromRgb(0x1B,0x1B,0x1E)),Width=160,Height=80,Child=new Grid{Children={b}}};
+   if(themed)host.Resources.MergedDictionaries.Add(Theme());return host;
+  }
   [Fact]
-  public void Button_Renders_Dark_Not_System_Gray(){
+  public void Button_Interior_Is_Our_Dark_Fill_And_Not_The_System_Look(){
    Sta(()=>{
-    var b=new Button{Content="Browse",Width=120,Height=40};
-    var host=new Border{Background=new SolidColorBrush(Color.FromRgb(0x1B,0x1B,0x1E)),Width=160,Height=80,Child=b};host.Resources.MergedDictionaries.Add(Theme());
-    host.Measure(new Size(160,80));host.Arrange(new Rect(0,0,160,80));host.UpdateLayout();
-    var bmp=new RenderTargetBitmap(160,80,96,96,PixelFormats.Pbgra32);bmp.Render(host);
-    var px=new byte[4];bmp.CopyPixels(new Int32Rect(10,10,1,1),px,4,0); // inside the button, off the text
-    Assert.True(px[0]<0x60&&px[1]<0x60&&px[2]<0x60,$"button corner pixel too light: {px[2]:X2}{px[1]:X2}{px[0]:X2}");
+    // Button is 120x40 centered in 160x80: it covers x 20..140, y 20..60. Sample inside it, away from the text.
+    var themed=Pixel(ButtonHost(true),30,30);
+    Assert.True(themed[0]<0x60&&themed[1]<0x60&&themed[2]<0x60,$"themed button interior too light: {themed[2]:X2}{themed[1]:X2}{themed[0]:X2}");
+    // Mutation: take the theme away and the same pixel must change, or the test is not looking at the button.
+    var plain=Pixel(ButtonHost(false),30,30);
+    Assert.NotEqual(themed,plain);
+    // And the host background outside the button is the dark host color, not the button.
+    var outside=Pixel(ButtonHost(true),5,5);Assert.Equal(0x1B,outside[2]);
+   });
+  }
+  [Fact]
+  public void MenuItem_Shows_Whether_It_Is_Checked(){
+   Sta(()=>{
+    foreach(var on in new[]{true,false}){
+     var menu=new ContextMenu();var item=new MenuItem{Header="Name",IsCheckable=true,IsChecked=on};menu.Items.Add(item);
+     menu.Resources.MergedDictionaries.Add(Theme());menu.ApplyTemplate();menu.Measure(new Size(240,200));menu.Arrange(new Rect(0,0,240,200));menu.UpdateLayout();
+     item.ApplyTemplate();var check=(UIElement)item.Template.FindName("Check",item);
+     Assert.Equal(on?Visibility.Visible:Visibility.Collapsed,check.Visibility);
+    }
    });
   }
  }
