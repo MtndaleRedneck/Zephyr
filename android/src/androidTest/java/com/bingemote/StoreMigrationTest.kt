@@ -2,6 +2,7 @@ package com.bingemote
 
 import android.content.Context
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
