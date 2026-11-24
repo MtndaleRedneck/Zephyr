@@ -8,6 +8,11 @@ import androidx.test.uiautomator.UiDevice
 object Triage {
     fun tree(label: String) {
         runCatching {
+            val ctx = InstrumentationRegistry.getInstrumentation().targetContext
+            UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+                .takeScreenshot(java.io.File(ctx.getExternalFilesDir(null), "triage-" + label.replace(Regex("[^A-Za-z0-9]+"), "-").take(40) + ".png"))
+        }
+        runCatching {
             val out = java.io.ByteArrayOutputStream()
             UiDevice.getInstance(InstrumentationRegistry.getInstrumentation()).dumpWindowHierarchy(out)
             val xml = out.toString()

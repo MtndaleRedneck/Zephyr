@@ -136,14 +136,14 @@ class AutomaticOnlySetupTest {
         assertTrue(device.hasObject(By.text("Code from your PC")))
         // The page was scrolled to reveal the code field; bring the Selected row back into view.
         repeat(3) {
-            if (!device.hasObject(By.text("Selected: 192.0.2.20:8488"))) {
+            if (!device.hasObject(By.text("Selected: 192.0.2.20:${HelperClient.DEFAULT_PORT}"))) {
                 device.swipe(device.displayWidth / 2, device.displayHeight / 3,
                     device.displayWidth / 2, device.displayHeight * 4 / 5, 20)
                 Thread.sleep(250)
             }
         }
-        if (!device.hasObject(By.text("Selected: 192.0.2.20:8488"))) Triage.tree("selected row missing after confirming address")
-        assertTrue(device.hasObject(By.text("Selected: 192.0.2.20:8488")))
+        if (!device.hasObject(By.text("Selected: 192.0.2.20:${HelperClient.DEFAULT_PORT}"))) Triage.tree("selected row missing after confirming address")
+        assertTrue(device.hasObject(By.text("Selected: 192.0.2.20:${HelperClient.DEFAULT_PORT}")))
         device.takeScreenshot(java.io.File(ctx.getExternalFilesDir(null), "bm-setup-selected-address.png"))
     }
 

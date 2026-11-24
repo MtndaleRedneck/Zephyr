@@ -814,8 +814,14 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
                 androidx.compose.runtime.snapshotFlow { remote.subtitleFolder?.files?.isNotEmpty() == true }
                     .first { v -> v }
                 MainActivity.previewLostRigArmed = false
+                android.util.Log.e("ZephyrTriage", "rig: connected rows composed, dropping in 2.5s")
                 kotlinx.coroutines.delay(2500)
                 remote.debugForceStatus(unreachable = true, helperDown = true)
+                android.util.Log.e("ZephyrTriage", "rig: forced unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                kotlinx.coroutines.delay(3000)
+                android.util.Log.e("ZephyrTriage", "rig: 3s later unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+            } else {
+                android.util.Log.e("ZephyrTriage", "rig: not armed when the sheet composed")
             }
         }
     }
