@@ -262,11 +262,13 @@ class RemoteState(
     // main thread; now it refreshes once per poll and right after pair/clear flows.
     var zephyrPaired by mutableStateOf(false); private set
     var vlcPaired by mutableStateOf(false); private set
+    /** Screenshot-rig only: render the VLC source as paired without a real pairing. Never set outside the rig. */
+    @Volatile var debugForcePaired = false
 
     init { refreshPairing() } // once at creation; then per poll + after pair/clear
     fun refreshPairing() {
         zephyrPaired = store.isPaired(Source.ZEPHYR)
-        vlcPaired = store.isPaired(Source.VLC)
+        vlcPaired = store.isPaired(Source.VLC) || (BuildConfig.DEBUG && debugForcePaired)
     }
     fun pairedForSelected(): Boolean = if (store.selectedSource == Source.ZEPHYR) zephyrPaired else vlcPaired
 

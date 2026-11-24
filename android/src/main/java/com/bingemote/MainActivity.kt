@@ -75,6 +75,7 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
         remote = RemoteState(this, store, lifecycleScope)
         if (BuildConfig.DEBUG && intent.getBooleanExtra("demostatus", false)) remote.debugSeedStatus()
+        if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { remote.debugForcePaired = true; remote.refreshPairing() }
         // Screenshot-rig only: render one status-notice review scenario per capture.
         // Polling is frozen (setupDone=false -> pollOnce no-ops) or leftover rig prefs
         // would re-trip unreachable/helperDown over the forced states mid-capture.

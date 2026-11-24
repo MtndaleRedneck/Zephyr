@@ -47,6 +47,7 @@ shoot settings-pair-paired
 shoot movies-phone
 shoot movies
 shoot main-connected main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok
+adb shell pm clear $PKG >/dev/null 2>&1 || true # no saved pairing: the code field sits above the fold
 shoot helper-code-entry setup --ez pairdemo true
 adb shell wm size reset
 adb shell wm density reset

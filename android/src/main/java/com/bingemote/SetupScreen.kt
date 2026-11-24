@@ -48,7 +48,7 @@ fun SetupScreen(
     var found by remember {
         mutableStateOf(if (demoPair && demo) listOf(DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC")) else emptyList())
     }
-    var chosen by remember { mutableStateOf<DiscoveredHelper?>(null) }
+    var chosen by remember { mutableStateOf<DiscoveredHelper?>(if (demoPair && demo) DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC") else null) }
     var manualHost by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var pairing by remember { mutableStateOf(false) }
