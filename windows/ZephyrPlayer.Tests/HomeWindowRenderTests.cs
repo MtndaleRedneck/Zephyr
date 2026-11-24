@@ -142,7 +142,13 @@ namespace ZephyrPlayer.Tests
                     }
                     Assert.True(watched && kids, "both folders listed");
                     var root = (FrameworkElement)w.Content;
-                    root.Measure(new Size(900, 600)); root.Arrange(new Rect(0, 0, 900, 600)); root.UpdateLayout();
+                    // Lay the window out at the real minimum size first, so nothing keeps a wider cached layout.
+                    w.Width = 900; w.Height = 600; w.Show(); w.UpdateLayout();
+                    root.InvalidateMeasure(); root.Measure(new Size(900, 600)); root.Arrange(new Rect(0, 0, 900, 600)); root.UpdateLayout();
+                    var phoneChip = (FrameworkElement)w.FindName("PhoneCard")!;
+                    var chipRight = phoneChip.TranslatePoint(new Point(phoneChip.ActualWidth, 0), root).X;
+                    Assert.True(chipRight <= 900, $"phone chip clipped at 900 wide: right edge {chipRight}");
+                    Assert.True(list.ActualWidth <= 900, $"movie list wider than the window: {list.ActualWidth}");
                     var rtb = new RenderTargetBitmap(900, 600, 96, 96, PixelFormats.Pbgra32);
                     var bg = new DrawingVisual();
                     using (var dc = bg.RenderOpen()) dc.DrawRectangle(w.Background, null, new Rect(0, 0, 900, 600));
