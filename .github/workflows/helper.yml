@@ -43,23 +43,16 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/ZephyrVlcRemote/installer.iss
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           Get-ChildItem windows/ZephyrVlcRemote/Output | Select-Object Name, Length
-      - name: Launch the compressed exe (window render, no setup prompts)
-        shell: pwsh
-        run: |
-          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\shot-default.png"
-          $p = Start-Process -FilePath windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe -ArgumentList '--window-shot' -PassThru
-          if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "compressed exe did not finish a window render in 60s" }
-          "exit code: $($p.ExitCode)"
-          if (-not (Test-Path shot-default.png)) { throw "no window render produced" }
       - name: Render pairing and Wi-Fi states (CI-hook build, not shipped)
         shell: pwsh
         run: |
           dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
-          foreach ($m in @('pairing','broken-store')) {
+          foreach ($m in @('default','pairing','broken-store')) {
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\shot-$m.png"
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = $m
             $p = Start-Process -FilePath windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe -ArgumentList '--window-shot' -PassThru
-            if (-not $p.WaitForExit(60000)) { $p.Kill() }
+            if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "compressed exe did not finish the $m render in 60s" }
+            if (-not (Test-Path "shot-$m.png")) { throw "no $m render produced" }
           }
           Get-ChildItem shot-*.png | Select-Object Name, Length
       - uses: actions/upload-artifact@v4
