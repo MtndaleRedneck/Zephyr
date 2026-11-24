@@ -41,6 +41,7 @@ namespace ZephyrPlayer
         internal List<(string Path, Item Item)> Recent(int count, string? root = null)
         {
             var result = new List<(string, Item)>();
+            if (count <= 0) return result;
             lock (Sync)
             {
                 var rootFull = string.IsNullOrEmpty(root) ? null : System.IO.Path.GetFullPath(root).TrimEnd('\\', '/') + System.IO.Path.DirectorySeparatorChar;

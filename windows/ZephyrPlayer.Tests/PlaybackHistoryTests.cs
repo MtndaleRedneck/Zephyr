@@ -56,6 +56,7 @@ namespace ZephyrPlayer.Tests
             var history = new PlaybackHistory(file);
             Assert.Equal(5000, history.Get(video)!.PositionMs);
             Assert.Empty(history.Recent(3, dir));
+            Assert.Empty(history.Recent(0, dir)); Assert.Empty(history.Recent(-1, dir));
             Directory.Delete(dir, true);
         }
         [Fact] public void RemoteAddressesNeverPersist()
