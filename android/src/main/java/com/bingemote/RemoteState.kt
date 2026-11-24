@@ -31,6 +31,9 @@ class RemoteState(
     var unreachable by mutableStateOf(false)
         private set
 
+    /** Either service answering proves the PC is reachable, independently of VLC playback. */
+    val pcReachable: Boolean get() = !unreachable || (store.helperToken.isNotBlank() && !helperDown)
+
     /** VLC didn't answer but the helper did: the PC is fine, VLC just isn't open. */
     var vlcClosed by mutableStateOf(false)
     /** VLC refused the password and the one automatic heal (the adoption fetch) is spent:
@@ -108,6 +111,7 @@ class RemoteState(
     }
 
     private var pollJob: Job? = null
+    private var lastConnectedAt = 0L
     private var failures = 0
     private var helperFailures = 0
     @Volatile private var rediscovering = false
@@ -315,16 +319,26 @@ class RemoteState(
                     System.currentTimeMillis() - helperDownAt >= 5000
             }
         } else winVolume = null
+        // A cached VLC-closed state must not mask a subsequent loss of the PC.
+        // Helper liveness is checked on every poll, including the skipped VLC cycles.
+        if (helperDown && vlcClosed) vlcClosed = false
         if (skipVlc) return
         try {
             val s = vlcDeferred!!.await()
             if (store.selectedSource != Source.VLC) return
             status = s
+            lastConnectedAt = android.os.SystemClock.elapsedRealtime()
             // A new video clears the remembered subtitle pick; the sheet then shows the
             // file's own selected track instead of a checkmark from the previous video.
             if (s.title != lastTitle || s.lengthSec != lastLengthSec) {
                 lastTitle = s.title; lastLengthSec = s.lengthSec
+                subtitleRequest++
+                subtitleListRequest++
+                subtitleListLoading = false
+                subtitleMutationLoading = false
                 pickedSubtitle = null
+                pickedSubtitleFile = null
+                subtitleFolder = null
             }
             failures = 0
             unreachable = false
@@ -334,6 +348,7 @@ class RemoteState(
             connecting = false
             expectingVlc = false
         } catch (e: Vlc.BadAuth) {
+            lastConnectedAt = 0L
             // The one automatic heal: adopt the PC's current password once. The phone never
             // pushes its stored copy at the PC - a refusal can be an intentional PC change.
             val healed = withContext(Dispatchers.IO) { VlcAuthRepair.tryHealOnce(store) }
@@ -342,6 +357,7 @@ class RemoteState(
             failures = UNREACHABLE_AFTER
             unreachable = true
         } catch (e: Exception) {
+            lastConnectedAt = 0L
             failures++
             if (failures >= UNREACHABLE_AFTER) {
                 unreachable = true
@@ -417,21 +433,23 @@ class RemoteState(
     // Taps carry their time: a play/pause/skip/seek queued more than about 2 s (a dead
     // PC, a stalled request) is a tap he no longer expects, so it is dropped - and a
     // burst of volume steps folds into the newest one.
-    private class Cmd(val kind: String, val ts: Long, val block: () -> Unit)
+    private class Cmd(val kind: String, val ts: Long, val subtitleGeneration: Int = -1, val block: () -> Unit)
     private val cmds = Channel<Cmd>(Channel.UNLIMITED)
     @Volatile private var pushback: Cmd? = null // one non-volume command held while volume folds
     init {
         scope.launch(Dispatchers.IO) {
             while (isActive) {
                 var c = pushback?.also { pushback = null } ?: cmds.receive()
+                if (c.kind == "sub" && c.subtitleGeneration != subtitleRequest) continue
                 if (c.kind == "volume") {
                     while (true) {
                         val nxt = cmds.tryReceive().getOrNull() ?: break
                         if (nxt.kind == "volume") { Diag.volumeCoalesced.incrementAndGet(); c = nxt }
                         else { pushback = nxt; break }
                     }
-                } else if (c.kind != "mute" && System.currentTimeMillis() - c.ts > CmdPolicy.EXPIRY_MS) {
+                } else if (c.kind != "mute" && c.kind != "sub" && System.currentTimeMillis() - c.ts > CmdPolicy.EXPIRY_MS) {
                     Diag.cmdsExpired.incrementAndGet()
+                    if (c.kind == "sub") scope.launch { subtitleMutationLoading = false }
                     continue
                 }
                 try { c.block() }
@@ -452,17 +470,29 @@ class RemoteState(
     }
 
     private fun fire(kind: String, block: () -> Unit) {
-        // Teardown A1: an unpaired source drops taps quietly - they are not PC failures
+        // An unpaired source drops taps quietly - they are not PC failures
         // and must not feed the unreachable counter.
         if (!store.isPaired(store.selectedSource)) return
         val target = store.selectedSource
-        cmds.trySend(Cmd(kind, System.currentTimeMillis()) {
-            // A queued tap never moves to a different source after a selector change.
-            if (store.selectedSource == target && store.isPaired(target)) block()
-        })
+        // First press while the PC's screen is dark only wakes it (VLC source; helper-routed
+        // ones are also swallowed PC-side, so one tap never half-lands). A queued tap never
+        // moves to a different source after a selector change.
+        val gated: () -> Unit = {
+            if (store.selectedSource == target && store.isPaired(target)) {
+                if (target == Source.VLC && HelperClient.screenIsDark(store.host, store.helperPort, store.helperToken)) {
+                    HelperClient.wakeDisplay(store.host, store.helperPort, store.helperToken)
+                } else {
+                    block()
+                }
+            }
+        }
+        cmds.trySend(Cmd(kind, System.currentTimeMillis(), block = gated))
     }
 
     fun togglePause() {
+        // A disconnected tap is intentionally inert, without disabled styling.
+        if (unreachable || vlcClosed || vlcRefused || lastConnectedAt == 0L ||
+            android.os.SystemClock.elapsedRealtime() - lastConnectedAt > 5000) return
         if (BuildConfig.DEBUG) Log.i("BMSeek", "togglePause")
         // Flip the icon at once; the next status poll (about a second out) confirms or corrects it.
         val s = status
@@ -590,11 +620,271 @@ class RemoteState(
         }
     }
 
-    fun pickSubtitle(trackId: Int) {
-        pickedSubtitle = trackId
-        fire("sub") {
-            if (store.selectedSource == Source.ZEPHYR) ZephyrClient.captions(zephyrHost(), store.zephyrPort, store.zephyrToken, trackId)
-            else Vlc.setSubtitleTrack(store.host, store.vlcPort, store.vlcPassword, trackId)
+    var subtitleFolder by mutableStateOf<HelperClient.SubtitleFolder?>(null); private set
+    private var subtitleListLoading by mutableStateOf(false)
+    private var subtitleMutationLoading by mutableStateOf(false)
+    val subtitleFilesLoading get() = subtitleListLoading || subtitleMutationLoading
+    private var subtitleListError by mutableStateOf<String?>(null)
+    private var subtitleMutationError by mutableStateOf<String?>(null)
+    val subtitleFileError get() = subtitleMutationError ?: subtitleListError
+    private var confirmedSubtitleMedia: String? = null
+    private val subtitleJournal = SubtitleJournal(app)
+    private val subtitleWarningKey: String get() = java.security.MessageDigest.getInstance("SHA-256")
+        .digest(("subtitle-v1:" + store.helperToken).toByteArray(Charsets.UTF_8))
+        .joinToString("") { "%02x".format(it) }
+    var subtitleOutcomeUnknown by mutableStateOf(false); private set
+    private var uncertainFolderMedia: String? = null
+    private var uncertainSubtitleMedia: Set<String> = emptySet()
+    private var loadedWarningKey: String? = null
+    private var warningReadInFlight = false
+    private var warningReadAgain = false
+    @Volatile private var warningGeneration = 0
+    private suspend fun readSubtitleWarnings(key:String,current:String?): Pair<List<SubtitleJournal.Entry>,Boolean> = withContext(Dispatchers.IO){
+        try{
+            subtitleJournal.entries(key) to subtitleJournal.isDegraded(key)
+        }catch(_:Exception){emptyList<SubtitleJournal.Entry>() to true}
+    }
+    private fun applySubtitleWarnings(key:String,current:String?,result:Pair<List<SubtitleJournal.Entry>,Boolean>): Boolean {
+        if(key!=subtitleWarningKey || current!=confirmedSubtitleMedia)return false
+        val records=result.first
+        val relevant=records.filter{current.isNullOrEmpty() || it.media.isEmpty() || it.media==current || it.phase=="pending"}
+        val wasUnknown=subtitleOutcomeUnknown
+        subtitleOutcomeUnknown=result.second || relevant.isNotEmpty()
+        uncertainSubtitleMedia=relevant.map{it.media}.toSet()
+        uncertainFolderMedia=relevant.firstOrNull{it.media==current}?.media ?: relevant.firstOrNull()?.media
+        if(result.second)subtitleMutationError="Subtitle safety history couldn't be read. New file loads are paused because their previous outcome cannot be established. Existing controls remain best-effort."
+        else if(subtitleOutcomeUnknown)subtitleMutationError="Couldn't confirm the previous subtitle change. Existing controls are still available."
+        else if(wasUnknown)subtitleMutationError=null
+        return true
+    }
+    private fun reconcileSubtitleWarnings() {
+        val key=subtitleWarningKey
+        if(loadedWarningKey!=key){
+            loadedWarningKey=key;confirmedSubtitleMedia=null;pickedSubtitle=null;pickedSubtitleFile=null
+            subtitleFolder=null;subtitleRequest++;subtitleListRequest++;warningGeneration++
+            subtitleListLoading=false;subtitleMutationLoading=false;subtitleMutationError=null
+            subtitleOutcomeUnknown=false;uncertainFolderMedia=null;uncertainSubtitleMedia=emptySet()
         }
+        if(warningReadInFlight){warningReadAgain=true;return}
+        warningReadInFlight=true
+        scope.launch {
+            try {
+                do {
+                    warningReadAgain=false
+                    val readKey=subtitleWarningKey;val current=confirmedSubtitleMedia
+                    val generation=warningGeneration;val mutation=subtitleRequest
+                    val result=readSubtitleWarnings(readKey,current)
+                    if(generation==warningGeneration && mutation==subtitleRequest)applySubtitleWarnings(readKey,current,result)
+                    else warningReadAgain=true
+                } while(warningReadAgain)
+            } finally { warningReadInFlight=false }
+        }
+    }
+    private fun beginSubtitleMutation(media: String?, key: String, folderLoad:Boolean=false): String = try { subtitleJournal.begin(key,media,folderLoad) }
+        catch (_: Exception) { throw HelperClient.SubtitleRejected("Couldn't save subtitle safety state. Try again.") }
+    private fun finishSubtitleMutation(id: String?, unknown: Boolean) {
+        if (id != null) { subtitleJournal.finish(id,unknown);warningGeneration++ }
+    }
+    var pickedSubtitleFile by mutableStateOf<String?>(null); private set
+    @Volatile private var subtitleRequest = 0
+    private var subtitleListRequest = 0
+    private var subtitleListInFlight = false
+    init { reconcileSubtitleWarnings() }
+
+    internal fun debugSubtitlePreview() {
+        if (!BuildConfig.DEBUG) return
+        status = VlcStatus("playing", "Demo", 30, 3600, 128, false,
+            listOf(SubTrack(1, "English", false), SubTrack(2, "Spanish", false)))
+        subtitleFolder = HelperClient.SubtitleFolder("demo", listOf(
+            HelperClient.SubtitleFile("demo-en", "Movie.en.srt"),
+            HelperClient.SubtitleFile("demo-es", "Movie.es.srt")), false)
+        pickedSubtitleFile = "demo-en"
+    }
+    /** Screenshot-rig only: seeds the leftover list message a prior unavailable/
+     *  truncated result would have set, so tests can prove a later failed check
+     *  clears it. Debug builds only. */
+    internal fun debugSeedSubtitleListError() {
+        if (!BuildConfig.DEBUG) return
+        subtitleListError = "Can't check subtitle files right now."
+    }
+    fun refreshSubtitleFiles(quiet: Boolean = false) {
+        reconcileSubtitleWarnings()
+        if (BuildConfig.DEBUG && subtitleFolder?.mediaId == "demo") return
+        if (subtitleListInFlight) return
+        subtitleListInFlight = true
+        val request = ++subtitleListRequest
+        val mutationAtStart = subtitleRequest
+        if (!quiet) { subtitleListLoading = true; subtitleListError = null }
+        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        scope.launch {
+            try {
+                val folder = withContext(Dispatchers.IO) { HelperClient.subtitleFiles(host, port, token) }
+                if (request == subtitleListRequest && mutationAtStart == subtitleRequest) {
+                    if (!folder.unavailable && folder.mediaId.isNotEmpty() && confirmedSubtitleMedia != folder.mediaId) { pickedSubtitleFile = null; pickedSubtitle = null }
+                    if (!folder.unavailable && folder.mediaId.isNotEmpty()) {
+                        confirmedSubtitleMedia = folder.mediaId
+                        reconcileSubtitleWarnings()
+                    }
+                    subtitleFolder = folder
+                    subtitleListError = null
+                    if (folder.unavailable) subtitleListError = "Can't check subtitle files right now."
+                    else if (folder.truncated) subtitleListError = "This folder is large. Only some subtitle files are shown."
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: Exception) {
+                if (request == subtitleListRequest && mutationAtStart == subtitleRequest) {
+                    // No connection to the PC (or an older PC app without folder
+                    // subtitles): folder entries simply stay hidden, exactly like
+                    // before the feature existed. No error line, no Retry. A leftover
+                    // message from an earlier unavailable/truncated result is stale
+                    // content and must go too, or it would render an error/Retry the
+                    // current failure did not produce.
+                    subtitleFolder = null
+                    // Quiet only when the PC is gone (raw socket failure), too old
+                    // (MissingRoute), or unpaired (BadToken - the main screen owns
+                    // that notice). An ANSWERING helper whose check failed keeps an
+                    // honest message + Retry, same wording as its unavailable answer.
+                    subtitleListError = when (e) {
+                        is HelperClient.MissingRoute, is HelperClient.BadToken, is java.io.IOException -> null
+                        else -> "Can't check subtitle files right now."
+                    }
+                }
+            } finally { subtitleListInFlight = false; if (request == subtitleListRequest) subtitleListLoading = false }
+        }
+    }
+    fun loadSubtitleFile(file: HelperClient.SubtitleFile) {
+        reconcileSubtitleWarnings()
+        val folder = subtitleFolder ?: return
+        if (folder.mediaId in uncertainSubtitleMedia || "" in uncertainSubtitleMedia) {
+            subtitleMutationError = "Couldn't confirm the file load. Existing subtitle controls are still available."
+            return
+        }
+        val request = ++subtitleRequest
+        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        val warningKey = subtitleWarningKey
+        subtitleMutationError = null
+        subtitleMutationLoading = true
+        // Same ordered command lane as Off/loaded-track selection. A later Off cannot
+        // overtake a slow add and then be undone when that add eventually lands.
+        cmds.trySend(Cmd("sub", System.currentTimeMillis(), request) {
+            var journalId: String? = null
+            try {
+                if (warningKey != subtitleWarningKey) throw HelperClient.SubtitleRejected("pairing changed")
+                journalId = beginSubtitleMutation(folder.mediaId,warningKey,true)
+                val loaded = HelperClient.loadSubtitle(host, port, token, folder.mediaId, file.id)
+                finishSubtitleMutation(journalId,false)
+                val refreshed = if (loaded) try { HelperClient.subtitleFiles(host, port, token) } catch (_: Exception) { null } else null
+                scope.launch {
+                    if (request == subtitleRequest && host == store.host && token == store.helperToken) {
+                        val current=confirmedSubtitleMedia
+                        val result=readSubtitleWarnings(warningKey,current)
+                        if(request!=subtitleRequest || warningKey!=subtitleWarningKey)return@launch
+                        if(!applySubtitleWarnings(warningKey,current,result))return@launch
+                        if (loaded) {
+                            pickedSubtitle = null
+                            pickedSubtitleFile = if (refreshed?.mediaId == folder.mediaId) file.id else null
+                            subtitleFolder = refreshed
+                            if (refreshed == null || refreshed.unavailable) subtitleMutationError = "Subtitle loaded. Couldn't refresh the list. Tap Retry."
+                        } else subtitleMutationError = "Screen woken. Tap the subtitle again to load it."
+                        subtitleMutationLoading = false
+                    }
+                }
+            } catch (_: HelperClient.SubtitleRejected) {
+                finishSubtitleMutation(journalId,false)
+                scope.launch { if (warningKey == subtitleWarningKey && request == subtitleRequest) {
+                    subtitleMutationError = "That subtitle selection changed. Refresh the list and try again."
+                    subtitleMutationLoading = false
+                } }
+            } catch (_: Exception) {
+                finishSubtitleMutation(journalId,true)
+                scope.launch {
+                    // A newer intent can hide an old success, but cannot erase an
+                    // uncertain mutation that may already have reached VLC.
+                    if (warningKey == subtitleWarningKey && (confirmedSubtitleMedia == null || confirmedSubtitleMedia == folder.mediaId)) {
+                        subtitleOutcomeUnknown = true
+                        uncertainFolderMedia = folder.mediaId
+                        uncertainSubtitleMedia = uncertainSubtitleMedia + folder.mediaId
+                        subtitleMutationError = "Couldn't confirm the file load. Existing subtitle controls are still available."
+                    }
+                    if (warningKey == subtitleWarningKey && request == subtitleRequest) subtitleMutationLoading = false
+                }
+            }
+        })
+    }
+
+    fun pickSubtitle(trackId: Int) {
+        if (store.selectedSource == Source.ZEPHYR) {
+            pickedSubtitle = trackId
+            fire("sub") { ZephyrClient.captions(zephyrHost(), store.zephyrPort, store.zephyrToken, trackId) }
+            return
+        }
+        reconcileSubtitleWarnings()
+        subtitleRequest++
+        subtitleMutationLoading = false
+        val request = subtitleRequest
+        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        val warningKey = subtitleWarningKey
+        val vlcPort = store.vlcPort; val password = store.vlcPassword
+        val mediaId = confirmedSubtitleMedia
+        if (!subtitleOutcomeUnknown) subtitleMutationError = null
+        subtitleMutationLoading = true
+        cmds.trySend(Cmd("sub", System.currentTimeMillis(), request) {
+            var journalId: String? = null
+            var dispatched = false
+            var dispatchedMedia: String? = null
+            try {
+                if (warningKey != subtitleWarningKey) throw HelperClient.SubtitleRejected("pairing changed")
+                val currentMedia = try { HelperClient.subtitleMedia(host,port,token) } catch (_: HelperClient.MissingRoute) { null }
+                if (trackId != -1 && mediaId != null && currentMedia != null && mediaId != currentMedia) throw HelperClient.SubtitleRejected("movie changed")
+                dispatchedMedia = currentMedia ?: confirmedSubtitleMedia
+                try { journalId = beginSubtitleMutation(dispatchedMedia,warningKey) }
+                catch (_: HelperClient.SubtitleRejected) {
+                    // Existing track controls remain usable when history storage is
+                    // unavailable, but cannot claim a confirmed durable outcome.
+                    subtitleJournal.markDegraded(warningKey)
+                    scope.launch { if(warningKey==subtitleWarningKey){
+                        subtitleOutcomeUnknown=true
+                        subtitleMutationError="Subtitle history couldn't be saved. Existing controls are best-effort; the selected state is unconfirmed."
+                    } }
+                }
+                dispatched = true
+                if (currentMedia == null || !HelperClient.selectSubtitle(host, port, token, trackId, currentMedia)) {
+                    if (HelperClient.screenIsDark(host, port, token)) {
+                        HelperClient.wakeDisplay(host, port, token)
+                        throw HelperClient.SubtitleRejected("wake only")
+                    }
+                    Vlc.setSubtitleTrack(host, vlcPort, password, trackId)
+                }
+                finishSubtitleMutation(journalId,false)
+                scope.launch {
+                    if (warningKey == subtitleWarningKey && request == subtitleRequest) {
+                        val current=confirmedSubtitleMedia
+                        val result=readSubtitleWarnings(warningKey,current)
+                        if(request!=subtitleRequest || warningKey!=subtitleWarningKey)return@launch
+                        if(!applySubtitleWarnings(warningKey,current,result))return@launch
+                        pickedSubtitleFile=null;if(!subtitleOutcomeUnknown)pickedSubtitle=trackId
+                        subtitleMutationLoading=false
+                    }
+                }
+            } catch (_: HelperClient.SubtitleRejected) {
+                finishSubtitleMutation(journalId,false)
+                scope.launch { if (warningKey == subtitleWarningKey && request == subtitleRequest) {
+                    subtitleMutationError = "The movie or subtitle selection changed. Try again."
+                    subtitleMutationLoading = false
+                } }
+            } catch (_: Exception) {
+                if (dispatched) finishSubtitleMutation(journalId,true)
+                scope.launch {
+                    if (warningKey == subtitleWarningKey && dispatched && (mediaId == null || confirmedSubtitleMedia == null || confirmedSubtitleMedia == mediaId)) {
+                        subtitleOutcomeUnknown = true
+                        uncertainFolderMedia = dispatchedMedia
+                        uncertainSubtitleMedia = uncertainSubtitleMedia + dispatchedMedia.orEmpty()
+                        subtitleMutationError = "Couldn't confirm the subtitle change. You can try the existing controls again."
+                    }
+                    if (warningKey == subtitleWarningKey && !dispatched && request == subtitleRequest) subtitleMutationError = "Can't reach the PC to change subtitles. Try again."
+                    if (warningKey == subtitleWarningKey && request == subtitleRequest) subtitleMutationLoading = false
+                }
+            }
+        })
     }
 }

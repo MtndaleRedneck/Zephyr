@@ -23,7 +23,7 @@ class Store internal constructor(
     init {
         // 1.9 removals: the seek bar is always on top and reconnect is always on.
         // Drop the retired keys so no stale setting lingers on existing installs.
-        prefs.edit().remove("seekOnTop").remove("autoReconnect").apply()
+        prefs.edit().remove("seekOnTop").remove("autoReconnect").remove("cancelStyle").apply()
     }
 
     /** True when the Keystore-backed store could not open this launch (teardown C11).
@@ -106,6 +106,17 @@ class Store internal constructor(
     var lastUpdateCheckAt: Long
         get() = prefs.getLong("lastUpdateCheckAt", 0L)
         set(v) = prefs.edit().putLong("lastUpdateCheckAt", v).apply()
+    /** Keep the PC awake while a video is loaded in VLC (screen may still turn off;
+     * minimized VLC sleeps normally). Default ON for new installs; a saved choice is kept.
+     * The PC behavior itself ships with the reviewed helper change; helpers that don't
+     * know the setting ignore it. */
+    var keepAwake: Boolean
+        get() = prefs.getBoolean("keepAwake", true)
+        set(v) = prefs.edit().putBoolean("keepAwake", v).apply()
+
+    var showVolumeOnPc: Boolean
+        get() = prefs.getBoolean("showVolumeOnPc", true)
+        set(v) = prefs.edit().putBoolean("showVolumeOnPc", v).apply()
 
     /** Play/pause/skip + position on the lock screen while a movie plays. Off by default. */
     var lockScreenControls: Boolean
@@ -116,12 +127,6 @@ class Store internal constructor(
     var demoControls: Boolean
         get() = prefs.getBoolean("demoControls", false)
         set(v) = prefs.edit().putBoolean("demoControls", v).apply()
-
-    /** Temporary A/B: the seek-drag cancel circle treatment. Try both
-     * ("ring" = Ring only, "fills" = Fills in) and remove the loser; the setting goes with it. */
-    var cancelStyle: String
-        get() = prefs.getString("cancelStyle", "ring") ?: "ring"
-        set(v) = prefs.edit().putString("cancelStyle", v).apply()
 
     /** Press flash on the home screen: 0 = skip rings only, 1 = every button. */
     var buttonFlash: Int
