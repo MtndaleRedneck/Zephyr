@@ -126,10 +126,10 @@ namespace ZephyrPlayer.Tests
                 var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
                 window.SetMuteTied(false);
                 Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
-                Assert.Equal(1000, window.ControlBar.MaxWidth);
+                Assert.Equal(Math.Clamp(System.Windows.SystemParameters.PrimaryScreenWidth * 0.5, 760, 1100), window.ControlBar.MaxWidth); // floating bar: about half the screen
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;
-                Capture(window.ControlBar,1000,"pc-redesign-fullscreen-pill.png");
+                Capture(window.ControlBar,(int)window.ControlBar.MaxWidth,"pc-redesign-fullscreen-pill.png");
                 window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Stretch,window.ControlBar.HorizontalAlignment);
                 window.Close();
             });
