@@ -76,7 +76,7 @@ namespace ZephyrPlayer
             _volume = volume ?? new VolumeService();
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _awakeTimer.Stop(); _sleep.Update(false); };
+            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _closed = true; _awakeTimer.Stop(); _sleep.Update(false); };
             _cursorWatch.Tick += (_, __) =>
             {
                 if (!IsVisible || !GetCursorPos(out var point)) return;
@@ -116,7 +116,9 @@ namespace ZephyrPlayer
                 _idleTimer.Stop(); _idleTimer.Start(); // resume the hide countdown
             });
             _awakeTimer.Tick += (_, __) => RefreshSleepGuard();
-            _awakeTimer.Start();
+            _player.Playing += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
+            _player.Paused += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
+            _player.EncounteredError += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
             StateChanged += (_, __) => RefreshSleepGuard();
             _player.Stopped += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
             _player.EndReached += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
@@ -137,8 +139,17 @@ namespace ZephyrPlayer
 
         private readonly SleepGuard _sleep = new();
         private readonly System.Windows.Threading.DispatcherTimer _awakeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
-        private void RefreshSleepGuard() =>
-            _sleep.Update(SleepGuard.ShouldHold(_settings.PreventSleep, IsPlayingMedia, WindowState == WindowState.Minimized));
+        private bool _closed;
+        /// <summary>Event-driven (play, pause, stop, end, error, minimize, setting change, close). The 2 second timer runs
+        /// only while the PC should be held awake and the system call has failed, to retry it; it never polls otherwise,
+        /// and nothing touches the player after the window is closed.</summary>
+        private void RefreshSleepGuard()
+        {
+            if (_closed) return;
+            var want = SleepGuard.ShouldHold(_settings.PreventSleep, IsPlayingMedia, WindowState == WindowState.Minimized);
+            _sleep.Update(want);
+            if (want && !_sleep.Held) _awakeTimer.Start(); else _awakeTimer.Stop();
+        }
 
         private int _playGeneration;
         private System.Threading.CancellationTokenSource? _preparation;
