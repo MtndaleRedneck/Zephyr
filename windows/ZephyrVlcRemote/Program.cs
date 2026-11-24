@@ -218,44 +218,6 @@ internal static class Program
                 Program.StoreBrokenReason = "could not be read";
                 shot.RunStatusTickForShot();
             }
-            else if (shotMode == "remove" || shotMode == "remove-all")
-            {
-                // The destructive confirms, real construction (round-9 missing captures).
-                var text = shotMode == "remove"
-                    ? "Remove Shot Phone? It stops controlling this PC through Zephyr VLC Remote right away. "
-                      + "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. "
-                      + "You can pair the phone again any time with a new code."
-                    : "Remove all phones? Every phone stops controlling this PC through Zephyr VLC Remote right away. "
-                      + "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. "
-                      + "Pair them again with new codes.";
-                using var d = ConfirmDialog.Build(text, shotMode == "remove" ? "Remove" : "Remove all");
-                CaptureDialogForShot(d, shotPath);
-                return 0;
-            }
-            else if (shotMode == "tray")
-            {
-                shot.ShowTrayMenuForShot(shotPath);
-                return 0;
-            }
-            else if (shotMode == "remove-paths")
-            {
-                // PRODUCTION path proof (round-10 regression: Build returned a disposed
-                // form and the real Ask crashed on Remove/Remove all). Runs the REAL
-                // ConfirmDialog.Ask: cancel must return false, confirm must return true.
-                const string text = "Remove Shot Phone? It stops controlling this PC through Zephyr VLC Remote right away. "
-                    + "You can pair the phone again any time with a new code.";
-                var cancelSays = AskWithAutoClick(text, "Remove", DialogResult.Cancel);
-                Console.Error.WriteLine("[remove-paths] cancel path returned " + cancelSays + " (want False)");
-                var confirmSays = AskWithAutoClick(text, "Remove", DialogResult.OK);
-                Console.Error.WriteLine("[remove-paths] confirm path returned " + confirmSays + " (want True)");
-                if (cancelSays || !confirmSays)
-                {
-                    Console.Error.WriteLine("[remove-paths] FAIL - production Ask returned the wrong answer");
-                    return 2;
-                }
-                Console.Error.WriteLine("[remove-paths] PASS - production Ask opens, cancel cancels, confirm confirms");
-                return 0;
-            }
 #endif
             shot.ShowOffscreenAndCapture(shotPath);
             return 0;

@@ -662,6 +662,8 @@ internal sealed class HelperWindow : Form
         Close();
     }
 
+    internal void RunStatusTickForShot() => TickStatus();
+
     /// <summary>Show or hide the pairing code block (window-visible work).</summary>
     private void TickStatus()
     {
