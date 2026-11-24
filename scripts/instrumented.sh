@@ -14,6 +14,8 @@ RUNNER=androidx.test.runner.AndroidJUnitRunner
 adb install -r android/build/outputs/apk/debug/app-debug.apk
 adb install -r android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 # Match the base rig environment (screenshots.sh): no error dialogs, tester geometry.
+# The notification-bar suites post real notifications; API 34 blocks them without the runtime grant (the BingeMote rig grants it too).
+adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS
 adb shell settings put global hide_error_dialogs 1
 adb shell wm size 1080x2310
 adb shell wm density 480
@@ -27,6 +29,9 @@ PAIR_CODE=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log 2>/dev/null || true)
 # direction AND makes adbd hold device port 47888 -> EADDRINUSE in the test.)
 adb forward tcp:47888 tcp:47888 || true
 
+# UpgradeConnectionTest and RecoveryBridgeTest are NOT in this list on purpose: they need a previously
+# installed release (seed, replace the package, verify) and BingeMote-only package ids, so a plain
+# one-APK session cannot run them. The Zephyr upgrade check is a separate job (1.4.0 source -> this build).
 CLASSES="
 com.bingemote.ZephyrAutoPairTest
 com.bingemote.AutoSetupCheckTest
@@ -46,7 +51,8 @@ com.bingemote.SubtitleClientTest
 com.bingemote.SourceSwitchSubtitleTest
 com.bingemote.SubtitleJournalTest
 com.bingemote.SubtitleSheetTest
-com.bingemote.NotificationFeedbackTest
+com.bingemote.HapticTickTest
+com.bingemote.ImmediateFlipTest
 com.bingemote.NotificationTapMatrixTest
 com.bingemote.PlaybackRoutingTest
 com.bingemote.DisconnectedPlaybackTest
@@ -56,8 +62,6 @@ com.bingemote.AutomaticOnlySetupTest
 com.bingemote.ModernizationUiTest
 com.bingemote.RefinementsUiTest
 com.bingemote.ReleaseIdentityTest
-com.bingemote.UpgradeConnectionTest
-com.bingemote.RecoveryBridgeTest
 "
 
 FAIL=0
@@ -86,6 +90,7 @@ for cls in $CLASSES; do
       adb exec-out run-as "$TESTPKG" cat "app_evidence/$f" > "instrument-results/$(basename $cls).$f" 2>/dev/null || true
       adb exec-out run-as "$TESTPKG" rm -f "app_evidence/$f" 2>/dev/null || true
     done
+    adb logcat -d -s ZephyrTriage:E | cut -c1-9000 | tail -20
     echo "SUITE FAIL: $cls"
     FAIL=1
   fi

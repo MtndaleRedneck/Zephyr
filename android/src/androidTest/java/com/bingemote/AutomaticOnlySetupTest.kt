@@ -104,7 +104,9 @@ class AutomaticOnlySetupTest {
         // Same async timing class as the setText read-back above: the confirmed-address
         // state update is not instant, so wait (bounded) for the pair-code entry to go
         // instead of checking once after a fixed sleep (run 45424136265 failed this one-shot check while two same-tree runs passed it).
-        assertTrue(device.wait(Until.gone(By.text("Code from your PC")), 3000))
+        val codeGone = device.wait(Until.gone(By.text("Code from your PC")), 3000)
+        if (!codeGone) Triage.tree("code field still shown after typing an address")
+        assertTrue(codeGone)
         if (device.executeShellCommand("dumpsys input_method").contains("mInputShown=true")) device.pressBack()
         repeat(3) {
             if (!device.hasObject(By.text("Use this address"))) {

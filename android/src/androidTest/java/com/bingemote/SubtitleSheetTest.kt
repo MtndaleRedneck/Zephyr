@@ -12,6 +12,8 @@ import java.io.File
 
 class SubtitleSheetTest {
     @get:Rule val failureDump = FailureDumpRule()
+    // Shared app data: an earlier suite can leave Zephyr selected, and the VLC subtitle sheet only refreshes (and clears stale rows) for the VLC source.
+    @org.junit.Before fun selectVlc() { Store(InstrumentationRegistry.getInstrumentation().targetContext).selectedSource = Source.VLC }
     @Test fun offThenFolderThenLoadedWithExtensionsHidden() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())

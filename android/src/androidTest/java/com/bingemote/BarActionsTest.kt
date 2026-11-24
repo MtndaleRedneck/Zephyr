@@ -99,6 +99,8 @@ class BarActionsTest {
             if (cond()) return
             Thread.sleep(250)
         }
+        Triage.tree("barActions wait: $what")
+        android.util.Log.e("ZephyrTriage", "notifications: " + (runCatching { androidx.test.uiautomator.UiDevice.getInstance(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation()).executeShellCommand("dumpsys notification --noredact").lines().filter { it.contains("com.zephyr.remote") || it.contains("importance") }.take(12).joinToString(" | ") }.getOrDefault("?")))
         fail("timeout waiting for: $what | ${diag()}")
     }
 

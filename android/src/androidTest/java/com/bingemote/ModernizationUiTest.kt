@@ -81,6 +81,7 @@ class ModernizationUiTest {
             device.swipe(device.displayWidth/2, device.displayHeight*4/5, device.displayWidth/2, device.displayHeight/4, 25)
             Thread.sleep(300)
         }
+        if (device.hasObject(By.text("Connected Sources"))) Triage.tree("settings never scrolled")
         assertFalse("test must really scroll away from the top", device.hasObject(By.text("Connected Sources")))
         device.pressBack()
         device.wait(Until.findObject(By.desc("Settings")), 10000).click()

@@ -27,11 +27,16 @@ class BarSpacingTest {
             NotificationArt.forBar(NotificationArt.skip(big, true, "10"), out))
         val bounds = icons.map { NotificationArt.contentBounds(it) }
         assertTrue("every glyph drew something", bounds.all { it.width() > 0 && it.height() > 0 })
-        // Equal content widths across glyphs: equal slots then yield equal edge gaps.
-        val w0 = bounds[0].width()
+        // BingeMote 1.13 (2e58cf1) capped tall glyphs at 26dp so the bar reads one size, so content
+        // widths are no longer equal. The invariant that still decides even gaps: every glyph fits the
+        // shared 24dp x 26dp content box and sits centered in its slot, both ways.
+        val maxW = out * 24f / 36f + 1.5f
+        val maxH = out * 26f / 36f + 1.5f
         bounds.forEachIndexed { i, r ->
-            assertEquals("glyph $i content width", w0.toDouble(), r.width().toDouble(), 1.0)
+            assertTrue("glyph $i width ${r.width()} fits the shared box", r.width() <= maxW)
+            assertTrue("glyph $i height ${r.height()} fits the shared box", r.height() <= maxH)
             assertEquals("glyph $i horizontally centered", (out - r.width()) / 2.0, r.left.toDouble(), 1.5)
+            assertEquals("glyph $i vertically centered", (out - r.height()) / 2.0, r.top.toDouble(), 1.5)
         }
     }
 }
