@@ -55,7 +55,7 @@ class RefinementsUiTest {
             Thread.sleep(300)
         }
         if (!device.hasObject(By.text("Button flash"))) {
-            Triage.tree("settings never showed Button flash")
+            Triage.tree("settings never showed Button flash"); Triage.freshProbe("button flash", "Button flash")
         }
         assertTrue("Button flash removed", device.hasObject(By.text("Button flash")))
         assertFalse("retired selector remains", device.hasObject(By.text("Cancel button style")))
