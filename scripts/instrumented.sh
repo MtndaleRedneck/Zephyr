@@ -90,6 +90,12 @@ for cls in $CLASSES; do
       adb exec-out run-as "$TESTPKG" cat "app_evidence/$f" > "instrument-results/$(basename $cls).$f" 2>/dev/null || true
       adb exec-out run-as "$TESTPKG" rm -f "app_evidence/$f" 2>/dev/null || true
     done
+    # Triage screenshots (emulator-only fixtures; a failed suite's own file names) live in the
+    # app's external files dir. Pull them with a suite prefix so names stay distinct.
+    for f in $(adb shell 'ls /sdcard/Android/data/*/files/triage-*.png' 2>/dev/null | tr -d '\r'); do
+      adb exec-out cat "$f" > "instrument-results/$(basename $cls).$(basename $f)" 2>/dev/null || true
+      adb shell rm -f "$f" 2>/dev/null || true
+    done
     adb logcat -d -s ZephyrTriage:E | cut -c1-9000 | tail -20
     echo "SUITE FAIL: $cls"
     FAIL=1

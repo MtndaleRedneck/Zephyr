@@ -159,7 +159,7 @@ class BarActionsTest {
             fire("Play")
             waitFor("second pl_pause at stub", 10_000) { stub.requests.count { it.contains("pl_pause") } == 2 }
             waitFor("label flips to Pause", 15_000) { hasLabel("Pause") }
-            // Skips use his 5s interval (absolute seek from the stub's clock).
+            // Skips use his 5s interval (VLC relative skip, no clock assumption).
             fire("Back 5 seconds")
             waitFor("seek back at stub", 10_000, { stub.requests.joinToString() }) { stub.requests.any { it.contains("command=seek&val=-5s") } }
             fire("Forward 5 seconds")
