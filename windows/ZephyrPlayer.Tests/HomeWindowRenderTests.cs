@@ -143,6 +143,9 @@ namespace ZephyrPlayer.Tests
                         if (name == "Kids") { kids = true; Assert.Equal(Visibility.Collapsed, vis); }
                     }
                     Assert.True(watched && kids, "both folders listed");
+                    var cont = (ItemsControl)w.FindName("ContinueList")!;
+                    Assert.Equal(3, cont.Items.Count); // all three seeded unfinished videos, not just rendered names
+                    Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("ContinueStrip")!).Visibility);
                     var root = (FrameworkElement)w.Content;
                     // Lay the window out at the real minimum size first, so nothing keeps a wider cached layout.
                     w.Width = 900; w.Height = 600; w.Show(); w.UpdateLayout();

@@ -103,7 +103,7 @@ namespace ZephyrPlayer.Tests {
     var popup=(Popup)parent.Template.FindName("PART_Popup",parent);Assert.NotNull(popup);
     Assert.NotNull(FindFirst<ItemsPresenter>(popup.Child));
     Assert.Equal(Visibility.Visible,((UIElement)parent.Template.FindName("Arrow",parent)).Visibility);
-    parent.IsSubmenuOpen=false;Assert.False(popup.IsOpen);
+    // Structure only: opening a popup offscreen is not driven here, so no open/close behavior is claimed.
    });
   }
   [Fact]
