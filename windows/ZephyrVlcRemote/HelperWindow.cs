@@ -787,9 +787,18 @@ internal sealed class HelperWindow : Form
     {
         var name = _nameBox.Text.Trim();
         if (name.Length == 0) return;
-        Program.PendingPhoneName = name;
-        Program.PairCode = Program.NewPairCode();
-        Program.PairFailures = 0;
+        if (Program.StoreBroken)
+        {
+            // Fail closed: the saved pairings could not be read, so a new pairing would overwrite the only copy.
+            NoteDialog.Show(this, "The saved pairing data on this PC " + Program.StoreBrokenReason + ", so Zephyr VLC Remote will not pair a new phone until that is sorted out. Nothing was changed or deleted.");
+            return;
+        }
+        lock (HttpServer.PairLock)
+        {
+            Program.PendingPhoneName = name;
+            Program.PairCode = Program.NewPairCode();
+            Program.PairFailures = 0;
+        }
         _nameBox.Clear();
         Program.Log("Pairing code created for \"" + name + "\".");
         TickStatus();
