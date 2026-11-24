@@ -20,8 +20,10 @@ namespace ZephyrPlayer.Tests {
    for(int i=0;i<VisualTreeHelper.GetChildrenCount(o);i++)Walk(VisualTreeHelper.GetChild(o,i),names);
   }
   static List<string> Visuals(FrameworkElement e){
-   var host=new Border{Background=Brushes.Black,Width=240,Height=80,Child=e};host.Resources.MergedDictionaries.Add(Theme());
-   host.Measure(new Size(240,80));host.Arrange(new Rect(0,0,240,80));host.UpdateLayout();
+   // Popups (tooltip, context menu) cannot have a parent: theme and lay them out on their own.
+   if(e is ToolTip||e is ContextMenu){e.Resources.MergedDictionaries.Add(Theme());e.ApplyTemplate();e.Measure(new Size(240,80));e.Arrange(new Rect(0,0,240,80));e.UpdateLayout();}
+   else {var host=new Border{Background=Brushes.Black,Width=240,Height=80,Child=e};host.Resources.MergedDictionaries.Add(Theme());
+    host.Measure(new Size(240,80));host.Arrange(new Rect(0,0,240,80));host.UpdateLayout();}
    var names=new List<string>();Walk(e,names);return names;
   }
   [Fact]
