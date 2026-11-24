@@ -7,6 +7,8 @@ internal interface PairFields {
     var helperToken: String
     var pcName: String
     var vlcPassword: String
+    /** Force the writes to disk and report whether they landed (SharedPreferences.commit). */
+    fun flush(): Boolean = true
 }
 
 /**
@@ -32,10 +34,13 @@ internal object HelperPairSave {
             step({ f.helperPort }, { f.helperPort = it }, port)
             step({ f.pcName }, { f.pcName = it }, pcName)
             if (vlcPassword != null) step({ f.vlcPassword }, { f.vlcPassword = it }, vlcPassword)
+            // apply() alone cannot say the write reached disk; a refused commit rolls everything back.
+            if (!f.flush()) throw IllegalStateException("pairing not durable")
             Outcome.SAVED
         } catch (e: Exception) {
             var ok = true
             while (undo.isNotEmpty()) if (!undo.removeLast()()) ok = false
+            if (ok && !runCatching { f.flush() }.getOrDefault(false)) ok = false // the restored values must be durable too
             if (ok) Outcome.FAILED_PRIOR_KEPT else Outcome.FAILED_RESTORE_UNCERTAIN
         }
     }

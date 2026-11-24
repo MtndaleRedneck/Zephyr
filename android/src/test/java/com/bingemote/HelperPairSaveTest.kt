@@ -13,6 +13,9 @@ class HelperPairSaveTest {
             if (k in failOn && !restoring) throw SecureStoreUnavailable()
             if (k in failRestore && restoring) throw SecureStoreUnavailable()
         }
+        var flushSeq: (Int) -> Boolean = { true }
+        private var flushCalls = 0
+        override fun flush(): Boolean = flushSeq(++flushCalls)
         private var restoring = false
         fun enterRestore() { restoring = true }
         override var host: String get() = h; set(x) { w("host", restoring); h = x }
@@ -24,6 +27,17 @@ class HelperPairSaveTest {
 
     private fun snapshot(f: Fields) = listOf(f.host, f.helperPort.toString(), f.helperToken, f.pcName, f.vlcPassword)
     private val prior = listOf("oldhost", "8492", "oldtoken", "oldname", "oldvlc")
+
+    @Test fun refusedFirstCommitRollsBackAndDurableRestoreReportsPriorKept() {
+        val f = Fields(); f.flushSeq = { n -> n > 1 } // new values not durable, restored values are
+        assertEquals(HelperPairSave.Outcome.FAILED_PRIOR_KEPT, HelperPairSave.save(f, "h", 1, "tok", "pc", "pw"))
+        assertEquals(prior, snapshot(f))
+    }
+
+    @Test fun commitThatNeverLandsIsReportedUncertainNotSaved() {
+        val f = Fields(); f.flushSeq = { false }
+        assertEquals(HelperPairSave.Outcome.FAILED_RESTORE_UNCERTAIN, HelperPairSave.save(f, "h", 1, "tok", "pc", "pw"))
+    }
 
     @Test fun successWritesEverything() {
         val f = Fields()

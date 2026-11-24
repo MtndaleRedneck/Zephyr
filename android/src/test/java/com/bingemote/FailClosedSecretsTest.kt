@@ -51,6 +51,23 @@ class FailClosedSecretsTest {
     }
 
     @Test
+    fun throwingReadPoisonsTheStoreSoNoLaterWriteOverwritesTheUnreadableSecret() {
+        var writes = 0
+        var failRead = true
+        val box = FailClosedSecrets(
+            reader = { if (failRead) throw RuntimeException("corrupt") else "old" },
+            writer = { _, _ -> writes++ },
+            broken = false,
+        )
+        assertEquals("", box.read("token"))
+        assertTrue(box.isBroken)
+        failRead = false
+        assertEquals("", box.read("token"))
+        try { box.write("token", "new"); fail("write must throw after a failed read") } catch (e: SecureStoreUnavailable) { }
+        assertEquals(0, writes)
+    }
+
+    @Test
     fun secureStoreUnavailableIsAnException() {
         assertTrue(SecureStoreUnavailable() is Exception)
     }

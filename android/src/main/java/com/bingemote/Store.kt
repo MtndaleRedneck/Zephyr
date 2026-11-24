@@ -41,6 +41,10 @@ class Store internal constructor(
         broken = secureStoreBroken,
     )
 
+    /** Blocks until pending plain and secret writes are on disk; false when either commit is refused.
+     *  Pairing uses it so "saved" means durable, not just queued. */
+    fun commitPairing(): Boolean = try { prefs.edit().commit() && !secureStoreBroken && secrets.edit().commit() } catch (e: Exception) { false }
+
     var pcName: String
         get() = prefs.getString("pcName", "") ?: ""
         set(v) = prefs.edit().putString("pcName", v).apply()
