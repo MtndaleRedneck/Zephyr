@@ -76,7 +76,7 @@ namespace ZephyrPlayer
             _volume = volume ?? new VolumeService();
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _sleepTimer.Stop(); _sleep.Update(false); };
+            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _awakeTimer.Stop(); _sleep.Update(false); };
             _cursorWatch.Tick += (_, __) =>
             {
                 if (!IsVisible || !GetCursorPos(out var point)) return;
@@ -115,8 +115,8 @@ namespace ZephyrPlayer
             {
                 _idleTimer.Stop(); _idleTimer.Start(); // resume the hide countdown
             });
-            _sleepTimer.Tick += (_, __) => RefreshSleepGuard();
-            _sleepTimer.Start();
+            _awakeTimer.Tick += (_, __) => RefreshSleepGuard();
+            _awakeTimer.Start();
             StateChanged += (_, __) => RefreshSleepGuard();
             _player.Stopped += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
             _player.EndReached += (_, __) => Dispatcher.BeginInvoke(RefreshSleepGuard);
@@ -136,7 +136,7 @@ namespace ZephyrPlayer
         }
 
         private readonly SleepGuard _sleep = new();
-        private readonly System.Windows.Threading.DispatcherTimer _sleepTimer = new() { Interval = TimeSpan.FromSeconds(2) };
+        private readonly System.Windows.Threading.DispatcherTimer _awakeTimer = new() { Interval = TimeSpan.FromSeconds(2) };
         private void RefreshSleepGuard() =>
             _sleep.Update(SleepGuard.ShouldHold(_settings.PreventSleep, IsPlayingMedia, WindowState == WindowState.Minimized));
 
@@ -532,7 +532,7 @@ namespace ZephyrPlayer
         public void SetFullscreen(bool on)
         {
             if (on == IsFullscreen) return;
-            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = 1000; ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
+            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = Math.Clamp(SystemParameters.PrimaryScreenWidth * 0.5, 760, 1100); ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
             else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
