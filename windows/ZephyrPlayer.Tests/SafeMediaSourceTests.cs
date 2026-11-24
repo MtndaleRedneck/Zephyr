@@ -88,8 +88,9 @@ public sealed class SafeMediaSourceTests
     {
         using var fixture=new Fixture((ctx,_)=>{ctx.Response.StatusCode=200;ctx.Response.ContentLength64=100;for(int i=0;i<100;i++){ctx.Response.OutputStream.WriteByte(1);ctx.Response.OutputStream.Flush();Thread.Sleep(50);}});
         using var deadline=new CancellationTokenSource(300);
-        using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);var watch=System.Diagnostics.Stopwatch.StartNew();var b=new byte[10];
-        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{while(true)source.Read(b,0,b.Length);}));
+        var watch=System.Diagnostics.Stopwatch.StartNew();var b=new byte[10];
+        // The deadline covers connecting too, so a slow first response may cancel inside the constructor.
+        Assert.ThrowsAny<OperationCanceledException>((Action)(()=>{using var source=new PeerRangeStream(new Uri(fixture.Url),deadline.Token);while(true)source.Read(b,0,b.Length);}));
         Assert.True(watch.Elapsed<TimeSpan.FromSeconds(2));
     }
     [Fact]
