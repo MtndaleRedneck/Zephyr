@@ -64,7 +64,7 @@ class SubtitleClientTest {
             assertEquals("Movie.en.srt", listing.files.single().name)
             assertEquals(1, stub.requests.size)
             assertTrue(stub.requests.single().startsWith("GET /subtitles/list"))
-            assertTrue(stub.requests.single().contains("X-BingeMote-Token: fixture-token", true))
+            assertTrue(stub.requests.single().contains("X-Zephyr-VLC-Remote-Token: fixture-token", true))
             assertTrue(HelperClient.loadSubtitle("127.0.0.1",stub.port,"fixture-token",listing.mediaId,listing.files.single().id))
             val request = stub.requests.last()
             assertTrue(request.startsWith("POST /subtitles/load"))

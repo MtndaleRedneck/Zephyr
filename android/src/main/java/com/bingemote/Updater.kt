@@ -24,10 +24,10 @@ data class UpdateInfo(
  * and every failure ends quietly or with a plain message.
  */
 object Updater {
-    const val API = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30"
+    const val API = "https://api.github.com/repos/MtndaleRedneck/Zephyr/releases?per_page=30"
     /** Android and PC release separately; this updater only ever looks at zephyr-android-v* tags. */
     const val TAG_PREFIX = "zephyr-android-v"
-    private const val DOWNLOAD_PREFIX = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/"
+    private const val DOWNLOAD_PREFIX = "https://github.com/MtndaleRedneck/Zephyr/releases/download/"
     private const val MAX_APK = 150L * 1024 * 1024
 
     /** "v1.8.0" or "1.8.0" as numbers, or null when it is not a plain dotted version. */

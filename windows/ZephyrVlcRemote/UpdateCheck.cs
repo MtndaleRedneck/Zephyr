@@ -11,10 +11,10 @@ namespace ZephyrVlcRemote;
 /// </summary>
 internal static class UpdateCheck
 {
-    private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30";
+    private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr/releases?per_page=30";
     /// <summary>All three Zephyr products share one repo; this checker only ever looks at vlc-remote-v* tags.</summary>
     private const string TagPrefix = "vlc-remote-v";
-    public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases";
+    public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr/releases";
 
     /// <summary>The published version if it is newer than [current] and ships the installer, else null. Never throws.
     /// The automatic background checks use this one. Carries the installer's download URL

@@ -42,6 +42,21 @@ com.zephyr.remote.PhoneMoviesAndroidTest
 com.zephyr.remote.ZephyrWireTest
 com.zephyr.remote.ZephyrDiscoveryTest
 com.bingemote.StreamTargetTest
+com.bingemote.SubtitleClientTest
+com.bingemote.SubtitleJournalTest
+com.bingemote.SubtitleSheetTest
+com.bingemote.NotificationFeedbackTest
+com.bingemote.NotificationTapMatrixTest
+com.bingemote.PlaybackRoutingTest
+com.bingemote.DisconnectedPlaybackTest
+com.bingemote.BarActionsTest
+com.bingemote.BarSpacingTest
+com.bingemote.AutomaticOnlySetupTest
+com.bingemote.ModernizationUiTest
+com.bingemote.RefinementsUiTest
+com.bingemote.ReleaseIdentityTest
+com.bingemote.UpgradeConnectionTest
+com.bingemote.RecoveryBridgeTest
 "
 
 FAIL=0

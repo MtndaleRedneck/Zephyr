@@ -123,7 +123,7 @@ class UpdaterTest {
 
     @Test
     fun only_android_releases_count() {
-        val apk = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/zephyr-android-v1.0.1/Zephyr-Android-1.0.1.apk"
+        val apk = "https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.0.1/Zephyr-Android-1.0.1.apk"
         val appRel = """{"tag_name":"zephyr-android-v1.0.1","draft":false,"prerelease":false,"body":"- newer app","assets":[{"name":"Zephyr-Android-1.0.1.apk","browser_download_url":"$apk","size":1000}]}"""
         val helperRel = """{"tag_name":"pc-v1.0.2","draft":false,"prerelease":false,"body":"- newer PC","assets":[{"name":"BingeMote-PC-1.0.2.exe","browser_download_url":"https://github.com/MtndaleRedneck/BingeMote/releases/download/pc-v1.0.2/BingeMote-PC-1.0.2.exe","size":1000}]}"""
         // A PC release never prompts the app, even with a higher number.
@@ -136,7 +136,7 @@ class UpdaterTest {
 
     @Test
     fun feed_states_and_asset_isolation() {
-        val url = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/zephyr-android-v1.1.0/Zephyr-Android-1.1.0.apk"
+        val url = "https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.1.0/Zephyr-Android-1.1.0.apk"
         val release = """{"tag_name":"zephyr-android-v1.1.0","assets":[{"name":"Zephyr-Android-1.1.0.apk","browser_download_url":"$url","size":1000}]}"""
         assertEquals(Updater.CheckOutcome.NoRelease, Updater.classifyFeed("[]", "1.0.0"))
         assertEquals(Updater.CheckOutcome.UpToDate, Updater.classifyFeed("[$release]", "1.1.0"))
@@ -144,9 +144,11 @@ class UpdaterTest {
         val digested = release.replace("\"size\":1000", "\"size\":1000,\"digest\":\"sha256:${"b".repeat(64)}\"")
         assertTrue(Updater.classifyFeed("[$digested]", "1.0.0") is Updater.CheckOutcome.Newer)
         assertEquals(Updater.CheckOutcome.Unavailable, Updater.classifyFeed("bad json", "1.0.0"))
-        assertEquals(null, Updater.parseRelease(release.replace("Zephyr-Dev", "BingeMote"), "1.0.0"))
+        assertEquals(null, Updater.parseRelease(release.replace("/Zephyr/", "/BingeMote/"), "1.0.0"))
         assertEquals(null, Updater.parseRelease(release.replace("Zephyr-Android-1.1.0.apk", "BingeMote-Android-1.1.0.apk"), "1.0.0"))
         assertEquals(null, Updater.parseRelease(release.replace("android-v", "pc-v"), "1.0.0"))
+        // The old Zephyr-Dev repo name redirects (301) and is no longer a trusted asset origin.
+        assertEquals(null, Updater.parseRelease(release.replace("/Zephyr/", "/Zephyr-Dev/"), "1.0.0"))
     }
 
     @Test
