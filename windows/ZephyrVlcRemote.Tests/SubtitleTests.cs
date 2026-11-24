@@ -153,8 +153,6 @@ public class SubtitleTests : IDisposable
     }
 
     [Fact] public async Task SubtitleRoutesRequireTokenAndCorrectMethod() {
-        using var acl = Process.Start(new ProcessStartInfo("netsh", "http add urlacl url=http://+:8492/ sddl=D:(A;;GX;;;S-1-1-0)") { UseShellExecute=false, CreateNoWindow=true });
-        acl!.WaitForExit();
         using var server = new HttpServer();server.Start();
         using var client = new HttpClient();
         foreach(var path in new[]{"list","media","load","select"}) {
@@ -174,8 +172,6 @@ public class SubtitleTests : IDisposable
         } finally {
             lock(Program.PhonesLock) Program.Phones.RemoveAll(p=>p.Token==token);
             server.Dispose();
-            using var del = Process.Start(new ProcessStartInfo("netsh", "http delete urlacl url=http://+:8492/") { UseShellExecute=false, CreateNoWindow=true });
-            del!.WaitForExit();
         }
     }
 
