@@ -28,7 +28,7 @@ object HelperClient {
 
     open class Unreachable(val msg: String) : Exception(msg)
     class SubtitleRejected(val detail: String) : Exception(detail)
-    class MissingRoute : Unreachable("BingeMote PC is too old for this app.")
+    class MissingRoute : Unreachable("Zephyr VLC Remote on the PC is too old for this app.")
     /** Shown to the user. The raw socket text ("failed to connect to /192.168.1.5 (port 8488) after 2500ms") used to leak into Movies. */
     private const val NO_PC = "Can't reach Zephyr VLC Remote on the PC. Check that the PC is on and Zephyr VLC Remote is open."
     class BadToken(val msg: String) : Exception(msg)
