@@ -107,5 +107,57 @@ namespace ZephyrPlayer.Tests
             t.Join(30000);
             Assert.True(error == null, error ?? "STA thread did not finish");
         }
+
+        [Fact]
+        public void HomeWindow_Narrow_Shows_Three_Continue_Items_And_The_Watched_Badge()
+        {
+            string? error = null;
+            var t = new Thread(() =>
+            {
+                try
+                {
+                    var dir = Path.Combine(Path.GetTempPath(), "zephyr-homenarrow-" + Guid.NewGuid().ToString("N"));
+                    var lib = Path.Combine(dir, "Movies");
+                    Directory.CreateDirectory(Path.Combine(lib, ".Watched"));
+                    Directory.CreateDirectory(Path.Combine(lib, "Kids"));
+                    var history = new PlaybackHistory();
+                    foreach (var name in new[] { "A long movie title that keeps going.mp4", "Second movie.mp4", "Third movie.mp4" })
+                    {
+                        var f = Path.Combine(lib, name);
+                        File.WriteAllBytes(f, new byte[] { 1, 2, 3 });
+                        history.Save(f, 20000, 90000);
+                    }
+                    var settings = new PlayerSettings(Path.Combine(dir, "settings.json")) { LibraryFolder = lib };
+                    var w = new HomeWindow(settings, new PairedStore(Path.Combine(dir, "paired.json")), _ => { }, () => { }, loadDurations: false);
+                    w.Show(); w.Hide();
+                    var list = (ListBox)w.FindName("MovieList")!;
+                    var watched = false; var kids = false;
+                    foreach (var e in list.Items)
+                    {
+                        var type = e.GetType();
+                        var name = (string)type.GetProperty("Name")!.GetValue(e)!;
+                        var vis = (Visibility)type.GetProperty("WatchedVis")!.GetValue(e)!;
+                        if (name == ".Watched") { watched = true; Assert.Equal(Visibility.Visible, vis); }
+                        if (name == "Kids") { kids = true; Assert.Equal(Visibility.Collapsed, vis); }
+                    }
+                    Assert.True(watched && kids, "both folders listed");
+                    var root = (FrameworkElement)w.Content;
+                    root.Measure(new Size(900, 600)); root.Arrange(new Rect(0, 0, 900, 600)); root.UpdateLayout();
+                    var rtb = new RenderTargetBitmap(900, 600, 96, 96, PixelFormats.Pbgra32);
+                    var bg = new DrawingVisual();
+                    using (var dc = bg.RenderOpen()) dc.DrawRectangle(w.Background, null, new Rect(0, 0, 900, 600));
+                    rtb.Render(bg); rtb.Render(root);
+                    var png = new PngBitmapEncoder(); png.Frames.Add(BitmapFrame.Create(rtb));
+                    using (var fs = File.Create(Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? Path.GetTempPath(), "pc-home-narrow.png"))) png.Save(fs);
+                    w.Close();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+                }
+                catch (Exception e) { error = e.ToString(); }
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join(30000);
+            Assert.True(error == null, error ?? "STA thread did not finish");
+        }
     }
 }

@@ -76,6 +76,48 @@ namespace ZephyrPlayer.Tests {
     }
    });
   }
+  [Fact]
+  public void MenuItem_Labels_Align_Whether_Or_Not_Checked(){
+   Sta(()=>{
+    double X(bool on){
+     var menu=new ContextMenu();var item=new MenuItem{Header="Name",IsCheckable=true,IsChecked=on};menu.Items.Add(item);
+     menu.Resources.MergedDictionaries.Add(Theme());menu.ApplyTemplate();menu.Measure(new Size(240,200));menu.Arrange(new Rect(0,0,240,200));menu.UpdateLayout();
+     item.ApplyTemplate();var cp=(FrameworkElement)item.Template.FindName("Bd",item);
+     var label=FindFirst<ContentPresenter>(cp)!;return label.TranslatePoint(new Point(0,0),item).X;
+    }
+    Assert.Equal(X(true),X(false),1);
+    Assert.True(X(false)>10,"label starts at the check gutter, not at the edge");
+   });
+  }
+  static T? FindFirst<T>(DependencyObject o) where T:DependencyObject{
+   for(int i=0;i<VisualTreeHelper.GetChildrenCount(o);i++){var c=VisualTreeHelper.GetChild(o,i);if(c is T t)return t;var r=FindFirst<T>(c);if(r!=null)return r;}
+   return null;
+  }
+  [Fact]
+  public void SubMenu_Template_Has_Popup_ItemsPresenter_And_Arrow(){
+   Sta(()=>{
+    var menu=new ContextMenu();var parent=new MenuItem{Header="Speed"};parent.Items.Add(new MenuItem{Header="1x"});menu.Items.Add(parent);
+    menu.Resources.MergedDictionaries.Add(Theme());menu.ApplyTemplate();menu.Measure(new Size(240,200));menu.Arrange(new Rect(0,0,240,200));menu.UpdateLayout();
+    parent.ApplyTemplate();
+    Assert.Equal(MenuItemRole.SubmenuHeader,parent.Role);
+    var popup=(Popup)parent.Template.FindName("PART_Popup",parent);Assert.NotNull(popup);
+    Assert.NotNull(FindFirst<ItemsPresenter>(popup.Child));
+    Assert.Equal(Visibility.Visible,((UIElement)parent.Template.FindName("Arrow",parent)).Visibility);
+    parent.IsSubmenuOpen=false;Assert.False(popup.IsOpen);
+   });
+  }
+  [Fact]
+  public void ListBoxItem_Style_Has_A_Keyboard_Focus_Trigger_Structural_Only(){
+   Sta(()=>{
+    // Structural check only: real keyboard focus cannot be driven offscreen. The ring is the 2px orange border.
+    var host=new Border{Child=new ListBox{Items={new ListBoxItem{Content="a"}}}};host.Resources.MergedDictionaries.Add(Theme());
+    host.Measure(new Size(200,100));host.Arrange(new Rect(0,0,200,100));host.UpdateLayout();
+    var item=(ListBoxItem)((ListBox)host.Child).Items[0]!;
+    var style=item.Style??(Style)host.Resources[typeof(ListBoxItem)];Assert.NotNull(style);
+    var triggers=new List<TriggerBase>(style.Triggers);
+    Assert.Contains(triggers,t=>t is Trigger tr&&tr.Property==UIElement.IsKeyboardFocusedProperty);
+   });
+  }
  }
 }
 namespace ZephyrPlayer.Tests {
