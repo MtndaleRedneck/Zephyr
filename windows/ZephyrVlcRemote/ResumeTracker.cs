@@ -163,6 +163,8 @@ internal static class ResumeTracker
         ClearedWhileSuppressed.Clear();
         _saveSuppressed = false;
         if (_dirty) SaveLocked();
+    }
+
     /// <summary>If the VLC password became known after startup (paired later), start polling now.</summary>
     public static void EnsurePollingWithCurrentPassword()
     {
@@ -197,7 +199,7 @@ internal static class ResumeTracker
         if (Process.GetProcessesByName("vlc").Length == 0)
         {
             // VLC closed: forget the "current" file (its last place is already saved).
-            lock (Gate) { _currentFile = null; SaveLocked(); }
+            lock (Gate) { _currentFile = null; if (_dirty) SaveLocked(); }
             MediaActive = false;
             return;
         }
