@@ -561,12 +561,12 @@ internal sealed class HelperWindow : Form
                 _wifiBtn.Enabled = true;
                 if (ok)
                 {
-                    Program.SetNetworkChoice(profile.Name, home: true);
-                    Program.Log("Network \"" + profile.Name + "\" marked Private from the window strip.");
+                    var saved = Program.SetNetworkChoice(profile.Name, home: true);
+                    Program.Log("Network \"" + profile.Name + "\" marked Private from the window strip." + (saved ? "" : " The remembered choice could not be saved."));
                     _wifiProfile = null;
                     SetWifiStripVisible(false);
                     NoteDialog.Show(this,
-                        "\u2713 Done. Your phone can reach this PC now.\n\nThis Wi-Fi is now marked Private in Windows, and Windows remembers it.");
+                        PrivateDoneText(saved));
                 }
                 else
                 {
@@ -1258,12 +1258,12 @@ internal sealed class HelperWindow : Form
                     {
                         if (ok)
                         {
-                            Program.SetNetworkChoice(profile.Name, home: true);
+                            var saved = Program.SetNetworkChoice(profile.Name, home: true);
                             _wifiProfile = null;
                             SetWifiStripVisible(false);
                             Program.Log("Network \"" + profile.Name + "\" marked Private from the popup.");
                             NoteDialog.Show(this,
-                                "\u2713 Done. Your phone can reach this PC now.\n\nThis Wi-Fi is now marked Private in Windows, and Windows remembers it.");
+                                PrivateDoneText(saved));
                         }
                         else
                         {
@@ -1279,13 +1279,19 @@ internal sealed class HelperWindow : Form
                 break;
             case WifiDialog.Result.NotNow:
                 // Saying "Not now" on a network once marked home means it is not home after all.
-                Program.SetNetworkChoice(profile.Name, home: false);
-                Program.Log("Public-network popup declined for \"" + profile.Name + "\" - not asking again.");
+                var declinedSaved = Program.SetNetworkChoice(profile.Name, home: false);
+                Program.Log("Public-network popup declined for \"" + profile.Name + "\"" + (declinedSaved ? " - not asking again." : " - the choice could not be saved, so it may ask again."));
                 break;
         }
         }
         finally { _wifiDialogOpen = false; }
     }
+
+    /// <summary>Windows is Private either way; only claim the app remembers it when the save worked.</summary>
+    internal static string PrivateDoneText(bool saved) =>
+        saved
+            ? "\u2713 Done. Your phone can reach this PC now.\n\nThis Wi-Fi is now marked Private in Windows, and Windows remembers it."
+            : "\u2713 Done in Windows. This Wi-Fi is now Private, so your phone can reach this PC.\n\nThis app could not save its own note about it, so it may ask about this Wi-Fi again.";
 
     private static void OpenWifiSettings()
     {

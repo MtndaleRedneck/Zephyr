@@ -71,6 +71,8 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG) intent.getStringExtra("pickeruri")?.let { DebugRig.pickerInitialUri = android.net.Uri.parse(it) }
         // Screenshot rig: a stand-in PC name so the Your PC card renders paired.
         if (BuildConfig.DEBUG && intent.hasExtra("pcdemo")) store.pcName = "MY-PC"
+        // Screenshot rig: a stand-in VLC pairing so the status pill can render Connected. Debug only.
+        if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
         remote = RemoteState(this, store, lifecycleScope)
         if (BuildConfig.DEBUG && intent.getBooleanExtra("demostatus", false)) remote.debugSeedStatus()
         // Screenshot-rig only: render one status-notice review scenario per capture.
