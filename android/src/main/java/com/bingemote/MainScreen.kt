@@ -818,8 +818,10 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
                 kotlinx.coroutines.delay(2500)
                 remote.debugForceStatus(unreachable = true, helperDown = true)
                 android.util.Log.e("ZephyrTriage", "rig: forced unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
-                kotlinx.coroutines.delay(3000)
-                android.util.Log.e("ZephyrTriage", "rig: 3s later unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                repeat(9) {
+                    kotlinx.coroutines.delay(3000)
+                    android.util.Log.e("ZephyrTriage", "rig: +${(it + 1) * 3}s unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                }
             } else {
                 android.util.Log.e("ZephyrTriage", "rig: not armed when the sheet composed")
             }
@@ -867,6 +869,7 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
             // stopped answering - every shippable helper serves /volume/get, and an
             // older helper that lacks folder subtitles still answers it, so it keeps
             // helperDown=false and its working embedded rows are untouched.
+            if (BuildConfig.DEBUG) android.util.Log.e("ZephyrTriage", "sheet body composed unreachable=${remote.unreachable} helperDown=${remote.helperDown} rows=${folder?.files?.size}")
             if (!remote.unreachable && !remote.helperDown) {
                 val showEmptyNotice = tracks.isEmpty() && folder != null && folder.files.isEmpty() && !remote.subtitleFilesLoading && remote.subtitleFileError == null
                 // Dividers only when there is actually something below them to separate
