@@ -8,7 +8,6 @@ import android.content.pm.ServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,7 +57,7 @@ object MediaControls {
         val i = Intent(context, MediaControlsService::class.java)
         // The CI screenshot state seeds demo controls with no PC paired.
         val demo = BuildConfig.DEBUG && store.demoControls
-        if (store.lockScreenControls && (store.isConfigured || demo) && allowed(context)) {
+        if (store.lockScreenControls && (mediaSourceConfigured(store) || demo) && allowed(context)) {
             androidx.core.content.ContextCompat.startForegroundService(context, i)
         } else context.stopService(i)
     }
@@ -104,11 +103,19 @@ class MediaControlsService : Service() {
      * unmute only if it was muted); otherwise drive VLC volume, capped at 100%. */
     @Volatile private var lastStatus: VlcStatus? = null
     private fun currentPlayback(store: Store): VlcStatus = lastStatus
-        ?: Vlc.status(store.host, store.vlcPort, store.vlcPassword)
+        ?: SelectedPlayback(store).status()
 
     private fun volumeBy(store: Store, delta: Int) {
         scope.launch {
             try {
+                if (store.selectedSource == Source.ZEPHYR) {
+                    val st = currentPlayback(store)
+                    val next = ((st.volumeRaw * 100 / 256) + if (delta > 0) 5 else -5).coerceIn(0, 100)
+                    com.zephyr.remote.ZephyrClient.volume(store.zephyrHost, store.zephyrPort, store.zephyrToken, next)
+                    lastStatus = st.copy(volumeRaw = next * 256 / 100)
+                    refreshNow()
+                    return@launch
+                }
                 val helper = if (store.helperToken.isNotBlank())
                     try { HelperClient.volumeGet(store.host, store.helperPort, store.helperToken) } catch (_: Exception) { null }
                 else null
@@ -131,7 +138,7 @@ class MediaControlsService : Service() {
     private fun jump(store: Store, deltaSec: Int) {
         scope.launch {
             try {
-                Vlc.skip(store.host, store.vlcPort, store.vlcPassword, deltaSec)
+                SelectedPlayback(store).skip(deltaSec)
                 refreshNow()
             } catch (e: Exception) { if (e is CancellationException) throw e }
         }
@@ -197,7 +204,7 @@ class MediaControlsService : Service() {
                     try {
                         val store = Store(this@MediaControlsService)
                         deliveryObserver?.invoke()
-                        Vlc.togglePause(store.host, store.vlcPort, store.vlcPassword)
+                        SelectedPlayback(store).togglePause()
                     } catch (e: Exception) {
                         if (e is CancellationException) throw e
                         synchronized(this@MediaControlsService) {
@@ -317,7 +324,7 @@ class MediaControlsService : Service() {
         // killed the service silently - the bar simply vanished.
         try {
             val store = Store(this)
-            if (!store.lockScreenControls || !store.isConfigured) {
+            if (!store.lockScreenControls || !mediaSourceConfigured(store)) {
                         stopSelf()
                 return
             }
@@ -333,10 +340,10 @@ class MediaControlsService : Service() {
             val commitObserver = if (BuildConfig.DEBUG) beforePollCommit else null
             val committedObserver = if (BuildConfig.DEBUG) pollCommitted else null
             val st = try {
-                Vlc.status(store.host, store.vlcPort, store.vlcPassword)
+                SelectedPlayback(store).status()
             } catch (e: Vlc.BadAuth) {
                 // The one automatic heal: adopt the PC's current password once; never push ours.
-                if (VlcAuthRepair.tryHealOnce(store)) { return } // the next poll uses it
+                if (store.selectedSource == Source.VLC && VlcAuthRepair.tryHealOnce(store)) { return } // the next poll uses it
                 recordPollFailure(epoch, failureObserver)
                 return
             } catch (e: Exception) { if (e is CancellationException) throw e;

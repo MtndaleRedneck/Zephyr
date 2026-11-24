@@ -1,6 +1,5 @@
 package com.bingemote
 
-import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -33,7 +32,7 @@ fun SetupScreen(
     remote: RemoteState,
     scrollState: androidx.compose.foundation.ScrollState,
     onDone: () -> Unit,
-    onCancel: () -> Unit,
+    onCancel: (() -> Unit)? = null,
     demoVlcPending: Boolean = false,
     demoPair: Boolean = false,
 ) {
@@ -105,7 +104,7 @@ fun SetupScreen(
         scope.launch {
             found = withContext(Dispatchers.IO) { HelperClient.discover() }
             scanning = false
-            if (found.isEmpty()) discoveryMessage = "No PC answered. Check BingeMote is running on the PC, then try again, or type its address."
+            if (found.isEmpty()) discoveryMessage = "No PC answered. Check Zephyr VLC Remote is running on the PC, then try again, or type its address."
         }
     }
 
@@ -116,20 +115,17 @@ fun SetupScreen(
 
     fun pair() {
         val target = chosen ?: run { say("Select your PC first.", true); return }
-        if (code.length != 4 && code.length != 6) { say("Enter the code BingeMote is showing on your PC - 4 digits, or 6 on an older BingeMote.", true); return }
+        if (code.length != 4 && code.length != 6) { say("Enter the code Zephyr VLC Remote is showing on your PC - 4 digits, or 6 on an older Zephyr VLC Remote.", true); return }
         pairing = true
         say("", false)
         scope.launch {
             try {
                 val paired = withContext(Dispatchers.IO) { HelperClient.pair(target.host, target.port, code) }
-                // Token FIRST (fail-closed): a broken secure store throws before any
-                // visible state changes, so no half-saved pairing.
-                store.helperToken = paired.token
                 store.host = target.host
                 store.helperPort = target.port
+                store.helperToken = paired.token
                 store.pcName = paired.name.ifBlank { target.name }
                 remote.publishAddress(target.host, target.port, paired.token)
-                remote.refreshPairing()
                 // Automatic-first: the PC generated the VLC password and handed it over with
                 // the pair. Older helpers need an update before automatic setup can finish.
                 if (paired.vlcPassword != null) {
@@ -147,12 +143,7 @@ fun SetupScreen(
                 say("", false)
             } catch (e: HelperClient.BadPairCode) {
                 pairing = false
-                // S-3: the helper's own reason (wrong/expired/too many tries/too many
-                // phones) is written for him - show it instead of one generic line.
-                say(e.msg, true)
-            } catch (e: HelperClient.Unreachable) {
-                pairing = false
-                say(e.msg, true)
+                say("That code didn't work. Get a fresh one: on your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)
             } catch (e: Exception) {
                 pairing = false
                 say("Couldn't reach Zephyr VLC Remote on ${target.host}. Check the PC is awake and try again.", true)
@@ -175,9 +166,11 @@ fun SetupScreen(
     ) {
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Set up VLC PC", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+            Text("Set up Zephyr VLC Remote", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            if (onCancel != null) {
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+            }
         }
         Spacer(Modifier.height(6.dp))
         Text(
@@ -189,25 +182,13 @@ fun SetupScreen(
         when (step) {
             1 -> Column {
                 SetupCard {
-                    Text("1. VLC control needs the free Zephyr VLC Remote PC app. Install it on your PC.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Get Zephyr VLC Remote PC",
-                        color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) {
-                            // The helper's OWN release page: the general releases list
-                            // also shows the old BingeMote recovery build, which is not
-                            // the helper. Ship order guarantees this tag exists before
-                            // the Android release that links to it.
-                            uriHandler.openUri("https://github.com/MtndaleRedneck/Zephyr-Dev/releases/tag/vlc-remote-v1.0.0")
-                        },
-                    )
+                    Text("1. On your PC, download the Zephyr VLC Remote installer from the Zephyr release page and run it.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("2. If Windows warns about an unrecognized app, click \"More info\", then \"Run anyway\".", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("2. Windows may warn about an unrecognized app. Click \"More info\", then \"Run anyway\". Zephyr VLC Remote is built by the same project as this app.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("3. Allow the one Windows prompt during install. It only opens Zephyr VLC Remote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("3. The installer asks for Windows permission once during install - that is the only admin prompt, and it only opens Zephyr VLC Remote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("4. Leave BingeMote running (it sits in the tray, by the clock, and starts with Windows). Open it, type a name under Pair new phone, and tap Pair - it shows a code for the next step.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("4. Leave Zephyr VLC Remote running (it sits in the tray, by the clock, and starts with Windows). Open it, type a name under Pair new phone, and tap Pair - it shows a code for the next step.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                 }
                 Spacer(Modifier.height(18.dp))
                 OrangeButton("Zephyr VLC Remote is running", onClick = { say("", false); step = 2 })
@@ -301,13 +282,13 @@ fun SetupScreen(
                     Spacer(Modifier.height(6.dp))
                     // No digit-count/older-version/one-use explanation - the field
                     // and its error carry that when it matters. Validation is unchanged.
-                    Text("Enter the code BingeMote is showing on your PC. No code on screen? Open BingeMote from the icon by the clock, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+                    Text("Enter the code Zephyr VLC Remote is showing on your PC. No code on screen? Open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = code,
                         onValueChange = {
                             code = it.filter(Char::isDigit).take(6)
-                            // One less tap: a full 6th digit (older BingeMote) pairs right away; a 4-digit
+                            // One less tap: a full 6th digit (older Zephyr VLC Remote) pairs right away; a 4-digit
                             // code goes with the Pair button below, since 4 is a prefix of 6.
                             if (code.length == 6 && !pairing && chosen != null) pair()
                         },
@@ -337,7 +318,7 @@ fun SetupScreen(
                             Spacer(Modifier.height(10.dp))
                         }
                         if (!autoSetup) {
-                            Text("Update BingeMote on your PC, then pair again to set up VLC automatically.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                            Text("Update Zephyr VLC Remote on your PC, then pair again to set up VLC automatically.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                             Spacer(Modifier.height(12.dp))
                             OrangeButton("Pair again", onClick = { retryPair() })
                         } else when (autoState) {
@@ -374,7 +355,7 @@ fun SetupScreen(
                             else -> {
                                 Text("VLC refused the password", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.height(10.dp))
-                                Text("Pair again to get the password from BingeMote on your PC. If VLC is still running with old settings, close and reopen it.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                                Text("Pair again to get the password from Zephyr VLC Remote on your PC. If VLC is still running with old settings, close and reopen it.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                                 Spacer(Modifier.height(12.dp))
                                 OrangeButton("Pair again", onClick = { retryPair() })
                                 SetupMessage(message, messageIsError)
@@ -391,7 +372,7 @@ fun SetupScreen(
 }
 
 @Composable
-fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
+private fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardGradient).padding(16.dp),
         content = content,
@@ -406,7 +387,7 @@ private fun SetupMessage(message: String?, isError: Boolean) {
 }
 
 @Composable
-fun OrangeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+private fun OrangeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     // One primary button size app-wide: 48dp tall, 14dp corners (was 52/16 here, 46/14 in Settings).
     PressTile(
         onTap = { if (enabled) onClick() },
