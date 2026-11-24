@@ -463,6 +463,44 @@ namespace ZephyrPlayer
 
         // ---------- speed + sleep timer (bar toggles, off by default) ----------
 
+        /// <summary>Fullscreen overflow: speed, audio track and aspect ratio, so the floating bar stays compact.</summary>
+        private void OnMore(object sender, RoutedEventArgs e)
+        {
+            var menu = new ContextMenu();
+            var speed = new MenuItem { Header = "Speed" };
+            foreach (var rate in new[] { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
+            {
+                var r = (float)rate;
+                var item = new MenuItem { Header = rate + "x", IsChecked = Math.Abs(_player.Rate - rate) < 0.01 };
+                item.Click += (_, __) => { _player.SetRate(r); SpeedLabel.Text = rate + "x"; };
+                speed.Items.Add(item);
+            }
+            menu.Items.Add(speed);
+            var audio = new MenuItem { Header = "Audio" };
+            var tracks = _player.AudioTrackDescription;
+            if (tracks == null || tracks.Length == 0) audio.Items.Add(new MenuItem { Header = "No audio tracks", IsEnabled = false });
+            else foreach (var t in tracks)
+            {
+                var id = t.Id;
+                var item = new MenuItem { Header = string.IsNullOrWhiteSpace(t.Name) ? "Track " + id : t.Name, IsChecked = _player.AudioTrack == id };
+                item.Click += (_, __) => _player.SetAudioTrack(id);
+                audio.Items.Add(item);
+            }
+            menu.Items.Add(audio);
+            var aspect = new MenuItem { Header = "Aspect ratio" };
+            foreach (var (label, value) in new (string, string?)[] { ("Default", null), ("16:9", "16:9"), ("4:3", "4:3"), ("21:9", "21:9") })
+            {
+                var v = value;
+                var item = new MenuItem { Header = label, IsChecked = _player.AspectRatio == v };
+                item.Click += (_, __) => _player.AspectRatio = v;
+                aspect.Items.Add(item);
+            }
+            menu.Items.Add(aspect);
+            _menuOpen = true;
+            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
+            menu.IsOpen = true;
+        }
+
         private void OnSpeed(object sender, RoutedEventArgs e)
         {
             var menu = new ContextMenu();
@@ -552,6 +590,7 @@ namespace ZephyrPlayer
             Overlay.Cursor = Cursors.Arrow;
             TopOverlay.BeginAnimation(OpacityProperty, null); TopOverlay.Opacity = 1;
             FullscreenGlyph.Data = Geometry.Parse(on ? "M10,4 V10 H4 M18,4 V10 H24 M24,18 H18 V24 M4,18 H10 V24" : "M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8");
+            MoreButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
             FullscreenButton.ToolTip = on ? "Exit full screen (Esc)" : "Full screen (F)";
             ShowBarOnce();
         }
