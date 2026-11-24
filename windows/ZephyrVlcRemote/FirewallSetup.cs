@@ -51,7 +51,7 @@ internal static class FirewallSetup
             // small files there, so it only accepts a folder inside that user's own profile
             // (no ".." tricks, no reparse points); anything else falls back to this process's
             // own data folder.
-            var dataDir = userDataDir != null && IsDataDirInsideProfile(sid, userDataDir) ? userDataDir : Program.DataDir;
+            var dataDir = ChooseDataDir(Program.DataDir, userDataDir, d => IsDataDirInsideProfile(sid, d));
             // Classify the port reservation FIRST (round-9 N9-5): when it belongs to
             // another app or another Windows user, setup stops BEFORE touching any
             // machine-wide rule - rewriting the shared rules first would break the
@@ -598,6 +598,11 @@ internal static class FirewallSetup
         catch { return false; }
     }
 
+    /// <summary>The supplied folder wins only if the final check passes; otherwise the process's own
+    /// trusted default, which nothing has overwritten, is used.</summary>
+    internal static string ChooseDataDir(string trustedDefault, string? supplied, Func<string, bool> validate) =>
+        !string.IsNullOrWhiteSpace(supplied) && validate(supplied) ? supplied : trustedDefault;
+
     /// <summary>Pure path check: absolute, normalized, strictly inside <paramref name="root"/>.</summary>
     internal static bool IsPathInside(string root, string dir)
     {
@@ -608,13 +613,16 @@ internal static class FirewallSetup
         return d.Length > r.Length && d.StartsWith(r, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool HasReparsePoint(string root, string dir)
+    internal static bool HasReparsePoint(string root, string dir)
     {
         var cur = new DirectoryInfo(Path.GetFullPath(dir));
         var stop = Path.GetFullPath(root).TrimEnd('\\', '/');
-        while (cur != null && !string.Equals(cur.FullName.TrimEnd('\\', '/'), stop, StringComparison.OrdinalIgnoreCase))
+        // Every existing component from the folder up to and INCLUDING the profile root: a profile
+        // folder that is itself a junction or symlink is not accepted (setup then uses its own folder).
+        while (cur != null)
         {
             if (cur.Exists && (cur.Attributes & FileAttributes.ReparsePoint) != 0) return true;
+            if (string.Equals(cur.FullName.TrimEnd('\\', '/'), stop, StringComparison.OrdinalIgnoreCase)) break;
             cur = cur.Parent;
         }
         return false;

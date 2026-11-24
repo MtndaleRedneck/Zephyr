@@ -167,7 +167,8 @@ internal static class Program
             // RunElevated); anything else leaves this process on its own data folder.
             string? vsid = null;
             try { if (!string.IsNullOrWhiteSpace(sid)) vsid = new System.Security.Principal.SecurityIdentifier(sid).Value; } catch { }
-            if (!string.IsNullOrWhiteSpace(dir) && vsid != null && FirewallSetup.IsDataDirInsideProfile(vsid, dir)) DataDir = dir;
+            // Program.DataDir is NOT reassigned here: RunElevated validates the supplied folder once, right
+            // before use, and its fallback must stay this process's own trusted default.
             return FirewallSetup.RunElevated(sid, dir);
         }
         if (args.Contains("--remove-firewall"))
