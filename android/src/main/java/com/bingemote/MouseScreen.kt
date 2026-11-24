@@ -158,12 +158,12 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
                             var lastSentAt = 0L
                             while (isActive) {
                                 // Send-when-free: the next batch leaves the moment the previous one
-                                // landed (paced to at most ~60/sec), so the rate follows the
+                                // landed (paced to at most ~120/sec), so the rate follows the
                                 // connection - fast on a healthy LAN, self-throttling when it's not.
                                 val sendStarted = System.currentTimeMillis()
                                 landed?.await()
                                 val stalledMs = if (landed != null) System.currentTimeMillis() - sendStarted else 0L
-                                val pace = lastSentAt + 16 - System.currentTimeMillis()
+                                val pace = lastSentAt + 8 - System.currentTimeMillis()
                                 if (pace > 0) delay(pace)
                                 // Moves ride the same channel as buttons and scrolls, so a
                                 // drag can never start before its button-down reaches the PC.
