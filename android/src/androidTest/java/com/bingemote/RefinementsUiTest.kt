@@ -54,6 +54,11 @@ class RefinementsUiTest {
             device.swipe(device.displayWidth/2, device.displayHeight*4/5, device.displayWidth/2, device.displayHeight/3, 30)
             Thread.sleep(300)
         }
+        if (!device.hasObject(By.text("Button flash"))) {
+            // Evidence for triage: what the screen actually showed when the scan gave up.
+            val out = java.io.ByteArrayOutputStream(); device.dumpWindowHierarchy(out)
+            android.util.Log.e("ZephyrTriage", "settings tree at give-up: " + out.toString().replace(Regex("\\s+"), " ").take(6000))
+        }
         assertTrue("Button flash removed", device.hasObject(By.text("Button flash")))
         assertFalse("retired selector remains", device.hasObject(By.text("Cancel button style")))
         assertTrue(device.hasObject(By.text("Skip rings only")))
