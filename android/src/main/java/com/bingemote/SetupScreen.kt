@@ -372,7 +372,7 @@ fun SetupScreen(
 }
 
 @Composable
-private fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardGradient).padding(16.dp),
         content = content,
@@ -380,14 +380,14 @@ private fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SetupMessage(message: String?, isError: Boolean) {
+internal fun SetupMessage(message: String?, isError: Boolean) {
     if (message.isNullOrBlank()) return
     Spacer(Modifier.height(10.dp))
     Text(message, color = if (isError) ErrorRed else Orange, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
 @Composable
-private fun OrangeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun OrangeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     // One primary button size app-wide: 48dp tall, 14dp corners (was 52/16 here, 46/14 in Settings).
     PressTile(
         onTap = { if (enabled) onClick() },
