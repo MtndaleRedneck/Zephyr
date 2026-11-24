@@ -114,7 +114,9 @@ namespace ZephyrPlayer.Tests {
     host.Measure(new Size(200,100));host.Arrange(new Rect(0,0,200,100));host.UpdateLayout();
     var item=(ListBoxItem)((ListBox)host.Child).Items[0]!;
     var style=item.Style??(Style)host.Resources[typeof(ListBoxItem)];Assert.NotNull(style);
-    var triggers=new List<TriggerBase>(style.Triggers);
+    // The ring trigger lives in the control template (Style.Triggers or ControlTemplate.Triggers).
+    item.ApplyTemplate();
+    var triggers=new List<TriggerBase>(style.Triggers);if(item.Template!=null)triggers.AddRange(item.Template.Triggers);
     Assert.Contains(triggers,t=>t is Trigger tr&&tr.Property==UIElement.IsKeyboardFocusedProperty);
    });
   }
