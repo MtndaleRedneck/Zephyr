@@ -90,4 +90,18 @@ class HelperPairSaveTest {
         assertEquals(HelperPairSave.Outcome.FAILED_RESTORE_UNCERTAIN, HelperPairSave.save(f, "h", 1, "tok", "pc", null))
         assertEquals("tok", token) // the token restore did not land, and the caller is told
     }
+
+    @Test fun unhealthyAfterPriorReadsMeansZeroWritesAndPriorKept() {
+        var writes = 0
+        val f = object : PairFields {
+            override var host: String get() = "h"; set(_) { writes++ }
+            override var helperPort: Int get() = 1; set(_) { writes++ }
+            override var helperToken: String get() = ""; set(_) { writes++ }
+            override var pcName: String get() = "n"; set(_) { writes++ }
+            override var vlcPassword: String get() = ""; set(_) { writes++ }
+            override fun healthy() = false
+        }
+        assertEquals(HelperPairSave.Outcome.FAILED_PRIOR_KEPT, HelperPairSave.save(f, "x", 2, "t", "p", "v"))
+        assertEquals(0, writes)
+    }
 }

@@ -129,6 +129,7 @@ fun SetupScreen(
                     override var pcName: String get() = store.pcName; set(v) { store.pcName = v }
                     override var vlcPassword: String get() = store.vlcPassword; set(v) { store.vlcPassword = v }
                     override fun flush(): Boolean = store.commitPairing()
+                    override fun healthy(): Boolean = !store.secureStoreBroken
                 }
                 when (HelperPairSave.save(fields, target.host, target.port, paired.token,
                     paired.name.ifBlank { target.name }, paired.vlcPassword)) {

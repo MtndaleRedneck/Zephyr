@@ -9,6 +9,8 @@ internal interface PairFields {
     var vlcPassword: String
     /** Force the writes to disk and report whether they landed (SharedPreferences.commit). */
     fun flush(): Boolean = true
+    /** False when a prior read failed or the secret store is broken: the real Store getters swallow read errors and poison the box instead of throwing. */
+    fun healthy(): Boolean = true
 }
 
 /**
@@ -31,6 +33,10 @@ internal object HelperPairSave {
         } catch (e: Exception) {
             return Outcome.FAILED_PRIOR_KEPT
         }
+        // The real getters do not throw: a failed protected read returns "" and poisons the box. Check
+        // health after collecting priors; unhealthy means nothing was written and nothing can be, so the
+        // old pairing is untouched (not UNCERTAIN: no write happened).
+        if (!runCatching { f.healthy() }.getOrDefault(false)) return Outcome.FAILED_PRIOR_KEPT
         val undo = ArrayDeque<() -> Boolean>() // each restores one written field, true when confirmed
         fun <T> step(read: () -> T, write: (T) -> Unit, prior: T, value: T) {
             // Register before writing: a write that throws midway may still have changed state.

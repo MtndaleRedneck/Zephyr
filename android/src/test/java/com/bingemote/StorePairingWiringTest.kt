@@ -57,6 +57,7 @@ class StorePairingWiringTest {
         override var pcName: String get() = store.pcName; set(v) { store.pcName = v }
         override var vlcPassword: String get() = store.vlcPassword; set(v) { store.vlcPassword = v }
         override fun flush(): Boolean = store.commitPairing()
+        override fun healthy(): Boolean = !store.secureStoreBroken
     }
 
     @Test fun unreadableOldVlcPasswordStopsTheSaveBeforeAnyWrite() {
