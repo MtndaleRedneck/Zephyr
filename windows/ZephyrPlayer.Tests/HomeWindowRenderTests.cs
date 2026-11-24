@@ -183,7 +183,7 @@ namespace ZephyrPlayer.Tests
                     var w = new HomeWindow(settings, new PairedStore(Path.Combine(dir, "paired.json")), _ => { }, () => { }, loadDurations: false, history: new PlaybackHistory(Path.Combine(dir, "h.json")));
                     w.Show(); w.Hide();
                     var box = (FrameworkElement)w.FindName("SearchBox")!;
-                    var border = (Border)box.Parent is Grid g ? (Border)g.Parent : throw new InvalidOperationException("search layout changed");
+                    var border = box.Parent is Grid g && g.Parent is Border b ? b : throw new InvalidOperationException("search layout changed");
                     // WPF precedence: a locally set BorderBrush would beat the style's focus trigger. The base brush must come from the style.
                     Assert.NotEqual(BaseValueSource.Local, DependencyPropertyHelper.GetValueSource(border, Border.BorderBrushProperty).BaseValueSource);
                     // The style carries a trigger on the box's keyboard focus that sets the orange border.
