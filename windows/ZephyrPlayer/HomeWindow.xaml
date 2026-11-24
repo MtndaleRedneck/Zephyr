@@ -32,8 +32,8 @@
           <Button x:Name="PhonesTab" Style="{StaticResource TabButton}" Content="Phones" Click="OnPairing"/>
           <Button x:Name="SettingsButton" Style="{StaticResource TabButton}" Content="Settings" Click="OnSettings"/>
         </StackPanel>
-        <Border Grid.Column="2" Width="260" Height="34" Margin="0,0,12,0" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource PanelLineBrush}" BorderThickness="1" CornerRadius="10">
-          <Border.Style><Style TargetType="Border"><Style.Triggers><DataTrigger Binding="{Binding IsKeyboardFocused, ElementName=SearchBox}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource OrangeBrush}"/></DataTrigger></Style.Triggers></Style></Border.Style>
+        <Border Grid.Column="2" Width="260" Height="34" Margin="0,0,12,0" Background="{StaticResource PanelBrush}" BorderThickness="1" CornerRadius="10">
+          <Border.Style><Style TargetType="Border"><Setter Property="BorderBrush" Value="{StaticResource PanelLineBrush}"/><Style.Triggers><DataTrigger Binding="{Binding IsKeyboardFocused, ElementName=SearchBox}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource OrangeBrush}"/></DataTrigger></Style.Triggers></Style></Border.Style>
           <Grid>
             <Path Data="M10.5,3 A7.5,7.5 0 1 0 10.5,18 A7.5,7.5 0 1 0 10.5,3 M16,16 L21,21" Stroke="{StaticResource MutedBrush}" StrokeThickness="1.6" Width="15" Height="15" Stretch="Uniform" HorizontalAlignment="Left" Margin="11,0,0,0" IsHitTestVisible="False"/>
             <TextBox x:Name="SearchBox" Background="Transparent" BorderThickness="0" Padding="34,6,10,6" FontSize="13" VerticalContentAlignment="Center" TextChanged="OnSearchChanged"/>

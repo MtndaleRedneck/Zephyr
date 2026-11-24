@@ -47,6 +47,25 @@ namespace ZephyrPlayer.Tests
             Assert.DoesNotContain(history.Recent(5, root), r => r.Path == fresh);
             Directory.Delete(root, true); Directory.Delete(other, true);
         }
+        [Fact] public void RecentCountZeroOrNegative_ReturnsNothing_EvenWithEligibleEntries()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "zephyr-history-" + Guid.NewGuid()); Directory.CreateDirectory(dir);
+            var video = Path.Combine(dir, "eligible.mp4"); File.WriteAllText(video, "x");
+            var history = new PlaybackHistory(Path.Combine(dir, "history.json")); history.Save(video, 60_000, 600_000);
+            Assert.Single(history.Recent(1, dir)); // the entry really is eligible
+            Assert.Empty(history.Recent(0, dir)); Assert.Empty(history.Recent(-1, dir));
+            Directory.Delete(dir, true);
+        }
+        [Fact] public void RecentAcceptFilter_RunsBeforeCounting()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "zephyr-history-" + Guid.NewGuid()); Directory.CreateDirectory(dir);
+            var history = new PlaybackHistory(Path.Combine(dir, "history.json"));
+            var older = Path.Combine(dir, "older.mp4"); File.WriteAllText(older, "x"); history.Save(older, 60_000, 600_000); Thread.Sleep(20);
+            for (var i = 0; i < 12; i++) { var f = Path.Combine(dir, $"note{i}.txt"); File.WriteAllText(f, "x"); history.Save(f, 60_000, 600_000); Thread.Sleep(5); }
+            var got = history.Recent(3, dir, p => p.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(new[] { older }, got.ConvertAll(r => r.Path).ToArray());
+            Directory.Delete(dir, true);
+        }
         [Fact] public void OldHistoryFilesWithoutPlayedTimeStillLoad()
         {
             var dir = Path.Combine(Path.GetTempPath(), "zephyr-history-" + Guid.NewGuid()); Directory.CreateDirectory(dir);
@@ -56,7 +75,6 @@ namespace ZephyrPlayer.Tests
             var history = new PlaybackHistory(file);
             Assert.Equal(5000, history.Get(video)!.PositionMs);
             Assert.Empty(history.Recent(3, dir));
-            Assert.Empty(history.Recent(0, dir)); Assert.Empty(history.Recent(-1, dir));
             Directory.Delete(dir, true);
         }
         [Fact] public void RemoteAddressesNeverPersist()

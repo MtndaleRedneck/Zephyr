@@ -38,7 +38,7 @@ namespace ZephyrPlayer
         }
         /// <summary>Movies started and not finished, newest first: started more than 10 s in, under 95% done,
         /// file still the same size and date, and still under <paramref name="root"/> when given.</summary>
-        internal List<(string Path, Item Item)> Recent(int count, string? root = null)
+        internal List<(string Path, Item Item)> Recent(int count, string? root = null, Func<string, bool>? accept = null)
         {
             var result = new List<(string, Item)>();
             if (count <= 0) return result;
@@ -56,6 +56,7 @@ namespace ZephyrPlayer
                         if (!info.Exists || info.Length != v.FileSize || info.LastWriteTimeUtc != v.ModifiedUtc) continue;
                         var real = v.Path!;
                         if (rootFull != null && !real.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (accept != null && !accept(real)) continue; // filter BEFORE counting, so skipped files never crowd out older eligible ones
                         result.Add((real, v));
                         if (result.Count >= count) break;
                     }

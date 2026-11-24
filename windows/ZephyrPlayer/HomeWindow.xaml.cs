@@ -32,7 +32,7 @@ namespace ZephyrPlayer
         private readonly List<string> _backStack = new();
         private List<Entry> _all = new();
         private int _thumbGeneration;
-        private readonly PlaybackHistory _history = new();
+        private readonly PlaybackHistory _history;
         private readonly bool _loadDurations;
         internal Task DurationWork { get; private set; } = Task.CompletedTask;
 
@@ -64,8 +64,9 @@ namespace ZephyrPlayer
             public event PropertyChangedEventHandler? PropertyChanged;
         }
 
-        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true)
+        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true, PlaybackHistory? history = null)
         {
+            _history = history ?? new PlaybackHistory();
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
             _loadDurations = loadDurations;
@@ -121,7 +122,7 @@ namespace ZephyrPlayer
         private void BuildContinue()
         {
             var folder = _settings.LibraryFolder;
-            var items = folder.Length == 0 ? new List<(string Path, PlaybackHistory.Item Item)>() : _history.Recent(12, folder).Where(x => LibraryIsVideo(x.Path)).Take(3).ToList();
+            var items = folder.Length == 0 ? new List<(string Path, PlaybackHistory.Item Item)>() : _history.Recent(3, folder, LibraryIsVideo);
             ContinueList.ItemsSource = items.Select(r => new ContinueItem(r.Path, System.IO.Path.GetFileNameWithoutExtension(r.Path),
                 PlaybackHistory.TimeLeftLabel(r.Item.PositionMs, r.Item.DurationMs), 1.0 * r.Item.PositionMs / r.Item.DurationMs)).ToList();
             ContinueStrip.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;

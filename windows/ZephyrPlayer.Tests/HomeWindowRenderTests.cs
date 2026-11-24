@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -38,7 +39,8 @@ namespace ZephyrPlayer.Tests
                     settings.LibraryFolder = lib;
                     var store = new PairedStore(Path.Combine(dir, "paired.json"));
 
-                    var w = new HomeWindow(settings, store, _ => { }, () => { }, loadDurations: durations);
+                    var history = new PlaybackHistory(Path.Combine(dir, "history.json")); // isolated: never the real AppData history
+                    var w = new HomeWindow(settings, store, _ => { }, () => { }, loadDurations: durations, history: history);
                     w.Show(); w.Hide(); // drives Loaded/Refresh like startup does
 
                     var emptyState = (UIElement)w.FindName("EmptyState")!;
@@ -51,7 +53,6 @@ namespace ZephyrPlayer.Tests
                     Assert.True(crumbs.Items.Count >= 1);
 
                     // Real per-file history drives the badge/progress, not a fixed mock label.
-                    var history = new PlaybackHistory();
                     history.Save(Path.Combine(lib, "Episode 2.mp4"), 20000, 90000);
                     w.Refresh();
                     var entry = list.Items[1]; // natural sort after folder
@@ -60,7 +61,7 @@ namespace ZephyrPlayer.Tests
 
                     // Empty-folder state flips correctly when nothing is set.
                     var settings2 = new PlayerSettings(Path.Combine(dir, "settings2.json"));
-                    var w2 = new HomeWindow(settings2, store, _ => { }, () => { }, loadDurations: durations);
+                    var w2 = new HomeWindow(settings2, store, _ => { }, () => { }, loadDurations: durations, history: new PlaybackHistory(Path.Combine(dir, "history2.json")));
                     w2.Show(); w2.Hide();
                     Assert.Equal(Visibility.Visible, ((UIElement)w2.FindName("EmptyState")!).Visibility);
                     w2.Close();
@@ -99,6 +100,7 @@ namespace ZephyrPlayer.Tests
                     Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
                     w.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+                    try { Directory.Delete(dir, true); } catch { } // temp fixtures only
                 }
                 catch (Exception e) { error = e.ToString(); }
             });
@@ -120,7 +122,7 @@ namespace ZephyrPlayer.Tests
                     var lib = Path.Combine(dir, "Movies");
                     Directory.CreateDirectory(Path.Combine(lib, ".Watched"));
                     Directory.CreateDirectory(Path.Combine(lib, "Kids"));
-                    var history = new PlaybackHistory();
+                    var history = new PlaybackHistory(Path.Combine(dir, "history.json"));
                     foreach (var name in new[] { "A long movie title that keeps going.mp4", "Second movie.mp4", "Third movie.mp4" })
                     {
                         var f = Path.Combine(lib, name);
@@ -128,7 +130,7 @@ namespace ZephyrPlayer.Tests
                         history.Save(f, 20000, 90000);
                     }
                     var settings = new PlayerSettings(Path.Combine(dir, "settings.json")) { LibraryFolder = lib };
-                    var w = new HomeWindow(settings, new PairedStore(Path.Combine(dir, "paired.json")), _ => { }, () => { }, loadDurations: false);
+                    var w = new HomeWindow(settings, new PairedStore(Path.Combine(dir, "paired.json")), _ => { }, () => { }, loadDurations: false, history: history);
                     w.Show(); w.Hide();
                     var list = (ListBox)w.FindName("MovieList")!;
                     var watched = false; var kids = false;
@@ -157,6 +159,39 @@ namespace ZephyrPlayer.Tests
                     using (var fs = File.Create(Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? Path.GetTempPath(), "pc-home-narrow.png"))) png.Save(fs);
                     w.Close();
                     System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+                    try { Directory.Delete(dir, true); } catch { } // temp fixtures only
+                }
+                catch (Exception e) { error = e.ToString(); }
+            });
+            t.SetApartmentState(ApartmentState.STA);
+            t.Start();
+            t.Join(30000);
+            Assert.True(error == null, error ?? "STA thread did not finish");
+        }
+
+        [Fact]
+        public void HomeSearch_FocusBorder_Can_Win_Over_The_Base_Border()
+        {
+            string? error = null;
+            var t = new Thread(() =>
+            {
+                try
+                {
+                    var dir = Path.Combine(Path.GetTempPath(), "zephyr-homesearch-" + Guid.NewGuid().ToString("N"));
+                    Directory.CreateDirectory(dir);
+                    var settings = new PlayerSettings(Path.Combine(dir, "settings.json"));
+                    var w = new HomeWindow(settings, new PairedStore(Path.Combine(dir, "paired.json")), _ => { }, () => { }, loadDurations: false, history: new PlaybackHistory(Path.Combine(dir, "h.json")));
+                    w.Show(); w.Hide();
+                    var box = (FrameworkElement)w.FindName("SearchBox")!;
+                    var border = (Border)box.Parent is Grid g ? (Border)g.Parent : throw new InvalidOperationException("search layout changed");
+                    // WPF precedence: a locally set BorderBrush would beat the style's focus trigger. The base brush must come from the style.
+                    Assert.NotEqual(BaseValueSource.Local, DependencyPropertyHelper.GetValueSource(border, Border.BorderBrushProperty).BaseValueSource);
+                    // The style carries a trigger on the box's keyboard focus that sets the orange border.
+                    var dt = border.Style.Triggers.OfType<DataTrigger>().Single();
+                    Assert.Contains(dt.Setters.OfType<Setter>(), x => x.Property == Border.BorderBrushProperty);
+                    w.Close();
+                    System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+                    try { Directory.Delete(dir, true); } catch { }
                 }
                 catch (Exception e) { error = e.ToString(); }
             });
