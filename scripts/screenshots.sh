@@ -47,7 +47,7 @@ shoot settings-pair-paired
 shoot movies-phone
 shoot movies
 shoot main-connected main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok
-shoot helper-code-entry setup --ez pairdemo true
+shoot helper-code-entry setup --ez pairdemo true --ez pairdemoselect true
 adb shell wm size reset
 adb shell wm density reset
 

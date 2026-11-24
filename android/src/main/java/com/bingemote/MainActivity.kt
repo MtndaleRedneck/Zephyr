@@ -168,6 +168,7 @@ class MainActivity : ComponentActivity() {
                         onCancel = if (store.setupDone) ({ openSettings() }) else null,
                         demoVlcPending = BuildConfig.DEBUG && intent.hasExtra("vlcpending"),
                         demoPair = BuildConfig.DEBUG && intent.hasExtra("pairdemo"),
+                        demoPreselect = BuildConfig.DEBUG && intent.hasExtra("pairdemoselect"),
                     )
                     "mouse" -> MouseScreen(remote) { current.value = "main" }
                     // CI screenshot states (debug builds only): open with the sheet forced open.

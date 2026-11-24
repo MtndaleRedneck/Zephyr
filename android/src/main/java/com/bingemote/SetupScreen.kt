@@ -36,6 +36,7 @@ fun SetupScreen(
     onCancel: (() -> Unit)? = null,
     demoVlcPending: Boolean = false,
     demoPair: Boolean = false,
+    demoPreselect: Boolean = false, // screenshot rig only: open with the demo PC already chosen
 ) {
     val store = remote.store
     val scope = rememberCoroutineScope()
@@ -48,7 +49,7 @@ fun SetupScreen(
     var found by remember {
         mutableStateOf(if (demoPair && demo) listOf(DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC")) else emptyList())
     }
-    var chosen by remember { mutableStateOf<DiscoveredHelper?>(if (demoPair && demo) DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC") else null) }
+    var chosen by remember { mutableStateOf<DiscoveredHelper?>(if (demoPair && demoPreselect && demo) DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC") else null) }
     var manualHost by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var pairing by remember { mutableStateOf(false) }

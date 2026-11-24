@@ -51,6 +51,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun MainScreen(
@@ -805,9 +806,13 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
     // long enough for the test to observe them, then drop the connection mid-view.
     // The armed flag is read INSIDE the effect: gating the effect itself on the flag
     // let any recomposition dispose the effect mid-delay and silently skip the drop.
-    if (BuildConfig.DEBUG && folder?.files?.isNotEmpty() == true) {
+    if (BuildConfig.DEBUG) {
         LaunchedEffect(Unit) {
             if (MainActivity.previewLostRigArmed) {
+                // Wait inside the effect for the connected rows (the effect itself is never gated
+                // on them, so a recomposition cannot dispose it after the flag was consumed).
+                androidx.compose.runtime.snapshotFlow { remote.subtitleFolder?.files?.isNotEmpty() == true }
+                    .first { v -> v }
                 MainActivity.previewLostRigArmed = false
                 kotlinx.coroutines.delay(2500)
                 remote.debugForceStatus(unreachable = true, helperDown = true)
