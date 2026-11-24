@@ -31,6 +31,12 @@ jobs:
           dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "console;verbosity=normal"
+      - name: Publish check (win-x64 single file, locked; nothing is uploaded)
+        if: always()
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+      - name: Headless host builds on net10
+        if: always()
+        run: dotnet build windows/ZephyrPlayer.HeadlessHost/ZephyrPlayer.HeadlessHost.csproj -c Release
       - name: Screenshots for review (one day)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
