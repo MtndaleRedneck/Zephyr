@@ -159,6 +159,9 @@ class RemoteState(
         store.selectedSource = source
         MediaControls.sync(app, store)
         status = null; winVolume = null; pickedSubtitle = null
+        // Helper-only subtitle work must not outlive the source it belonged to.
+        subtitleRequest++; subtitleListRequest++; subtitleFolder = null; pickedSubtitleFile = null
+        subtitleListLoading = false; subtitleMutationLoading = false; subtitleListInFlight = false
         muted = false; vlcClosed = false; vlcRefused = false
         helperDown = false; helperNotice = false; helperMovedTo = null; unpaired = false
         failures = 0; connecting = true; unreachable = true
@@ -708,6 +711,7 @@ class RemoteState(
         subtitleListError = "Can't check subtitle files right now."
     }
     fun refreshSubtitleFiles(quiet: Boolean = false) {
+        if (store.selectedSource != Source.VLC) return
         reconcileSubtitleWarnings()
         if (BuildConfig.DEBUG && subtitleFolder?.mediaId == "demo") return
         if (subtitleListInFlight) return
@@ -753,6 +757,7 @@ class RemoteState(
         }
     }
     fun loadSubtitleFile(file: HelperClient.SubtitleFile) {
+        if (store.selectedSource != Source.VLC) return
         reconcileSubtitleWarnings()
         val folder = subtitleFolder ?: return
         if (folder.mediaId in uncertainSubtitleMedia || "" in uncertainSubtitleMedia) {
@@ -769,7 +774,7 @@ class RemoteState(
         cmds.trySend(Cmd("sub", System.currentTimeMillis(), request) {
             var journalId: String? = null
             try {
-                if (warningKey != subtitleWarningKey) throw HelperClient.SubtitleRejected("pairing changed")
+                if (warningKey != subtitleWarningKey || store.selectedSource != Source.VLC) throw HelperClient.SubtitleRejected("pairing changed")
                 journalId = beginSubtitleMutation(folder.mediaId,warningKey,true)
                 val loaded = HelperClient.loadSubtitle(host, port, token, folder.mediaId, file.id)
                 finishSubtitleMutation(journalId,false)

@@ -121,9 +121,19 @@ fun SetupScreen(
         scope.launch {
             try {
                 val paired = withContext(Dispatchers.IO) { HelperClient.pair(target.host, target.port, code) }
-                store.host = target.host
-                store.helperPort = target.port
-                store.helperToken = paired.token
+                // Token FIRST: a broken secure store throws before host/port change, so a
+                // failed save leaves the prior pairing exactly as it was.
+                val prior = Triple(store.host, store.helperPort, store.helperToken)
+                try {
+                    store.helperToken = paired.token
+                    store.host = target.host
+                    store.helperPort = target.port
+                } catch (e: SecureStoreUnavailable) {
+                    store.host = prior.first; store.helperPort = prior.second
+                    pairing = false
+                    say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was changed - on your PC, remove this phone in Zephyr VLC Remote, then pair again.", true)
+                    return@launch
+                }
                 store.pcName = paired.name.ifBlank { target.name }
                 remote.publishAddress(target.host, target.port, paired.token)
                 // Automatic-first: the PC generated the VLC password and handed it over with
