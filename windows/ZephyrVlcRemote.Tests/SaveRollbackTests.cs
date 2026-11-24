@@ -117,3 +117,33 @@ public class SaveRollbackTests : IDisposable
         Assert.Equal(@"C:\Movies", Program.MoviesFolder);
     }
 }
+
+[Collection("ProgramState")]
+public class CancelPairingOrderTests
+{
+    [Fact]
+    public void CancelWaitsForAnInFlightPairAndNothingCompletesAfterItReturns()
+    {
+        Program.PairCode = "1234"; Program.PendingPhoneName = "Phone";
+        var inFlightHasLock = new ManualResetEventSlim();
+        var pairedAt = 0L; var canceledAt = 0L; var clock = 0L;
+        var pair = new Thread(() =>
+        {
+            lock (HttpServer.PairLock)
+            {
+                inFlightHasLock.Set();
+                Thread.Sleep(300); // a correct code is mid-save
+                if (Program.PairCode != null) { Program.PairCode = null; pairedAt = Interlocked.Increment(ref clock); }
+            }
+        });
+        pair.Start();
+        inFlightHasLock.Wait();
+        HttpServer.CancelPairCode();
+        canceledAt = Interlocked.Increment(ref clock);
+        pair.Join();
+        Assert.True(pairedAt > 0 && pairedAt < canceledAt, "Cancel returned before the in-flight pair finished");
+        Assert.Null(Program.PairCode);
+        // A /pair that arrives after Cancel finds no code.
+        lock (HttpServer.PairLock) { Assert.Null(Program.PairCode); }
+    }
+}

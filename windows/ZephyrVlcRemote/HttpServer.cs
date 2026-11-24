@@ -306,11 +306,27 @@ internal sealed class HttpServer : IDisposable
     /// <summary>UI pairing mutations (Start/Cancel/expiry name restore) take this too,
     /// so a /pair never observes half-set pairing state (round-7 review C).</summary>
     internal static readonly object PairLock = new();
+
+    /// <summary>Cancel the on-screen pairing code. Takes PairLock, so a /pair that already holds
+    /// it finishes first and one that arrives later finds no code. Returns the typed name.</summary>
+    internal static string? CancelPairCode()
+    {
+        lock (PairLock)
+        {
+            var name = Program.PendingPhoneName;
+            Program.PairCode = null;
+            Program.PendingPhoneName = null;
+            return name;
+        }
+    }
     private void HandlePair(HttpListenerRequest req, HttpListenerResponse res)
     {
-        lock (PairLock) { HandlePairLocked(req, res); }
+        // Read the request body BEFORE taking the lock: a slow or stalled client must never
+        // hold PairLock, or the window's Cancel/Start (same lock) would freeze behind it.
+        var body = ReadBody(req);
+        lock (PairLock) { HandlePairLocked(body, res); }
     }
-    private void HandlePairLocked(HttpListenerRequest req, HttpListenerResponse res)
+    private void HandlePairLocked(string body, HttpListenerResponse res)
     {
         if (Program.PairFailures >= Program.MaxPairFailures)
         {
@@ -329,7 +345,6 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
             return;
         }
-        var body = ReadBody(req);
         var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
         // One-shot and rate-limited, but never timed: the code stays valid until it pairs or is canceled.
         var valid = pairCode != null

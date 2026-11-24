@@ -680,9 +680,9 @@ internal sealed class HelperWindow : Form
     /// <summary>Cancel drops the code and goes back to step one, keeping the typed name.</summary>
     private void CancelPairing()
     {
-        var name = Program.PendingPhoneName;
-        Program.PairCode = null;
-        Program.PendingPhoneName = null;
+        // Same lock as /pair (see CancelPairCode): a correct code in flight either finishes before
+        // Cancel (the phone is paired) or finds no code after it.
+        var name = HttpServer.CancelPairCode();
         if (!string.IsNullOrEmpty(name) && _nameBox.Text.Trim().Length == 0) _nameBox.Text = name;
         Program.Log("Pairing canceled from the window.");
         TickStatus();
@@ -759,7 +759,9 @@ internal sealed class HelperWindow : Form
     private void RemovePhone(Program.PairedPhone ph)
     {
         if (!ConfirmDialog.Ask(this,
-                "Remove " + ph.Name + "? It stops controlling this PC right away. You can pair it again any time with a new code.",
+                "Remove " + ph.Name + "? It stops controlling this PC through Zephyr VLC Remote right away. " +
+                "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. " +
+                "You can pair the phone again any time with a new code.",
                 "Remove")) return;
         if (!Program.RemovePhonesAndPersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray()))
         {
@@ -775,7 +777,9 @@ internal sealed class HelperWindow : Form
     {
         if (Program.PhonesCount == 0) return;
         if (!ConfirmDialog.Ask(this,
-                "Remove all phones? Every phone stops controlling this PC right away. Pair them again with new codes.",
+                "Remove all phones? Every phone stops controlling this PC through Zephyr VLC Remote right away. " +
+                "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. " +
+                "Pair them again with new codes.",
                 "Remove all")) return;
         if (!Program.RemovePhonesAndPersist(all => all))
         {
