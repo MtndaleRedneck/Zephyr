@@ -20,6 +20,9 @@ internal static class ResumeTracker
     private static string? _password;
     private static int _port = 8080;
     private static bool _pollerStarted;
+    /// <summary>Latest VLC status: a video loaded, playing or paused (the keep-awake
+    /// condition). False whenever VLC is closed, stopped, or its status can't be read.</summary>
+    internal static bool MediaActive { get; private set; }
     private static DateTime _lastSave = DateTime.MinValue;
     private static string? _currentFile;
     private static bool _dirty;
@@ -160,6 +163,13 @@ internal static class ResumeTracker
         ClearedWhileSuppressed.Clear();
         _saveSuppressed = false;
         if (_dirty) SaveLocked();
+    /// <summary>If the VLC password became known after startup (paired later), start polling now.</summary>
+    public static void EnsurePollingWithCurrentPassword()
+    {
+        var pw = VlcSetup.EffectivePassword();
+        if (string.IsNullOrEmpty(pw)) return;
+        lock (Gate) _password ??= pw;
+        EnsurePoller();
     }
 
     private static void EnsurePoller()
@@ -187,18 +197,18 @@ internal static class ResumeTracker
         if (Process.GetProcessesByName("vlc").Length == 0)
         {
             // VLC closed: forget the "current" file (its last place is already saved).
-            // Save only when something actually changed - not every 5 s while VLC is
-            // closed, which would mean thousands of identical writes a day.
-            lock (Gate) { _currentFile = null; if (_dirty) SaveLocked(); }
+            lock (Gate) { _currentFile = null; SaveLocked(); }
+            MediaActive = false;
             return;
         }
         var status = await Get(port, pw, "status.json");
-        if (status == null) return;
+        if (status == null) { MediaActive = false; return; }
         using var doc = JsonDocument.Parse(status);
         var root = doc.RootElement;
         if (!root.TryGetProperty("time", out var t) || !root.TryGetProperty("length", out var l)) return;
         var state = root.TryGetProperty("state", out var st) ? st.GetString() ?? "" : "";
-        if (state != "playing" && state != "paused") return;
+        MediaActive = state == "playing" || state == "paused";
+        if (!MediaActive) return;
         var file = await CurrentFile(port, pw);
         if (file == null) return;
         lock (Gate)
@@ -232,7 +242,7 @@ internal static class ResumeTracker
         return null;
     }
 
-    private static readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(3) };
+    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromSeconds(3) };
 
     private static async Task<string?> Get(int port, string pw, string page)
     {
@@ -241,7 +251,8 @@ internal static class ResumeTracker
             using var req = new HttpRequestMessage(HttpMethod.Get, $"http://127.0.0.1:{port}/requests/{page}");
             req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
                 "Basic", Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(":" + pw)));
-            using var resp = await _http.SendAsync(req);
+            using var resp = await Http.SendAsync(req);
+            resp.EnsureSuccessStatusCode();
             return await resp.Content.ReadAsStringAsync();
         }
         catch { return null; }

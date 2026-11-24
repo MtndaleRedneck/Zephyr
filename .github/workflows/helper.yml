@@ -1,0 +1,45 @@
+name: Helper
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [modernization-1124]
+    paths:
+      - 'windows/ZephyrVlcRemote/**'
+      - 'windows/ZephyrVlcRemote.Tests/**'
+      - '.github/workflows/helper.yml'
+
+# Zephyr VLC Remote (Windows helper): tests, publish and installer build.
+# Nothing is uploaded as a run artifact: this repo is public and run artifacts are
+# publicly downloadable. Hidden builds go to the private draft route only.
+
+permissions:
+  contents: read
+
+jobs:
+  helper:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+      - name: Helper unit tests
+        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --filter 'FullyQualifiedName!~RealVlc'
+      - name: Publish helper exe
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
+      - name: Report size and runtime
+        shell: pwsh
+        run: |
+          $f = Get-Item windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe
+          "exe bytes: $($f.Length)"
+          dotnet --version
+          Get-ChildItem "$env:ProgramFiles\dotnet\shared\Microsoft.NETCore.App" | Select-Object -ExpandProperty Name
+      - name: Build the installer
+        run: |
+          choco install innosetup --no-progress -y
+          $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/ZephyrVlcRemote/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem windows/ZephyrVlcRemote/Output | Select-Object Name, Length

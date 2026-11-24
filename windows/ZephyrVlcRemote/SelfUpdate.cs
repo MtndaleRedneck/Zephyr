@@ -11,47 +11,30 @@ namespace ZephyrVlcRemote;
 /// </summary>
 internal static class SelfUpdate
 {
-    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string,string> Verified = new();
-    private static readonly HttpClient Http = new(new HttpClientHandler {AllowAutoRedirect=false});
-    /// <summary>Hard cap on one installer download: a broken or hostile feed
-    /// must never fill the disk. Margin evidence: the 1.4.0 Zephyr Player
-    /// installer is 164,212,234 bytes (~157 MiB, CI artifact 12934174344); the
-    /// helper's own installer is smaller (~47 MB zip). The cap is well above
-    /// both, so growth headroom is real but bounded.</summary>
-    internal static long MaxInstallerBytes = 512L * 1024 * 1024;
-
-    internal static void CleanOldDownloads()
-    {
-        var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZephyrVlcRemote","Updates");
-        try{foreach(var dir in Directory.GetDirectories(root))if(Directory.GetLastWriteTimeUtc(dir)<DateTime.UtcNow.AddDays(-1)){try{Directory.Delete(dir,true);}catch{}}}catch{}
-    }
+    private static readonly HttpClient Http = new();
 
     /// <summary>Fetch the installer to the temp folder and verify its SHA-256 when the
     /// release published one. Returns the local path; throws on any failure. A download that
     /// stalls for 60 seconds is canceled so the button never sits on "Downloading..." forever.
     /// Slow connections may take as long as they need: only silence counts.</summary>
-    public static async Task<string> Download(string version, string exeUrl, string? sha256, IProgress<int>? progress = null, Func<string, bool>? hostAllowed = null)
+    public static async Task<string> Download(string version, string exeUrl, string? sha256, IProgress<int>? progress = null)
     {
         // Round-5: no verified checksum, no execute - an undigested release asset is
         // refused outright instead of being run unverified.
-        if (sha256==null || !System.Text.RegularExpressions.Regex.IsMatch(sha256,"^[0-9a-fA-F]{64}$"))
+        if (string.IsNullOrWhiteSpace(sha256))
             throw new InvalidOperationException("The release has no SHA-256 digest; the download was not started.");
-        return await DownloadCore(version, exeUrl, sha256, progress, hostAllowed);
+        return await DownloadCore(version, exeUrl, sha256, progress);
     }
 
-    private static async Task<string> DownloadCore(string version, string exeUrl, string? sha256, IProgress<int>? progress = null, Func<string, bool>? hostAllowed = null)
+    private static async Task<string> DownloadCore(string version, string exeUrl, string? sha256, IProgress<int>? progress = null)
     {
         using var stall = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         var current = exeUrl;
         for (var hops = 0; ; hops++)
         {
-            var uri=new Uri(current);
-            if(!uri.IsLoopback && uri.Scheme!=Uri.UriSchemeHttps)throw new InvalidOperationException("The download address was not HTTPS.");
-            var host = uri.Host;
-            hostAllowed ??= h =>
-                h.Equals("github.com", StringComparison.OrdinalIgnoreCase) ||
-                h.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase);
-            if (!hostAllowed(host))
+            var host = new Uri(current).Host;
+            if (!host.Equals("github.com", StringComparison.OrdinalIgnoreCase) &&
+                !host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException("The download address was not trusted: " + host);
             using var req = new HttpRequestMessage(HttpMethod.Get, current);
             req.Headers.UserAgent.ParseAdd("ZephyrVlcRemotePC");
@@ -66,16 +49,11 @@ internal static class SelfUpdate
             }
             resp.EnsureSuccessStatusCode();
             // Fresh random folder: a predictable %TEMP% name can be pre-planted.
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ZephyrVlcRemote", "Updates", Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(dir);
-            var dest = Path.Combine(dir, "installer.exe");
+            var dest = Path.Combine(Path.GetTempPath(), "zvr-update-" + Guid.NewGuid().ToString("N"),
+                "Zephyr-VLC-Remote-PC-" + version + ".exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
             var total = resp.Content.Headers.ContentLength ?? -1;
-            // Any failure below (cap, IO, hash) removes the partial download
-            // instead of leaving it for the next-day sweep.
-            try
-            {
-            if (total > MaxInstallerBytes) throw new InvalidOperationException("The update download is too large to be a real installer.");
-            await using (var fs = new FileStream(dest,FileMode.CreateNew,FileAccess.Write,FileShare.None))
+            await using (var fs = File.Create(dest))
             {
                 await using var src = await resp.Content.ReadAsStreamAsync(stall.Token);
                 var buf = new byte[64 * 1024];
@@ -85,7 +63,6 @@ internal static class SelfUpdate
                 {
                     await fs.WriteAsync(buf.AsMemory(0, n), stall.Token);
                     got += n;
-                    if (got > MaxInstallerBytes) throw new InvalidOperationException("The update download is too large to be a real installer.");
                     // Every arrived chunk proves the download is alive: the 60 seconds only
                     // ever count silence.
                     stall.CancelAfter(TimeSpan.FromSeconds(60));
@@ -103,32 +80,14 @@ internal static class SelfUpdate
                     throw new InvalidOperationException("The download did not match the release's SHA-256.");
                 }
             }
-            Verified[dest]=sha256!;
             return dest;
-            }
-            catch { try { Directory.Delete(dir, true); } catch { } throw; }
         }
     }
-
-        internal static FileStream OpenVerifiedForLaunch(string path)
-        {
-            if (!Verified.TryGetValue(path, out var expected)) throw new InvalidOperationException("Download was not verified in this session.");
-            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            try
-            {
-                var actual = Convert.ToHexString(SHA256.HashData(stream));
-                if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) throw new InvalidOperationException("The installer changed after download. It was not started.");
-                stream.Position = 0;
-                return stream;
-            }
-            catch { stream.Dispose(); Verified.TryRemove(path, out _); try { File.Delete(path); } catch { } throw; }
-        }
 
     /// <summary>Open the downloaded installer (it asks Windows for permission once) and
     /// quit so it can replace the running exe.</summary>
     public static void LaunchAndQuit(string path)
     {
-        using var verified=OpenVerifiedForLaunch(path);
         Program.Log("Starting the downloaded installer silently, quitting for the update.");
         // Tell the watchdog an install is about to run so its 5-minute check cannot start a
         // copy mid-install. Fresh for 3 minutes; any normal start deletes it.

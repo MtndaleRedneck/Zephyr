@@ -1,0 +1,17 @@
+Notices for the .NET 10.0.15 runtime bundled inside ZephyrVlcRemote.exe
+
+ZephyrVlcRemote.exe is published self-contained as a single file. It carries
+the .NET 10 runtimes (win-x64). The files in this folder are the official license
+and third-party notice files for those runtimes, copied unchanged from the
+v10.0.15 release tags of the .NET repositories:
+
+dotnet-runtime-10.0.15-THIRD-PARTY-NOTICES.TXT
+  https://github.com/dotnet/runtime/blob/v10.0.15/THIRD-PARTY-NOTICES.TXT
+dotnet-wpf-10.0.15-THIRD-PARTY-NOTICES.TXT
+  https://github.com/dotnet/wpf/blob/v10.0.15/THIRD-PARTY-NOTICES.TXT
+dotnet-winforms-10.0.15-THIRD-PARTY-NOTICES.TXT
+  https://github.com/dotnet/winforms/blob/v10.0.15/THIRD-PARTY-NOTICES.TXT
+dotnet-10.0.15-LICENSE.TXT (MIT License)
+  https://github.com/dotnet/runtime/blob/v10.0.15/LICENSE.TXT
+
+If the runtime patch version in a build differs from 10.0.15, refresh these files.

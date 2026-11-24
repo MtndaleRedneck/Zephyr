@@ -14,16 +14,12 @@ namespace ZephyrVlcRemote;
 internal sealed class HttpServer : IDisposable
 {
     private readonly HttpListener _listener = new();
-    private readonly SemaphoreSlim _requests = new(16);
-    private readonly SemaphoreSlim _pairs = new(4);
-    private readonly SemaphoreSlim _sockets = new(8);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<string,byte> _socketTokens = new();
     private Thread? _thread;
     private volatile bool _running;
 
-    public void Start(int? loopbackPort = null)
+    public void Start()
     {
-        _listener.Prefixes.Add(loopbackPort.HasValue ? $"http://127.0.0.1:{loopbackPort.Value}/" : $"http://+:{Program.HttpPort}/");
+        _listener.Prefixes.Add($"http://+:{Program.HttpPort}/");
         _listener.Start();
         _running = true;
         _thread = new Thread(Loop) { IsBackground = true };
@@ -37,15 +33,7 @@ internal sealed class HttpServer : IDisposable
             HttpListenerContext ctx;
             try { ctx = _listener.GetContext(); }
             catch { break; }
-            var path = ctx.Request.Url?.AbsolutePath?.TrimEnd('/') ?? "";
-            var pair = path == "/pair";
-            if (!pair && !Authorized(ctx.Request)) { ctx.Response.StatusCode=401;ctx.Response.Close();continue; }
-            var ws = path == "/ws";
-            var token = ctx.Request.Headers["X-Zephyr-VLC-Remote-Token"] ?? "";
-            var slots = pair ? _pairs : ws ? _sockets : _requests;
-            if (!slots.Wait(0)) { ctx.Response.StatusCode=503;ctx.Response.Close();continue; }
-            if (ws && !_socketTokens.TryAdd(token,0)) {slots.Release();ctx.Response.StatusCode=429;ctx.Response.Close();continue;}
-            Task.Run(async () => { try { await Handle(ctx); } finally { slots.Release();if(ws)_socketTokens.TryRemove(token,out _); } });
+            Task.Run(async () => await Handle(ctx));
         }
     }
 
@@ -99,6 +87,31 @@ internal sealed class HttpServer : IDisposable
                     HandlePair(req, res);
                     return;
 
+#if KEEPAWAKE_HOOK
+                // CI-only (never in shipped builds, same gate as the pairing hook): force
+                // the keep-awake hold on/off so the e2e can watch it in powercfg /requests.
+                // Runs on a listener pool thread on purpose - that exercises the
+                // pool-to-UI-thread marshal the hold depends on.
+                case "/ci/hold":
+                {
+                    var on = JsonDocument.Parse(ReadBody(req)).RootElement.GetProperty("on").GetBoolean();
+                    PowerWake.SyncToVlc(on);
+                    Reply(res, 200, "{\"ok\":true}");
+                    return;
+                }
+#endif
+
+#if BLOCK_NOTICE_HOOK
+                // CI-only (never in shipped builds): the input-blocked notice state, so
+                // the e2e can assert the title, state transitions and balloon throttle.
+                case "/ci/blockstate":
+                    if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                    Reply(res, 200, "{\"blocked\":" + (HelperWindow.BlockNoticeProbe.Blocked ? "true" : "false")
+                        + ",\"balloons\":" + HelperWindow.BlockNoticeProbe.Balloons
+                        + ",\"title\":" + JsonSerializer.Serialize(HelperWindow.BlockNoticeProbe.Title) + "}");
+                    return;
+#endif
+
                 // The live mouse connection (item 5): one always-open WebSocket for
                 // move/scroll/zoom/button frames, fire-and-forget. Same port, same token
                 // check; an old phone simply never opens it and stays on HTTP.
@@ -106,6 +119,21 @@ internal sealed class HttpServer : IDisposable
                     if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
                     if (!req.IsWebSocketRequest) { Reply(res, 400, "{\"error\":\"websocket expected\"}"); return; }
                     await HandleWs(ctx);
+                    return;
+
+                // Any button on the phone: bring the screen back if its idle timer shut it
+                // off. The playback buttons talk straight to VLC, so the phone pings this.
+                case "/wake-display":
+                    if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                    PowerWake.WakeDisplay();
+                    Reply(res, 200, "{\"ok\":true}");
+                    return;
+
+                // The phone's gate for VLC-direct buttons: dark (or not yet known) means
+                // the first tap only wakes - it must not send the tap's real command.
+                case "/screen-state":
+                    if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                    Reply(res, 200, "{\"dark\":" + (PowerWake.DisplayDarkOrUnknown ? "true" : "false") + "}");
                     return;
 
                 case "/config":
@@ -140,6 +168,40 @@ internal sealed class HttpServer : IDisposable
                     }
                     return;
 
+                case "/subtitles/media":
+                    if (!Authorized(req)) { Reply(res,401,"{}"); return; }
+                    if (req.HttpMethod != "GET") { Reply(res,405,"{}"); return; }
+                    Reply(res,200,await Subtitles.Media(int.TryParse(VlcSetup.ReadVlcrcValue("http-port"),out var mediaPort) && mediaPort is >0 and <=65535 ? mediaPort :8080,VlcSetup.EffectivePassword() ?? ""));
+                    return;
+                case "/subtitles/list":
+                    if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                    if (req.HttpMethod != "GET") { Reply(res, 405, "{}"); return; }
+                    Reply(res, 200, await Subtitles.List(Program.MoviesFolder ?? "", int.TryParse(VlcSetup.ReadVlcrcValue("http-port"), out var listPort) && listPort is > 0 and <= 65535 ? listPort : 8080, VlcSetup.EffectivePassword() ?? ""));
+                    return;
+                case "/subtitles/select":
+                    if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                    if (req.HttpMethod != "POST") { Reply(res, 405, "{}"); return; }
+                    {
+                        if (PowerWake.ShouldSwallowDiscrete()) { Reply(res, 200, "{\"woke\":true}"); return; }
+                        using var doc = JsonDocument.Parse(ReadBody(req));
+                        var answer = await Subtitles.Select(int.TryParse(VlcSetup.ReadVlcrcValue("http-port"), out var selectPort) && selectPort is > 0 and <= 65535 ? selectPort : 8080,
+                            VlcSetup.EffectivePassword() ?? "", doc.RootElement.GetProperty("trackId").GetInt32(), Program.MoviesFolder ?? "", doc.RootElement.GetProperty("mediaId").GetString());
+                        Reply(res, answer.status, answer.body);
+                    }
+                    return;
+                case "/subtitles/load":
+                    if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                    if (req.HttpMethod != "POST") { Reply(res, 405, "{}"); return; }
+                    {
+                        if (PowerWake.ShouldSwallowDiscrete()) { Reply(res, 200, "{\"woke\":true}"); return; }
+                        using var doc = JsonDocument.Parse(ReadBody(req));
+                        var data = doc.RootElement;
+                        var answer = await Subtitles.Load(Program.MoviesFolder ?? "", int.TryParse(VlcSetup.ReadVlcrcValue("http-port"), out var loadPort) && loadPort is > 0 and <= 65535 ? loadPort : 8080, VlcSetup.EffectivePassword() ?? "",
+                            data.GetProperty("mediaId").GetString() ?? "", data.GetProperty("id").GetString() ?? "");
+                        Reply(res, answer.status, answer.body);
+                    }
+                    return;
+
                 case "/movies/list":
                     if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
                     {
@@ -160,6 +222,10 @@ internal sealed class HttpServer : IDisposable
                 case "/movies/play":
                     if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
                     {
+                        // Tapping a movie is a button press: dark screen means this tap only
+                        // wakes, the movie does not launch blind. woke:true tells the phone
+                        // the tap was consumed (no resume question, no navigation).
+                        if (PowerWake.ShouldSwallowDiscrete()) { Reply(res, 200, "{\"ok\":true,\"woke\":true}"); return; }
                         using var doc = JsonDocument.Parse(ReadBody(req));
                         var rr = doc.RootElement;
                         var answer = Movies.Play(
@@ -242,19 +308,14 @@ internal sealed class HttpServer : IDisposable
     internal static readonly object PairLock = new();
     private void HandlePair(HttpListenerRequest req, HttpListenerResponse res)
     {
-        // Network/body waits must never hold the lock shared with Cancel/Pair UI.
-        var body = ReadBody(req);
-        var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
-        int status = 400; string payload = "{}";
-        lock (PairLock) { HandlePairLocked(code, (c, j) => { status = c; payload = j; }); }
-        Reply(res, status, payload);
+        lock (PairLock) { HandlePairLocked(req, res); }
     }
-    private void HandlePairLocked(string code, Action<int, string> respond)
+    private void HandlePairLocked(HttpListenerRequest req, HttpListenerResponse res)
     {
         if (Program.PairFailures >= Program.MaxPairFailures)
         {
             Program.Log("Pairing locked - too many wrong codes.");
-            respond(429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
+            Reply(res, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
             return;
         }
         // Snapshot the pairing state ONCE under the lock: the UI thread also writes it
@@ -266,26 +327,25 @@ internal sealed class HttpServer : IDisposable
         // Wi-Fi could lock pairing while he is not even pairing.
         if (pairCode == null)
         {
-            respond(403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
+            Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"No pairing code is showing on the PC right now. Press Pair in the Zephyr VLC Remote window first.\"}");
             return;
         }
-        // An expired code is not a wrong guess - say so without spending a try (round-5).
-        if (DateTime.UtcNow > pairCodeExpires)
-        {
-            respond(410, "{\"error\":\"code expired\",\"detail\":\"That code expired. Press Pair again in the Zephyr VLC Remote window on the PC.\"}");
-            return;
-        }
-        if (!ConstantTimeEq(code, pairCode))
+        var body = ReadBody(req);
+        var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
+        // One-shot and rate-limited, but never timed: the code stays valid until it pairs or is canceled.
+        var valid = Program.PairCode != null
+                    && ConstantTimeEq(code, Program.PairCode);
+        if (!valid)
         {
             Program.PairFailures++;
             Program.Log("Wrong pairing code entered (" + Program.PairFailures + " of " + Program.MaxPairFailures + ").");
-            respond(403, "{\"error\":\"bad code\",\"detail\":\"Wrong code. Check the code on the PC and try again.\"}");
+            Reply(res, 403, "{\"error\":\"bad code\",\"detail\":\"Wrong code. Check the code on the PC and try again.\"}");
             return;
         }
         if (Program.PhonesCount >= Program.MaxPhones)
         {
             Program.Log("Pairing refused - already " + Program.MaxPhones + " phones paired.");
-            respond(409, "{\"error\":\"too many phones\",\"detail\":\"This PC already has " + Program.MaxPhones + " phones paired. Remove one in the Zephyr VLC Remote window on the PC to make room.\"}");
+            Reply(res, 409, "{\"error\":\"too many phones\",\"detail\":\"This PC already has " + Program.MaxPhones + " phones paired. Remove one in the Zephyr VLC Remote window on the PC to make room.\"}");
             return;
         }
         var token = Program.NewToken();
@@ -303,7 +363,7 @@ internal sealed class HttpServer : IDisposable
             // name goes back too, so the retry pairs under the name he chose.
             Program.PendingPhoneName = phoneName;
             Program.Log("Pairing could not be saved: " + ex.Message);
-            respond(503, "{\"error\":\"save failed\",\"detail\":\"The pairing worked but could not be saved on the PC. Try the same code again in a moment.\"}");
+            Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"The pairing worked but could not be saved on the PC. Try the same code again in a moment.\"}");
             return;
         }
         // Persisted: only now is the code spent.
@@ -313,7 +373,7 @@ internal sealed class HttpServer : IDisposable
         // Automatic-first VLC setup: the freshly paired phone gets the PC's password in the
         // code-gated pair response, so nobody types anything into VLC's settings.
         var vlcPassword = VlcSetup.ReadOrCreatePassword();
-        respond(200, JsonSerializer.Serialize(new
+        Reply(res, 200, JsonSerializer.Serialize(new
         {
             token = token,
             name = Program.MachineLabel(),
@@ -323,34 +383,54 @@ internal sealed class HttpServer : IDisposable
         Program.PhonesChanged?.Invoke();
     }
 
-    /// <summary>GET returns the shared settings; POST writes them. Only the movies folder so far.</summary>
+    /// <summary>GET returns the shared settings; POST writes them: movies folder, keep-awake, volume pop-up.</summary>
     private static void HandleConfig(HttpListenerRequest req, HttpListenerResponse res)
     {
         if (req.HttpMethod == "GET")
         {
-            Reply(res, 200, JsonSerializer.Serialize(new { moviesFolder = Program.MoviesFolder ?? "" }));
+            Reply(res, 200, JsonSerializer.Serialize(new { moviesFolder = Program.MoviesFolder ?? "", keepAwake = Program.KeepAwakeEnabled, volumeOsd = Program.VolumeOsdEnabled }));
             return;
         }
-        var folder = JsonDocument.Parse(ReadBody(req)).RootElement.GetProperty("moviesFolder").GetString() ?? "";
-        lock (Program.ConfigSaveLock)
+        var root = JsonDocument.Parse(ReadBody(req)).RootElement;
+        if (root.TryGetProperty("moviesFolder", out var mf))
         {
-            var previous = Program.MoviesFolder;
-            Program.MoviesFolder = folder.Trim();
-            try { Program.SaveConfig(); }
-            catch (Exception ex)
-            {
-                Program.MoviesFolder = previous; // transactional: a refused write leaves no phantom
-                Program.Log("Movies folder could not be saved: " + ex.Message);
-                Reply(res, 503, "{\"error\":\"save failed\",\"detail\":\"That could not be saved on the PC. Try again in a moment.\"}");
-                return;
-            }
+            Program.MoviesFolder = (mf.GetString() ?? "").Trim();
+            Program.Log("Movies folder set from the phone: " + (Program.MoviesFolder.Length == 0 ? "(cleared)" : Program.MoviesFolder));
         }
-        Program.Log("Movies folder set from the phone: " + (Program.MoviesFolder.Length == 0 ? "(cleared)" : Program.MoviesFolder));
+        // His keep-awake switch: off means the laptop follows its normal sleep rules again.
+        if (root.TryGetProperty("keepAwake", out var ka) && (ka.ValueKind == JsonValueKind.True || ka.ValueKind == JsonValueKind.False))
+        {
+            Program.KeepAwakeEnabled = ka.GetBoolean();
+            if (!Program.KeepAwakeEnabled) PowerWake.SyncToVlc(false);
+            Program.Log("Keep-awake while a video is loaded in VLC: " + (Program.KeepAwakeEnabled ? "on" : "off") + ".");
+        }
+        // His "Show volume on PC screen" switch: off hides the pop-up immediately.
+        if (root.TryGetProperty("volumeOsd", out var vo) && (vo.ValueKind == JsonValueKind.True || vo.ValueKind == JsonValueKind.False))
+        {
+            Program.VolumeOsdEnabled = vo.GetBoolean();
+            if (!Program.VolumeOsdEnabled) VolumeOsd.HideNow();
+            Program.Log("Volume pop-up on the PC screen: " + (Program.VolumeOsdEnabled ? "on" : "off") + ".");
+        }
+        Program.SaveConfig();
         Reply(res, 200, "{\"ok\":true}");
     }
 
     private static void RouteCommand(string path, string body, HttpListenerResponse res)
     {
+        // First press while the screen is dark only wakes it - the tap's action is
+        // swallowed whole, never half-applied. Continuous touchpad/scroll input is
+        // swallowed to the end of the gesture. Reads (volume/get) carry no action and pass.
+        var swallowed = path switch
+        {
+            "/volume/get" => false,
+            "/mouse/move" or "/mouse/scroll" or "/mouse/zoom" => PowerWake.ShouldSwallowContinuous(),
+            _ => PowerWake.ShouldSwallowDiscrete(),
+        };
+        if (swallowed)
+        {
+            Reply(res, 200, "{\"ok\":true,\"woke\":true}");
+            return;
+        }
         using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
         var r = doc.RootElement;
         switch (path)
@@ -381,11 +461,24 @@ internal sealed class HttpServer : IDisposable
                 return;
             }
             case "/volume/set":
-                try { VolumeControl.Set(r.GetProperty("volume").GetInt32()); }
+            {
+                var vol = Math.Clamp(r.GetProperty("volume").GetInt32(), 0, 100);
+                try
+                {
+                    VolumeControl.Set(vol);
+                    var (v, m) = VolumeControl.Get();
+                    VolumeOsd.Show(v, m);
+                }
                 catch (VolumeControl.NoAudioDeviceException ex) { NoAudio(res, ex); return; }
                 break;
+            }
             case "/volume/mute":
-                try { VolumeControl.SetMute(r.GetProperty("mute").GetBoolean()); }
+                try
+                {
+                    VolumeControl.SetMute(r.GetProperty("mute").GetBoolean());
+                    var (v, m) = VolumeControl.Get();
+                    VolumeOsd.Show(v, m);
+                }
                 catch (VolumeControl.NoAudioDeviceException ex) { NoAudio(res, ex); return; }
                 break;
             case "/key":
@@ -491,6 +584,9 @@ internal sealed class HttpServer : IDisposable
                     Program.Log($"Live connection frame gap: expected {lastSeq + 1}, got {n} ({n - lastSeq - 1} lost).");
                 lastSeq = n;
             }
+            // First touch while the screen is dark only wakes it: the frame is consumed
+            // whole (no half-gestures, no leaked clicks) and nothing is injected.
+            if (cmd == "button" ? PowerWake.ShouldSwallowDiscrete() : PowerWake.ShouldSwallowContinuous()) return;
             switch (cmd)
             {
                 case "move": MoveDiag.RecordMove(viaLiveSocket: true); InputSender.Move((float)r.GetProperty("dx").GetDouble(), (float)r.GetProperty("dy").GetDouble()); break;
@@ -518,24 +614,20 @@ internal sealed class HttpServer : IDisposable
     private static string ReadBody(HttpListenerRequest req)
     {
         if (req.ContentLength64 > 64 * 1024) throw new InvalidDataException("Request too large");
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var buffer = new MemoryStream();
-        var bytes = new byte[4096];
-        while (true)
-        {
-            var read = req.InputStream.ReadAsync(bytes.AsMemory(), timeout.Token).AsTask();
-            if (Task.WhenAny(read, Task.Delay(Timeout.Infinite, timeout.Token)).GetAwaiter().GetResult() != read)
-            {
-                req.InputStream.Close();
-                _ = read.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
-                throw new OperationCanceledException();
-            }
-            var n = read.GetAwaiter().GetResult();
+        return ReadBoundedBody(req.InputStream).GetAwaiter().GetResult();
+    }
+
+    internal static async Task<string> ReadBoundedBody(Stream input) {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        using var output = new MemoryStream();
+        var buffer = new byte[4096];
+        while (true) {
+            var n = await input.ReadAsync(buffer.AsMemory(), timeout.Token).AsTask().WaitAsync(timeout.Token);
             if (n == 0) break;
-            if (buffer.Length + n > 64 * 1024) throw new InvalidDataException("Request too large");
-            buffer.Write(bytes, 0, n);
+            if (output.Length + n > 64 * 1024) throw new InvalidDataException("Request too large");
+            output.Write(buffer, 0, n);
         }
-        return Encoding.UTF8.GetString(buffer.ToArray());
+        return Encoding.UTF8.GetString(output.ToArray());
     }
 
     private static void Reply(HttpListenerResponse res, int code, string json)
@@ -582,7 +674,7 @@ internal sealed class DiscoveryResponder : IDisposable
     private Thread? _thread;
     private volatile bool _running;
 
-    public void Start(int? loopbackPort = null)
+    public void Start()
     {
         // Exclusive claim on 8491: BingeMote keeps 8489 and the Player keeps 8490, and
         // nothing else may co-bind ours. ICMP port-unreachable must not kill the loop.

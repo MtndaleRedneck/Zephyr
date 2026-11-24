@@ -7,7 +7,7 @@
 ; MySourceDir selects which published exe is packaged: "out" is the CI test build
 ; (PAIR_CODE_HOOK compiled in, never shipped); "release-out" is the clean shipped build.
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.0"
+  #define MyAppVersion "1.1.0"
 #endif
 #ifndef MySourceDir
   #define MySourceDir "release-out"
@@ -32,6 +32,12 @@ WizardStyle=modern
 
 [Files]
 Source: "{#MySourceDir}\ZephyrVlcRemote.exe"; DestDir: "{app}"; Flags: ignoreversion
+; License notices for the bundled open-source parts.
+Source: "..\..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+; The app's own license (GPLv3).
+Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+; License and third-party notices of the bundled .NET 10 runtime (see SOURCES.txt there).
+Source: "runtime-notices\*"; DestDir: "{app}\dotnet-runtime-notices"; Flags: ignoreversion
 
 [Registry]
 ; The installer owns the autostart entry so uninstall removes it; the app rewrites the same value.
