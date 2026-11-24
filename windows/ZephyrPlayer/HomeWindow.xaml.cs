@@ -121,7 +121,7 @@ namespace ZephyrPlayer
         private void BuildContinue()
         {
             var folder = _settings.LibraryFolder;
-            var items = folder.Length == 0 ? new List<(string Path, PlaybackHistory.Item Item)>() : _history.Recent(3, folder);
+            var items = folder.Length == 0 ? new List<(string Path, PlaybackHistory.Item Item)>() : _history.Recent(12, folder).Where(x => LibraryIsVideo(x.Path)).Take(3).ToList();
             ContinueList.ItemsSource = items.Select(r => new ContinueItem(r.Path, System.IO.Path.GetFileNameWithoutExtension(r.Path),
                 PlaybackHistory.TimeLeftLabel(r.Item.PositionMs, r.Item.DurationMs), 1.0 * r.Item.PositionMs / r.Item.DurationMs)).ToList();
             ContinueStrip.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;

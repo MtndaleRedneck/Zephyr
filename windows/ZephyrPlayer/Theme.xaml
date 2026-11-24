@@ -59,7 +59,7 @@
   <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="MenuItem">
    <Grid><Border x:Name="Bd" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
      <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-      <Path x:Name="Check" Visibility="Collapsed" Data="M2,7 L6,11 L13,3" Stroke="{StaticResource OrangeBrush}" StrokeThickness="2" Width="14" Height="14" Stretch="Uniform" Margin="0,0,10,0" VerticalAlignment="Center"/>
+      <Path x:Name="Check" Visibility="Hidden" Data="M2,7 L6,11 L13,3" Stroke="{StaticResource OrangeBrush}" StrokeThickness="2" Width="14" Height="14" Stretch="Uniform" Margin="0,0,10,0" VerticalAlignment="Center"/>
       <ContentPresenter Grid.Column="1" ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"/>
       <Path x:Name="Arrow" Grid.Column="2" Visibility="Collapsed" Data="M0,0 L5,5 L0,10" Stroke="{StaticResource MutedBrush}" StrokeThickness="1.6" Margin="14,0,0,0" VerticalAlignment="Center"/></Grid></Border>
     <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="2" IsOpen="{TemplateBinding IsSubmenuOpen}" AllowsTransparency="True" Focusable="False" PopupAnimation="None">

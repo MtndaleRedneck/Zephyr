@@ -71,7 +71,8 @@ namespace ZephyrPlayer.Tests {
      var menu=new ContextMenu();var item=new MenuItem{Header="Name",IsCheckable=true,IsChecked=on};menu.Items.Add(item);
      menu.Resources.MergedDictionaries.Add(Theme());menu.ApplyTemplate();menu.Measure(new Size(240,200));menu.Arrange(new Rect(0,0,240,200));menu.UpdateLayout();
      item.ApplyTemplate();var check=(UIElement)item.Template.FindName("Check",item);
-     Assert.Equal(on?Visibility.Visible:Visibility.Collapsed,check.Visibility);
+     Assert.Equal(on?Visibility.Visible:Visibility.Hidden,check.Visibility); // Hidden keeps the gutter so checked and unchecked labels align
+     Assert.True(((FrameworkElement)check).Width+((FrameworkElement)check).Margin.Right>0);
     }
    });
   }
