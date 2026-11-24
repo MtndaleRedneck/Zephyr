@@ -71,6 +71,9 @@ namespace ZephyrPlayer.Tests
                     root.Arrange(new Rect(0, 0, 940, 700));
                     root.UpdateLayout();
                     var rtb = new RenderTargetBitmap(940, 700, 96, 96, PixelFormats.Pbgra32);
+                    var bg = new DrawingVisual();
+                    using (var dc = bg.RenderOpen()) dc.DrawRectangle(w.Background, null, new Rect(0, 0, 940, 700));
+                    rtb.Render(bg); // window chrome background sits behind the content, as on screen
                     rtb.Render(root);
                     try
                     {
@@ -89,6 +92,7 @@ namespace ZephyrPlayer.Tests
                     {
                         if (px[i] > 60 || px[i + 1] > 60 || px[i + 2] > 60) lit++;
                     }
+                    Assert.True(px[(600 * 940 + 600) * 4 + 2] < 0x20, "window background is not dark");
                     Assert.True(lit > 4000, $"lit pixels {lit} - home grid not rendered");
                     // Finish native metadata work before tearing down its owning STA.
                     Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
