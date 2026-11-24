@@ -119,7 +119,7 @@
                     <ItemsControl x:Name="ContinueList">
                         <ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate><DataTemplate>
-                            <Button Click="OnContinue" Tag="{Binding Path}" Margin="0,0,12,0" Padding="0" Width="250" ToolTip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
+                            <Button Click="OnContinue" Tag="{Binding Path}" Margin="0,0,12,0" Padding="0" Width="250" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" ToolTip="{Binding Name}" AutomationProperties.Name="{Binding Name}">
                                 <Grid><StackPanel Margin="14,10,14,14">
                                     <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="13" TextTrimming="CharacterEllipsis"/>
                                     <TextBlock Text="{Binding Left}" Foreground="{StaticResource OrangeBrush}" FontSize="12" Margin="0,3,0,0"/></StackPanel>
