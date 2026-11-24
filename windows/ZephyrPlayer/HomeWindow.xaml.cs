@@ -64,7 +64,11 @@ namespace ZephyrPlayer
             public event PropertyChangedEventHandler? PropertyChanged;
         }
 
-        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true, PlaybackHistory? history = null)
+        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true)
+            : this(settings, store, playLocal, openPairing, loadDurations, null) { }
+
+        // Tests inject an isolated history file here; the app uses the default location.
+        internal HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations, PlaybackHistory? history)
         {
             _history = history ?? new PlaybackHistory();
             InitializeComponent();
