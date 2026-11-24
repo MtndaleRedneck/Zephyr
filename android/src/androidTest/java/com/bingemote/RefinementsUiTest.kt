@@ -50,14 +50,14 @@ class RefinementsUiTest {
         // Scan with a deadline instead of a fixed swipe count: a loaded CI emulator
         // can need many seconds just to compose the screen before scrolling helps.
         val deadline = System.currentTimeMillis() + 30000
-        while (!device.hasObject(By.text("Button flash")) && System.currentTimeMillis() < deadline) {
+        while (!FreshUi.has("Button flash") && System.currentTimeMillis() < deadline) {
             device.swipe(device.displayWidth/2, device.displayHeight*4/5, device.displayWidth/2, device.displayHeight/3, 30)
             Thread.sleep(300)
         }
-        if (!device.hasObject(By.text("Button flash"))) {
+        if (!FreshUi.has("Button flash")) {
             Triage.tree("settings never showed Button flash"); Triage.freshProbe("button flash", "Button flash")
         }
-        assertTrue("Button flash removed", device.hasObject(By.text("Button flash")))
+        assertTrue("Button flash removed", FreshUi.has("Button flash"))
         assertFalse("retired selector remains", device.hasObject(By.text("Cancel button style")))
         assertTrue(device.hasObject(By.text("Skip rings only")))
         device.swipe(device.displayWidth/2, device.displayHeight*4/5, device.displayWidth/2, device.displayHeight*3/5, 20)
