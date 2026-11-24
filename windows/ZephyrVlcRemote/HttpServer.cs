@@ -391,27 +391,43 @@ internal sealed class HttpServer : IDisposable
             return;
         }
         var root = JsonDocument.Parse(ReadBody(req)).RootElement;
-        if (root.TryGetProperty("moviesFolder", out var mf))
-        {
-            Program.MoviesFolder = (mf.GetString() ?? "").Trim();
-            Program.Log("Movies folder set from the phone: " + (Program.MoviesFolder.Length == 0 ? "(cleared)" : Program.MoviesFolder));
-        }
-        // His keep-awake switch: off means the laptop follows its normal sleep rules again.
-        if (root.TryGetProperty("keepAwake", out var ka) && (ka.ValueKind == JsonValueKind.True || ka.ValueKind == JsonValueKind.False))
-        {
-            Program.KeepAwakeEnabled = ka.GetBoolean();
-            if (!Program.KeepAwakeEnabled) PowerWake.SyncToVlc(false);
-            Program.Log("Keep-awake while a video is loaded in VLC: " + (Program.KeepAwakeEnabled ? "on" : "off") + ".");
-        }
-        // His "Show volume on PC screen" switch: off hides the pop-up immediately.
-        if (root.TryGetProperty("volumeOsd", out var vo) && (vo.ValueKind == JsonValueKind.True || vo.ValueKind == JsonValueKind.False))
-        {
-            Program.VolumeOsdEnabled = vo.GetBoolean();
-            if (!Program.VolumeOsdEnabled) VolumeOsd.HideNow();
-            Program.Log("Volume pop-up on the PC screen: " + (Program.VolumeOsdEnabled ? "on" : "off") + ".");
-        }
-        Program.SaveConfig();
+        string? newFolder = root.TryGetProperty("moviesFolder", out var mf) ? (mf.GetString() ?? "").Trim() : null;
+        bool? newKeepAwake = root.TryGetProperty("keepAwake", out var ka) && (ka.ValueKind == JsonValueKind.True || ka.ValueKind == JsonValueKind.False) ? ka.GetBoolean() : null;
+        bool? newVolumeOsd = root.TryGetProperty("volumeOsd", out var vo) && (vo.ValueKind == JsonValueKind.True || vo.ValueKind == JsonValueKind.False) ? vo.GetBoolean() : null;
+        if (!ApplyConfigChange(newFolder, newKeepAwake, newVolumeOsd)) { Reply(res, 503, "{\"ok\":false,\"detail\":\"The PC could not save the change.\"}"); return; }
         Reply(res, 200, "{\"ok\":true}");
+    }
+
+    /// <summary>Change + persist as one unit. Side effects (sleep rules, pop-up) and log lines run
+    /// only after the change is on disk; a refused save rolls the settings back and returns false,
+    /// so the phone never shows a state the PC will lose at restart.</summary>
+    internal static bool ApplyConfigChange(string? newFolder, bool? newKeepAwake, bool? newVolumeOsd)
+    {
+        string? priorFolder = null; bool priorKeep = true, priorOsd = true;
+        var saved = Program.MutateAndPersist(
+            () =>
+            {
+                priorFolder = Program.MoviesFolder; priorKeep = Program.KeepAwakeEnabled; priorOsd = Program.VolumeOsdEnabled;
+                if (newFolder != null) Program.MoviesFolder = newFolder;
+                if (newKeepAwake is bool k) Program.KeepAwakeEnabled = k;
+                if (newVolumeOsd is bool v) Program.VolumeOsdEnabled = v;
+            },
+            () => { Program.MoviesFolder = priorFolder; Program.KeepAwakeEnabled = priorKeep; Program.VolumeOsdEnabled = priorOsd; },
+            "the settings from the phone");
+        if (!saved) return false;
+        if (newFolder != null)
+            Program.Log("Movies folder set from the phone: " + (newFolder.Length == 0 ? "(cleared)" : newFolder));
+        if (newKeepAwake is bool k2)
+        {
+            if (!k2) PowerWake.SyncToVlc(false);
+            Program.Log("Keep-awake while a video is loaded in VLC: " + (k2 ? "on" : "off") + ".");
+        }
+        if (newVolumeOsd is bool v2)
+        {
+            if (!v2) VolumeOsd.HideNow();
+            Program.Log("Volume pop-up on the PC screen: " + (v2 ? "on" : "off") + ".");
+        }
+        return true;
     }
 
     private static void RouteCommand(string path, string body, HttpListenerResponse res)

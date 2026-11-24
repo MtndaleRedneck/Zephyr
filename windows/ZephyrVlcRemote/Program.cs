@@ -680,6 +680,8 @@ internal static class Program
                     phones = Phones.Select(p => new { token = Dpapi.Wrap(p.Token), name = p.Name, adoptSpent = p.AdoptSpent, adoptRequestId = p.AdoptRequestId, adoptServedAtUtc = p.AdoptServedAtUtc?.ToString("o") }).ToArray(),
                     pendingVlcPassword = VlcSetup.PendingValue is { } pv ? Dpapi.Wrap(pv) : null,
                     moviesFolder = MoviesFolder,
+                    keepAwake = KeepAwakeEnabled,
+                    volumeOsd = VolumeOsdEnabled,
                     declinedNetworks = DeclinedNetworks.ToArray(),
                     homeNetworks = HomeNetworks.ToArray(),
                     lastRunVersion = LastRunVersion,
@@ -707,6 +709,60 @@ internal static class Program
     {
         try { SaveConfig(); return true; }
         catch (Exception ex) { Log("Could not save " + what + ": " + ex.Message); return false; }
+    }
+
+    /// <summary>Mutate + persist + roll back as one unit under the OUTER save lock. The
+    /// in-memory state changes only if it also reached disk: a refused save runs
+    /// <paramref name="rollback"/> before the lock is released, so no concurrent save can
+    /// persist, and no reader can keep, a state that never made it to disk. Returns false
+    /// (and logs) when the save failed and the change was rolled back.</summary>
+    internal static bool MutateAndPersist(Action mutate, Action rollback, string what)
+    {
+        lock (ConfigSaveLock)
+        {
+            mutate();
+            try { SaveConfig(); return true; }
+            catch (Exception ex)
+            {
+                try { rollback(); } catch (Exception rex) { Log("Rollback after a failed save of " + what + " also failed: " + rex.Message); }
+                Log("Could not save " + what + " (change undone): " + ex.Message);
+                return false;
+            }
+        }
+    }
+
+    /// <summary>Wi-Fi choice (home / not now) with rollback of both lists on a failed save.</summary>
+    internal static bool SetNetworkChoice(string name, bool home)
+    {
+        string[] priorDeclined = Array.Empty<string>(), priorHome = Array.Empty<string>();
+        return MutateAndPersist(
+            () =>
+            {
+                priorDeclined = DeclinedNetworks.ToArray(); priorHome = HomeNetworks.ToArray();
+                if (home)
+                {
+                    DeclinedNetworks.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
+                    if (!HomeNetworks.Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase))) HomeNetworks.Add(name);
+                }
+                else
+                {
+                    DeclinedNetworks.Add(name);
+                    HomeNetworks.RemoveAll(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
+                }
+            },
+            () => { DeclinedNetworks.Clear(); DeclinedNetworks.AddRange(priorDeclined); HomeNetworks.Clear(); HomeNetworks.AddRange(priorHome); },
+            "the Wi-Fi choice");
+    }
+
+    /// <summary>Phone removal that is on disk before it is final; a refused save puts the phones back.</summary>
+    internal static bool RemovePhonesAndPersist(Func<PairedPhone[], PairedPhone[]> pick)
+    {
+        PairedPhone[] removed = Array.Empty<PairedPhone>();
+        PairedPhone[] before = Array.Empty<PairedPhone>();
+        return MutateAndPersist(
+            () => { lock (PhonesLock) { before = Phones.ToArray(); removed = pick(before); foreach (var r in removed) Phones.Remove(r); } },
+            () => { lock (PhonesLock) { Phones.Clear(); Phones.AddRange(before); } },
+            "the phone removal");
     }
 
     /// <summary>Transactional pairing (round-5 B3): the phone exists in memory only

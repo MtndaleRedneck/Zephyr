@@ -561,10 +561,7 @@ internal sealed class HelperWindow : Form
                 _wifiBtn.Enabled = true;
                 if (ok)
                 {
-                    Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                    if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
-                        Program.HomeNetworks.Add(profile.Name);
-                    Program.SaveConfig();
+                    Program.SetNetworkChoice(profile.Name, home: true);
                     Program.Log("Network \"" + profile.Name + "\" marked Private from the window strip.");
                     _wifiProfile = null;
                     SetWifiStripVisible(false);
@@ -764,8 +761,12 @@ internal sealed class HelperWindow : Form
         if (!ConfirmDialog.Ask(this,
                 "Remove " + ph.Name + "? It stops controlling this PC right away. You can pair it again any time with a new code.",
                 "Remove")) return;
-        lock (Program.PhonesLock) { Program.Phones.Remove(ph); }
-        Program.SaveConfig();
+        if (!Program.RemovePhonesAndPersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray()))
+        {
+            NoteDialog.Show(this, "Couldn't save the removal, so " + ph.Name + " is still paired. Nothing changed. Try again.");
+            RefreshPhones();
+            return;
+        }
         Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
         RefreshPhones();
     }
@@ -776,8 +777,12 @@ internal sealed class HelperWindow : Form
         if (!ConfirmDialog.Ask(this,
                 "Remove all phones? Every phone stops controlling this PC right away. Pair them again with new codes.",
                 "Remove all")) return;
-        lock (Program.PhonesLock) { Program.Phones.Clear(); }
-        Program.SaveConfig();
+        if (!Program.RemovePhonesAndPersist(all => all))
+        {
+            NoteDialog.Show(this, "Couldn't save the removal, so every phone is still paired. Nothing changed. Try again.");
+            RefreshPhones();
+            return;
+        }
         Program.Log("All phones removed.");
         RefreshPhones();
     }
@@ -1249,10 +1254,7 @@ internal sealed class HelperWindow : Form
                     {
                         if (ok)
                         {
-                            Program.DeclinedNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                            if (!Program.HomeNetworks.Any(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase)))
-                                Program.HomeNetworks.Add(profile.Name);
-                            Program.SaveConfig();
+                            Program.SetNetworkChoice(profile.Name, home: true);
                             _wifiProfile = null;
                             SetWifiStripVisible(false);
                             Program.Log("Network \"" + profile.Name + "\" marked Private from the popup.");
@@ -1272,10 +1274,8 @@ internal sealed class HelperWindow : Form
                 OpenWifiSettings();
                 break;
             case WifiDialog.Result.NotNow:
-                Program.DeclinedNetworks.Add(profile.Name);
                 // Saying "Not now" on a network once marked home means it is not home after all.
-                Program.HomeNetworks.RemoveAll(n => string.Equals(n, profile.Name, StringComparison.OrdinalIgnoreCase));
-                Program.SaveConfig();
+                Program.SetNetworkChoice(profile.Name, home: false);
                 Program.Log("Public-network popup declined for \"" + profile.Name + "\" - not asking again.");
                 break;
         }
