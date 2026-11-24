@@ -74,7 +74,7 @@ namespace ZephyrPlayer
             _playLocal = playLocal;
             _openPairing = openPairing;
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
-            Activated += (_, __) => { RefreshStatus(); foreach (var entry in _all.Where(e => !e.Dir)) { var item = _history.Get(Path.Combine(_settings.LibraryFolder, entry.Rel.Replace('/', Path.DirectorySeparatorChar))); if (item != null) entry.SetMetadata(item.PositionMs, item.DurationMs); } };
+            Activated += (_, __) => { RefreshStatus(); BuildContinue(); foreach (var entry in _all.Where(e => !e.Dir)) { var item = _history.Get(Path.Combine(_settings.LibraryFolder, entry.Rel.Replace('/', Path.DirectorySeparatorChar))); if (item != null) entry.SetMetadata(item.PositionMs, item.DurationMs); } };
             ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
             var statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             statusTimer.Tick += (_, __) => RefreshStatus();
@@ -111,7 +111,25 @@ namespace ZephyrPlayer
                 BuildBreadcrumb(folder);
                 LoadEntries(folder, _currentRel);
             }
+            BuildContinue();
             RefreshStatus();
+        }
+
+        private sealed record ContinueItem(string Path, string Name, string Left, double Progress);
+
+        /// <summary>Last few unfinished movies from this library, newest first.</summary>
+        private void BuildContinue()
+        {
+            var folder = _settings.LibraryFolder;
+            var items = folder.Length == 0 ? new List<(string Path, PlaybackHistory.Item Item)>() : _history.Recent(3, folder);
+            ContinueList.ItemsSource = items.Select(r => new ContinueItem(r.Path, System.IO.Path.GetFileNameWithoutExtension(r.Path),
+                PlaybackHistory.TimeLeftLabel(r.Item.PositionMs, r.Item.DurationMs), 1.0 * r.Item.PositionMs / r.Item.DurationMs)).ToList();
+            ContinueStrip.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void OnContinue(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Button { Tag: string path } && File.Exists(path)) _playLocal(new Uri(path).AbsoluteUri);
         }
 
         public void RefreshStatus()

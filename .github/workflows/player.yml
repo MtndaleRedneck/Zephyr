@@ -8,7 +8,7 @@ on:
       - 'windows/ZephyrPlayer.Tests/**'
       - '.github/workflows/player.yml'
 
-# Zephyr Player rebuild branch: build and test on .NET 10. No artifacts are uploaded (public repo: run artifacts are publicly downloadable).
+# Zephyr Player rebuild branch: build and test on .NET 10. Only one-day screenshot PNGs are uploaded (public repo: run artifacts are publicly downloadable); never installers.
 permissions:
   contents: read
 jobs:
@@ -31,3 +31,11 @@ jobs:
           dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "console;verbosity=normal"
+      - name: Screenshots for review (one day)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: player-shots
+          path: ${{ runner.temp }}/pc-*.png
+          retention-days: 1
+          if-no-files-found: ignore
