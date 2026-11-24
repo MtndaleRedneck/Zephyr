@@ -204,20 +204,11 @@ internal static class Program
 #if PAIR_CODE_HOOK
             // CI only: render specific window states for pixel review.
             var shotMode = Environment.GetEnvironmentVariable("ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE");
-            if (shotMode == "pairing-expired")
-            {
-                // The expired-code state (born-expired code, like the e2e hook).
-                Program.PendingPhoneName = "Shot Phone";
-                Program.PairCode = Program.NewPairCode();
-                Program.PairCodeExpires = DateTime.UtcNow - TimeSpan.FromSeconds(1);
-                shot.RunStatusTickForShot();
-            }
-            else if (shotMode == "pairing")
+            if (shotMode == "pairing")
             {
                 // A live code showing, exactly as after tapping Pair.
                 Program.PendingPhoneName = "Shot Phone";
                 Program.PairCode = Program.NewPairCode();
-                Program.PairCodeExpires = DateTime.UtcNow + Program.PairCodeLifetime;
                 shot.RunStatusTickForShot();
             }
             else if (shotMode == "broken-store")

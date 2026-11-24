@@ -322,7 +322,6 @@ internal sealed class HttpServer : IDisposable
         // (Start/Cancel/expiry), and a null landing between the check and the compare
         // would turn into an exception instead of an answer (round-7 review C).
         var pairCode = Program.PairCode;
-        var pairCodeExpires = Program.PairCodeExpires;
         // No code on screen: guesses here must not count toward the lock, or anyone on the
         // Wi-Fi could lock pairing while he is not even pairing.
         if (pairCode == null)
@@ -333,8 +332,8 @@ internal sealed class HttpServer : IDisposable
         var body = ReadBody(req);
         var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
         // One-shot and rate-limited, but never timed: the code stays valid until it pairs or is canceled.
-        var valid = Program.PairCode != null
-                    && ConstantTimeEq(code, Program.PairCode);
+        var valid = pairCode != null
+                    && ConstantTimeEq(code, pairCode);
         if (!valid)
         {
             Program.PairFailures++;
