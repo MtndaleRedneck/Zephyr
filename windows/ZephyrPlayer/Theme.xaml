@@ -5,6 +5,7 @@
  <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/><SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
  <Style TargetType="Window"><Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI"/><Setter Property="Foreground" Value="{StaticResource TextBrush}"/></Style>
 
+ <SolidColorBrush x:Key="AppBgBrush" Color="#0B0B0D"/><SolidColorBrush x:Key="PanelBrush" Color="#111114"/><SolidColorBrush x:Key="PanelLineBrush" Color="#202026"/>
  <SolidColorBrush x:Key="HoverBrush" Color="#3A3A44"/><SolidColorBrush x:Key="PressBrush" Color="#45454F"/>
  <SolidColorBrush x:Key="LineBrush" Color="#35353B"/><SolidColorBrush x:Key="FieldBrush" Color="#1F1F24"/>
  <SolidColorBrush x:Key="OrangeSoftBrush" Color="#33FF9500"/>

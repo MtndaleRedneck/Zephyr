@@ -146,7 +146,7 @@ namespace ZephyrPlayer
             StatusText.Text = status;
             var active = _store.Entries().FirstOrDefault(e => _store.IsConnected(e.Token));
             PhoneCardName.Text = active?.Name ?? (paired > 0 ? "Paired phones" : "Pair a phone");
-            PhoneCardStatus.Text = active != null ? "Connected" : paired > 0 ? "Not connected" : "Not paired";
+            PhoneCardStatus.Text = active != null ? "connected" : paired > 0 ? "not connected" : "";
             PhoneConnectedDot.Visibility = active != null ? Visibility.Visible : Visibility.Collapsed;
         }
 
@@ -203,14 +203,14 @@ namespace ZephyrPlayer
                 DateTime created;
                 try { created = File.GetCreationTimeUtc(path); } catch { created = DateTime.MinValue; }
                 string detail;
-                try { detail = dir ? Directory.EnumerateFiles(path).Count(LibraryIsVideo) + " videos" : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + FileSize(new FileInfo(path).Length); }
+                try { detail = dir ? Plural(Directory.EnumerateFiles(path).Count(LibraryIsVideo), "video") : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + FileSize(new FileInfo(path).Length); }
                 catch { detail = dir ? "Folder" : "Video"; }
                 var entry = new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail };
                 var saved = dir ? null : _history.Get(path);
                 if (saved != null) entry.SetMetadata(saved.PositionMs, saved.DurationMs);
                 entries.Add(entry);
             }
-            CountText.Text = entries.Count(e => e.Dir) + " folders - " + entries.Count(e => !e.Dir) + " videos";
+            CountText.Text = Plural(entries.Count(e => e.Dir), "folder") + " · " + Plural(entries.Count(e => !e.Dir), "video");
             _all = entries;
             ApplySearch();
             BackButton.IsEnabled = _backStack.Count > 0;
@@ -393,6 +393,8 @@ namespace ZephyrPlayer
         private static extern int StrCmpLogicalW(string a, string b);
         private static int NaturalCompare(string? a, string? b) =>
             OperatingSystem.IsWindows() ? StrCmpLogicalW(a ?? "", b ?? "") : StringComparer.OrdinalIgnoreCase.Compare(a, b);
+
+        internal static string Plural(int n, string noun) => n + " " + noun + (n == 1 ? "" : "s");
 
         private static string FileSize(long bytes) => bytes >= 1024L * 1024 * 1024 ? (bytes / (1024d * 1024 * 1024)).ToString("0.#") + " GB" : bytes >= 1024 * 1024 ? (bytes / (1024d * 1024)).ToString("0.#") + " MB" : bytes >= 1024 ? (bytes / 1024d).ToString("0.#") + " KB" : bytes + " B";
 

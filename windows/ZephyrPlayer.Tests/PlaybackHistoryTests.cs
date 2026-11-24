@@ -70,3 +70,11 @@ namespace ZephyrPlayer.Tests
         public void DurationLabelsUseRealTime(long ms, string expected) => Assert.Equal(expected, PlaybackHistory.DurationLabel(ms));
     }
 }
+namespace ZephyrPlayer.Tests
+{
+    public class LibraryCountWordsTests
+    {
+        [Theory] [InlineData(0, "0 folders")] [InlineData(1, "1 folder")] [InlineData(6, "6 folders")]
+        public void Counts_Use_Singular_For_One(int n, string expected) => Assert.Equal(expected, HomeWindow.Plural(n, "folder"));
+    }
+}
