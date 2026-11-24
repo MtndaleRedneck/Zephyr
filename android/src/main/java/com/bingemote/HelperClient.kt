@@ -151,7 +151,7 @@ object HelperClient {
         try {
             c.connectTimeout = minOf(timeoutMs, 5000); c.readTimeout = timeoutMs
             c.instanceFollowRedirects = false
-            c.setRequestProperty("X-BingeMote-Token",token)
+            c.setRequestProperty("X-Zephyr-VLC-Remote-Token",token)
             if (body != null) {
                 c.requestMethod = "POST"; c.doOutput = true; c.setRequestProperty("Content-Type","application/json")
                 val bytes = body.toString().toByteArray(Charsets.UTF_8); c.setFixedLengthStreamingMode(bytes.size)

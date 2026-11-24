@@ -171,7 +171,12 @@ public class SubtitleTests : IDisposable
             }
             using var listWrong=await client.PostAsync("http://127.0.0.1:8492/subtitles/list",new StringContent("{}"));
             Assert.Equal(System.Net.HttpStatusCode.MethodNotAllowed,listWrong.StatusCode);
-        } finally {lock(Program.PhonesLock) Program.Phones.RemoveAll(p=>p.Token==token);}
+        } finally {
+            lock(Program.PhonesLock) Program.Phones.RemoveAll(p=>p.Token==token);
+            server.Dispose();
+            using var del = Process.Start(new ProcessStartInfo("netsh", "http delete urlacl url=http://+:8492/") { UseShellExecute=false, CreateNoWindow=true });
+            del!.WaitForExit();
+        }
     }
 
 }
