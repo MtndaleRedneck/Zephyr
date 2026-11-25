@@ -49,13 +49,16 @@ shot nav-5-settings-after-back;   expect "5 Settings after Back from Feedback: p
 expect "5b Settings after Back: Feedback card still in view" yes contains text "Send feedback, report a bug"
 tap contains text "Send feedback, report a bug"
 shot nav-6-feedback-reentry;      expect "6 Feedback re-entered after being scrolled: back at the top" yes exact text "Feedback"
-tap exact desc "Back"
-shot nav-7-settings-after-header-back
-scroll_down 6
-shot nav-8-settings-top
-tap exact desc "Back"
-shot nav-9-home;                  expect "9 Home shows the Settings gear" yes exact desc "Settings"
+# Back from Feedback again: Settings is still scrolled (position kept). Settings has a BackHandler to Home (SettingsScreen.kt:147),
+# so Home is reachable WITH Settings scrolled; the gear then must reopen Settings at the top (openSettings(resetScroll = true)).
+adb shell input keyevent KEYCODE_BACK; sleep 2
+shot nav-7-settings-scrolled-again; expect "7 Settings scrolled again after Back from Feedback (title off screen)" no exact text "Settings"
+adb shell input keyevent KEYCODE_BACK; sleep 2
+shot nav-8-home;                    expect "8 Home shows the Settings gear" yes exact desc "Settings"
 tap exact desc "Settings"
-shot nav-10-settings-from-home;   expect "10 Home -> Settings: title visible (top)" yes exact text "Settings"
+shot nav-9-settings-from-home;      expect "9 Home -> Settings after it was scrolled: reset to the top (title visible)" yes exact text "Settings"
+# Header Back arrow also works from the top of Settings (reaches Home), and the header arrow of Feedback returns to Settings.
+tap exact desc "Back"
+shot nav-10-home-via-header-back;   expect "10 header Back from Settings: Home" yes exact desc "Settings"
 adb shell wm size reset; adb shell wm density reset
 [ "$FAIL" = 0 ] && echo "NAV ALL OK" || { echo "NAV FAILED"; exit 1; }
