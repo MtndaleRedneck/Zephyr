@@ -63,7 +63,7 @@ public class VolumeMuteTests
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
         var finished = t.Join(joinMs);
-        if (mustFinish && !finished && error == null) Assert.True(false, "STA body did not finish within " + joinMs + " ms");
+        if (!finished && error == null) Assert.True(false, "STA body did not finish within " + joinMs + " ms");
         if (error != null)
         {
             var f = Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");

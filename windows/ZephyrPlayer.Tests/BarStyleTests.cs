@@ -38,7 +38,7 @@ namespace ZephyrPlayer.Tests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join(30000);
+            Assert.True(t.Join(30000), "STA body timed out");
                         if (error != null)
             {
                 var f = System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");
