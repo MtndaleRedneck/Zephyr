@@ -24,9 +24,21 @@ param(
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Drawing, System.Windows.Forms
 $report = Join-Path $env:RUNNER_TEMP 'pub202-real-data.txt'
 Remove-Item $report -ErrorAction SilentlyContinue
+# A stale failure image from an earlier invocation must never be mistaken for this run's evidence.
+Remove-Item (Join-Path $env:RUNNER_TEMP 'pub202-failure.png') -Force -ErrorAction SilentlyContinue
 function Note($k, $v) { $l = "${k}: $v"; Write-Host $l; Add-Content -Path $report -Value $l }
+Add-Type -Namespace ZW -Name Inp -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetCursorPos(int X, int Y);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool GetCursorPos(out POINT p);
+[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, System.UIntPtr extra);
+'@
 function Stop-Player { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
 function Find-InProc($procId, $id) {
     $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -155,33 +167,81 @@ try {
     $tp = $tg.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     $speedBefore = ($tp.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
     # UIA TogglePattern.Toggle() flips the checkbox but does NOT raise the WPF Click event the 2.0.2 Settings
-    # window saves from, so it never persists. Drive the real user path instead: bring the Settings window to the
-    # foreground, focus the SpeedToggle itself, verify the focused element is that control, and press Space.
-    Add-Type -AssemblyName System.Windows.Forms
-    Add-Type -Namespace ZW -Name Fg -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);'
-    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-    $top = $tg
-    while ($true) { $par = $walker.GetParent($top); if (-not $par -or $par -eq [System.Windows.Automation.AutomationElement]::RootElement) { break }; $top = $par }
-    $hwnd = [IntPtr]$top.Current.NativeWindowHandle
-    if ($hwnd -eq [IntPtr]::Zero) { throw 'could not find the Settings window handle for SpeedToggle' }
-    $focused = $false
-    for ($i = 0; $i -lt 10 -and -not $focused; $i++) {
-        [ZW.Fg]::SetForegroundWindow($hwnd) | Out-Null
-        try { $tg.SetFocus() } catch { }
-        Start-Sleep -Milliseconds 400
-        $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
-        $focused = ($fe -and $fe.Current.AutomationId -eq 'SpeedToggle' -and $fe.Current.ProcessId -eq $p.Id)
+    # window saves from, so it never persists. Drive the production Click path with a REAL mouse click on the
+    # control. Coordinates: UIA BoundingRectangle and SetCursorPos are both read in this one process, the same
+    # pairing scripts/pc_desktop_capture.ps1 already uses for its verified PlayPauseButton click.
+    # Keyboard focus is logged for diagnosis only; it is not required.
+    try {
+        $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+        $rootEl = [System.Windows.Automation.AutomationElement]::RootElement
+        $top = $tg
+        while ($true) { $par = $walker.GetParent($top); if (-not $par -or [System.Windows.Automation.Automation]::Compare($par, $rootEl)) { break }; $top = $par }
+        $hwnd = [IntPtr]$top.Current.NativeWindowHandle
+        if ($hwnd -eq [IntPtr]::Zero) { throw 'could not find the Settings window handle for SpeedToggle' }
+        $tgRid = ($tg.GetRuntimeId() -join '.')
+        # Resolves the point to the exact SpeedToggle (or a descendant of it) in the app's pid.
+        function Test-HitIsToggle([int]$x, [int]$y) {
+            $h = [System.Windows.Automation.AutomationElement]::FromPoint((New-Object System.Windows.Point($x, $y)))
+            if (-not $h) { return @($false, 'none') }
+            $info = "id='$($h.Current.AutomationId)' pid=$($h.Current.ProcessId) type=$($h.Current.ControlType.ProgrammaticName)"
+            $w = $h
+            for ($d = 0; $d -lt 6 -and $w; $d++) {
+                if (($w.GetRuntimeId() -join '.') -eq $tgRid -and $w.Current.ProcessId -eq $p.Id) { return @($true, $info) }
+                $w = $walker.GetParent($w)
+            }
+            return @($false, $info)
+        }
+        $clicked = $false
+        for ($try = 1; $try -le 5 -and -not $clicked; $try++) {
+            [ZW.Inp]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Milliseconds 500
+            $fgH = [ZW.Inp]::GetForegroundWindow()
+            [uint32]$fgPid = 0
+            [void][ZW.Inp]::GetWindowThreadProcessId($fgH, [ref]$fgPid)
+            $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+            # Ids, control types and pids only: element NAMES can carry the pairing code or phone name, so none are logged.
+            $feInfo = if ($fe) { "id='$($fe.Current.AutomationId)' type=$($fe.Current.ControlType.ProgrammaticName) pid=$($fe.Current.ProcessId)" } else { 'none' }
+            $r = $tg.Current.BoundingRectangle
+            $vsb = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $finite = $true
+            foreach ($n in $r.X, $r.Y, $r.Width, $r.Height) { if ([double]::IsNaN($n) -or [double]::IsInfinity($n)) { $finite = $false } }
+            $okTarget = ($tg.Current.ProcessId -eq $p.Id -and -not $tg.Current.IsOffscreen -and $tg.Current.IsEnabled -and $finite -and $r.Width -gt 4 -and $r.Height -gt 4 -and `
+                $r.X -ge $vsb.Left -and $r.Y -ge $vsb.Top -and ($r.X + $r.Width) -le $vsb.Right -and ($r.Y + $r.Height) -le $vsb.Bottom)
+            Note 'speedtoggle_attempt' "try $try; target pid=$($tg.Current.ProcessId) (app $($p.Id)) enabled=$($tg.Current.IsEnabled) offscreen=$($tg.Current.IsOffscreen) bounds=$r (all four finite=$finite, inside virtual screen $($vsb.Left),$($vsb.Top) $($vsb.Width)x$($vsb.Height)); foreground hwnd=$($fgH.ToInt64()) pid=$fgPid (app $($p.Id)) equals the Settings window hwnd ($($hwnd.ToInt64()))=$($fgH -eq $hwnd); focused element $feInfo"
+            if (-not $okTarget) { Start-Sleep -Seconds 1; continue }
+            $cx = [int]($r.X + $r.Width / 2); $cy = [int]($r.Y + $r.Height / 2)
+            $v1 = Test-HitIsToggle $cx $cy
+            Note 'speedtoggle_hit_test' "point $cx,$cy -> $($v1[1]); resolves to SpeedToggle=$($v1[0])"
+            if (-not $v1[0]) { Start-Sleep -Seconds 1; continue }
+            $moved = [ZW.Inp]::SetCursorPos($cx, $cy)
+            Start-Sleep -Milliseconds 100
+            $cp = New-Object 'ZW.Inp+POINT'
+            $gotPos = [ZW.Inp]::GetCursorPos([ref]$cp)
+            $posOk = ($moved -and $gotPos -and [Math]::Abs($cp.X - $cx) -le 1 -and [Math]::Abs($cp.Y - $cy) -le 1)
+            # Re-verify immediately before pressing: same point, cursor really there, same target under it.
+            $v2 = if ($posOk) { Test-HitIsToggle $cx $cy } else { @($false, 'cursor not at the target') }
+            Note 'speedtoggle_pre_click' "SetCursorPos=$moved cursor=$($cp.X),$($cp.Y) want $cx,$cy ok=$posOk; re-hit resolves to SpeedToggle=$($v2[0]) ($($v2[1]))"
+            if (-not ($posOk -and $v2[0])) { Start-Sleep -Seconds 1; continue }
+            [ZW.Inp]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+            Start-Sleep -Milliseconds 80
+            [ZW.Inp]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+            $clicked = $true
+        }
+        if (-not $clicked) { throw 'no verified real click on SpeedToggle was possible (target checks or the point hit test never matched)' }
+        $speedAfter = $speedBefore
+        for ($i = 0; $i -lt 10 -and $speedAfter -eq $speedBefore; $i++) {
+            Start-Sleep -Milliseconds 500
+            $speedAfter = ($tp.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
+        }
+        Note 'speedtoggle_click' "verified real mouse click delivered; toggle $speedBefore -> $speedAfter"
+        if ($speedAfter -eq $speedBefore) { throw "the ShowSpeed toggle did not change after the verified click ($speedBefore)" }
     }
-    Note 'speedtoggle_focus' "focused element is SpeedToggle of the published app: $focused"
-    if (-not $focused) { throw 'SpeedToggle never held keyboard focus in the published app, so Space would not hit the target' }
-    [System.Windows.Forms.SendKeys]::SendWait(' ')
-    $speedAfter = $speedBefore
-    for ($i = 0; $i -lt 10 -and $speedAfter -eq $speedBefore; $i++) {
-        Start-Sleep -Milliseconds 500
-        $speedAfter = ($tp.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
+    catch {
+        # Exception TYPE only: a message can carry UI text. No screenshot is taken (the run artifact is public).
+        Note 'speedtoggle_failure' $_.Exception.GetType().Name
+        throw
     }
     Start-Sleep -Seconds 1
-    if ($speedAfter -eq $speedBefore) { throw "the ShowSpeed toggle did not change ($speedBefore)" }
     $s0 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
     if ($s0.ShowSpeed -ne $speedAfter -or $s0.LibraryFolder -ne $lib) { throw "settings.json does not hold the app-made values (ShowSpeed $($s0.ShowSpeed) want $speedAfter)" }
     Note 'settings_created_by_real_202' "PROVEN (settings.json written by the published app: ShowSpeed $speedBefore -> $speedAfter, LibraryFolder set through the app's own route)"
