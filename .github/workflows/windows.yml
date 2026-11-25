@@ -153,9 +153,14 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: |
+          # The shipped helper exe uses single-file COMPRESSION, so a byte scan of it sees no literals (it would
+          # pass "clean" vacuously and fail "hooked"). The same source is therefore published twice more WITHOUT
+          # compression, once clean and once hooked, and those two uncompressed bundles are scanned.
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=false -o windows/ZephyrVlcRemote/proof-clean
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=false "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/proof-hooked
           $latin = [Text.Encoding]::GetEncoding(28591)
-          $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe"))
-          $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"))
+          $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/proof-clean/ZephyrVlcRemote.exe"))
+          $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/proof-hooked/ZephyrVlcRemote.exe"))
           foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
             $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {

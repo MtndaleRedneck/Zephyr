@@ -249,7 +249,7 @@ try {
     Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the BingeMote config is untouched"
     $ownCfg = Join-Path $ownDir 'config.json'
     Assert ((-not (Test-Path $ownCfg)) -or ((Get-Content $ownCfg -Raw) -notmatch 'CI legacy phone|CI-HomeLAN')) "nothing from BingeMote was copied into the Zephyr config"
-    Stop-HelperVerified
+    # helper stays running for the sections below
     Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
 

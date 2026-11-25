@@ -124,7 +124,12 @@ function CaptureWindow($hWnd, $path) {
     # rects but paints nothing - CopyFromScreen then grabs desktop + whatever
     # window is behind it, which is exactly the 40989952680 evidence-corruption
     # mode (offset player, clipped chrome/bar, desktop in frame). Fail closed.
-    if (-not [ZWU32]::HwndVisible($hWnd)) { throw "CaptureWindow: hwnd $hWnd is not visible for $path - capture would grab other on-screen content" }
+    if (-not [ZWU32]::HwndVisible($hWnd)) {
+        # Evidence for the failure: which Player processes and windows exist right now.
+        foreach ($zp in @(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { Write-Host "diag: ZephyrPlayer pid=$($zp.Id) exited=$($zp.HasExited) mainTitle='$($zp.MainWindowTitle)'"; foreach ($t in [ZWU32]::AllTitles([uint32]$zp.Id)) { Write-Host "diag:   window $t" } }
+        if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { Write-Host "diag: no ZephyrPlayer process is running" }
+        DumpCrashLog "hwnd $hWnd not visible for $path"
+        throw "CaptureWindow: hwnd $hWnd is not visible for $path - capture would grab other on-screen content" }
     $cloakState = [ZWU32]::DwmCloaked($hWnd)
     if ($cloakState -gt 0) { throw "CaptureWindow: hwnd $hWnd is DWM-cloaked ($cloakState) for $path - its rects are stale and the grab would show other content" }
     # CopyFromScreen grabs whatever is ON SCREEN in the rect: re-assert topmost
