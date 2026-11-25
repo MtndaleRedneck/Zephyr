@@ -51,6 +51,14 @@ namespace ZephyrPlayer.Tests
             if (failure != null) System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
         }
 
+        private static void PumpUntil(Func<bool> test, Func<string> message, int ms = 8000)
+        {
+            var until = Environment.TickCount64 + ms;
+            while (!test() && Environment.TickCount64 < until) Pump(20);
+            var ok = test(); // one final evaluation, as the string overload does
+            Assert.True(ok, ok ? "" : message());
+        }
+
         private static void PumpUntil(Func<bool> test, string message, int ms = 8000)
         {
             var until = Environment.TickCount64 + ms;
@@ -679,7 +687,7 @@ namespace ZephyrPlayer.Tests
                 now = t0.AddMinutes(15).AddSeconds(1);
                 var howA = Due(1);
                 Assert.Equal(1, view.SleepPausedCount);
-                PumpUntil(() => player.State == VLCState.Paused, "the new movie was not paused: " + player.State);
+                PumpUntil(() => player.State == VLCState.Paused, () => $"the new movie was not paused: {player.State} (time {player.Time}/{player.Length} ms, paused count {view.SleepPausedCount}, fire {view.LastSleepFire ?? "none"}, how {howA}, media ended count {view.MediaEndedCount})");
                 log.AppendLine($"   at +15:01 the carried timer fired on the NEW movie ({howA}): state={player.State} why={view.LastSleepFire} timer now active={view.Sleep.IsActive}");
                 Assert.Equal("timer", view.LastSleepFire);
                 Assert.False(view.Sleep.IsActive);

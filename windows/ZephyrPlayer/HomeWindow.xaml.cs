@@ -441,8 +441,14 @@ namespace ZephyrPlayer
             });
         }
 
+        /// <summary>Test seam, no behavior: why a movie got no time badge. At most 20 short entries, cleared at each scan,
+        /// file NAME and exception TYPE only (no path, no message text).</summary>
+        internal System.Collections.Concurrent.ConcurrentQueue<string> DurationDiagnostics { get; } = new();
+        private void NoteDuration(string text) { if (DurationDiagnostics.Count < 20) DurationDiagnostics.Enqueue(text); }
+
         private void LoadDurations(string root, List<Entry> entries, int generation)
         {
+            DurationDiagnostics.Clear();
             DurationWork = Task.Run(() =>
             {
                 try
@@ -463,14 +469,14 @@ namespace ZephyrPlayer
                             try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500).GetAwaiter().GetResult(); }
                             finally { media.ParseStop(); }
                             var duration = media.Duration;
-                            if (duration <= 0) continue;
+                            if (duration <= 0) { NoteDuration($"{Path.GetFileName(entry.Rel)}: duration {duration} ms after Parse"); continue; }
                             _history.Save(path, 0, duration, metadataOnly: true);
                             Dispatcher.BeginInvoke(new Action(() => { if (generation == _thumbGeneration) entry.SetMetadata(_history.Get(path)?.PositionMs ?? 0, duration); }));
                         }
-                        catch { }
+                        catch (Exception ex) { NoteDuration($"{Path.GetFileName(entry.Rel)}: {ex.GetType().Name}"); }
                     }
                 }
-                catch { } // Missing codec/invalid file: omit the badge, never invent a duration.
+                catch (Exception ex) { NoteDuration($"worker: {ex.GetType().Name}"); } // Missing codec/invalid file: omit the badge, never invent a duration.
             });
         }
 

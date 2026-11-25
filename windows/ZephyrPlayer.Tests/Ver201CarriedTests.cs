@@ -72,7 +72,7 @@ namespace ZephyrPlayer.Tests
                             var isDir = (bool)Prop(e, "Dir")!;
                             Assert.True((isDir ? Prop(e, "Peek") : Prop(e, "Thumb")) != null, $"no picture for {Prop(e, "Name")}");
                             // Time badge on every movie (2.0.0 read no length through its stream input).
-                            if (!isDir) Assert.True(Equals(Prop(e, "DurationVis"), Visibility.Visible), $"no time badge for {Prop(e, "Name")} (Duration=[{Prop(e, "Duration")}], duration worker completed={w.DurationWork.IsCompleted})");
+                            if (!isDir) Assert.True(Equals(Prop(e, "DurationVis"), Visibility.Visible), $"no time badge for {Prop(e, "Name")} (Duration=[{Prop(e, "Duration")}], duration worker completed={w.DurationWork.IsCompleted}; worker diagnostics: [{string.Join(" | ", w.DurationDiagnostics)}])");
                         }
                         // The whole path above the library root, not "C: > ... > Movies".
                         var crumbs = (ItemsControl)w.FindName("Breadcrumb")!;

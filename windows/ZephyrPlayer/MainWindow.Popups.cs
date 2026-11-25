@@ -199,7 +199,8 @@ namespace ZephyrPlayer
 
             _sleepTick.Tick += (_, __) => SleepTick();
             _player.EndReached += (_, __) => Dispatcher.BeginInvoke(new Action(OnMediaFinished));
-            PreviewMouseDown += OnPopupOutsideClick;
+            PreviewMouseDown += OnPopupOutsideClick;           // unchanged: the window
+            Overlay.PreviewMouseDown += OnPopupOutsideClick;   // added: the Overlay lives in VideoView's own window, its clicks never reach the window hook   // the Overlay lives in VideoView's own window: clicks there never reach this window
             RefreshSubtitleSizeUi();
             RefreshSpeedUi();
             RefreshSleepUi();

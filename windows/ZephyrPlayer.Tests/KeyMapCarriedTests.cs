@@ -113,9 +113,11 @@ namespace ZephyrPlayer.Tests
                     view.UpdateLayout();
                     Assert.True(more.Focusable && more.IsTabStop && more.IsEnabled, "More must be Tab-reachable");
                     Assert.True(more.Focus(), "More could not take keyboard focus");
-                    Assert.Same(more, FocusManager.GetFocusedElement(view));
+                    // More sits in the Overlay, which LibVLCSharp hosts in its own window: that window is its focus scope, not the main window's.
+                    var overlayWindow = Window.GetWindow(more)!;
+                    Assert.Same(more, FocusManager.GetFocusedElement(overlayWindow));
                     var source = PresentationSource.FromVisual(host)!;
-                    // Keys raised FROM the focused More button tunnel through the window's PreviewKeyDown, the same one key map.
+                    // Keys raised FROM the focused More button tunnel through the OVERLAY window's PreviewKeyDown, which HookOverlayKeys feeds to the one key map.
                     KeyEventArgs From(Key k) { var e = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, k) { RoutedEvent = Keyboard.PreviewKeyDownEvent, Source = more }; more.RaiseEvent(e); return e; }
                     view.SetVolumeTied(50);
                     var up = From(System.Windows.Input.Key.Up);

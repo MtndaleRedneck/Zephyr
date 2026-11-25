@@ -100,17 +100,22 @@ public class StartLifecycleTests
     [Fact]
     public void NativeError_AndEndBeforePlaying_FailTheStart_WithTheNativeMessage()
     {
+        // The start must still be WAITING when the error arrives (a real clip plays within ms on the runner and the
+        // product correctly ignores an error after completion). The source sends its header and then holds.
+        using var server = new StalledMovieServer();
         VolumeMuteTests.Sta((w, settings) =>
         {
-            var source = new SafeMediaSource(w.LibVlcForTest, ClipUrl);
-            w.PrepareOverride = (url, subs, token) => source;
-            Await(w.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>()));
-            var start = w.CurrentNativeStart;
-            Assert.NotNull(start);
-            w.RaiseNativeEvent(start!, "error");
-            PumpUntil(() => w.IsLoadingErrorShown, () => $"a native error did not end loading (Waiting={start!.Waiting}, PlayingSeen={start.PlayingSeen}, CompletedBy={start.CompletedBy ?? "none"}, LastStartFailure={w.LastStartFailure ?? "none"})");
+            w.PrepareOverride = (url, subs, token) => new SafeMediaSource(w.LibVlcForTest, server.Url);
+            // The start task completes once the prepared media is handed to libVLC (not on Playing), so the original
+            // completion check stays; the held server keeps the native start Waiting after it.
+            Await(w.PlayFromUrlAsync(server.Url, null, Array.Empty<string>()));
+            var native = w.CurrentNativeStart;
+            Assert.NotNull(native);
+            w.RaiseNativeEvent(native!, "error");
+            PumpUntil(() => w.IsLoadingErrorShown, () => $"a native error did not end loading (Waiting={native!.Waiting}, PlayingSeen={native.PlayingSeen}, CompletedBy={native.CompletedBy ?? "none"}, LastStartFailure={w.LastStartFailure ?? "none"})");
             Assert.Equal(MainWindow.NativeFailedMessage, w.LoadingDetailText);
             Assert.Equal("native-error", w.LastStartFailure);
+            w.StopPlaybackSource();
         });
     }
 
@@ -139,23 +144,23 @@ public class StartLifecycleTests
     {
         VolumeMuteTests.Sta((w, settings) =>
         {
-            // A source nobody reads: no bytes move and libVLC never says Playing within the (shortened) window.
-            var src = Path.Combine(Path.GetTempPath(), "zephyr-stall-" + Guid.NewGuid().ToString("N") + ".bin");
-            File.WriteAllBytes(src, new byte[4096]);
+            // A source nobody reads: header bytes, then nothing. No bytes move and libVLC never says Playing within the (shortened) window.
+            using var server = new StalledMovieServer();
             try
             {
                 w.NativeStallWindow = TimeSpan.FromMilliseconds(600);
                 string? prepError = null;
-                w.PrepareOverride = (url, subs, token) => { try { return new SafeMediaSource(w.LibVlcForTest, new Uri(src).AbsoluteUri); } catch (Exception ex) { prepError = ex.ToString(); throw; } };
-                Await(w.PlayFromUrlAsync(new Uri(src).AbsoluteUri, null, Array.Empty<string>()));
-                PumpUntil(() => w.IsLoadingErrorShown || w.LastStartFailure != null || w.CurrentNativeStart?.PlayingSeen == true, "neither a failure nor Playing arrived", 20000);
-                if (w.CurrentNativeStart?.PlayingSeen != true)
-                {
-                    var failure = w.LastStartFailure ?? "native-stalled";
-                    Assert.True(failure == "native-stalled", $"expected native-stalled, got [{failure}]; exception thrown while preparing: {prepError ?? "none"}");
-                }
+                w.PrepareOverride = (url, subs, token) => { try { return new SafeMediaSource(w.LibVlcForTest, server.Url); } catch (Exception ex) { prepError = ex.GetType().Name + ": " + ex.Message; throw; } };
+                Await(w.PlayFromUrlAsync(server.Url, null, Array.Empty<string>()));
+                var native = w.CurrentNativeStart;
+                Assert.NotNull(native);
+                PumpUntil(() => w.IsLoadingErrorShown || w.LastStartFailure != null || native!.PlayingSeen, "neither a failure nor Playing arrived", 20000);
+                // Unconditional: the held source never reaches Playing, and the failure is exactly the stall (never defaulted).
+                var detail = $"LastStartFailure=[{w.LastStartFailure ?? "none"}], PlayingSeen={native!.PlayingSeen}; exception thrown while preparing: {prepError ?? "none"}; server requests: {server.Requests}";
+                Assert.False(native.PlayingSeen, "the held source reached Playing: " + detail);
+                Assert.True(w.LastStartFailure == "native-stalled", "expected native-stalled: " + detail);
             }
-            finally { w.StopPlaybackSource(); try { File.Delete(src); } catch { } }
+            finally { w.StopPlaybackSource(); }
         });
     }
 

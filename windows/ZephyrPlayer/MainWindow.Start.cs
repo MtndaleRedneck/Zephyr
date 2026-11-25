@@ -367,6 +367,7 @@ namespace ZephyrPlayer
         internal bool PauseFromPhone(bool pause)
         {
             if (_opening) { PlayPauseRefusedCount++; return false; }
+            PlayPauseHandedCount++;                       // same seam as the bar and Space (2.0.2 HandPause)
             _player.SetPause(pause);
             UpdatePlayPauseGlyph();
             return true;
