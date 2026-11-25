@@ -17,6 +17,18 @@ adb logcat -c
 adb install -r new.apk
 adb shell dumpsys package "$PKG" | grep -E "versionName=$NEW_NAME" | head -1
 adb shell dumpsys package "$PKG" | grep -E "versionCode=$NEW_CODE" | head -1
+# Decisive evidence is always printed, pass or fail: a screenshot (base64 PNG between markers), window focus, and the log lines about the app.
+evidence() {
+  set +e
+  echo "== evidence: screenshot (base64 PNG) =="
+  adb exec-out screencap -p > shot.png 2>/dev/null
+  echo "screenshot bytes: $(wc -c < shot.png) sha256: $(sha256sum shot.png | cut -d' ' -f1)"
+  echo "-----BEGIN-SCREENSHOT-----"; base64 -w 200 shot.png; echo "-----END-SCREENSHOT-----"
+  echo "== evidence: window focus =="; adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp" | head -3
+  echo "== evidence: log lines about the app (tail) =="; adb logcat -d -b all 2>/dev/null | grep -E "$PKG" | tail -40
+  set -e
+}
+trap evidence EXIT
 wake
 adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null
 sleep 30
