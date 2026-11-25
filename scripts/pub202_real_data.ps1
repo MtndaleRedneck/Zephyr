@@ -19,16 +19,18 @@ param(
     [Parameter(Mandatory)][string]$Candidate,
     [Parameter(Mandatory)][string]$OldSha256,
     [Parameter(Mandatory)][string]$ExpectedVersion,
-    [Parameter(Mandatory)][string]$ExpectedHead
+    [Parameter(Mandatory)][string]$ExpectedHead,
+    [string]$OldVersion = '2.0.2'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
-$report = Join-Path $env:RUNNER_TEMP 'pub202-real-data.txt'
+$oldTag = $OldVersion -replace '\.', ''
+$report = Join-Path $env:RUNNER_TEMP "pub$oldTag-real-data.txt"
 Remove-Item $report -ErrorAction SilentlyContinue
 # A stale failure image from an earlier invocation must never be mistaken for this run's evidence.
-Remove-Item (Join-Path $env:RUNNER_TEMP 'pub202-failure.png') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:RUNNER_TEMP "pub$oldTag-failure.png") -Force -ErrorAction SilentlyContinue
 function Note($k, $v) { $l = "${k}: $v"; Write-Host $l; Add-Content -Path $report -Value $l }
 Add-Type -Namespace ZW -Name Inp -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
@@ -88,35 +90,35 @@ function Uninstall-Player {
 
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', $null, 'Process')
 $dataDir = "$env:APPDATA\ZephyrPlayer"
-$lib = Join-Path $env:RUNNER_TEMP 'pub202lib'
+$lib = Join-Path $env:RUNNER_TEMP "pub${oldTag}lib"
 $srv = $null
 $allAssertionsPassed = $false
 try {
     # --- clean slate, published installer, sha and version ---
     Uninstall-Player
     Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
-    $dl = Join-Path $env:RUNNER_TEMP 'pub202real'
+    $dl = Join-Path $env:RUNNER_TEMP "pub${oldTag}real"
     $global:LASTEXITCODE = 0
-    gh release download player-v2.0.2 -p 'Zephyr-PC-2.0.2.exe' --dir $dl --clobber
+    gh release download "player-v$OldVersion" -p "Zephyr-PC-$OldVersion.exe" --dir $dl --clobber
     if ($LASTEXITCODE -ne 0) { throw "gh release download exit $LASTEXITCODE" }
-    $old = Join-Path $dl 'Zephyr-PC-2.0.2.exe'
+    $old = Join-Path $dl "Zephyr-PC-$OldVersion.exe"
     $sha = (Get-FileHash $old -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($sha -ne $OldSha256) { throw "published 2.0.2 installer sha256 is $sha" }
+    if ($sha -ne $OldSha256) { throw "published $OldVersion installer sha256 is $sha" }
     $op = Start-Process $old -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS' -PassThru
-    if (-not $op.WaitForExit(150000)) { throw 'published 2.0.2 installer timed out' }
-    if ($op.ExitCode -ne 0) { throw "published 2.0.2 installer exit $($op.ExitCode)" }
+    if (-not $op.WaitForExit(150000)) { throw "published $OldVersion installer timed out" }
+    if ($op.ExitCode -ne 0) { throw "published $OldVersion installer exit $($op.ExitCode)" }
     $exe = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
     $pv0 = (Get-Item $exe).VersionInfo.ProductVersion
-    if ($pv0 -notlike '2.0.2*') { throw "installed ProductVersion is $pv0" }
+    if ($pv0 -notlike "$OldVersion*") { throw "installed ProductVersion is $pv0" }
     Stop-Player
-    Note 'published_202_installed' "sha256 $sha, ProductVersion $pv0"
+    Note "published_${oldTag}_installed" "sha256 $sha, ProductVersion $pv0"
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $fw = Start-Process $exe -ArgumentList '--install-firewall', $sid -PassThru -Wait -WindowStyle Hidden
-    if ($fw.ExitCode -ne 0) { throw "2.0.2 --install-firewall exit $($fw.ExitCode)" }
+    if ($fw.ExitCode -ne 0) { throw "$OldVersion --install-firewall exit $($fw.ExitCode)" }
 
     # --- media: reuse the clip the capture step already made; else an ffmpeg already on the runner. No install. ---
     New-Item -ItemType Directory -Force $lib | Out-Null
-    $movie = Join-Path $lib 'Real202Movie.mp4'
+    $movie = Join-Path $lib "Real${oldTag}Movie.mp4"
     $existingClip = Join-Path $env:RUNNER_TEMP 'clip.mp4'
     if (Test-Path $existingClip) { Copy-Item $existingClip $movie -Force }
     else {
@@ -132,10 +134,10 @@ try {
     # --- the published app, no hooks, on a data folder it creates itself ---
     if (Test-Path $dataDir) { throw 'provenance: the data folder existed before the published app first ran' }
     $p = Start-Process $exe -PassThru
-    if (-not (Wait-Server 40)) { throw 'published 2.0.2 control server never came up' }
+    if (-not (Wait-Server 40)) { throw "published $OldVersion control server never came up" }
     $nameBox = Wait-InProc $p.Id 'PhoneNameBox' 40
     if (-not $nameBox) { throw 'Paired phones screen (PhoneNameBox) not found through UI Automation' }
-    $nameBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Real 202 phone')
+    $nameBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue("Real $oldTag phone")
     $pairBtn = Find-InProc $p.Id 'PairButton'
     if (-not $pairBtn) { throw 'PairButton not found' }
     Invoke-Uia $pairBtn
@@ -156,8 +158,8 @@ try {
     $paired = Get-Content "$dataDir\paired.json" -Raw
     if ($paired -notmatch 'dpapi:' -or $paired.Contains($token)) { throw 'paired.json is not DPAPI-protected by the app' }
     $entries = @($paired | ConvertFrom-Json)
-    if ($entries.Count -ne 1 -or $entries[0].name -ne 'Real 202 phone') { throw 'paired.json does not hold the one phone the app paired' }
-    Note 'pairing_created_by_real_202' "PROVEN (paired.json written by the published app: 1 entry, DPAPI-protected, token length $($token.Length) not printed)"
+    if ($entries.Count -ne 1 -or $entries[0].name -ne "Real $oldTag phone") { throw 'paired.json does not hold the one phone the app paired' }
+    Note "pairing_created_by_real_${oldTag}" "PROVEN (paired.json written by the published app: 1 entry, DPAPI-protected, token length $($token.Length) not printed)"
 
     # --- settings: the app's own library route and a real Settings toggle ---
     $null = Expect 'library-folder-set' 'Post' '/library/folder' $token (@{ folder = $lib } | ConvertTo-Json -Compress) 200
@@ -249,7 +251,7 @@ try {
     Start-Sleep -Seconds 1
     $s0 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
     if ($s0.ShowSpeed -ne $speedAfter -or $s0.LibraryFolder -ne $lib) { throw "settings.json does not hold the app-made values (ShowSpeed $($s0.ShowSpeed) want $speedAfter)" }
-    Note 'settings_created_by_real_202' "PROVEN (settings.json written by the published app: ShowSpeed $speedBefore -> $speedAfter, LibraryFolder set through the app's own route)"
+    Note "settings_created_by_real_${oldTag}" "PROVEN (settings.json written by the published app: ShowSpeed $speedBefore -> $speedAfter, LibraryFolder set through the app's own route)"
 
     # --- history: a real local library file, played and seeked through the app's own routes ---
     $srv = $null
@@ -257,7 +259,7 @@ try {
     $null = Expect 'play' 'Post' '/play' $token (@{ url = $fileUrl } | ConvertTo-Json -Compress) 200
     Start-Sleep -Seconds 12
     $st = Expect 'status-playing' 'Get' '/control/status' $token $null 200
-    if (($st.Content | ConvertFrom-Json).state -ne 'Playing') { throw "2.0.2 is not Playing ($((($st.Content | ConvertFrom-Json).state)))" }
+    if (($st.Content | ConvertFrom-Json).state -ne 'Playing') { throw "$OldVersion is not Playing ($((($st.Content | ConvertFrom-Json).state)))" }
     # /control/seek takes {"position": <seconds>} (2.0.2 PlaybackServer.cs:266-267, PlayerView.xaml.cs:817-821)
     $null = Expect 'seek' 'Post' '/control/seek' $token '{"position":120}' 200
     Start-Sleep -Seconds 8
@@ -270,14 +272,14 @@ try {
     $item0 = $h0.$key
     if (-not $item0) { throw 'history has no entry for the played library file' }
     if ([long]$item0.DurationMs -le 0 -or [long]$item0.PositionMs -lt 100000) { throw "history values are not the played ones (position $($item0.PositionMs) ms, duration $($item0.DurationMs) ms)" }
-    Note 'history_created_by_real_202' "PROVEN (playback-history.json written by the published app: PositionMs $($item0.PositionMs), DurationMs $($item0.DurationMs))"
+    Note "history_created_by_real_${oldTag}" "PROVEN (playback-history.json written by the published app: PositionMs $($item0.PositionMs), DurationMs $($item0.DurationMs))"
     Stop-Player
 
     # --- upgrade to the candidate and prove what carried over ---
     $files = @('paired.json', 'settings.json', 'playback-history.json')
     $before = @{}
     foreach ($f in $files) { $before[$f] = (Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash }
-    & (Join-Path $PSScriptRoot 'assert_installer_sha.ps1') -Path $Candidate -Label 'player-202-real-data-upgrade'
+    & (Join-Path $PSScriptRoot 'assert_installer_sha.ps1') -Path $Candidate -Label "player-$oldTag-real-data-upgrade"
     $up = Start-Process $Candidate -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS' -PassThru
     if (-not $up.WaitForExit(150000)) { throw 'candidate installer timed out' }
     if ($up.ExitCode -ne 0) { throw "candidate installer exit $($up.ExitCode)" }
@@ -293,7 +295,7 @@ try {
     Note 'installer_left_real_data_identical' "PROVEN (3 real files byte-identical after the candidate installer)"
     Stop-Player
     $null = Start-Process $exe -PassThru
-    if (-not (Wait-Server 40)) { throw 'candidate control server never came up on the real 2.0.2 data' }
+    if (-not (Wait-Server 40)) { throw "candidate control server never came up on the real $OldVersion data" }
     Start-Sleep -Seconds 4
     $null = Expect 'candidate-real-token' 'Get' '/control/status' $token $null 200
     $null = Expect 'candidate-wrong-token' 'Get' '/control/status' 'not-a-real-token' $null 401

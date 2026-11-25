@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       run_published_202_migration:
-        description: 'Run the published 2.0.2 to candidate migration smoke (needs an explicit go)'
+        description: 'Run the published 2.0.2 and 3.0.0 to candidate migration smokes (seeded and real app-created data)'
         type: boolean
         default: false
 
@@ -917,6 +917,95 @@ jobs:
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
           ./scripts/pub202_real_data.ps1 -Candidate "windows/Output/Zephyr-PC-$v.exe" -OldSha256 889126cc0bc0ae7105fca2bb635416192566a79ed6dce7e51d6b1886f113c485 -ExpectedVersion $v -ExpectedHead (git rev-parse HEAD).Trim()
 
+      - name: Published 3.0.0 -> candidate upgrade smoke with seeded settings and history (real published asset)
+        id: pub300_seeded
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The version installed today (3.0.0, published sha256 18e715d9... from the release API) -> THIS build's installer.
+          # Seeds settings.json, playback-history.json and a sentinel paired.json in %AppData%\ZephyrPlayer between the two
+          # installs. Proves: the installer leaves that folder byte-for-byte alone, and the new app starts on the old files
+          # and still reads the stored choices. paired.json is a sentinel (arbitrary bytes), NOT a real DPAPI store: this step
+          # does not prove paired-phone preservation (PairedStore.cs, Dpapi.cs are byte-identical to the 3.0.0 tag).
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            if (-not $pu.WaitForExit(150000)) { throw 'pre-cleanup uninstaller timed out' }
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "$env:APPDATA\ZephyrPlayer" -Recurse -Force -ErrorAction SilentlyContinue
+          gh release download player-v3.0.0 -p 'Zephyr-PC-3.0.0.exe' --dir "$env:RUNNER_TEMP/pub300" --clobber
+          $oldInstaller = "$env:RUNNER_TEMP/pub300/Zephyr-PC-3.0.0.exe"
+          if (-not (Test-Path $oldInstaller)) { throw 'published 3.0.0 installer missing after download' }
+          $sha = (Get-FileHash $oldInstaller -Algorithm SHA256).Hash.ToLower()
+          if ($sha -ne '18e715d9f8235bca82de2183c6f62dd6707409451561da92817bcefbf47e6822') { throw "published 3.0.0 installer sha256 is $sha" }
+          $oldLog = "$env:RUNNER_TEMP/installer-old300.log"
+          $op = Start-Process $oldInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$oldLog" -PassThru
+          if (-not $op.WaitForExit(150000)) { throw 'published 3.0.0 installer timed out' }
+          if ($op.ExitCode -ne 0) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw "published 3.0.0 installer exit $($op.ExitCode)" }
+          $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $installed)) { throw "3.0.0 installed exe missing: $installed" }
+          $pv0 = (Get-Item $installed).VersionInfo.ProductVersion
+          if ($pv0 -notlike '3.0.0*') { throw "installed exe ProductVersion is $pv0, expected 3.0.0.x" }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $dataDir = "$env:APPDATA\ZephyrPlayer"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $settings = '{"LibraryFolder":"C:\\Users\\Public\\Videos","VolumeBoostMaxPct":150,"SkipBackSeconds":5,"SkipForwardSeconds":60,"BarColorStyle":"white","IconStyle":"filled","ShowSpeed":true,"ShowSleepTimer":false,"LastVolume":42,"PrimarySkipSeconds":15,"SecondarySkipSeconds":120,"LibrarySort":"created","FoldersFirst":false,"ButtonFlash":true,"ShellBounds":"10,20,1280,720,0","AnimateOnPress":false,"SubtitleSize":"L","RememberVolume":false,"PreventSleep":false,"HardwareDecoding":"off"}'
+          [IO.File]::WriteAllText("$dataDir\settings.json", $settings, $utf8)
+          [IO.File]::WriteAllText("$dataDir\playback-history.json", '{"C:\\USERS\\PUBLIC\\VIDEOS\\SEEDED.MP4":{"PositionMs":600000,"DurationMs":5400000,"FileSize":4096,"ModifiedUtc":"2026-01-01T00:00:00Z"}}', $utf8)
+          [IO.File]::WriteAllBytes("$dataDir\paired.json", [byte[]](1..64))
+          $before = @{}
+          foreach ($f in 'settings.json','playback-history.json','paired.json') { $before[$f] = (Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash }
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          if (-not (Test-Path $newInstaller)) { throw "candidate installer missing: $newInstaller" }
+          $upLog = "$env:RUNNER_TEMP/installer-300-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-9'
+          $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
+          if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'candidate upgrade installer timed out' }
+          if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "candidate upgrade installer exit $($up.ExitCode)" }
+          foreach ($f in 'settings.json','playback-history.json','paired.json') {
+            $after = (Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash
+            if ($after -ne $before[$f]) { throw "the installer changed $f in the user data folder" }
+          }
+          Write-Output 'installer left settings.json, playback-history.json and paired.json byte-identical'
+          $newInstalled = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          $pv = (Get-Item $newInstalled).VersionInfo.ProductVersion
+          if ($pv -notlike "$v*") { throw "upgraded exe ProductVersion is $pv, expected $v.x" }
+          $uninstEntries = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -like 'Zephyr Player*' })
+          if ($uninstEntries.Count -ne 1) { throw "expected exactly one per-user uninstall entry for Zephyr Player, found $($uninstEntries.Count)" }
+          Start-Process $newInstalled
+          $alive = $false
+          for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive) { throw 'upgraded build never stayed running on the 3.0.0 data' }
+          Start-Sleep -Seconds 8
+          if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { throw 'upgraded build exited within 8 s on the 3.0.0 data' }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $now = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
+          if ($now.LibraryFolder -ne 'C:\Users\Public\Videos' -or $now.PrimarySkipSeconds -ne 15 -or $now.SecondarySkipSeconds -ne 120 -or $now.LastVolume -ne 42 -or $now.BarColorStyle -ne 'white' -or $now.PreventSleep -ne $false -or $now.HardwareDecoding -ne 'off') {
+            throw "settings choices changed after the upgraded build ran: $($now | ConvertTo-Json -Compress)"
+          }
+          Write-Output "published 3.0.0 -> $v upgrade OK (ProductVersion $pv, 1 uninstall entry, seeded settings choices intact after run)"
+
+      - name: Published 3.0.0 REAL app-created data -> candidate (production pair, settings and history paths)
+        id: pub300_real
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          ./scripts/pub202_real_data.ps1 -Candidate "windows/Output/Zephyr-PC-$v.exe" -OldSha256 18e715d9f8235bca82de2183c6f62dd6707409451561da92817bcefbf47e6822 -ExpectedVersion $v -ExpectedHead (git rev-parse HEAD).Trim() -OldVersion 3.0.0
+
       - name: Legacy chain + fresh-install uninstall smokes (real artifacts)
         if: always()
         timeout-minutes: 12
@@ -1139,6 +1228,7 @@ jobs:
             ${{ runner.temp }}/pc-desktop-note.txt
             ${{ runner.temp }}/installer-smoke.log
             ${{ runner.temp }}/pub202-real-data.txt
+            ${{ runner.temp }}/pub300-real-data.txt
             ${{ runner.temp }}/installer-update-smoke.log
             ${{ runner.temp }}/installer-old110.log
             ${{ runner.temp }}/installer-old140.log
@@ -1218,7 +1308,11 @@ jobs:
           Write-Host "PUBLISHED 2.0.2 MIGRATION REQUESTED: $migrationRequested"
           Write-Host "PUBLISHED 2.0.2 SEEDED OUTCOME: ${{ steps.pub202_seeded.outcome }}"
           Write-Host "PUBLISHED 2.0.2 REAL-DATA OUTCOME: ${{ steps.pub202_real.outcome }}"
+          Write-Host "PUBLISHED 3.0.0 SEEDED OUTCOME: ${{ steps.pub300_seeded.outcome }}"
+          Write-Host "PUBLISHED 3.0.0 REAL-DATA OUTCOME: ${{ steps.pub300_real.outcome }}"
           if ($migrationRequested -eq 'true') {
             if ('${{ steps.pub202_seeded.outcome }}' -ne 'success') { throw "migration was requested but the seeded 2.0.2 step outcome is '${{ steps.pub202_seeded.outcome }}'" }
             if ('${{ steps.pub202_real.outcome }}' -ne 'success') { throw "migration was requested but the real-data 2.0.2 step outcome is '${{ steps.pub202_real.outcome }}'" }
+            if ('${{ steps.pub300_seeded.outcome }}' -ne 'success') { throw "migration was requested but the seeded 3.0.0 step outcome is '${{ steps.pub300_seeded.outcome }}'" }
+            if ('${{ steps.pub300_real.outcome }}' -ne 'success') { throw "migration was requested but the real-data 3.0.0 step outcome is '${{ steps.pub300_real.outcome }}'" }
           }
