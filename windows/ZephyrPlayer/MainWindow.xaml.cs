@@ -62,6 +62,18 @@ namespace ZephyrPlayer
         /// <summary>Fired when the sleep timer ends playback; App lands on Home.</summary>
         public event Action? SleepFired;
         public event Action? HomeRequested;
+
+        protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
+        {
+            base.OnRenderSizeChanged(sizeInfo);
+            if (IsFullscreen) ControlBar.MaxWidth = FullscreenBarWidth(sizeInfo.NewSize.Width);
+        }
+
+        /// <summary>Half the window's current width, clamped to 760..1100, but never wider than the
+        /// available width minus margins (a narrow or secondary monitor must not clip the bar).</summary>
+        internal static double FullscreenBarWidth(double available) =>
+            Math.Max(0, Math.Min(Math.Clamp(available * 0.5, 760, 1100), available - 40));
+
         private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
 
         public MainWindow(LibVLC libvlc, MediaPlayer player, PlayerSettings? settings = null, VolumeService? volume = null)
@@ -581,7 +593,7 @@ namespace ZephyrPlayer
         public void SetFullscreen(bool on)
         {
             if (on == IsFullscreen) return;
-            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = Math.Clamp(SystemParameters.PrimaryScreenWidth * 0.5, 760, 1100); ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
+            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = FullscreenBarWidth(ActualWidth > 0 ? ActualWidth : SystemParameters.PrimaryScreenWidth); ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
             else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
