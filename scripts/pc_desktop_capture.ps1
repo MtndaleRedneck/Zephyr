@@ -386,7 +386,9 @@ function Wait-PlaybackWindow($proc, $seconds) {
         # Only the player window (MainWindow) hosts the VideoView; Home has none. When the
         # video host is owned by a window, that owner must be the chosen one (never Home).
         $owner = if ($host_ -ne [System.IntPtr]::Zero) { [ZWU32]::OwnerOf($host_) } else { [System.IntPtr]::Zero }
-        $ownerOk = ($owner -eq [System.IntPtr]::Zero) -or ($all.Count -eq 1 -and $owner -eq $all[0])
+        # LibVLCSharp.WPF 3.x ForegroundWindow is a top-level Window titled "LibVLCSharp.WPF" with
+        # Owner = the window containing the VideoView (MainWindow), so GW_OWNER must equal the player. No owner-0 fallback.
+        $ownerOk = ($owner -ne [System.IntPtr]::Zero) -and ($all.Count -eq 1 -and $owner -eq $all[0])
         if ($host_ -ne [System.IntPtr]::Zero -and $all.Count -eq 1 -and $ownerOk) {
             if ($all[0] -eq $last) { $stable++ } else { $last = $all[0]; $stable = 1 }
             if ($stable -ge 2) { Write-Host "playback window: hwnd=$($all[0]) videoHostOwner=$owner"; return $all[0] }
