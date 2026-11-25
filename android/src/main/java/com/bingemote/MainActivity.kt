@@ -37,6 +37,11 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        /** Screenshot-rig only: arms the subtitle sheet's lose-connection-mid-view
+         *  transition (see the subtitlepreviewlost intent extra). Debug builds only. */
+        var previewLostRigArmed = false
+    }
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
         val a = ev.actionMasked
@@ -56,15 +61,23 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Test isolation: never inherit the transition rig from an earlier preview
+        // Activity in the same process (interrupted test, config change).
+        if (BuildConfig.DEBUG) previewLostRigArmed = false
         store = Store(this)
         // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
         // Remote (port 8492) and flag the one-time "what changed" notice.
         store.migrateLegacyHelperPort()
-        // Screenshot rig: pick the cancel-circle treatment for the cancel captures.
-        if (BuildConfig.DEBUG) intent.getStringExtra("cancelstyle")?.let { store.cancelStyle = it }
         if (BuildConfig.DEBUG) intent.getStringExtra("pickeruri")?.let { DebugRig.pickerInitialUri = android.net.Uri.parse(it) }
+        // Screenshot rig: a stand-in PC name so the Your PC card renders paired.
+        if (BuildConfig.DEBUG && intent.hasExtra("pcdemo")) store.pcName = "MY-PC"
+        // Screenshot rig: a stand-in VLC pairing so the status pill can render Connected. Debug only.
+        if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
+        // Screenshot rig: the helper pair-code shot needs NO saved pairing (the code field then sits above the fold). Debug only.
+        if (BuildConfig.DEBUG && intent.hasExtra("pairdemo")) { try { store.helperToken = ""; store.pcName = "" } catch (e: SecureStoreUnavailable) { } }
         remote = RemoteState(this, store, lifecycleScope)
         if (BuildConfig.DEBUG && intent.getBooleanExtra("demostatus", false)) remote.debugSeedStatus()
+        if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { remote.debugForcePaired = true; remote.refreshPairing() }
         // Screenshot-rig only: render one status-notice review scenario per capture.
         // Polling is frozen (setupDone=false -> pollOnce no-ops) or leftover rig prefs
         // would re-trip unreachable/helperDown over the forced states mid-capture.
@@ -73,12 +86,36 @@ class MainActivity : ComponentActivity() {
             "cur-g" -> remote.debugForceStatus(unreachable = true, helperDown = true)
             "prop-g" -> remote.debugForceStatus(unreachable = true, helperDown = false)
             "cur-e" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = true) }
+            // Genuinely connected: VLC answering AND helper answering (the sheet's
+            // below-Off content only renders in this state since 1.12.16).
+            "cur-ok" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = false) }
             "prop-e" -> { remote.debugSeedStatus(); remote.mockHeroNote = "Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume." }
             "prop-unpaired" -> { remote.debugSeedStatus(); remote.mockHeroNote = "This phone isn't paired with the PC anymore - pair again." }
             // Post-1.11.0 production states: the REAL shipped notice branches
             // (post-debounce helper notice / 401 pair-again), no mock slot.
             "prod-e" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = true, helperNotice = true) }
             "prod-unpaired" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = true, unpaired = true) }
+        }
+        // Subtitle previews seed AFTER any statuscase so a seeding case (cur-e etc.)
+        // can't wipe the preview's tracks, and the case's connected/disconnected
+        // flags still govern what the sheet shows.
+        if (BuildConfig.DEBUG && intent.getBooleanExtra("subtitlepreview", false)) remote.debugSubtitlePreview()
+        // Screenshot-rig only: the sheet opens with connected content, then the
+        // connection drops mid-view so UI tests see the live transition to Off-only.
+        // The drop is armed here and fired by the sheet once the connected rows have
+        // actually composed (never on a timer racing cold startup). Polling stays
+        // frozen (statuscase sets setupDone=false), so nothing flips it back.
+        if (BuildConfig.DEBUG && intent.getBooleanExtra("subtitlepreviewlost", false)) {
+            remote.debugSubtitlePreview()
+            previewLostRigArmed = true
+        }
+        // UI-test rig only: seeds the stale folder-message state AFTER the sheet's
+        // opening check has run, so the next failing quiet check is what clears it.
+        if (BuildConfig.DEBUG && intent.getBooleanExtra("subtitleseedstaleerror", false)) {
+            lifecycleScope.launch {
+                kotlinx.coroutines.delay(3000)
+                remote.debugSeedSubtitleListError()
+            }
         }
         if (BuildConfig.DEBUG && intent.hasExtra("lockcontrols")) {
             store.lockScreenControls = true
@@ -101,9 +138,32 @@ class MainActivity : ComponentActivity() {
                 else initialScreenForConfiguredInstall(store.setupDone)) }
             screen = current
             // Scroll positions live above the screen switch so leaving a screen and
-            // coming back lands you where you were instead of back at the top.
-            val settingsScroll = rememberScrollState()
+            // coming back lands you where you were - except Settings, which is
+            // re-entered at the top (each navigation into it resets settingsScroll).
+            val settingsScroll = rememberScrollState(initial = if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) Int.MAX_VALUE else 0)
+            val navigationScope = rememberCoroutineScope()
+            fun openSettings(resetScroll: Boolean = false) {
+                navigationScope.launch {
+                    if (resetScroll) settingsScroll.scrollTo(0)
+                    current.value = "settings"
+                }
+            }
+            // Fresh entry into a sub-page starts at the top (same pattern as openSettings(resetScroll)). Back to Settings is
+            // unchanged: it keeps its position (openSettings() without reset).
+            fun openFromTop(route: String, scroll: androidx.compose.foundation.ScrollState) {
+                navigationScope.launch {
+                    scroll.scrollTo(0)
+                    current.value = route
+                }
+            }
+            if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) {
+                androidx.compose.runtime.LaunchedEffect(settingsScroll.maxValue) {
+                    if (settingsScroll.maxValue > 0 && settingsScroll.maxValue < Int.MAX_VALUE)
+                        settingsScroll.scrollTo(settingsScroll.maxValue)
+                }
+            }
             val setupScroll = rememberScrollState()
+            val yourpcScroll = rememberScrollState()
             val feedbackScroll = rememberScrollState()
             val moviesListState = rememberLazyListState()
             val pickerListState = rememberLazyListState()
@@ -112,11 +172,11 @@ class MainActivity : ComponentActivity() {
                     "setup" -> SetupScreen(
                         remote,
                         setupScroll,
-                        // Teardown A1: a finished VLC pairing selects its own source, same as Zephyr.
                         onDone = { store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
-                        // Teardown A2: reachable only from Settings now - Cancel always exists.
-                        onCancel = { current.value = "settings" },
+                        onCancel = if (store.setupDone || (BuildConfig.DEBUG && intent.hasExtra("setupcancel"))) ({ openSettings() }) else null,
                         demoVlcPending = BuildConfig.DEBUG && intent.hasExtra("vlcpending"),
+                        demoPair = BuildConfig.DEBUG && intent.hasExtra("pairdemo"),
+                        demoPreselect = BuildConfig.DEBUG && intent.hasExtra("pairdemoselect"),
                     )
                     "mouse" -> MouseScreen(remote) { current.value = "main" }
                     // CI screenshot states (debug builds only): open with the sheet forced open.
@@ -125,7 +185,7 @@ class MainActivity : ComponentActivity() {
                         remote,
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
-                        onSettings = { current.value = "settings" },
+                        onSettings = { openSettings(resetScroll = true) },
                         startSubtitlesOpen = true,
                     )
                     "movies" -> MoviesScreen(remote, moviesListState, onBack = { current.value = "main" }, demoResumeAsk = BuildConfig.DEBUG && intent.hasExtra("resumeask"))
@@ -138,8 +198,8 @@ class MainActivity : ComponentActivity() {
                         settingsScroll,
                         pickerListState,
                         onBack = { current.value = "main" },
-                        onRepair = { current.value = "setup" },
-                        onFeedback = { current.value = "feedback" },
+                        onRepair = { openFromTop("yourpc", yourpcScroll) },
+                        onFeedback = { openFromTop("feedback", feedbackScroll) },
                         onZephyrSetup = { current.value = "setup-zephyr" },
                     )
                     // Zephyr Player pairing is its OWN screen: separate
@@ -184,12 +244,18 @@ class MainActivity : ComponentActivity() {
                             initialStep = 2,
                         )
                     }
-                    "feedback" -> FeedbackScreen(remote, feedbackScroll) { current.value = "settings" }
+                                        "yourpc" -> YourPCScreen(
+                        remote,
+                        yourpcScroll,
+                        onBack = { openSettings() },
+                        onPairAgain = { openFromTop("setup", setupScroll) },
+                    )
+                    "feedback" -> FeedbackScreen(remote, feedbackScroll) { openSettings() }
                     else -> MainScreen(
                         remote,
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
-                        onSettings = { current.value = "settings" },
+                        onSettings = { openSettings(resetScroll = true) },
                     )
                 }
                 UpdateHost(store)
@@ -197,13 +263,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val notifPermission = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { MediaControls.sync(this, store) }
+
     override fun onStart() {
+        MediaControls.permissionRequest = { notifPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS) }
         super.onStart()
         if (::remote.isInitialized && store.setupDone) remote.start()
         MediaControls.sync(this, store)
+        com.zephyr.remote.ZephyrClient.startInputLeases()
     }
 
     override fun onStop() {
+        com.zephyr.remote.ZephyrClient.stopInputLeases()
         if (::remote.isInitialized) remote.stop()
         // A drag can be latched when the app backgrounds (call, screen timeout): release the
         // PC's left button so it doesn't stay held down while he's away.

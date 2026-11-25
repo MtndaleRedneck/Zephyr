@@ -22,16 +22,19 @@ internal class SelectedPlayback(private val store: Store) {
             j.optBoolean("fullscreen"), emptyList())
     }
     fun togglePause() {
+        // VLC has a real toggle command: sending it must not wait on (or fail with) a status
+        // read. Only Zephyr needs the current state, because its API has explicit pause/resume.
+        if (source == Source.VLC) { checkTarget(); Vlc.togglePause(host, port, secret); return }
         val st = status(); checkTarget()
-        if (source == Source.VLC) Vlc.togglePause(host, port, secret)
-        else if (st.playing) ZephyrClient.pause(host, port, secret)
+        if (st.playing) ZephyrClient.pause(host, port, secret)
         else ZephyrClient.resume(host, port, secret)
     }
     fun skip(delta: Int) {
+        // VLC has a real relative seek: no status read to wait on or fail with.
+        if (source == Source.VLC) { checkTarget(); Vlc.skip(host, port, secret, delta); return }
         val st = status(); checkTarget()
         // Length 0/unknown must not pin the target to 0 (a jump to the start).
         val next = (st.timeSec + delta).let { if (st.lengthSec > 0) it.coerceIn(0, st.lengthSec) else it.coerceAtLeast(0) }
-        if (source == Source.ZEPHYR) ZephyrClient.seek(host, port, secret, next)
-        else Vlc.seekTo(host, port, secret, next)
+        ZephyrClient.seek(host, port, secret, next)
     }
 }

@@ -14,6 +14,8 @@ RUNNER=androidx.test.runner.AndroidJUnitRunner
 adb install -r android/build/outputs/apk/debug/app-debug.apk
 adb install -r android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 # Match the base rig environment (screenshots.sh): no error dialogs, tester geometry.
+# The notification-bar suites post real notifications; API 34 blocks them without the runtime grant (the BingeMote rig grants it too).
+adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS
 adb shell settings put global hide_error_dialogs 1
 adb shell wm size 1080x2310
 adb shell wm density 480
@@ -27,7 +29,11 @@ PAIR_CODE=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log 2>/dev/null || true)
 # direction AND makes adbd hold device port 47888 -> EADDRINUSE in the test.)
 adb forward tcp:47888 tcp:47888 || true
 
+# UpgradeConnectionTest and RecoveryBridgeTest are NOT in this list on purpose: they need a previously
+# installed release (seed, replace the package, verify) and BingeMote-only package ids, so a plain
+# one-APK session cannot run them. The Zephyr upgrade check is a separate job (1.5.0 source -> this build).
 CLASSES="
+com.bingemote.ZephyrAutoPairTest
 com.bingemote.AutoSetupCheckTest
 com.bingemote.StoreMigrationTest
 com.bingemote.NoticeTokenResetTest
@@ -41,7 +47,47 @@ com.zephyr.remote.PhoneMoviesAndroidTest
 com.zephyr.remote.ZephyrWireTest
 com.zephyr.remote.ZephyrDiscoveryTest
 com.bingemote.StreamTargetTest
+com.bingemote.SubtitleClientTest
+com.bingemote.SourceSwitchSubtitleTest
+com.bingemote.SubtitleJournalTest
+com.bingemote.SubtitleSheetTest
+com.bingemote.HapticTickTest
+com.bingemote.ImmediateFlipTest
+com.bingemote.NotificationTapMatrixTest
+com.bingemote.PlaybackRoutingTest
+com.bingemote.DisconnectedPlaybackTest
+com.bingemote.BarActionsTest
+com.bingemote.BarSpacingTest
+com.bingemote.AutomaticOnlySetupTest
+com.bingemote.ModernizationUiTest
+com.bingemote.RefinementsUiTest
+com.bingemote.ReleaseIdentityTest
 "
+
+# Clear only our own FailureDumpRule/test-failure outputs so anything pulled later belongs to THIS run.
+EVDIR=/sdcard/Android/data/$PKG/files
+if ! adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*"; then
+  echo "CLEAR DIAG: stale-evidence cleanup failed - pulls may include files from an earlier run on this emulator"
+fi
+# Verified pull: temp name, per-type signature check, keep-or-log. A failed or error-text pull is deleted
+# and logged, never kept as a fake capture.
+pull_device_file() { # $1=device file name under the app files dir, $2=local prefix
+  local name="$1" prefix="$2" out sz sig
+  out="instrument-results/$prefix.$name"
+  if ! adb exec-out cat "$EVDIR/$name" > "$out.tmp" 2>/dev/null; then
+    rm -f "$out.tmp"; echo "PULL DIAG: $name transport failed - not kept"; return 0
+  fi
+  sz=$(stat -c%s "$out.tmp" 2>/dev/null || echo 0)
+  sig=$(file -b "$out.tmp" 2>/dev/null | cut -c1-60)
+  is_adb_error_stub() { [ "$1" -lt 200 ] && grep -qm1 'No such file\|Permission denied' "$2"; }
+  case "$name" in
+    *.png) echo "$sig" | grep -q 'PNG image' || { rm -f "$out.tmp"; echo "PULL DIAG: $name not a PNG ($sz bytes, $sig) - not kept"; return 0; };;
+    *.uix|*.xml) { echo "$sig" | grep -Eq 'XML|text' && ! is_adb_error_stub "$sz" "$out.tmp"; } || { rm -f "$out.tmp"; echo "PULL DIAG: $name not XML ($sz bytes, $sig) - not kept"; return 0; };;
+    *) { [ "$sz" -gt 0 ] && ! is_adb_error_stub "$sz" "$out.tmp"; } || { rm -f "$out.tmp"; echo "PULL DIAG: $name empty/error-stub ($sz bytes) - not kept"; return 0; };;
+  esac
+  mv "$out.tmp" "$out"
+  echo "PULLED: $out ($sz bytes, $sig)"
+}
 
 FAIL=0
 mkdir -p instrument-results
@@ -54,7 +100,7 @@ for cls in $CLASSES; do
   adb shell am instrument -w -e class "$cls" -e wire_port "$WIRE_PORT" -e pair_code "$PAIR_CODE" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/$(basename $cls).txt"
   adb logcat -d -s SAFTest:I SAFTest:W >> "instrument-results/$(basename $cls).txt" 2>/dev/null || true
   sleep 2
-  for f in $(adb shell ls /sdcard/zephyr-picker-*.png /sdcard/zephyr-picker-*.xml 2>/dev/null); do
+  for f in $(adb shell ls /sdcard/zephyr-picker-*.png /sdcard/zephyr-picker-*.xml /sdcard/zephyr-autopair-*.png 2>/dev/null); do
     adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true
     adb shell rm -f "$f"
   done
@@ -69,6 +115,21 @@ for cls in $CLASSES; do
       adb exec-out run-as "$TESTPKG" cat "app_evidence/$f" > "instrument-results/$(basename $cls).$f" 2>/dev/null || true
       adb exec-out run-as "$TESTPKG" rm -f "app_evidence/$f" 2>/dev/null || true
     done
+    # Triage screenshots (emulator-only fixtures; a failed suite's own file names) live in the
+    # app's external files dir. Pull them with a suite prefix so names stay distinct.
+    for f in $(adb shell 'ls /sdcard/Android/data/*/files/triage-*.png' 2>/dev/null | tr -d '\r'); do
+      adb exec-out cat "$f" > "instrument-results/$(basename $cls).$(basename $f)" 2>/dev/null || true
+      adb shell rm -f "$f" 2>/dev/null || true
+    done
+    adb logcat -d -s ZephyrTriage:E | cut -c1-9000 | tail -20
+    # FailureDumpRule evidence (screenshot, hierarchy, logcat, paired recurrence capture) plus the setup tests' own *-fail captures.
+    if dump_listing=$(adb shell "ls $EVDIR/ 2>/dev/null"); then :; else
+      echo "PULL DIAG: evidence dir listing failed (rc=$?) - cannot confirm which failure evidence exists this run"; dump_listing=""
+    fi
+    dumps=$(printf '%s\n' "$dump_listing" | tr -d '\r' | grep -E '^bm-(dump|andialog|dismissed-dialogs|setup-selected-pc-fail|setup-confirmed-address-fail)' || true)
+    if [ -z "$dumps" ]; then echo "PULL DIAG: no FailureDumpRule/test-failure evidence files listed for $cls"; fi
+    for dump in $dumps; do pull_device_file "$dump" "$(basename $cls)"; done
+    adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*" 2>/dev/null || true
     echo "SUITE FAIL: $cls"
     FAIL=1
   fi

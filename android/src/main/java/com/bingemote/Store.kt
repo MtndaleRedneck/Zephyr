@@ -23,14 +23,16 @@ class Store internal constructor(
     init {
         // 1.9 removals: the seek bar is always on top and reconnect is always on.
         // Drop the retired keys so no stale setting lingers on existing installs.
-        prefs.edit().remove("seekOnTop").remove("autoReconnect").apply()
+        prefs.edit().remove("seekOnTop").remove("autoReconnect").remove("cancelStyle").apply()
     }
 
     /** True when the Keystore-backed store could not open this launch (teardown C11).
      *  NOTHING is ever auto-deleted: the encrypted file and the master key stay exactly
      *  as they are, the app keeps working on an in-memory stand-in, and recovery is a
      *  plain error + re-pair, by hand, never a wipe. */
-    val secureStoreBroken: Boolean get() = secrets is InMemoryPrefs
+    private val storeOpenFailed: Boolean = secrets is InMemoryPrefs
+    /** Failed to open this launch, or a secret read failed since (the box then refuses writes). */
+    val secureStoreBroken: Boolean get() = storeOpenFailed || secretBox.isBroken
 
     /** Fail-closed gate for every secret write: while the store is broken a write
      *  THROWS instead of landing in memory and vanishing at restart (no fake-persisted
@@ -38,8 +40,12 @@ class Store internal constructor(
     private val secretBox = FailClosedSecrets(
         reader = { k -> secrets.getString(k, null) },
         writer = { k, v -> val ed = secrets.edit(); if (v == null) ed.remove(k) else ed.putString(k, v); ed.apply() },
-        broken = secureStoreBroken,
+        broken = storeOpenFailed,
     )
+
+    /** Blocks until pending plain and secret writes are on disk; false when either commit is refused.
+     *  Pairing uses it so "saved" means durable, not just queued. */
+    fun commitPairing(): Boolean = try { prefs.edit().commit() && !secretBox.isBroken && secrets.edit().commit() } catch (e: Exception) { false }
 
     var pcName: String
         get() = prefs.getString("pcName", "") ?: ""
@@ -106,6 +112,17 @@ class Store internal constructor(
     var lastUpdateCheckAt: Long
         get() = prefs.getLong("lastUpdateCheckAt", 0L)
         set(v) = prefs.edit().putLong("lastUpdateCheckAt", v).apply()
+    /** Keep the PC awake while a video is loaded in VLC (screen may still turn off;
+     * minimized VLC sleeps normally). Default ON for new installs; a saved choice is kept.
+     * The PC behavior itself ships with the reviewed helper change; helpers that don't
+     * know the setting ignore it. */
+    var keepAwake: Boolean
+        get() = prefs.getBoolean("keepAwake", true)
+        set(v) = prefs.edit().putBoolean("keepAwake", v).apply()
+
+    var showVolumeOnPc: Boolean
+        get() = prefs.getBoolean("showVolumeOnPc", true)
+        set(v) = prefs.edit().putBoolean("showVolumeOnPc", v).apply()
 
     /** Play/pause/skip + position on the lock screen while a movie plays. Off by default. */
     var lockScreenControls: Boolean
@@ -116,12 +133,6 @@ class Store internal constructor(
     var demoControls: Boolean
         get() = prefs.getBoolean("demoControls", false)
         set(v) = prefs.edit().putBoolean("demoControls", v).apply()
-
-    /** Temporary A/B: the seek-drag cancel circle treatment. Try both
-     * ("ring" = Ring only, "fills" = Fills in) and remove the loser; the setting goes with it. */
-    var cancelStyle: String
-        get() = prefs.getString("cancelStyle", "ring") ?: "ring"
-        set(v) = prefs.edit().putString("cancelStyle", v).apply()
 
     /** Press flash on the home screen: 0 = skip rings only, 1 = every button. */
     var buttonFlash: Int
@@ -179,9 +190,13 @@ class Store internal constructor(
             if (plain.isNotEmpty()) {
                 // Migration only when the encrypted store is healthy; while broken the
                 // plaintext value is honestly on disk, so it still reads, unmigrated.
-                if (!secureStoreBroken) {
-                    secretBox.write("zephyrToken", plain)
-                    prefs.edit().remove("zephyrToken").apply()
+                // Current health, not the startup flag: a failed read earlier in this process also
+                // poisons the box, and then the write would throw out of this getter.
+                if (!secretBox.isBroken) {
+                    try {
+                        secretBox.write("zephyrToken", plain)
+                        prefs.edit().remove("zephyrToken").apply()
+                    } catch (e: SecureStoreUnavailable) { /* stays plaintext on disk, still reads, unmigrated */ }
                 }
                 return plain
             }

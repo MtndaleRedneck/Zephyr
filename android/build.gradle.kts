@@ -7,13 +7,15 @@ plugins {
 android {
     namespace = "com.bingemote"
     compileSdk = 35
+    // -PsignedUpgradeTest: build the instrumentation APK against the signed release build (CI signed-upgrade job only).
+    testBuildType = if (providers.gradleProperty("signedUpgradeTest").isPresent) "release" else "debug"
 
     defaultConfig {
         applicationId = "com.zephyr.remote"
         minSdk = 31
         targetSdk = 34
-        versionCode = 23
-        versionName = "1.2.0"
+        versionCode = 27
+        versionName = "1.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -38,7 +40,12 @@ android {
             versionNameSuffix = "-debug"
         }
         getByName("release") {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // The minified androidTest APK does NOT inherit the rules above; its
+            // instrumentation runtime keeps live in test-proguard.pro.
+            testProguardFiles("test-proguard.pro")
             if (ksFile != null) signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -50,22 +57,45 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     testOptions { unitTests.isReturnDefaultValues = true }
 }
 
 dependencies {
+    // Tink references these class-retained build-time annotations; not runtime code.
+    compileOnly("com.google.errorprone:error_prone_annotations:2.53.0")
+    // The minified release androidTest APK has the same Tink/test-only annotation
+    // references on its own classpath; keep them compile-only there too.
+    androidTestCompileOnly("com.google.errorprone:error_prone_annotations:2.53.0")
+    // androidx.test.runner needs androidx.tracing at runtime. Debug gets it through
+    // consistent resolution with the app classpath; the release androidTest APK does not
+    // (NoClassDefFoundError: androidx.tracing.Trace in AndroidJUnitRunner.onCreate, run
+    // 45344979448 logcat). Pinned to 1.0.0: the app classpath carries a strict 1.0.0
+    // constraint (run 45347694554 conflict), and debug already runs the runner on 1.0.0.
+    androidTestImplementation("androidx.tracing:tracing:1.0.0")
+    // Runtime carrier for the minified release instrumentation process:
+    // AndroidJUnitRunner.onCreate needs androidx.tracing.Trace, and R8 strips
+    // it from the test APK (test minification does not apply this module's
+    // keep rules). Carrying it in the app APK (kept via proguard-rules.pro)
+    // resolves it for the shared instrumented classloader. A few KB; also
+    // satisfies the existing strict 1.0.0 constraint natively.
+    implementation("androidx.tracing:tracing:1.0.0")
     implementation(platform("androidx.compose:compose-bom:2025.04.01"))
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0") // the live mouse WebSocket
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

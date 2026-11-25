@@ -26,7 +26,9 @@ object HelperClient {
     private const val DISCOVER_MAGIC = "BINGEMOTE_DISCOVER_V1"
     internal const val REPLY_MAGIC = "ZEPHYR_VLC_REMOTE_HERE_V1"
 
-    class Unreachable(val msg: String) : Exception(msg)
+    open class Unreachable(val msg: String) : Exception(msg)
+    class SubtitleRejected(val detail: String) : Exception(detail)
+    class MissingRoute : Unreachable("Zephyr VLC Remote on the PC is too old for this app.")
     /** Shown to the user. The raw socket text ("failed to connect to /192.168.1.5 (port 8488) after 2500ms") used to leak into Movies. */
     private const val NO_PC = "Can't reach Zephyr VLC Remote on the PC. Check that the PC is on and Zephyr VLC Remote is open."
     class BadToken(val msg: String) : Exception(msg)
@@ -118,7 +120,7 @@ object HelperClient {
         }
         val detail = json?.optString("detail")?.takeIf { it.isNotBlank() }
         if (detail != null) return Unreachable(detail)
-        if (code == 404) return Unreachable("Zephyr VLC Remote on the PC is too old for this app.")
+        if (code == 404) return MissingRoute()
         return Unreachable("The PC answered with an error ($code).")
     }
 
@@ -141,10 +143,84 @@ object HelperClient {
         return out
     }
 
+    /** Subtitle-only bounded transport. Cleanup closes rather than draining an untrusted body. */
+    private fun subtitleRequest(host: String, port: Int, token: String, path: String, body: JSONObject? = null, timeoutMs: Int = 6000): JSONObject {
+        val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
+        val deadline = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+        val stopper = deadline.schedule({ c.disconnect() }, timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+        try {
+            c.connectTimeout = minOf(timeoutMs, 5000); c.readTimeout = timeoutMs
+            c.instanceFollowRedirects = false
+            c.setRequestProperty("X-Zephyr-VLC-Remote-Token",token)
+            if (body != null) {
+                c.requestMethod = "POST"; c.doOutput = true; c.setRequestProperty("Content-Type","application/json")
+                val bytes = body.toString().toByteArray(Charsets.UTF_8); c.setFixedLengthStreamingMode(bytes.size)
+                c.outputStream.use { it.write(bytes) }
+            }
+            val code = c.responseCode
+            if (code == 404) throw MissingRoute()
+            if (code == 401 || code == 403) throw BadToken("The PC rejected the pairing token.")
+            if (c.contentLengthLong > 524288) throw Unreachable("Subtitle response too large.")
+            val out = java.io.ByteArrayOutputStream()
+            (if (code in 200..299) c.inputStream else c.errorStream).use { input ->
+                requireNotNull(input)
+                val buf = ByteArray(4096)
+                while (true) {
+                    val n = input.read(buf); if (n < 0) break
+                    if (out.size() + n > 524288) throw Unreachable("Subtitle response too large.")
+                    out.write(buf,0,n)
+                }
+            }
+            val result = JSONObject(out.toString("UTF-8"))
+            if (code !in 200..299) {
+                if (!result.optBoolean("unknown", true)) throw SubtitleRejected(result.optString("error","Selection unavailable"))
+                throw Unreachable("Couldn't confirm the subtitle change.")
+            }
+            return result
+        } finally { stopper.cancel(false); c.disconnect(); deadline.shutdownNow() }
+    }
+
+    data class SubtitleFile(val id: String, val name: String, val trackIds: List<Int> = emptyList())
+    data class SubtitleFolder(val mediaId: String, val files: List<SubtitleFile>, val unavailable: Boolean, val truncated: Boolean = false)
+    fun subtitleFiles(host: String, port: Int, token: String): SubtitleFolder {
+        val json = subtitleRequest(host, port, token, "/subtitles/list")
+        val arr = json.getJSONArray("files")
+        require(arr.length() <= 200) { "Too many subtitle files" }
+        return SubtitleFolder(json.optString("mediaId"), (0 until arr.length()).map {
+            val item = arr.getJSONObject(it)
+            require(item.getString("name").length <= 255 && item.getString("id").length <= 64)
+            val ids = item.optJSONArray("trackIds")
+            require((ids?.length() ?: 0) <= 200)
+            SubtitleFile(item.getString("id"), item.getString("name"), if (ids == null) emptyList() else (0 until ids.length()).map { ids.getInt(it) })
+        }, json.optBoolean("unavailable"), json.optBoolean("truncated"))
+    }
+    fun loadSubtitle(host: String, port: Int, token: String, mediaId: String, id: String): Boolean {
+        val json = subtitleRequest(host,port,token,"/subtitles/load",JSONObject().put("mediaId",mediaId).put("id",id),55000)
+        return json.optBoolean("ok") && !json.optBoolean("woke")
+    }
+
+    fun subtitleMedia(host: String, port: Int, token: String): String =
+        subtitleRequest(host,port,token,"/subtitles/media").getString("mediaId")
+
+    /** False only for an explicit missing route. Never bypass an in-flight helper
+     * operation with a direct VLC command after a timeout or an auth failure. */
+    fun selectSubtitle(host: String, port: Int, token: String, trackId: Int, mediaId: String = ""): Boolean = try {
+        val json = subtitleRequest(host,port,token,"/subtitles/select",JSONObject().put("trackId",trackId).put("mediaId",mediaId),50000)
+        if (json.optBoolean("woke")) throw Unreachable("Screen woken. Tap the subtitle again.")
+        if (!json.optBoolean("ok")) throw Unreachable("Couldn't change subtitles.")
+        true
+    } catch (_: MissingRoute) { false }
+
     /** The movies folder as set on the PC; null when the helper can't be asked (too old or down). */
     fun getMoviesFolder(host: String, port: Int, token: String): String? = try {
         get(host, port, "/config", token).optString("moviesFolder", "")
     } catch (e: Exception) { null }
+
+    /** Strict variant: throws on read failure. Blank means the PC provably has no
+     *  folder configured - unlike a null from [getMoviesFolder], which also covers
+     *  "could not read", and must never be treated as permission to overwrite. */
+    fun getMoviesFolderStrict(host: String, port: Int, token: String): String =
+        get(host, port, "/config", token).optString("moviesFolder", "")
 
     /** One level of the PC's movies folder, listed by the helper (works with VLC closed). */
     fun listMovies(host: String, port: Int, token: String, relPath: String): List<Pair<String, Boolean>> {
@@ -205,12 +281,26 @@ object HelperClient {
         return if (resp.optBoolean("ok")) null else resp.optString("reason").ifBlank { null }
     }
 
+    /** Keep-awake preference for the PC. Best-effort: helpers that don't know the key
+     * leave the movies folder untouched (a missing moviesFolder fails before anything is
+     * written) and ignore it. */
+    fun setKeepAwake(host: String, port: Int, token: String, keepAwake: Boolean) =
+        post(host, port, "/config", JSONObject().put("keepAwake", keepAwake), token)
+
+    /** Read the shared settings back. Helpers without volumeOsd leave the key absent. */
+    fun getConfig(host: String, port: Int, token: String): JSONObject =
+        get(host, port, "/config", token)
+
+    /** Toggle the PC volume overlay. Helpers without it ignore the unknown config key. */
+    fun setVolumeOsd(host: String, port: Int, token: String, on: Boolean) =
+        post(host, port, "/config", JSONObject().put("volumeOsd", on), token)
+
     /** Save the movies folder on the PC (the helper owns it; both sides can set it). */
     fun setMoviesFolder(host: String, port: Int, token: String, folder: String) =
         post(host, port, "/config", JSONObject().put("moviesFolder", folder), token)
 
     /**
-     * Trade a one-time 6-digit code (shown on the PC) for the long-lived pairing token.
+     * Trade a one-time code (shown on the PC) for the long-lived pairing token.
      * Returns the token and the PC's name.
      */
     /** What a successful pairing returns. vlcPassword/vlcPending exist on helper 1.7+:
@@ -412,6 +502,24 @@ object HelperClient {
 
     fun volumeMute(host: String, port: Int, token: String, mute: Boolean) =
         post(host, port, "/volume/mute", JSONObject().put("mute", mute), token)
+
+    /** True when the PC's screen is dark - or when we can't find out, which includes an
+     * unreachable helper AND an unpaired phone (fail-safe: the tap becomes wake-only
+     * rather than firing blind; without a pairing there is no way to know the screen,
+     * so the strict rule is never to send the original action on an unknown state). */
+    fun screenIsDark(host: String, port: Int, token: String): Boolean {
+        if (token.isBlank()) return true
+        return try {
+            get(host, port, "/screen-state", token, 1500).optBoolean("dark", true)
+        } catch (e: Exception) { true }
+    }
+
+    /** Ask the PC to bring its screen back (its idle timer shut it off). Fire-and-forget;
+     * failure means nothing - the laptop may simply be off. */
+    fun wakeDisplay(host: String, port: Int, token: String) {
+        if (token.isBlank()) return
+        try { post(host, port, "/wake-display", JSONObject(), token, 1500) } catch (_: Exception) {}
+    }
 
     /** A named key: "enter", "backspace", "escape", "space", "tab", "up", "down", "left", "right". */
     fun key(host: String, port: Int, token: String, key: String) =
