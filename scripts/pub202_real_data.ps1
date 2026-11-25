@@ -313,7 +313,9 @@ try {
     if ($paired2 -notmatch 'dpapi:' -or $paired2.Contains($token) -or $e2.name -ne $entries[0].name -or @($paired2 | ConvertFrom-Json).Count -ne 1) { throw 'paired.json changed shape or lost the phone after the candidate ran' }
     Note 'paired_after_candidate_ran' 'PROVEN (same entry name, still DPAPI-protected, plain token absent, real token authenticated with 200)'
     $s1 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
-    Note 'settings_mtime_before_after_candidate' "before $mtBefore after $((Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o')) ($(if ((Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o') -ne $mtBefore) { 'file was rewritten' } else { 'file not rewritten' }))"
+    $mtAfter = (Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o')
+    $rewritten = if ($mtAfter -ne $mtBefore) { 'file was rewritten' } else { 'file not rewritten' }
+    Note 'settings_mtime_before_after_candidate' "before $mtBefore after $mtAfter ($rewritten)"
     if ($s1.ShowSpeed -ne $speedAfter -or $s1.LibraryFolder -ne $lib) { throw "settings changed after the candidate ran (ShowSpeed $($s1.ShowSpeed) want $speedAfter)" }
     # Every setting EXCEPT ShellBounds must be exactly unchanged. ShellBounds (remembered window geometry, a persisted
     # preference) is classified separately below so that its outcome never hides the other checks, including history.
