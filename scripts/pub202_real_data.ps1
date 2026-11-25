@@ -329,6 +329,9 @@ try {
     }
     Note 'settings_after_candidate_ran' "PROVEN (ShowSpeed $speedAfter, LibraryFolder and all $others non-ShellBounds values exactly unchanged; ShellBounds classified separately)"
     $shellFail = $null
+    $shellProven = $false
+    $dpi = try { (Get-ItemProperty 'HKCU:\Control Panel\Desktop\WindowMetrics' -ErrorAction Stop).AppliedDPI } catch { 'unknown' }
+    Note 'display_dpi' "AppliedDPI $dpi (96 = 100%; the script reads the virtual screen in pixels and the app works in DIPs, so the expected value is only comparable at 96)"
     if ($null -eq $s0.PSObject.Properties['ShellBounds']) {
         Note 'shellbounds_before_absent' "the pre-upgrade app wrote no ShellBounds; after: '$($s1.ShellBounds)' (nothing to preserve)"
     }
@@ -365,7 +368,8 @@ try {
             }
         }
         Note 'shellbounds_before_after' "before '$beforeS' after '$afterS' class=$class sane=$sane virtual-screen $($vs.Left),$($vs.Top),$($vs.Width),$($vs.Height) expected-if-reapplied '$expected' (defaults: Home 1280x800 CenterScreen, player 1920x1080)"
-        if ($class -notin 'unchanged', 'reapplied-clamped-to-this-desktop' -or -not $sane) { $shellFail = "ShellBounds after the candidate ran: class=$class sane=$sane before '$beforeS' after '$afterS' (separate finding: not treated as pass)" }
+        if ($class -notin 'unchanged', 'reapplied-clamped-to-this-desktop' -or -not $sane) { $shellFail = "ShellBounds after the candidate ran: class=$class sane=$sane dpi=$dpi before '$beforeS' after '$afterS' (separate finding: not treated as pass; Home and the player window share this one key, last save wins)" }
+        else { $shellProven = $true }
     }
     $item1 = (Get-Content $histPath -Raw | ConvertFrom-Json).$key
     if (-not $item1) { throw 'the history entry is gone after the candidate ran' }
@@ -374,7 +378,8 @@ try {
     }
     Note 'history_after_candidate_ran' "PROVEN (PositionMs $($item1.PositionMs), DurationMs $($item1.DurationMs), FileSize and ModifiedUtc exactly as the 2.0.2 app wrote them)"
     if ($shellFail) { throw $shellFail }
-    Note 'shellbounds_verdict' 'PROVEN (ShellBounds unchanged or re-applied and clamped to this desktop, and sane)'
+    if ($shellProven) { Note 'shellbounds_verdict' 'PROVEN only as string equality to the unchanged or clamped-before value on this runner (not that the app read it); sane' }
+    else { Note 'shellbounds_verdict' 'not evaluated: the pre-upgrade app wrote no ShellBounds' }
     $allAssertionsPassed = $true
 }
 finally {
