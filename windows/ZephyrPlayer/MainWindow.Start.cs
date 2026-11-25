@@ -131,11 +131,16 @@ namespace ZephyrPlayer
         /// <summary>Settings-write failure: the app's own dark dialog, not the stock light MessageBox.</summary>
         private void ShowSettingsWarning(string text, string caption)
         {
-            var dlg = FirewallSetup.NoteWindow(text, caption);
-            var owner = IsVisible ? this : System.Windows.Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && !ReferenceEquals(w, dlg));
-            if (owner != null) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
-            SettingsWarningShown?.Invoke(dlg);
-            dlg.ShowDialog();
+            // A warning about a failed save must never become a crash of its own: if the note cannot be built or shown, playback continues.
+            try
+            {
+                var dlg = FirewallSetup.NoteWindow(text, caption);
+                var owner = IsVisible ? this : System.Windows.Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && !ReferenceEquals(w, dlg));
+                if (owner != null) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+                SettingsWarningShown?.Invoke(dlg);
+                dlg.ShowDialog();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException || ex is System.ComponentModel.Win32Exception || ex is System.Runtime.InteropServices.ExternalException) { }
         }
 
         /// <summary>Test seam: the settings-write warning about to be shown.</summary>
