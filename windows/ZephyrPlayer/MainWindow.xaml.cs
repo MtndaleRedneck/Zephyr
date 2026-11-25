@@ -206,8 +206,15 @@ namespace ZephyrPlayer
             _player.Stop();
             _player.Media=null;
             _safeSource = source;
-            _player.Play(source.Media);
+            // Attach BEFORE Play: libVLC's Playing/Error events must reach this start's own handlers.
             AttachNativeStart(new NativeStart(generation, source));
+            _player.Play(source.Media);
+            _player.Mute = _playerMute;     // libVLC resets mute on a new Media
+            // The speed the bar shows (_rate) carries across starts. libVLC keeps the rate on the MediaPlayer and a new
+            // input inherits it; if this player ever reports another rate for the new media, the decoder is set back to
+            // what the bar shows (no reopen). RateAtHandoff records what libVLC reported.
+            RateAtHandoff = _player.Rate;
+            if (Math.Abs(RateAtHandoff - (float)_rate) > 0.001f) { _player.SetRate((float)_rate); RateReapplyCount++; }
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
             if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
@@ -371,7 +378,10 @@ namespace ZephyrPlayer
         {
             _seeking = false;
             if (!_opening && _player.Length > 0)
-                _player.Position = (float)(SeekBar.Value / 1000.0);
+            {
+                LastSeekFraction = SeekBar.Value / 1000.0;
+                _player.Position = (float)LastSeekFraction;
+            }
         }
 
         // ---------- play / pause / skips ----------
@@ -379,6 +389,7 @@ namespace ZephyrPlayer
         private void OnPlayPause(object sender, RoutedEventArgs e)
         {
             if (_opening) { PlayPauseRefusedCount++; return; }    // nothing reaches the old movie while a new start opens
+            PlayPauseHandedCount++;
             if (_player.IsPlaying) _player.SetPause(true);
             else if (_player.State == VLCState.Paused) _player.SetPause(false);
             UpdatePlayPauseGlyph();

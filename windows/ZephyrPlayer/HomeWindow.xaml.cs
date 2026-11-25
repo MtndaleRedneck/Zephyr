@@ -316,14 +316,26 @@ namespace ZephyrPlayer
                         if (img == null)
                         {
                             var full = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
+                            // 2.0.1: folder artwork first, then Windows' thumbnail, then our own
+                            // libVLC frame (cached) - Windows has none for most MKVs.
                             if (entry.Dir)
                             {
-                                var firstVideo = PeekFirstVideo(full);
-                                if (firstVideo != null) img = ShellThumbs.Get(firstVideo, 192);
+                                var art = VlcThumbs.FolderArt(full);
+                                if (art != null) img = VlcThumbs.LoadArt(art, 320);
+                                if (img == null)
+                                {
+                                    var firstVideo = PeekFirstVideo(full);
+                                    if (firstVideo != null)
+                                    {
+                                        img = ShellThumbs.Get(firstVideo, 256);
+                                        if (img == null && _loadDurations) img = VlcThumbs.Get(firstVideo, 320);
+                                    }
+                                }
                             }
                             else
                             {
                                 img = ShellThumbs.Get(full, 256);
+                                if (img == null && _loadDurations) img = VlcThumbs.Get(full, 320);
                             }
                         }
                     }

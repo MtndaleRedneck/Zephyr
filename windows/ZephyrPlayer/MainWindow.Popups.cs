@@ -395,8 +395,34 @@ namespace ZephyrPlayer
         {
             if (!_sleep.IsEndOfMovie) return;
             _sleep.Off(); _sleepEndGeneration = -1;
+            EndOfMovieDroppedCount++;
             RefreshSleepUi();
         }
+
+        /// <summary>Back/tray close: popups closed, timers stopped (the window itself is hidden by the App).</summary>
+        public void HideOverlayWindow() { ClosePopups(); _idleTimer.Stop(); _clock.Stop(); }
+        public void ReleasePlayback() { _idleTimer.Stop(); _clock.Stop(); _sleepTick.Stop(); StopPlaybackSource(); }
+
+        /// <summary>Test seam: the code-built elements (pop-ups, rows, error card) by their stable names; other names go to FindName.</summary>
+        internal object? NamedForTest(string name) => name switch
+        {
+            "SpeedPopup" => _speedPopup, "SleepPopup" => _sleepPopup, "SubtitlesPopup" => _subtitlesPopup,
+            "SleepRows" => _sleepRows, "SpeedChips" => _speedChips, "SpeedSlider" => _speedSlider,
+            "ErrorTitle" => _errorTitle, "ErrorMessage" => _errorMessage, "ErrorRetryButton" => _errorRetry, "ErrorBackButton" => _errorBack,
+            _ => FindName(name)
+        };
+
+        internal float RateAtHandoff { get; private set; } = 1f;
+        internal int RateReapplyCount { get; private set; }
+        internal int EndOfMovieDroppedCount { get; private set; }
+        internal int MediaEndedCount { get; private set; }
+        internal bool SleepTickRunning => _sleepTick.IsEnabled;
+        internal bool IsOpening => _opening;
+        internal object? CurrentMedia => _safeSource?.Media;
+        internal double LastSeekFraction { get; private set; } = -1;
+        internal int PlayPauseHandedCount { get; private set; }
+        /// <summary>Test seam: a key as the window's own PreviewKeyDown handler gets it.</summary>
+        internal void HandleKey(KeyEventArgs e) => OnPlayerKeyDown(this, e);
 
         /// <summary>Time is up: PAUSE and stay in the player (progress saved). Never stop, never leave for Home.</summary>
         private void SleepFire(string why)
@@ -414,7 +440,11 @@ namespace ZephyrPlayer
 
         private void OnMediaFinished()
         {
+            if (_nativeStart != null && _nativeStart.Waiting) return;      // EndReached before Playing is a failed start (FailNativeStart)
+            MediaEndedCount++;
+            ShowBarOnce();
             if (_sleep.IsEndOfMovie && _sleepEndGeneration == _playGeneration) SleepFire("end");
+            UpdatePlayPauseGlyph();
         }
 
         private void RefreshSleepUi()
