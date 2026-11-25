@@ -110,6 +110,17 @@ namespace ZephyrPlayer
             return true;
         }
 
+        /// <summary>Forget memory for phones whose token is no longer valid (revoked). Called from the
+        /// lease timer, so stale entries live at most one tick.</summary>
+        public void Prune(Func<string, bool> valid)
+        {
+            lock (_gate)
+            {
+                foreach (var m in new[] { _swallowedDowns, _deliveredDowns })
+                    foreach (var k in new List<string>(m.Keys)) if (!valid(k)) m.Remove(k);
+            }
+        }
+
         /// <summary>Drop all per-phone button memory (token revoked or lease expired).</summary>
         public void ForgetOwner(string owner)
         {

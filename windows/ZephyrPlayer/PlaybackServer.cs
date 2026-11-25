@@ -61,7 +61,7 @@ namespace ZephyrPlayer
             _onPair = onPair;
             _settings = settings ?? new PlayerSettings();
             _input = input;
-            if (input != null) { _inputLease = new InputLease(input); _inputTimer = new Timer(_ => { try { _inputLease.Expire(DateTime.UtcNow, _validateToken); } catch { } }, null, 500, 500); }
+            if (input != null) { _inputLease = new InputLease(input); _inputTimer = new Timer(_ => { try { _inputLease.Expire(DateTime.UtcNow, _validateToken); _display?.Prune(_validateToken); } catch { } }, null, 500, 500); }
             _control = control;
             _loopbackOnly = loopbackOnly;
             Port = port;

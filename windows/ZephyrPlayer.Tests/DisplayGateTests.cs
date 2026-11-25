@@ -92,6 +92,11 @@ namespace ZephyrPlayer.Tests
             Assert.True(gate.ShouldSwallowButton("A", "left", false));   // its own up is eaten
             gate.ForgetOwner("A");
             Assert.Equal(0, gate.SwallowedButtonCountForTests);
+            Assert.True(gate.ShouldSwallowButton("B", "left", true));
+            Assert.True(gate.ShouldSwallowButton("C", "right", true));
+            Assert.Equal(2, gate.SwallowedButtonCountForTests);
+            gate.Prune(t => t == "C");                                   // B was revoked
+            Assert.Equal(1, gate.SwallowedButtonCountForTests);
         }
 
         [Fact]
