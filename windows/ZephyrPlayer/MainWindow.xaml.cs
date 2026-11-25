@@ -301,11 +301,6 @@ namespace ZephyrPlayer
 
         private void OnStartOver(object sender, RoutedEventArgs e) => StartOver();
 
-        /// <summary>Poll/first-play mute application: a failed read (null) keeps
-        /// the player's CURRENT mute; only a successful read moves it. Pinned by
-        /// VolumeMuteTests.</summary>
-        internal static bool MuteAfterRead(bool current, bool? read) => read ?? current;
-
         // The player's mute as last APPLIED by this window. libvlc's Mute
         // read-back is unreliable with no media loaded or no audio device (it
         // returns false regardless of what was set), so preservation on a failed

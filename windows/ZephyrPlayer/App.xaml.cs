@@ -180,6 +180,9 @@ namespace ZephyrPlayer
                     _player!.PlayFromUrl(url, resume, Array.Empty<string>(), offerStartOver: resume.HasValue);
                 },
                 openPairing: ShowPairingWindow);
+            // One remembered window geometry for Home and the player window.
+            WindowGeometry.Attach(_home, settings);
+            WindowGeometry.Attach(_player, settings);
             _home.Closing += (_, ev) =>
             {
                 if (_reallyQuit) return; // real shutdown: let the window die

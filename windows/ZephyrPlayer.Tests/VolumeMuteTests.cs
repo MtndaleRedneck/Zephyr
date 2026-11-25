@@ -8,23 +8,12 @@ using Xunit;
 
 namespace ZephyrPlayer.Tests;
 
-// M2: a failed mute read must surface as UNKNOWN, never as "unmuted".
-//
-// Two levels, kept distinct on purpose:
-//  * MuteFromRead/MuteAfterRead tests pin the tri-state HELPER mappings. On the
-//    pre-fix tree they do not compile (the APIs did not exist) - that absence
-//    is a compile failure, NOT a behavioral reproduction of the bug.
-//  * The Sta() tests below reproduce the failure MODE behaviorally through the
-//    real MainWindow call sites (poll via UpdatePosition, and SharedMute),
-//    using the VolumeService override seam: a failed read must not move the
-//    player's mute. Under the pre-fix code path (player.Mute = GetMute() with
-//    GetMute() == false on failure) these scenarios would unmute the player.
-//    They assert MainWindow's TRACKED player mute (TrackedPlayerMute), not
-//    libvlc's Mute property: libvlc's read-back returns false whenever no
-//    media is loaded or no audio device exists (found on the CI runner,
-//    run 40964867086), which is exactly why the product tracks the applied
-//    value itself. Nothing here touches real audio hardware; no hardware
-//    proof is claimed.
+// 2.0.2 volume model: the player's OWN volume, 0-100 % on the
+// slider, with the Settings boost (100-200 %, kept) as extra decoder gain, and
+// the player's OWN mute. Windows' master volume and mute are never read or
+// written by the player, so a Windows-side state (or a failed Windows read) can
+// never move the player. The VolumeService helper mapping stays pinned below
+// because the service still exists (it no longer drives any UI).
 public class VolumeMuteTests
 {
     [Fact]
@@ -39,24 +28,20 @@ public class VolumeMuteTests
     {
         const int E_FAIL = unchecked((int)0x80004005);
         Assert.Null(VolumeService.MuteFromRead(E_FAIL, 0));
-        Assert.Null(VolumeService.MuteFromRead(E_FAIL, 1)); // even a stale "muted" bit on a failed call is unknown
+        Assert.Null(VolumeService.MuteFromRead(E_FAIL, 1));
     }
 
     [Fact]
-    public void MuteAfterRead_FailedRead_KeepsCurrentPlayerMute()
+    public void Gain_IsSliderTimesBoost_BoostKept()
     {
-        Assert.True(MainWindow.MuteAfterRead(true, null));   // was muted, read failed: STAY muted
-        Assert.False(MainWindow.MuteAfterRead(false, null)); // was unmuted, read failed: stay unmuted
+        Assert.Equal(62, MainWindow.GainFor(62, 100));
+        Assert.Equal(93, MainWindow.GainFor(62, 150));
+        Assert.Equal(200, MainWindow.GainFor(100, 200)); // Boost 200 % still doubles
+        Assert.Equal(0, MainWindow.GainFor(0, 200));
+        Assert.Equal(100, MainWindow.GainFor(150, 100)); // slider clamps at 100
     }
 
-    [Fact]
-    public void MuteAfterRead_SuccessfulRead_Wins()
-    {
-        Assert.True(MainWindow.MuteAfterRead(false, true));
-        Assert.False(MainWindow.MuteAfterRead(true, false));
-    }
-
-    private static void Sta(VolumeService volume, Action<MainWindow> body)
+    internal static void Sta(Action<MainWindow, PlayerSettings> body, VolumeService? volume = null)
     {
         string? error = null;
         var path = Path.Combine(Path.GetTempPath(), "zephyr-volmute-" + Guid.NewGuid().ToString("N") + ".json");
@@ -67,8 +52,9 @@ public class VolumeMuteTests
                 NativeVlc.Init();
                 var libvlc = new LibVLC();
                 var player = new MediaPlayer(libvlc);
-                var w = new MainWindow(libvlc, player, new PlayerSettings(path), volume);
-                body(w);
+                var settings = new PlayerSettings(path);
+                var w = new MainWindow(libvlc, player, settings, volume);
+                body(w, settings);
                 w.Close();
                 System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
             }
@@ -90,54 +76,95 @@ public class VolumeMuteTests
         typeof(MainWindow).GetMethod("UpdatePosition", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(w, null);
 
     [Fact]
-    public void SharedMute_FailedRead_PreservesPlayerMute()
+    public void Mute_IsThePlayersOwn_WindowsStateNeverMovesIt()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.Unknown }, w =>
+        foreach (var forced in new[] { VolumeService.ForcedMute.True, VolumeService.ForcedMute.False, VolumeService.ForcedMute.Unknown })
         {
-            w.TrackedPlayerMute = true;
-            Assert.True(w.SharedMute);   // failed read must not report "unmuted"
-            w.TrackedPlayerMute = false;
-            Assert.False(w.SharedMute);  // and must not report "muted" either
+            Sta((w, _) =>
+            {
+                w.TrackedPlayerMute = true;
+                InvokePoll(w);
+                Assert.True(w.TrackedPlayerMute);
+                Assert.True(w.SharedMute);
+                w.TrackedPlayerMute = false;
+                InvokePoll(w);
+                Assert.False(w.TrackedPlayerMute);
+                Assert.False(w.SharedMute);
+            }, new VolumeService { ForcedMuteOverride = forced });
+        }
+    }
+
+    // 2.0.2: a drag (dozens of slider steps) writes the settings file once, after the
+    // slider rests, and raises no settings Changed (no bar/library/Settings rebuild).
+    [Fact]
+    public void VolumeDrag_WritesSettingsOnce_AfterTheSliderRests_NoChangedEvent()
+    {
+        Sta((w, settings) =>
+        {
+            var changed = 0;
+            settings.Changed += (_, __) => changed++;
+            var writesBefore = w.VolumeSaveCount;
+            for (var v = 99; v >= 40; v--) w.SetVolumeTied(v);
+            Assert.Equal(writesBefore, w.VolumeSaveCount);
+            var until = Environment.TickCount64 + 3000;
+            while (w.VolumeSaveCount == writesBefore && Environment.TickCount64 < until)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => frame.Continue = false));
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+                Thread.Sleep(20);
+            }
+            Assert.Equal(writesBefore + 1, w.VolumeSaveCount);
+            Assert.Equal(40, settings.LastVolume);
+            Assert.Equal(0, changed);
+            // Nothing pending: a flush writes nothing more.
+            w.FlushVolumeSave();
+            Assert.Equal(writesBefore + 1, w.VolumeSaveCount);
         });
     }
 
     [Fact]
-    public void SharedMute_SuccessfulRead_Wins()
+    public void Slider_And_Phone_Drive_OwnVolume_Label_ShowsPercent()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.True }, w =>
+        Sta((w, settings) =>
         {
-            w.TrackedPlayerMute = false;
-            Assert.True(w.SharedMute);
-        });
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.False }, w =>
-        {
-            w.TrackedPlayerMute = true;
-            Assert.False(w.SharedMute);
-        });
-    }
-
-    [Fact]
-    public void Poll_FailedRead_KeepsPlayerMute_BothPolarities()
-    {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.Unknown }, w =>
-        {
-            w.TrackedPlayerMute = true;
-            InvokePoll(w);
-            Assert.True(w.TrackedPlayerMute);    // muted stays muted across a failed poll read
-            w.TrackedPlayerMute = false;
-            InvokePoll(w);
-            Assert.False(w.TrackedPlayerMute);   // unmuted stays unmuted
+            var label = (System.Windows.Controls.TextBlock)w.FindName("VolumeLabel")!;
+            w.SetVolumeTied(62);
+            Assert.Equal(62, w.SharedVolume);
+            Assert.Equal("62%", label.Text);
+            // 2.0.2: the remembered volume is saved once the slider rests, not per step.
+            Assert.NotEqual(62, settings.LastVolume);
+            w.FlushVolumeSave();
+            Assert.Equal(62, settings.LastVolume);
+            w.SetVolumeTied(140); // phone values clamp to 0-100
+            Assert.Equal(100, w.SharedVolume);
+            w.SetMuteTied(true);
+            Assert.Equal("Muted", label.Text);
+            Assert.True(((System.Windows.Controls.Slider)w.FindName("VolumeSlider")!).Opacity < 1);
+            w.SetMuteTied(false);
+            Assert.Equal("100%", label.Text);
+            var slider = (System.Windows.Controls.Slider)w.FindName("VolumeSlider")!;
+            Assert.Null(slider.ToolTip); // no "matches Windows" tooltip
         });
     }
 
     [Fact]
-    public void Poll_SuccessfulRead_MovesPlayerMute()
+    public void UpDown_Step_Volume_By_Five_And_Clamp()
     {
-        Sta(new VolumeService { ForcedMuteOverride = VolumeService.ForcedMute.True }, w =>
+        Sta((w, _) =>
         {
-            w.TrackedPlayerMute = false;
-            InvokePoll(w);
-            Assert.True(w.TrackedPlayerMute);
+            w.SetVolumeTied(62);
+            w.StepVolume(+MainWindow.VolumeStep);
+            Assert.Equal(67, w.SharedVolume);
+            w.StepVolume(-MainWindow.VolumeStep);
+            w.StepVolume(-MainWindow.VolumeStep);
+            Assert.Equal(57, w.SharedVolume);
+            w.SetVolumeTied(98);
+            w.StepVolume(+MainWindow.VolumeStep);
+            Assert.Equal(100, w.SharedVolume);
+            w.SetVolumeTied(3);
+            w.StepVolume(-MainWindow.VolumeStep);
+            Assert.Equal(0, w.SharedVolume);
         });
     }
 }
