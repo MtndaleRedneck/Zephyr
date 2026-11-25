@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -37,7 +38,7 @@ namespace ZephyrPlayer
             _gate = gate;
             _store = store;
             _pairStarted = pairStarted;
-            _storeChanged = (_, __) => Dispatcher.InvokeAsync(() => { if (_codeShowing && _store.Count > _countAtShow) OnPairSucceeded(); else RefreshPhones(); });
+            _storeChanged = (_, __) => Dispatcher.InvokeAsync(() => { if (_codeShowing && HasNewPhone()) OnPairSucceeded(); else RefreshPhones(); });
             _tick.Tick += (_, __) => { TickCountdown(); RefreshPhones(); };
             Loaded += (_, __) =>
             {
@@ -95,7 +96,8 @@ namespace ZephyrPlayer
         private bool _codeShowing;
         // Success is a new phone in the store, never just "the code went away" (a lock, expiry
         // or cancel also clears the code).
-        private int _countAtShow;
+        private HashSet<string> _tokensAtShow = new();
+        private bool HasNewPhone() => _store.Entries().Any(e => !_tokensAtShow.Contains(e.Token));
 
         private void OnPair(object sender, RoutedEventArgs e)
         {
@@ -153,7 +155,7 @@ namespace ZephyrPlayer
 
         private void ShowCode()
         {
-            if (!_codeShowing) _countAtShow = _store.Count;
+            if (!_codeShowing) _tokensAtShow = _store.Entries().Select(e => e.Token).ToHashSet();
             _codeShowing = true;
             CodePanel.Visibility = Visibility.Visible;
             // The code is already live: a Pair button that only re-shows the same
