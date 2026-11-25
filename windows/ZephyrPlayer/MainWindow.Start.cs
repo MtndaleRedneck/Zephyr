@@ -59,6 +59,8 @@ namespace ZephyrPlayer
 
         private void InitStartUi()
         {
+            // A settings file that cannot be written (disk full, no access) is said once instead of closing the app.
+            _settings.SaveFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Your settings could not be saved. The settings file could not be written (the disk may be full or the folder not writable). Zephyr Player keeps working; changes may not be kept after you quit.", "Settings could not be saved"));
             var spinner = new System.Windows.Shapes.Path { Data = Geometry.Parse("M12,3 A9,9 0 1 1 3,12"), Stroke = Orange, StrokeThickness = 3, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, Width = 44, Height = 44, Stretch = Stretch.Uniform, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = _spinnerTurn, HorizontalAlignment = HorizontalAlignment.Center };
             _loadingTitle = Label("", 15, true); _loadingTitle.HorizontalAlignment = HorizontalAlignment.Center; _loadingTitle.Margin = new Thickness(0, 14, 0, 0);
             _loadingDetail = Label("Opening...", 13, false, new SolidColorBrush(Color.FromRgb(0x96, 0x96, 0xA0))); _loadingDetail.HorizontalAlignment = HorizontalAlignment.Center; _loadingDetail.Margin = new Thickness(0, 4, 0, 0);
@@ -125,6 +127,19 @@ namespace ZephyrPlayer
             finally { await Dispatcher.InvokeAsync(() => { if (ReferenceEquals(_preparation, timeout)) _preparation = null; }); }
             await Dispatcher.InvokeAsync(() => CompletePreparedPlayback(source, generation, timeout.IsCancellationRequested, url, positionSeconds));
         }
+
+        /// <summary>Settings-write failure: the app's own dark dialog, not the stock light MessageBox.</summary>
+        private void ShowSettingsWarning(string text, string caption)
+        {
+            var dlg = FirewallSetup.NoteWindow(text, caption);
+            var owner = IsVisible ? this : System.Windows.Application.Current?.Windows.OfType<Window>().FirstOrDefault(w => w.IsVisible && !ReferenceEquals(w, dlg));
+            if (owner != null) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            SettingsWarningShown?.Invoke(dlg);
+            dlg.ShowDialog();
+        }
+
+        /// <summary>Test seam: the settings-write warning about to be shown.</summary>
+        internal static event Action<Window>? SettingsWarningShown;
 
         internal SafeMediaSource PrepareSource(string url, string[] subtitles, System.Threading.CancellationToken token)
         {

@@ -58,6 +58,32 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void UnreadableHistory_WhenItCannotBeMovedAside_IsNeverOverwritten()
+        {
+            var movie = Path.Combine(_dir, "movie.mp4");
+            File.WriteAllBytes(movie, new byte[2048]);
+            var hist = Path.Combine(_dir, "playback-history.json");
+            var damaged = "{ not json \u00e9 ";
+            File.WriteAllText(hist, damaged);
+            var h = new PlaybackHistory(hist);
+            // Another process holds the damaged file open with no sharing: the move-aside fails on Windows.
+            using (var held = new FileStream(hist, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                var ex = Record.Exception(() => h.Save(movie, 600_000, 5_400_000));
+                Assert.Null(ex);                                   // never throws into the player
+                Assert.Empty(Directory.GetFiles(_dir, "playback-history.json.unreadable-*"));
+            }
+            Assert.Equal(damaged, File.ReadAllText(hist));         // the corrupt file is untouched: not replaced by a new history
+            Assert.Null(h.Get(movie));                             // and nothing was saved over it
+            // Once the file can be moved aside again, the next save preserves it and history works.
+            h.Save(movie, 600_000, 5_400_000);
+            var aside = Directory.GetFiles(_dir, "playback-history.json.unreadable-*");
+            Assert.Single(aside);
+            Assert.Equal(damaged, File.ReadAllText(aside[0]));
+            Assert.Equal(600L, PlaybackHistory.ResumeSeconds(h.Get(movie)));
+        }
+
+        [Fact]
         public void MissingHistory_IsEmpty_AndFirstSaveCreatesIt_WithNothingMovedAside()
         {
             var movie = Path.Combine(_dir, "movie.mp4");
