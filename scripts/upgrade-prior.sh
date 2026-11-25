@@ -119,6 +119,14 @@ retry_window_only() { # $1 class#method, $2 result name
   for part in rawlog.txt syslog.txt focus.txt ui.xml anr-log.txt; do cp "instrument-results/$2-$part" "instrument-results/$2-first-$part" 2>/dev/null || true; done
   run "$1" "$2"
 }
+# Public-log-safe prefs diagnostic: file names, sizes and times of the app's shared_prefs, plus ONLY these explicit fixture keys
+# of the plain "settings" file (documentation address and demo values written by the fixture; no token, no secret file content).
+prefs_diag() { # $1 = label
+  echo "== prefs diagnostic: $1"
+  adb shell run-as $PKG ls -l shared_prefs 2>&1 | sed 's/^/  /' | head -20
+  adb shell run-as $PKG cat shared_prefs/settings.xml 2>&1 | grep -E 'name="(zephyrHost|zephyrPort|zephyrPcName|selectedSource|skipMainSec|skipSecondarySec|haptics)"' | sed 's/^/  /' | head -10 || true
+  echo "  (end $1)"
+}
 adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: old install"; exit 1; }
 adb install -r /tmp/up/old-test.apk || { echo "UPGRADE FAIL: old test install"; exit 1; }
@@ -129,6 +137,7 @@ green_must_be_clean seed "pass 1 seed"
 grep -q "^OK (1 test)" instrument-results/seed.txt || { echo "UPGRADE FAIL: seed did not pass on the old install"; exit 1; }
 # Make sure the seeded prefs are on disk before the install replaces the app.
 adb shell sync; sleep 3
+prefs_diag "pass 1 after seed, before the new build is installed"
 # New build over the old one, NO uninstall (this is the user's update path).
 adb install -r /tmp/up/new-app.apk || { echo "UPGRADE FAIL: new build does not install over the old one"; exit 1; }
 adb install -r /tmp/up/new-test.apk || { echo "UPGRADE FAIL: new test install"; exit 1; }
@@ -137,6 +146,7 @@ echo "versionCode old=$OLD_VC new=$NEW_VC"
 need_upgrade "$OLD_VC" "$NEW_VC" "pass 1"
 # A fresh headless emulator can still be on the lock screen; wake and dismiss it so a window check is about the app.
 adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
+prefs_diag "pass 1 after install -r, before verify"
 run com.bingemote.ZephyrUpgradeFixtureTest#verify verify
 retry_window_only com.bingemote.ZephyrUpgradeFixtureTest#verify verify
 green_must_be_clean verify "pass 1 verify"

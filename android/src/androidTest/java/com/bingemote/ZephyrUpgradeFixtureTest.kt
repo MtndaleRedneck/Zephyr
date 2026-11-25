@@ -31,6 +31,9 @@ class ZephyrUpgradeFixtureTest {
         s.skipSecondarySec = 60
         s.haptics = false
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
+        // Durable before the script installs the new build: the setters above use apply() (async). commit() on the same
+        // prefs file returns only after every pending edit is written, and must report success.
+        assertTrue("seed prefs commit refused", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit().commit())
     }
 
     @Test

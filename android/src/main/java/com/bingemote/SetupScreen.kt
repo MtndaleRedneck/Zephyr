@@ -183,9 +183,8 @@ fun SetupScreen(
     ) {
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Set up Zephyr VLC Remote", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            Text("Set up Zephyr VLC Remote", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             if (onCancel != null) {
-                Spacer(Modifier.weight(1f))
                 TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
             }
         }
