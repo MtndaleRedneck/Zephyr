@@ -8,9 +8,39 @@ if (-not (Test-Path $exe)) { throw "helper exe missing at $exe" }
 
 # Assertions are counted: a run that exercised nothing must FAIL, never pass.
 $script:assertCount = 0
-function Redact-Config([string]$t) {
-    # Job logs are public. Never print token / password values from a config file.
-    return ($t -replace '("(?:token|pendingVlcPassword)"\s*:\s*")[^"]*(")', '$1<redacted>$2')
+# Job logs are PUBLIC. Nothing that can carry a token, password, DPAPI blob or config content may reach them.
+# Redact-Text: last-line defense for free text (helper.log lines, errors): masks DPAPI blobs, long hex/base64-ish runs
+# and the value of any token/password-like JSON field (escaped quotes included).
+function Redact-Text([string]$t) {
+    if ($null -eq $t) { return '' }
+    $t = $t -replace '"(?<k>[^"\\]*(?:token|password|secret)[^"\\]*)"\s*:\s*"(?:\\.|[^"\\])*"', '"${k}":"<redacted>"'
+    $t = $t -replace 'dpapi:[A-Za-z0-9+/=_\\.-]+', 'dpapi:<redacted>'
+    $t = $t -replace '\b[0-9A-Fa-f]{32,}\b', '<hex-redacted>'
+    return $t
+}
+function Redact-Config([string]$t) { return (Redact-Text $t) }
+# Safe-Body: allowlist projection of an HTTP response body. Only these keys print their value; every other key prints
+# its name and value length. Non-JSON bodies are redacted text, truncated.
+function Safe-Body($body) {
+    if ($null -eq $body) { return '<no body>' }
+    $allow = @('ok','detail','error','name','code','configured','vlcPending','ask','position','length','atRoot','locked','retryAfter')
+    try {
+        $j = $body | ConvertFrom-Json -ErrorAction Stop
+        if ($j -is [System.Array]) { return "<json array of $($j.Count)>" }
+        $parts = foreach ($pr in $j.PSObject.Properties) {
+            if ($allow -contains $pr.Name) { "$($pr.Name)=$(Redact-Text ($pr.Value | ConvertTo-Json -Compress -Depth 4))" } else { "$($pr.Name)=<$((("$($pr.Value)").Length)) chars withheld>" }
+        }
+        return '{' + ($parts -join ', ') + '}'
+    } catch {
+        $r = Redact-Text ([string]$body)
+        if ($r.Length -gt 200) { $r = $r.Substring(0,200) + '...' }
+        return $r
+    }
+}
+function Show-Log([string]$path, [int]$tail) {
+    if (-not (Test-Path $path)) { return }
+    $lines = if ($tail -gt 0) { Get-Content $path -Tail $tail } else { Get-Content $path }
+    foreach ($l in $lines) { Write-Host (Redact-Text $l) }
 }
 function Invoke-Helper($path, $body, $token) {
     $headers = @{}
@@ -51,7 +81,7 @@ function Wait-HelperListening([int]$pidToServe, [string]$what) {
     Write-Host "== firewall rule dump (Zephyr VLC Remote) =="
     netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Select-String -Pattern 'Rule Name|Enabled|Direction|Profiles|Action|Protocol|LocalPort|RemoteIP|Program'
     $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
-    if (Test-Path $logf) { Write-Host "== helper.log tail =="; Get-Content $logf -Tail 60 }
+    if (Test-Path $logf) { Write-Host "== helper.log tail =="; Show-Log $logf 60 }
     throw $what
 }
 
@@ -129,7 +159,7 @@ $fw0 = Start-Process $installed -ArgumentList "--install-firewall `"$sid0`" `"$d
 if ($fw0.ExitCode -ne 0) {
     Write-Host "install-firewall exit: $($fw0.ExitCode)"
     $log0 = Join-Path $data0 'helper.log'
-    if (Test-Path $log0) { Write-Host "== helper.log tail =="; Get-Content $log0 -Tail 20 }
+    if (Test-Path $log0) { Write-Host "== helper.log tail =="; Show-Log $log0 20 }
     $acl0 = netsh http show urlacl | Out-String
     $block0 = ($acl0 -split "\r?\n\r?\n" | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
     Write-Host "8492 reservation after setup:"; Write-Host $block0
@@ -274,13 +304,13 @@ try {
     Assert ([int]$rHost.StatusCode -eq 403) "a rebound DNS name in Host is refused"
 
     $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
-    Write-Host "right-code pair -> $($r.code): $($r.body)"
+    Write-Host "right-code pair -> $($r.code): $(Safe-Body $r.body)"
     if ($r.code -ne 200) {
         Get-Process | Where-Object { $_.ProcessName -like '*ZephyrVlcRemote*' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) path=$($_.Path)" }
         $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
-        if (Test-Path $logf) { Write-Host "== helper.log =="; Get-Content $logf }
+        if (Test-Path $logf) { Write-Host "== helper.log =="; Show-Log $logf 0 }
         $cfgf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json'
-        if (Test-Path $cfgf) { Write-Host "== config.json =="; Redact-Config (Get-Content $cfgf -Raw) }
+        if (Test-Path $cfgf) { Write-Host "== config.json =="; Write-Host (Redact-Config (Get-Content $cfgf -Raw)) }
     }
     Assert ($r.code -eq 200) "pair with right code is 200"
     $paired = $r.body | ConvertFrom-Json
@@ -355,7 +385,7 @@ try {
     } else {
         # Headless runners have no audio device; the helper must say so clearly, not crash.
         Assert ($r.code -eq 503) "volume/get without an audio device is 503, got $($r.code)"
-        Assert ($r.body -match 'no audio device') "503 body names the reason: $($r.body)"
+        Assert ($r.body -match 'no audio device') "503 body names the reason: $(Safe-Body $r.body)"
         Write-Host "no audio device on this machine; 503 path verified"
     }
 
@@ -523,7 +553,7 @@ try {
     $r = Invoke-Helper '/movies/play' '{"path":"../Windows/win.ini"}' $token
     Assert ($r.code -eq 400) "play outside the folder is refused (got $($r.code))"
     $r = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
-    Assert ($r.code -eq 200) "play starts VLC: $($r.body)"
+    Assert ($r.code -eq 200) "play starts VLC: $(Safe-Body $r.body)"
     $vlcUp = $false
     foreach ($i in 1..20) {
         if (Get-Process vlc -ErrorAction SilentlyContinue) { $vlcUp = $true; break }
@@ -546,7 +576,7 @@ try {
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the resume check"
     $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
-    Write-Host "resume play answer: $($rResume.code) $($rResume.body)"
+    Write-Host "resume play answer: $($rResume.code) $(Safe-Body $rResume.body)"
     Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
     Assert ($rResume.body -match '"position":120') "the saved place's position comes back"
 
@@ -569,10 +599,10 @@ try {
         # Forensics before failing (no config content; the helper log carries no tokens): who is alive,
         # what the helper logged, and whether Windows recorded a VLC crash.
         Write-Host "== forensics: VLC did not appear after the long-clip play =="
-        Write-Host "play answer: $($rLong.code) $($rLong.body)"
+        Write-Host "play answer: $($rLong.code) $(Safe-Body $rLong.body)"
         Get-Process | Where-Object { $_.ProcessName -match 'vlc|Zephyr' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) exited=$($_.HasExited)" }
         $hl = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
-        if (Test-Path $hl) { Write-Host "== helper.log tail =="; Get-Content $hl -Tail 60 }
+        if (Test-Path $hl) { Write-Host "== helper.log tail =="; Show-Log $hl 60 }
         try { Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -MaxEvents 40 -ErrorAction Stop |
               Where-Object { $_.Message -match 'vlc' } | ForEach-Object { Write-Host "event $($_.TimeCreated) $($_.ProviderName): $(($_.Message -split "`n")[0..2] -join ' | ')" } } catch { Write-Host "event log read: $($_.Exception.Message)" }
         Write-Host "long clip present: $(Test-Path (Join-Path $movies 'long.mkv')) size=$((Get-Item (Join-Path $movies 'long.mkv') -ErrorAction SilentlyContinue).Length)"
@@ -602,7 +632,7 @@ try {
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart after the app's own save"
     $rResume2 = Invoke-Helper '/movies/play' '{"path":"long.mkv"}' $token
-    Write-Host "end-to-end resume play answer: $($rResume2.code) $($rResume2.body)"
+    Write-Host "end-to-end resume play answer: $($rResume2.code) $(Safe-Body $rResume2.body)"
     Assert ($rResume2.body -match '"ask"') "end-to-end resume: the helper's own saved place survives a restart"
     Assert ($rResume2.body -match '"position":1[0-4][0-9]') "end-to-end resume: the saved position is the one VLC reported"
     Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -770,11 +800,11 @@ try {
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the expired-code check"
     $rEx1 = Invoke-Helper '/pair' '{"code":"4242"}' $null
-    Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code): $($rEx1.body))"
+    Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code): $(Safe-Body $rEx1.body))"
     $rEx2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rEx2.code -eq 410) "a retried expired code stays 410"
     $rEx3 = Invoke-Helper '/pair' '{"code":"999999"}' $null
-    Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code): $($rEx3.body))"
+    Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code): $(Safe-Body $rEx3.body))"
     $rEx4 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rEx4.code -eq 410) "the expired code still answers 410 after the guess - no lock was spent"
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = $null
