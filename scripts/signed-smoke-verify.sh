@@ -3,7 +3,7 @@
 set -euo pipefail
 cd /tmp/zs
 BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-sig() { # file expected_signer -> exactly one signer, exactly one cert, equal to expected, v3 or v2 verified, no lineage
+sig() { # file expected_signer -> exactly one signer, exactly one cert, equal to expected, v3 or v2 verified
   local out; out=$("$BT/apksigner" verify -v --print-certs "$1")
   echo "$out" | sed 's/^/  /'
   [ "$(echo "$out" | grep -c '^Number of signers: 1$')" = 1 ] || { echo "ASSERT FAIL: $1 is not signed by exactly one signer"; exit 1; }
@@ -12,7 +12,8 @@ sig() { # file expected_signer -> exactly one signer, exactly one cert, equal to
   echo "$out" | grep -Eq 'Verified using v(2|3) scheme \(APK Signature Scheme v[23]\): true' || { echo "ASSERT FAIL: $1 has no verified v2/v3 signature"; exit 1; }
 }
 badge() { # file name code
-  local b; b=$("$BT/aapt2" dump badging "$1" | head -1)
+  local full b; full=$("$BT/aapt2" dump badging "$1")   # whole output captured: a producer failure aborts here (set -e)
+  b=${full%%$'\n'*}                                    # first line, taken in the shell, no pipe
   echo "  $b"
   echo "$b" | grep -q "package: name='com.zephyr.remote' versionCode='$3' versionName='$2'" || { echo "ASSERT FAIL: $1 is not com.zephyr.remote $2 ($3)"; exit 1; }
 }
