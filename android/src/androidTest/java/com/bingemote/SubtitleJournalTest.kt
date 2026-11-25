@@ -75,4 +75,10 @@ class SubtitleJournalTest {
         assertTrue(SubtitleJournal(ctx).isDegraded("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
     }
 
+    @Test fun overlongMediaIsRejectedAtBeginAndJournalStaysReadable(){
+        reset();val journal=SubtitleJournal(ctx)
+        try { journal.begin("pair","m".repeat(65)); fail("expected rejection") } catch(_:IllegalStateException){}
+        val ok=journal.begin("pair","m".repeat(64));assertTrue(journal.finish(ok,false))
+        assertTrue(SubtitleJournal(ctx).entries("pair").isEmpty())
+    }
 }
