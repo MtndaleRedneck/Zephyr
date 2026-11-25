@@ -205,9 +205,20 @@ class AutomaticOnlySetupTest {
         val fieldBefore = bounds(fieldLabel)
         val buttonBefore = bounds("Use this address")
         val cardLabelBefore = bounds(PAIR_CODE_LABEL)
-        assertTrue("pair-code label not fully inside the app window before typing",
-            cardLabelBefore.top >= appBounds.top && cardLabelBefore.bottom <= appBounds.bottom &&
-                cardLabelBefore.height() > 0)
+        // Counterexample the clearance must cover (review): if the bug under test is present, typing
+        // does not clear the selection, and SetupScreen (L284-286) inserts a "Selected: host:port" row
+        // between the button and the card, which moves the card DOWN relative to the button. That row is
+        // a Spacer(8.dp) plus a Text(fontSize = 13.sp) with the same default text style as the address
+        // label, so its height is the address label's own measured height (this device's font scale and
+        // line height included) plus 8dp at this device's density. Require the card label to stay inside
+        // the window even after that insertion, so a still-present card could not be pushed out of the
+        // tree and read as "gone". The row text is one short line ("Selected: 192.0.2.20:8488").
+        val insertion = fieldBefore.height() +
+            Math.round(8 * ctx.resources.displayMetrics.density)
+        assertTrue("pair-code label not fully inside the app window before typing, with room for the Selected row " +
+            "(insertion=$insertion px): the same-viewport proof cannot be made (fail closed)",
+            cardLabelBefore.top >= appBounds.top && cardLabelBefore.height() > 0 &&
+                cardLabelBefore.bottom + insertion <= appBounds.bottom)
         val fields = device.findObjects(By.clazz("android.widget.EditText"))
         val addressField = fields.minBy { it.visibleBounds.top }
         addressField.text = "192.0.2.20"
@@ -245,13 +256,10 @@ class AutomaticOnlySetupTest {
         }
         if (imeShown()) { device.pressBack(); device.waitForIdle() }
         assertFalse("keyboard still shown - the card region may be covered", imeShown())
-        // The window must be the one observed before typing (no resize from the keyboard). The card's
-        // disappearance can legitimately move the anchors DOWN: the column is shorter and Compose
-        // clamps its scroll offset. So the anchors are not compared for equality (that could race the
-        // hide and fail red); instead, once the label is gone, the observed anchor shift delta is
-        // measured and the label's old bounds shifted by that same delta must still lie inside the
-        // window. A still-present card moves rigidly with the anchors, so it would then be on screen
-        // and in the tree: its absence is a positive observation of that region, with no scrolling.
+        // The window must be the one observed before typing (no resize from the keyboard).
+        // Clearance was proven BEFORE typing (above), not from a post-hide shift: when the card goes, the
+        // column shortens and Compose may clamp the scroll offset, so the anchors can move DOWN by up to
+        // the card's height; a shifted-old-bounds check would then false-red, so none is made.
         assertEquals("app window bounds changed after typing", appBounds,
             device.findObject(By.pkg(ctx.packageName))!!.visibleBounds)
         val gone = device.wait(Until.gone(By.text(PAIR_CODE_LABEL)), 10000)
@@ -268,8 +276,6 @@ class AutomaticOnlySetupTest {
         assertEquals("button did not move rigidly with the address label", buttonBefore.top + delta, buttonAfter.top)
         assertTrue("page moved UP while the card disappeared (delta=$delta): the old label region is not observed",
             delta >= 0)
-        assertTrue("the old label region (shifted by delta=$delta) is outside the window: absence proves nothing",
-            cardLabelBefore.bottom + delta <= appBounds.bottom)
         repeat(3) {
             if (!device.hasObject(By.text("Use this address"))) {
                 device.swipe(device.displayWidth / 2, device.displayHeight * 4 / 5,
