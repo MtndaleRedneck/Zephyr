@@ -22,7 +22,7 @@ namespace ZephyrPlayer
             VolumeSlider.Width = level >= 2 ? 56 : 110;
             VolumeSlider.Visibility = level >= 3 ? Visibility.Collapsed : Visibility.Visible;
             var speedOn = !PlayerBarLogic.IsNormalRate(_rate) && level < 4;
-            var sleepOn = _sleep.IsActive && level < 4;
+            var sleepOn = _sleepTimer.IsActive && level < 4;
             SpeedLabel.Visibility = speedOn ? Visibility.Visible : Visibility.Collapsed;
             SleepLabel.Visibility = sleepOn ? Visibility.Visible : Visibility.Collapsed;
         }

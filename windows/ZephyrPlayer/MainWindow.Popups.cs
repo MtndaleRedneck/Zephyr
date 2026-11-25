@@ -33,7 +33,7 @@ namespace ZephyrPlayer
         private bool _speedSync;
         private double _rate = 1.0;
         private int _subDelayMs;
-        private readonly SleepTimerState _sleep = new();
+        private readonly SleepTimerState _sleepTimer = new();
         private readonly DispatcherTimer _sleepTick = new() { Interval = TimeSpan.FromSeconds(1) };
         private readonly DispatcherTimer _osdTimer = new() { Interval = TimeSpan.FromSeconds(3) };
         private bool _restartNoticeOpen;
@@ -46,7 +46,7 @@ namespace ZephyrPlayer
         /// <summary>Test seam: when set, the restart notice goes here instead of a dialog.</summary>
         internal Action<string, string>? RestartNoticeOverride { get; set; }
         internal Func<DateTime> Clock { get; set; } = () => DateTime.UtcNow;
-        internal SleepTimerState Sleep => _sleep;
+        internal SleepTimerState Sleep => _sleepTimer;
         internal int SleepPausedCount { get; private set; }
         internal string? LastSleepFire { get; private set; }
         internal double CurrentRate => _rate;
@@ -376,15 +376,15 @@ namespace ZephyrPlayer
 
         internal void SetSleep(int minutes)
         {
-            if (minutes == 0) _sleep.Off(); else _sleep.Set(minutes, Clock());
+            if (minutes == 0) _sleepTimer.Off(); else _sleepTimer.Set(minutes, Clock());
             _sleepEndGeneration = minutes == SleepTimerState.EndOfMovie ? _playGeneration : -1;
-            if (_sleep.IsActive && !_sleep.IsEndOfMovie) _sleepTick.Start(); else _sleepTick.Stop();
+            if (_sleepTimer.IsActive && !_sleepTimer.IsEndOfMovie) _sleepTick.Start(); else _sleepTick.Stop();
             RefreshSleepUi();
         }
 
         internal void SleepTick()
         {
-            if (_sleep.IsDue(Clock())) { SleepFire("timer"); return; }
+            if (_sleepTimer.IsDue(Clock())) { SleepFire("timer"); return; }
             RefreshSleepUi();
         }
 
@@ -393,8 +393,8 @@ namespace ZephyrPlayer
         /// <summary>"End of this movie" belongs to the start it was chosen on; a new start drops it.</summary>
         private void DropEndOfMovieSleep()
         {
-            if (!_sleep.IsEndOfMovie) return;
-            _sleep.Off(); _sleepEndGeneration = -1;
+            if (!_sleepTimer.IsEndOfMovie) return;
+            _sleepTimer.Off(); _sleepEndGeneration = -1;
             EndOfMovieDroppedCount++;
             RefreshSleepUi();
         }
@@ -428,7 +428,7 @@ namespace ZephyrPlayer
             _sleepTick.Stop();
             if (_player.State is VLCState.Playing or VLCState.Buffering or VLCState.Opening) _player.SetPause(true);
             SavePlaybackProgress();
-            _sleep.Off(); _sleepEndGeneration = -1;
+            _sleepTimer.Off(); _sleepEndGeneration = -1;
             SleepPausedCount++; LastSleepFire = why;
             RefreshSleepUi();
             ShowBarOnce();
@@ -441,7 +441,7 @@ namespace ZephyrPlayer
             if (_nativeStart != null && _nativeStart.Waiting) return;      // EndReached before Playing is a failed start (FailNativeStart)
             MediaEndedCount++;
             ShowBarOnce();
-            if (_sleep.IsEndOfMovie && _sleepEndGeneration == _playGeneration) SleepFire("end");
+            if (_sleepTimer.IsEndOfMovie && _sleepEndGeneration == _playGeneration) SleepFire("end");
             UpdatePlayPauseGlyph();
         }
 
@@ -449,20 +449,20 @@ namespace ZephyrPlayer
         {
             if (_sleepRows == null) return;
             var now = Clock();
-            var on = _sleep.IsActive;
-            SleepLabel.Text = _sleep.Badge(now);
+            var on = _sleepTimer.IsActive;
+            SleepLabel.Text = _sleepTimer.Badge(now);
             SleepLabel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
             Reflow();
-            _sleepHeader.Text = _sleep.Header(now);
+            _sleepHeader.Text = _sleepTimer.Header(now);
             _sleepRows.Children.Clear();
             foreach (var (label, minutes) in SleepTimerState.Choices)
             {
                 var m = minutes;
-                _sleepRows.Children.Add(Row(label, m == _sleep.Minutes, (_, __) => { SetSleep(m); ClosePopups(); }));
+                _sleepRows.Children.Add(Row(label, m == _sleepTimer.Minutes, (_, __) => { SetSleep(m); ClosePopups(); }));
             }
             var brush = on ? Orange : IconBrushNow();
             SleepButton.Foreground = brush; ApplyGlyphBrush(SleepButton, brush);
-            SleepButton.ToolTip = on ? "Sleep timer (" + _sleep.Header(now) + ")" : "Sleep timer";
+            SleepButton.ToolTip = on ? "Sleep timer (" + _sleepTimer.Header(now) + ")" : "Sleep timer";
         }
     }
 }
