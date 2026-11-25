@@ -233,32 +233,23 @@ try {
     Write-Host "helper is listening"
 
     # --- Part 2a: BingeMote migration on a real old config (settled: no forced re-pair) ---
-    Write-Host "== BingeMote pairing migration =="
+    Write-Host "== BingeMote pairing is NOT imported (a fresh Zephyr pairs explicitly) =="
     Stop-HelperVerified
     $legacyDir = Join-Path $env:LOCALAPPDATA 'BingeMote'
     $ownDir = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote'
     New-Item -ItemType Directory -Force $legacyDir | Out-Null
     $legacyCfg = Join-Path $legacyDir 'config.json'
-    $legacyText = '{"phones":[{"token":"' + ('a1' * 32) + '","name":"CI migration phone","adoptSpent":true}],"moviesFolder":null,"declinedNetworks":["CI-CafeWiFi"],"homeNetworks":["CI-HomeLAN"]}'
+    $legacyText = '{"phones":[{"token":"' + ('a1' * 32) + '","name":"CI legacy phone"}],"moviesFolder":null,"declinedNetworks":["CI-CafeWiFi"],"homeNetworks":["CI-HomeLAN"]}'
     Set-Content $legacyCfg $legacyText -NoNewline
     Remove-Item $ownDir -Recurse -Force -ErrorAction SilentlyContinue
     $p = Start-Process $exe -PassThru
-    Wait-HelperListening $p.Id "helper did not start on the migration run"
+    Wait-HelperListening $p.Id "helper did not start on the no-import run"
     $r = Invoke-Helper '/ping' '{}' ('a1' * 32)
-    Assert ($r.code -eq 200) "an imported BingeMote pairing serves immediately (no re-pair)"
-    Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the legacy config is byte-identical after the import"
-    $ownCfgText = Get-Content (Join-Path $ownDir 'config.json') -Raw
-    Assert ($ownCfgText -match 'CI migration phone') "the phone name carried over"
-    Assert ($ownCfgText -match 'CI-HomeLAN') "the home Wi-Fi choice carried over"
-    # A second run with an existing own config must NOT re-import or overwrite.
+    Assert ($r.code -eq 401) "a BingeMote pairing token is never accepted (no cross-product import)"
+    Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the BingeMote config is untouched"
+    $ownCfg = Join-Path $ownDir 'config.json'
+    Assert ((-not (Test-Path $ownCfg)) -or ((Get-Content $ownCfg -Raw) -notmatch 'CI legacy phone|CI-HomeLAN')) "nothing from BingeMote was copied into the Zephyr config"
     Stop-HelperVerified
-    Set-Content $legacyCfg ('{"phones":[{"token":"' + ('b2' * 32) + '","name":"should never import"}]}') -NoNewline
-    $p = Start-Process $exe -PassThru
-    Wait-HelperListening $p.Id "helper did not restart for the no-reimport check"
-    $r = Invoke-Helper '/ping' '{}' ('a1' * 32)
-    Assert ($r.code -eq 200) "the migrated phone still works on the next launch"
-    $r = Invoke-Helper '/ping' '{}' ('b2' * 32)
-    Assert ($r.code -eq 401) "a later legacy change never re-imports"
     Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
 
