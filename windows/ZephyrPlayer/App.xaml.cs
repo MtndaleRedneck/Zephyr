@@ -1,3 +1,4 @@
+using System.Linq;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -21,6 +22,7 @@ namespace ZephyrPlayer
         private PairedStore? _store;
         private PlayerSettings? _settings;
         private bool _reallyQuit;
+        private bool _startupDone;
         private volatile string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
@@ -53,7 +55,17 @@ namespace ZephyrPlayer
         {
             base.OnStartup(e);
             DispatcherUnhandledException += (_, ev) =>
+            {
                 LogCrash("dispatcher", ev.Exception.ToString());
+                // Once the app is up, an exception thrown by a UI handler is logged and the app keeps
+                // running (the tray app is also the phone remote). Not during startup, not for
+                // corrupting exceptions, and not when they repeat in a burst.
+                if (_startupDone && CrashGuard.ShouldHandle(ev.Exception, DateTime.UtcNow))
+                {
+                    ev.Handled = true;
+                    LogCrash("dispatcher-handled", "kept running after " + ev.Exception.GetType().Name);
+                }
+            };
             AppDomain.CurrentDomain.UnhandledException += (_, ev) =>
                 LogCrash("unhandled", ev.ExceptionObject?.ToString() ?? "?");
             TaskScheduler.UnobservedTaskException += (_, ev) =>
@@ -127,7 +139,8 @@ namespace ZephyrPlayer
 
             Core.Initialize();
             var settings = new PlayerSettings();
-            var libvlc = new LibVLC(HardwareDecoding.Options(settings.HardwareDecoding));
+            var libVlcOptions = HardwareDecoding.Options(settings.HardwareDecoding).Concat(PlayerBarLogic.SubtitleOptions(settings.SubtitleSize, 1.0)).ToArray();
+            var libvlc = new LibVLC(libVlcOptions);
             var player = new MediaPlayer(libvlc);
             player.EnableMouseInput = false;
             player.EnableKeyInput = false;
@@ -180,6 +193,7 @@ namespace ZephyrPlayer
                     _player!.PlayFromUrl(url, resume, Array.Empty<string>(), offerStartOver: resume.HasValue);
                 },
                 openPairing: ShowPairingWindow);
+            Dispatcher.BeginInvoke(new Action(() => _startupDone = true), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             // One remembered window geometry for Home and the player window.
             WindowGeometry.Attach(_home, settings);
             WindowGeometry.Attach(_player, settings);
@@ -404,5 +418,36 @@ namespace ZephyrPlayer
             _restoreSignal?.Dispose();
             base.OnExit(e);
         }
+    }
+
+    /// <summary>Which UI-thread exceptions the app survives (logged, Handled). Not the ones that mean the
+    /// process itself is damaged, and not more than a few in a short burst (a handler that throws on
+    /// every frame would otherwise spin forever).</summary>
+    internal static class CrashGuard
+    {
+        internal const int BurstLimit = 5;
+        internal static readonly TimeSpan BurstWindow = TimeSpan.FromSeconds(30);
+        private static readonly System.Collections.Generic.Queue<DateTime> Recent = new();
+        private static readonly object Sync = new();
+
+        internal static bool IsCorrupting(Exception ex) =>
+            ex is OutOfMemoryException || ex is StackOverflowException || ex is AccessViolationException
+            || ex is InvalidProgramException || ex is BadImageFormatException || ex is TypeInitializationException
+            || ex is System.Runtime.InteropServices.SEHException || ex is System.Threading.ThreadAbortException
+            || (ex.InnerException != null && IsCorrupting(ex.InnerException));
+
+        internal static bool ShouldHandle(Exception ex, DateTime nowUtc)
+        {
+            if (IsCorrupting(ex)) return false;
+            lock (Sync)
+            {
+                while (Recent.Count > 0 && nowUtc - Recent.Peek() > BurstWindow) Recent.Dequeue();
+                if (Recent.Count >= BurstLimit) return false;
+                Recent.Enqueue(nowUtc);
+                return true;
+            }
+        }
+
+        internal static void ResetForTest() { lock (Sync) Recent.Clear(); }
     }
 }
