@@ -732,7 +732,7 @@ internal fun plainPlayerError(e: Exception, fallback: String): String {
     val m = e.message ?: return fallback
     // Typed errors already carry one plain sentence written for him: pass it through.
     if (e is com.zephyr.remote.ZephyrClient.PairFailed || e is com.zephyr.remote.ZephyrClient.BadToken
-        || e is HelperClient.BadPairCode || e is HelperClient.BadToken || e is HelperClient.Unreachable) return m
+        || e is com.zephyr.remote.ZephyrClient.ScreenWoke || e is HelperClient.BadPairCode || e is HelperClient.BadToken || e is HelperClient.Unreachable) return m
     if (m.startsWith("Player returned")) return "Zephyr Player had a problem. Try again."
     // Raw plumbing never reaches the screen (S2): socket text, timeouts and the
     // stream server's "server not ready" each get one plain sentence.

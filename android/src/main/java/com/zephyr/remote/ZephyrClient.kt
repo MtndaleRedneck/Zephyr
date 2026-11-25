@@ -198,8 +198,14 @@ object ZephyrClient {
         playClient.newCall(req).execute().use { resp ->
             if (resp.code == 401) throw BadToken()
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
+            // Dark PC screen: the player only woke the screen and did NOT start the movie.
+            val woke = try { JSONObject(resp.body?.string().orEmpty()).optBoolean("woke", false) } catch (_: Exception) { false }
+            if (woke) throw ScreenWoke()
         }
     }
+
+    /** The PC screen was off: the tap only woke it and nothing started. */
+    class ScreenWoke : java.io.IOException("The PC screen was off, so that tap only woke it. Tap the movie again.")
 
     /** /control/status's subtitle track list (PC 1.2+); empty from older players. */
     fun parseSpuTracks(json: JSONObject): List<com.bingemote.SubTrack> {
