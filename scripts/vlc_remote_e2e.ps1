@@ -36,10 +36,15 @@ function Safe-Body($body) {
         return "<non-JSON body: $(([string]$body).Length) chars withheld>"
     }
 }
+# Show-Log: helper.log text is NOT printed to the public log. Only the line count and lines that start with a fixed
+# literal message from Program.Log call sites are shown; everything else is counted as withheld.
 function Show-Log([string]$path, [int]$tail) {
     if (-not (Test-Path $path)) { return }
-    $lines = if ($tail -gt 0) { Get-Content $path -Tail $tail } else { Get-Content $path }
-    foreach ($l in $lines) { if ($l -match '(?i)token|password|secret|dpapi|bearer|authorization|code') { Write-Host '<log line withheld: sensitive keyword>' } else { Write-Host (Redact-Text $l) } }
+    $lines = @(if ($tail -gt 0) { Get-Content $path -Tail $tail } else { Get-Content $path })
+    $known = '^\S*\s*(Started\.|Wrong pairing code entered|Pairing locked|Pairing code created for|[^"]*needs its own firewall setup first)'
+    $shown = 0
+    foreach ($l in $lines) { if ($l -match $known -and $l -notmatch '(?i)token|password|secret|dpapi|bearer|authorization') { Write-Host (Redact-Text $l); $shown++ } }
+    Write-Host "helper.log: $($lines.Count) lines read, $shown known-literal lines shown, $($lines.Count - $shown) withheld from the public log"
 }
 function Invoke-Helper($path, $body, $token) {
     $headers = @{}

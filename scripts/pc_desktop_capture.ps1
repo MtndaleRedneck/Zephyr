@@ -17,7 +17,7 @@ Remove-Item $crashLog -ErrorAction SilentlyContinue
 function DumpCrashLog($why) {
     if (Test-Path $crashLog) {
         Write-Host "::error::app crash log after: $why"
-        Get-Content $crashLog | ForEach-Object { if ($_ -match '(?i)token|password|secret|dpapi|bearer|authorization') { Write-Host '<crash log line withheld: sensitive keyword>' } else { Write-Host $_ } }
+        Write-Host "app crash log: $((Get-Item $crashLog).Length) bytes; entries (kind, exception type; text withheld from the public log): $((Get-Content $crashLog | Where-Object { $_ -match '^\[[^\]]+\] (\w+): ([\w.]+)' } | ForEach-Object { $Matches[1] + ' ' + $Matches[2] }) -join '; ')"
     }
 }
 
