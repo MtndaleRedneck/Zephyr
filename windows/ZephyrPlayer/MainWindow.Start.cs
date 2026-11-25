@@ -36,6 +36,9 @@ namespace ZephyrPlayer
         internal int PlayPauseRefusedCount { get; private set; }
         internal TimeSpan NativeStallWindow { get; set; } = TimeSpan.FromSeconds(45);
         internal NativeStart? CurrentNativeStart => _nativeStart;
+        /// <summary>Test seams: the start generation and libVLC's state.</summary>
+        internal int PlayGeneration => _playGeneration;
+        internal LibVLCSharp.Shared.VLCState PlayerStateForTest => _player.State;
         internal (string Url, long? Position, string[] Subtitles)? LastStartArgs => _lastStart is { } s ? (s.Url, s.Position, s.Subtitles) : null;
         internal Func<string, string[], System.Threading.CancellationToken, SafeMediaSource>? PrepareOverride;
         public bool IsLoadingShown => _loadingPanel.Visibility == Visibility.Visible || _errorPanel.Visibility == Visibility.Visible;
@@ -174,11 +177,7 @@ namespace ZephyrPlayer
             a.OnError = (_, __) => Dispatcher.BeginInvoke(new Action(() => FailNativeStart(a, "native-error")));
             a.OnEnded = (_, __) => Dispatcher.BeginInvoke(new Action(() => FailNativeStart(a, "native-ended")));   // the end before Playing is a failed start
             a.OnOpening = (_, __) => Dispatcher.BeginInvoke(new Action(() => MarkNativeProgress(a)));
-            a.OnBuffering = (_, e) => { var cache = e.Cache; Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (cache != a.LastCache) { a.LastCache = cache; MarkNativeProgress(a); }
-                if (cache >= 100f) { a.Buffered = true; if (a.PlayingSeen) OnNativeContent(a, "buffered"); }
-            })); };
+            a.OnBuffering = (_, e) => { var cache = e.Cache; Dispatcher.BeginInvoke(new Action(() => OnNativeBuffering(a, cache))); };
             _player.Playing += a.OnPlaying;
             _player.EncounteredError += a.OnError;
             _player.EndReached += a.OnEnded;
@@ -190,6 +189,15 @@ namespace ZephyrPlayer
             _nativeStart = a;
             _stallWatch.Stop(); _stallWatch.Start();
         }
+
+        private void OnNativeBuffering(NativeStart a, float cache)
+        {
+            if (cache != a.LastCache) { a.LastCache = cache; MarkNativeProgress(a); }
+            if (cache >= 100f) { a.Buffered = true; if (a.PlayingSeen) OnNativeContent(a, "buffered"); }
+        }
+
+        /// <summary>Test seam: libVLC's Buffering percentage reaching a start's own handler path (the event args type cannot be built by a test).</summary>
+        internal void RaiseNativeBuffering(NativeStart start, float cache) => Dispatcher.BeginInvoke(new Action(() => OnNativeBuffering(start, cache)));
 
         /// <summary>Test seam: deliver a libVLC event to a start's OWN attach-time handler, as libVLC's thread would.</summary>
         internal void RaiseNativeEvent(NativeStart start, string kind)

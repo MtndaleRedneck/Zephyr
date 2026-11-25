@@ -41,7 +41,7 @@ public class VolumeMuteTests
         Assert.Equal(100, MainWindow.GainFor(150, 100)); // slider clamps at 100
     }
 
-    internal static void Sta(Action<MainWindow, PlayerSettings> body, VolumeService? volume = null)
+    internal static void Sta(Action<MainWindow, PlayerSettings> body, VolumeService? volume = null, int joinMs = 30000, bool mustFinish = false)
     {
         string? error = null;
         var path = Path.Combine(Path.GetTempPath(), "zephyr-volmute-" + Guid.NewGuid().ToString("N") + ".json");
@@ -62,7 +62,8 @@ public class VolumeMuteTests
         });
         t.SetApartmentState(ApartmentState.STA);
         t.Start();
-        t.Join(30000);
+        var finished = t.Join(joinMs);
+        if (mustFinish && !finished && error == null) Assert.True(false, "STA body did not finish within " + joinMs + " ms");
         if (error != null)
         {
             var f = Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");

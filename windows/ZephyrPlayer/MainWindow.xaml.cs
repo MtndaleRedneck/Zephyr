@@ -136,7 +136,7 @@ namespace ZephyrPlayer
             _clock.Interval = TimeSpan.FromMilliseconds(500);
             _clock.Tick += (_, __) => UpdatePosition();
 
-            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(() => { ApplyBarStyle(); RefreshSleepGuard(); });
+            _settings.Changed += (_, __) => Dispatcher.InvokeAsync(() => { ApplyBarStyle(); ApplyPlayerGain(); RefreshSubtitleSizeUi(); RefreshSleepGuard(); });   // 2.0.2 OnSettingsChanged: Boost reaches the playing movie now
             _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved"));
 
             // 2.0.2 volume model: the player's OWN volume. Opens at the last
@@ -538,11 +538,19 @@ namespace ZephyrPlayer
         public bool SharedMute => _playerMute;
         public string CurrentMovieTitle => IsLoadingErrorShown ? _errorMessage.Text : MovieTitle.Text;
 
+        /// <summary>Decoder gain = slider x boost (100 % boost = none, 200 % = VLC-style doubling). Exposed for tests.</summary>
+        internal static int GainFor(double slider, int boostPct) => (int)(Math.Clamp(slider, 0, 100) * boostPct / 100.0);
+
+        private int _appliedGain = -1;
+        /// <summary>Test seam: the gain last handed to the decoder (libVLC's own read-back is not evidence on a headless runner).</summary>
+        internal int AppliedPlayerGain => _appliedGain;
+
         private void ApplyPlayerGain()
         {
             // Slider 0-100 is the shared number; boost is extra libVLC gain on top
             // (100% boost = none, 200% = VLC-style doubling).
-            _player.Volume = (int)(VolumeSlider.Value * _settings.VolumeBoostMaxPct / 100.0);
+            _appliedGain = GainFor(VolumeSlider.Value, _settings.VolumeBoostMaxPct);
+            _player.Volume = _appliedGain;
         }
 
         private const string MutedGlyph = "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17";
