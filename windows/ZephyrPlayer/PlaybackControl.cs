@@ -43,12 +43,12 @@ namespace ZephyrPlayer
         public Task PlayAsync(string url,long? positionSeconds,string[] subtitles) => _window.Dispatcher.InvokeAsync(() => {
             _showForPlayback?.Invoke();return _window.PlayFromUrlAsync(url,positionSeconds,subtitles);
         }).Task.Unwrap();
-        public void Pause() => OnUi(() => { _player.SetPause(true); _window.ShowBarOnce(); });
-        public void Resume() => OnUi(() => { _player.SetPause(false); _window.ShowBarOnce(); });
-        public void Seek(long positionSeconds) => OnUi(() => { if (_player.Length > 0) _player.Time = positionSeconds * 1000; _window.ShowBarOnce(); });
+        public void Pause() => OnUi(() => { _window.PauseFromPhone(true); _window.ShowBarOnce(); });
+        public void Resume() => OnUi(() => { _window.PauseFromPhone(false); _window.ShowBarOnce(); });
+        public void Seek(long positionSeconds) => OnUi(() => { _window.SeekFromPhone(positionSeconds); _window.ShowBarOnce(); });
         public void SetVolume(int volume) => OnUi(() => _window.SetVolumeTied(volume));
         public void Mute(bool mute) => OnUi(() => _window.SetMuteTied(mute));
-        public void SetSpu(int trackId) => OnUi(() => _player.SetSpu(trackId));
+        public void SetSpu(int trackId) => OnUi(() => _window.SelectSubtitle(trackId));
         public void SetFullscreen(bool on) => OnUi(() => _window.SetFullscreen(on));
 
         public string StatusJson() => OnUi(() => JsonSerializer.Serialize(new
@@ -63,11 +63,13 @@ namespace ZephyrPlayer
             spu = _player.Spu,
             // The phone's subtitle sheet needs the track LIST, not just the
             // current id (teardown C2): id + name per track.
-            spuTracks = (_player.SpuDescription ?? Array.Empty<LibVLCSharp.Shared.Structures.TrackDescription>())
+            // libVLC's id -1 "Disable" entry is Off, not a track.
+            spuTracks = MainWindow.RealTracks(_player.SpuDescription)
                 .Select(t => new { id = t.Id, name = t.Name }).ToArray(),
             fullscreen = _window.IsFullscreen,
             update_available = UpdateState.AvailableVersion,
             update_check = UpdateState.Outcome,
+            rate = _window.CurrentRate,
         }));
     }
 }

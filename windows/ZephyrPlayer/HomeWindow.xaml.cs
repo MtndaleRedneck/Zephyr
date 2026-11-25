@@ -503,8 +503,11 @@ namespace ZephyrPlayer
         {
             OpenSettings("volume");
         }
+        /// <summary>Test seam: receives the section instead of opening the Settings window.</summary>
+        internal Action<string>? OpenSettingsOverride;
         public void OpenSettings(string section)
         {
+            if (OpenSettingsOverride != null) { OpenSettingsOverride(section); return; }
             if (_settingsWin != null) { _settingsWin.SelectSection(section); _settingsWin.Activate(); return; }
             _settingsWin = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
             _settingsWin.Closed += (_, __) => _settingsWin = null;

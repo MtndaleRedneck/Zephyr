@@ -147,6 +147,7 @@ namespace ZephyrPlayer
             RefreshVolumeUi();
             ApplyBarStyle();
             InitPopups();
+            InitStartUi();
             UpdatePlayPauseGlyph();
         }
 
@@ -179,6 +180,7 @@ namespace ZephyrPlayer
         {
             DropEndOfMovieSleep();
             HideResumeNotice();
+            DetachNativeStart(); SetOpening(false); EndLoading(); HideError();
             ++_playGeneration; _preparation?.Cancel();
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
             var old = _safeSource; _safeSource = null;
@@ -187,39 +189,12 @@ namespace ZephyrPlayer
             // never stall stop/cleanup on the UI.
             if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(old));
         }
-        public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
-        {
-            try { await PlayFromUrlAsync(url,positionSeconds,subtitles,offerStartOver); }
-            catch (OperationCanceledException) { }
-            catch { MovieTitle.Text="Could not open this movie safely. Check the file or phone connection."; }
-        }
-        public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
-        {
-            var generation=++_playGeneration;
-            DropEndOfMovieSleep();
-            // A library resume says so with Start over; any other start drops that notice.
-            HideResumeNotice();
-            _startOverGeneration = offerStartOver ? generation : 0;
-            _preparation?.Cancel();
-            using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
-            _preparation=timeout;
-            SafeMediaSource source;
-            try {source=await System.Threading.Tasks.Task.Run(() => {
-                var ready=new SafeMediaSource(_libvlc,url,timeout.Token);
-                try {foreach(var sub in subtitles)ready.AddSubtitle(sub,timeout.Token);ready.PreparationComplete();return ready;}
-                catch {ready.Dispose();throw;}
-            });}
-            catch(OperationCanceledException) when(generation==_playGeneration) {throw new TimeoutException("Movie preparation timed out. Check the phone connection.");}
-            finally {await Dispatcher.InvokeAsync(()=>{if(ReferenceEquals(_preparation,timeout))_preparation=null;});}
-            await Dispatcher.InvokeAsync(()=>CompletePreparedPlayback(source,generation,timeout.IsCancellationRequested,url,positionSeconds));
-        }
         private void CompletePreparedPlayback(SafeMediaSource source,int generation,bool canceled,string url,long? positionSeconds)
         {
             if(generation!=_playGeneration || canceled) {source.Dispose();throw new OperationCanceledException("Playback preparation was canceled or superseded.");}
             SavePlaybackProgress();
             _currentSource = url;
-            var localTitle = PlaybackHistory.LocalPath(url);
-            MovieTitle.Text = localTitle != null ? System.IO.Path.GetFileNameWithoutExtension(localTitle) : "Playing from phone";
+            MovieTitle.Text = TitleFor(url);
             _lastHistorySave = DateTime.MinValue;
             // The slider (the player's own volume) is the loudness; the boost adds decoder gain.
             ApplyPlayerGain();
@@ -232,6 +207,7 @@ namespace ZephyrPlayer
             _player.Media=null;
             _safeSource = source;
             _player.Play(source.Media);
+            AttachNativeStart(new NativeStart(generation, source));
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
             if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
@@ -389,12 +365,12 @@ namespace ZephyrPlayer
             if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
         }
 
-        private void OnSeekDown(object sender, RoutedEventArgs e) => _seeking = true;
+        private void OnSeekDown(object sender, RoutedEventArgs e) { if (!_opening) _seeking = true; }
 
         private void OnSeekUp(object sender, RoutedEventArgs e)
         {
             _seeking = false;
-            if (_player.Length > 0)
+            if (!_opening && _player.Length > 0)
                 _player.Position = (float)(SeekBar.Value / 1000.0);
         }
 
@@ -402,6 +378,7 @@ namespace ZephyrPlayer
 
         private void OnPlayPause(object sender, RoutedEventArgs e)
         {
+            if (_opening) { PlayPauseRefusedCount++; return; }    // nothing reaches the old movie while a new start opens
             if (_player.IsPlaying) _player.SetPause(true);
             else if (_player.State == VLCState.Paused) _player.SetPause(false);
             UpdatePlayPauseGlyph();
@@ -418,7 +395,7 @@ namespace ZephyrPlayer
         private void Skip(int deltaSeconds, RotateTransform? spin, bool backward)
         {
             // Nothing loaded = nothing to skip: no time change, no spin, no flash.
-            if (_player.Length <= 0) return;
+            if (_opening || _player.Length <= 0) return;
             _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
             var secondary = spin == SecondaryBackSpin || spin == SecondaryForwardSpin;
             var effects = new System.Collections.Generic.List<string>();

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -269,15 +270,14 @@ namespace ZephyrPlayer
             _subtitleTracks.Children.Clear();
             var tracks = _player.SpuDescription;
             var current = _player.Spu;
-            _subtitleTracks.Children.Add(Row("Off", current == -1, (_, __) => { _player.SetSpu(-1); ClosePopups(); ShowOsd("Subtitles: Off"); }));
-            if (tracks != null)
-                foreach (var t in tracks)
-                {
-                    if (t.Id == -1) continue;
-                    var id = t.Id;
-                    var name = string.IsNullOrWhiteSpace(t.Name) ? "Track " + id : t.Name;
-                    _subtitleTracks.Children.Add(Row(name, current == id, (_, __) => { _player.SetSpu(id); ClosePopups(); ShowOsd("Subtitles: " + name); }));
-                }
+            var real = RealTracks(tracks);
+            _subtitleTracks.Children.Add(Row("Off", current == -1 || real.All(t => t.Id != current), (_, __) => { SelectSubtitle(-1, "Off"); ClosePopups(); }));
+            for (var i = 0; i < real.Length; i++)
+            {
+                var id = real[i].Id;
+                var name = string.IsNullOrWhiteSpace(real[i].Name) ? "Track " + (i + 1) : real[i].Name;
+                _subtitleTracks.Children.Add(Row(name, current == id, (_, __) => { SelectSubtitle(id, name); ClosePopups(); }));
+            }
             RefreshSubtitleSizeUi();
             _subDelayText.Text = PlayerBarLogic.FormatDelay(_subDelayMs);
         }
