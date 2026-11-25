@@ -200,10 +200,17 @@ private fun HomeContent(
     ) {
         Column {
             if (unpairedSource) {
+                // Same two-line hero as every other state (title + 14sp line), so the card keeps
+                // its size and look; the whole card still opens Settings. Source switching stays
+                // in the header selector.
                 Text(
-                    "Go to Settings to pair to PC",
+                    if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC isn't paired" else "VLC PC isn't paired",
                     color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2,
+                )
+                Text(
+                    "Tap here to open Settings and pair it",
+                    color = Color(0xFF3D2A12), fontSize = 14.sp,
                 )
             } else {
             Text(
