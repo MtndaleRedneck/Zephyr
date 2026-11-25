@@ -637,7 +637,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(1.5, view.CurrentRate);
                 Assert.Equal(PlayerBarLogic.FormatRate(1.5), label);
                 Assert.True(Math.Abs(rateNow - 1.5f) < 0.01, "libVLC rate after the second start is " + rateNow);
-                Assert.True(ratio > 1.25, $"the decoder clock after the second start runs at {ratio:0.00}x the 1x baseline; the bar shows 1.5x");
+                Assert.True(ratio > 1.25, $"the decoder clock after the second start runs at {ratio:0.00}x the 1x baseline; the bar shows 1.5x (diagnostics: baseline {baseline:0.000}, clock {clock:0.000} media-ms per wall-ms, libVLC rate at handoff {atHandoff:0.###}, reapplied {reapplied} time(s), rate now {rateNow:0.###})");
             });
         }
 

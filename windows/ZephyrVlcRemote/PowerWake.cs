@@ -101,13 +101,21 @@ internal static class PowerWake
     /// and must not be injected.</summary>
     public static bool ShouldSwallowDiscrete()
     {
-        lock (Gate)
-        {
-            if (!DisplayDarkOrUnknown) return false;
-            WakeDisplay();
-            return true;
-        }
+        lock (Gate) return ShouldSwallowDiscreteLocked();
     }
+
+    private static bool ShouldSwallowDiscreteLocked()
+    {
+        if (!DisplayDarkOrUnknown) return false;
+        WakeDisplay();
+        return true;
+    }
+
+    /// <summary>A mouse button frame. Only a PRESS is held back while the screen is dark (the first touch only
+    /// wakes). A RELEASE is never swallowed, so a button that went down on a lit screen can always be let go even if
+    /// the display went dark mid-hold. No state is kept: the release of a press that the wake swallowed reaches the
+    /// mouse as a lone button-up.</summary>
+    public static bool ShouldSwallowButton(bool down) => down && ShouldSwallowDiscrete();
 
     /// <summary>The hidden window's thread owns every ES_CONTINUOUS transition. Windows
     /// execution state is per-thread, so a hold set on one thread cannot be released from

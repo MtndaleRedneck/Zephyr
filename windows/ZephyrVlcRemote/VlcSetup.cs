@@ -15,7 +15,34 @@ internal static class VlcSetup
     internal static string? VlcDirOverride;
     private static string VlcDir => VlcDirOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc");
 
+    /// <summary>Test seam only: lets tests decide "is VLC running" instead of depending on the machine.
+    /// Null in production, where the real process check runs.</summary>
+    internal static Func<bool>? VlcRunningOverride;
+    private static bool VlcRunning() => VlcRunningOverride?.Invoke() ?? Process.GetProcessesByName("vlc").Length > 0;
+
+    private static bool _writeFaultLogged;
+
+    /// <summary>Writes the web-remote setup into vlcrc. A file-system failure (locked file, no permission,
+    /// unwritable profile) is not an exception for the caller: the password is kept as the pending write, which
+    /// the retry timer completes when the disk allows, and the answer is the same "not on disk yet" shape the
+    /// phone already understands (vlcPending). The log line is fixed text plus the exception type, once per fault.</summary>
     public static string WriteVlcrc(string password)
+    {
+        try { return WriteVlcrcCore(password); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            lock (Program.ConfigSaveLock)
+            {
+                bool changed;
+                lock (Gate) { changed = _pendingPassword != password; _pendingPassword = password; }
+                if (changed) { try { Program.SaveConfig(); } catch (Exception) { Program.Log("Could not save the deferred vlcrc write."); } }
+            }
+            if (!_writeFaultLogged) { _writeFaultLogged = true; Program.Log("vlcrc could not be written (" + ex.GetType().Name + ") - the setup stays pending and will be retried."); }
+            return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
+        }
+    }
+
+    private static string WriteVlcrcCore(string password)
     {
         // Round-5: the generated password is 96 bits; refuse to arm the LAN-facing web
         // remote with anything weak (12+ chars).
@@ -40,10 +67,11 @@ internal static class VlcSetup
                 lock (Gate) { hadPending = _pendingPassword != null; _pendingPassword = null; }
                 if (hadPending) { try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save: " + ex.Message); } }
             }
+            _writeFaultLogged = false;
             Program.Log("vlcrc already has the web remote set up - nothing to write.");
             return JsonSerializer.Serialize(new { ok = true });
         }
-        if (Process.GetProcessesByName("vlc").Length > 0)
+        if (VlcRunning())
         {
             lock (Program.ConfigSaveLock)
             {
@@ -60,6 +88,7 @@ internal static class VlcSetup
         // too; the password and the Private-only firewall rule guard it.
         Upsert(lines, "http-host", "0.0.0.0");
         File.WriteAllLines(path, lines);
+        _writeFaultLogged = false;
         lock (Program.ConfigSaveLock)
         {
             lock (Gate) _pendingPassword = null;
@@ -104,7 +133,7 @@ internal static class VlcSetup
     /// waiting for the retry timer; VLC already closed completes it immediately.</summary>
     public static void RestorePending(string password)
     {
-        if (Process.GetProcessesByName("vlc").Length > 0)
+        if (VlcRunning())
         {
             lock (Program.ConfigSaveLock)
             {
@@ -125,7 +154,7 @@ internal static class VlcSetup
         string? pw;
         lock (Gate) pw = _pendingPassword;
         if (pw == null) return false;
-        if (Process.GetProcessesByName("vlc").Length > 0) return true;
+        if (VlcRunning()) return true;
         Program.Log("VLC closed - writing the skipped vlcrc web-remote setup now.");
         using var doc = JsonDocument.Parse(WriteVlcrc(pw));
         return doc.RootElement.GetProperty("ok").GetBoolean() == false;
@@ -143,20 +172,61 @@ internal static class VlcSetup
     /// <summary>The automatic-first setup: the PC picks the password. Reuses the one
     /// already configured (including a write still waiting for VLC to close); generates a
     /// fresh one only when nothing exists. The value is never logged.</summary>
-    public static string ReadOrCreatePassword()
+    public static string ReadOrCreatePassword() => ApplyPlannedPassword(PlanPassword());
+
+    /// <summary>Decide the VLC password for a phone WITHOUT changing anything: the pending value, else the one
+    /// in vlcrc (read once), else a fresh candidate (not stored, not written, not logged). Throws
+    /// VlcrcUnreadableException when vlcrc exists but cannot be read, so an existing password is never replaced.
+    /// The pair endpoint calls this BEFORE it saves the phone or spends the code.</summary>
+    internal static string PlanPassword()
     {
-        var existing = EffectivePassword();
-        if (!string.IsNullOrEmpty(existing))
+        // ONE Gate hold covers the pending check, the single vlcrc read AND the candidate allocation. Another caller
+        // (adopt) that plans, writes and clears between a read and an allocation would otherwise leave this caller
+        // allocating a second password from a stale "nothing configured" read. Gate is a leaf lock here: the only
+        // work inside it is a file read, and no code takes any other lock while holding Gate and then asks for it.
+        lock (Gate)
         {
-            // A vlcrc can carry a password with the web interface itself off: the idempotent
-            // write also ensures extraintf=http and http-host, not just the password.
-            WriteVlcrc(existing);
-            return existing;
+            string? existing = _pendingPassword;
+            if (string.IsNullOrEmpty(existing)) existing = ReadVlcrcPasswordStrict();
+            AfterPlanReadForTests?.Invoke();
+            if (!string.IsNullOrEmpty(existing)) return existing;
+            // Nothing configured yet. Every caller (pair, adopt) gets the SAME in-memory candidate until one of them
+            // applies it. Memory only: not saved, not written, not pending.
+            return _candidate ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
         }
-        var pw = Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
-        WriteVlcrc(pw); // defers to the pending write when VLC is running; EffectivePassword still serves it
-        Program.Log("VLC web-remote password generated for the phone (value never logged).");
-        return pw;
+    }
+
+    /// <summary>Test hook, null in production: runs inside PlanPassword after the vlcrc read, before allocation.</summary>
+    internal static Action? AfterPlanReadForTests;
+
+    private static string? _candidate;
+    internal static void ForgetCandidateForTests() { lock (Gate) _candidate = null; }
+
+    /// <summary>Carry out a plan: the idempotent write (also for an existing password, since a vlcrc can carry
+    /// one with the web interface off). A write that cannot happen now stays pending (WriteVlcrc does not throw
+    /// for file-system faults), so this returns the password either way.</summary>
+    internal static string ApplyPlannedPassword(string password)
+    {
+        bool fresh = string.IsNullOrEmpty(ReadPendingOrNull()) && !File.Exists(Path.Combine(VlcDir, "vlcrc"));
+        WriteVlcrc(password);
+        lock (Gate) { if (_candidate == password) _candidate = null; }   // now on disk or pending: those are the truth
+        if (fresh) Program.Log("VLC web-remote password generated for the phone (value never logged).");
+        return password;
+    }
+
+    private static string? ReadPendingOrNull() { lock (Gate) return _pendingPassword; }
+
+    /// <summary>The configured http-password, read ONCE. Missing file or no password line is null (nothing
+    /// configured, a new one may be generated). Anything else that stops the read (a lock, a denied or untraversable path, a
+    /// directory where the file should be) is NOT "nothing configured": it throws, so an existing password is never replaced on a transient lock.</summary>
+    private static string? ReadVlcrcPasswordStrict()
+    {
+        var path = Path.Combine(VlcDir, "vlcrc");
+        // No File.Exists pre-check: it returns false for a file it merely cannot reach (untraversable parent, access
+        // fault), which would read as "nothing configured". Only a file or folder that is really not there is null.
+        try { return FindValue(File.ReadAllLines(path).ToList(), "http-password"); }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException) { return null; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { throw new VlcrcUnreadableException(); }
     }
 
     /// <summary>The live (uncommented) value of a vlcrc key, or null. Used for the
@@ -211,4 +281,10 @@ internal static class VlcSetup
         }
         lines.Add(prefix + value);
     }
+}
+
+/// <summary>vlcrc exists but could not be read, so whether a web-remote password is already set is unknown.</summary>
+internal sealed class VlcrcUnreadableException : IOException
+{
+    public VlcrcUnreadableException() : base("vlcrc exists but could not be read") { }
 }

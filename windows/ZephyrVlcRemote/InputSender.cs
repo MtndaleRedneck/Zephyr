@@ -96,8 +96,12 @@ internal static class InputSender
         }
     }
 
+    /// <summary>Test seam only: when set, button events go here instead of the real mouse. Null in production.</summary>
+    internal static Action<string, bool>? ButtonSink;
+
     public static void Button(string button, bool down)
     {
+        if (ButtonSink is { } sink) { sink(button, down); return; }
         var flags = button == "right"
             ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
             : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);

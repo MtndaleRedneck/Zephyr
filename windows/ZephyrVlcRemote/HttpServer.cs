@@ -362,6 +362,17 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 409, "{\"error\":\"too many phones\",\"detail\":\"This PC already has " + Program.MaxPhones + " phones paired. Remove one in the Zephyr VLC Remote window on the PC to make room.\"}");
             return;
         }
+        // Decide the VLC password BEFORE anything is saved or spent, and without changing anything: if an existing
+        // vlcrc cannot be read right now, the pairing is refused with a retryable answer (no phone saved, code kept,
+        // no password generated or replaced) instead of ending in a half-paired state.
+        string plannedVlcPassword;
+        try { plannedVlcPassword = VlcSetup.PlanPassword(); }
+        catch (VlcrcUnreadableException)
+        {
+            Program.Log("Pairing refused for now - the VLC settings file could not be read. The code is still valid.");
+            Reply(res, 503, "{\"error\":\"vlc settings busy\",\"detail\":\"The PC could not read VLC's settings just now. Try the same code again in a moment.\"}");
+            return;
+        }
         var token = Program.NewToken();
         // The name typed in the window when Pair was tapped; a code from elsewhere pairs as "Phone N".
         var phoneName = Program.PendingPhoneName;
@@ -386,7 +397,7 @@ internal sealed class HttpServer : IDisposable
         Program.Log("Phone paired as \"" + phoneName + "\" (" + Program.PhonesCount + " total).");
         // Automatic-first VLC setup: the freshly paired phone gets the PC's password in the
         // code-gated pair response, so nobody types anything into VLC's settings.
-        var vlcPassword = VlcSetup.ReadOrCreatePassword();
+        var vlcPassword = VlcSetup.ApplyPlannedPassword(plannedVlcPassword);
         Reply(res, 200, JsonSerializer.Serialize(new
         {
             token = token,
@@ -445,6 +456,19 @@ internal sealed class HttpServer : IDisposable
         return true;
     }
 
+    /// <summary>A button frame over HTTP: only a press can be swallowed, a release never is. A body that cannot be read
+    /// falls back to the old rule (the command parse below then fails the same way it always did).</summary>
+    private static bool SwallowHttpButton(string body)
+    {
+        try
+        {
+            using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
+            var r = d.RootElement;
+            return PowerWake.ShouldSwallowButton(r.GetProperty("down").GetBoolean());
+        }
+        catch (Exception) { return PowerWake.ShouldSwallowDiscrete(); }
+    }
+
     private static void RouteCommand(string path, string body, HttpListenerResponse res)
     {
         // First press while the screen is dark only wakes it - the tap's action is
@@ -454,6 +478,7 @@ internal sealed class HttpServer : IDisposable
         {
             "/volume/get" => false,
             "/mouse/move" or "/mouse/scroll" or "/mouse/zoom" => PowerWake.ShouldSwallowContinuous(),
+            "/mouse/button" => SwallowHttpButton(body),
             _ => PowerWake.ShouldSwallowDiscrete(),
         };
         if (swallowed)
@@ -616,7 +641,9 @@ internal sealed class HttpServer : IDisposable
             }
             // First touch while the screen is dark only wakes it: the frame is consumed
             // whole (no half-gestures, no leaked clicks) and nothing is injected.
-            if (cmd == "button" ? PowerWake.ShouldSwallowDiscrete() : PowerWake.ShouldSwallowContinuous()) return;
+            if (cmd == "button"
+                ? PowerWake.ShouldSwallowButton(r.GetProperty("down").GetBoolean())
+                : PowerWake.ShouldSwallowContinuous()) return;
             switch (cmd)
             {
                 case "move": MoveDiag.RecordMove(viaLiveSocket: true); InputSender.Move((float)r.GetProperty("dx").GetDouble(), (float)r.GetProperty("dy").GetDouble()); break;

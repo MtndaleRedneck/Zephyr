@@ -345,6 +345,8 @@ jobs:
             windows/ZephyrPlayer.Tests/TestResults/
             windows/ZephyrVlcRemote.Tests/TestResults/
             ${{ runner.temp }}/sta-error-*.txt
+            ${{ runner.temp }}/cp2-unit-r2-speed-second-start.txt
+            ${{ runner.temp }}/zvr-loneup-proof.txt
           if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
         if: always()
