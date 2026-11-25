@@ -17,6 +17,8 @@ adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS
 OLD_VC=$(adb shell dumpsys package $PKG | grep -m1 -o 'versionCode=[0-9]*' | cut -d= -f2)
 run com.bingemote.ZephyrUpgradeFixtureTest#seed seed
 grep -q "^OK (1 test)" instrument-results/seed.txt || { echo "UPGRADE FAIL: seed did not pass on the old install"; exit 1; }
+# Make sure the seeded prefs are on disk before the install replaces the app.
+adb shell sync; sleep 3
 # New build over the old one, NO uninstall (this is the user's update path).
 adb install -r /tmp/up/new-app.apk || { echo "UPGRADE FAIL: new build does not install over the old one"; exit 1; }
 adb install -r /tmp/up/new-test.apk || { echo "UPGRADE FAIL: new test install"; exit 1; }

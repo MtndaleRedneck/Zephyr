@@ -2,6 +2,9 @@ package com.bingemote
 
 import android.content.Intent
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.uiautomator.By
+import androidx.test.uiautomator.UiDevice
+import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -46,7 +49,11 @@ class ZephyrUpgradeFixtureTest {
         val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)!!
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         ctx.startActivity(launch)
-        Thread.sleep(6000)
+        // Real arrival: the app's own window must be on screen (not just a live process).
+        val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        assertTrue("app window never appeared after cold open", device.wait(Until.hasObject(By.pkg(ctx.packageName).depth(0)), 20000))
+        Thread.sleep(3000)
+        assertTrue("app window gone after cold open", device.hasObject(By.pkg(ctx.packageName).depth(0)))
         val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         assertTrue("app process died after cold open", am.runningAppProcesses.any { it.processName == ctx.packageName })
         // State still intact after the app itself ran against it.
