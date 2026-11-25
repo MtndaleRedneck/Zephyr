@@ -263,7 +263,8 @@ fun SetupScreen(
                         placeholder = { Text("192.168.1.50", color = Muted) },
                         // Numbers-and-dots keyboard for an address.
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
-                        colors = fieldColors(),
+                        // Orange outline at rest, not only when focused (BingeMote 1.15).
+                        colors = fieldColors(outline = Orange),
                     )
                     Spacer(Modifier.height(10.dp))
                     OrangeButton("Use this address", enabled = manualHost.isNotBlank(), onClick = {

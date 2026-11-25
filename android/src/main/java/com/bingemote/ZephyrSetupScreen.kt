@@ -83,7 +83,7 @@ fun ZephyrSetupScreen(
             ZephyrPairCard(
                 // N-5: a hand-typed address is a different PC - drop the stale Find
                 // result's name so the moved notice never names the wrong machine.
-                host = host, onHost = { host = it; foundName = "" },
+                host = host, onHost = { host = it; foundName = ""; pairedName = null },
                 code = code, onCode = { code = it.filter(Char::isDigit).take(6) },
                 busy = busy, error = error,
                 finding = finding, findNote = findNote, found = found,
@@ -119,6 +119,7 @@ fun ZephyrSetupScreen(
                     if (busy) return@ZephyrPairCard
                     busy = true
                     error = null
+                    pairedName = null // a new attempt clears any earlier success card
                     val h = host.trim()
                     val c = code.trim()
                     scope.launch(Dispatchers.IO) {
@@ -144,6 +145,7 @@ fun ZephyrSetupScreen(
                                 // Pairing refusals carry the PC's plain reason
                                 // (NEW-A1); raw network failures become one
                                 // plain sentence (teardown A3).
+                                pairedName = null
                                 error = if (e is ZephyrClient.PairFailed) (e.message ?: "Pairing failed - try again.")
                                     else "Can't reach Zephyr Player at $h. Check it's open and on the same Wi-Fi."
                             }
@@ -159,8 +161,7 @@ fun ZephyrSetupScreen(
                     OrangeButton("Continue", onClick = onDone)
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            androidx.compose.material3.TextButton(onClick = { step = 1; error = null }) { Text("Back", color = Muted) }
+            // No bottom Back button: Cancel (top) and system Back still work (BingeMote 1.12.14).
         }
     }
 }

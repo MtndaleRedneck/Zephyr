@@ -142,9 +142,9 @@ class MainActivity : ComponentActivity() {
             // re-entered at the top (each navigation into it resets settingsScroll).
             val settingsScroll = rememberScrollState(initial = if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) Int.MAX_VALUE else 0)
             val navigationScope = rememberCoroutineScope()
-            fun openSettings() {
+            fun openSettings(resetScroll: Boolean = false) {
                 navigationScope.launch {
-                    settingsScroll.scrollTo(0)
+                    if (resetScroll) settingsScroll.scrollTo(0)
                     current.value = "settings"
                 }
             }
@@ -177,7 +177,7 @@ class MainActivity : ComponentActivity() {
                         remote,
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
-                        onSettings = { openSettings() },
+                        onSettings = { openSettings(resetScroll = true) },
                         startSubtitlesOpen = true,
                     )
                     "movies" -> MoviesScreen(remote, moviesListState, onBack = { current.value = "main" }, demoResumeAsk = BuildConfig.DEBUG && intent.hasExtra("resumeask"))
@@ -247,7 +247,7 @@ class MainActivity : ComponentActivity() {
                         remote,
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
-                        onSettings = { openSettings() },
+                        onSettings = { openSettings(resetScroll = true) },
                     )
                 }
                 UpdateHost(store)

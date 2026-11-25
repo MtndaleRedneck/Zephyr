@@ -34,6 +34,14 @@ class RemoteState(
     /** Either service answering proves the PC is reachable, independently of VLC playback. */
     val pcReachable: Boolean get() = !unreachable || (store.helperToken.isNotBlank() && !helperDown)
 
+    /** Status as the home screen presents it. The raw status is the last good poll and
+     *  survives a dropped connection so a blip loses nothing; but once the player is
+     *  unreachable (or VLC itself is gone/refused) the seek bar, times and play glyph
+     *  read zero/play instead of stale playback. The cached status stays for an instant
+     *  recovery when the connection returns (BingeMote 1.15 parity). */
+    val shownStatus: VlcStatus?
+        get() = if (unreachable || vlcClosed || vlcRefused) null else status
+
     /** VLC didn't answer but the helper did: the PC is fine, VLC just isn't open. */
     var vlcClosed by mutableStateOf(false)
     /** VLC refused the password and the one automatic heal (the adoption fetch) is spent:

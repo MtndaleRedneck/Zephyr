@@ -347,7 +347,7 @@ fun SettingsScreen(
                 Spacer(Modifier.width(8.dp))
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null, tint = Muted, modifier = Modifier.size(24.dp),
+                    contentDescription = null, tint = TextC, modifier = Modifier.size(28.dp),
                 )
             }
         }
@@ -418,9 +418,9 @@ fun SettingsScreen(
 }
 
 @Composable
-fun fieldColors() = OutlinedTextFieldDefaults.colors(
+fun fieldColors(outline: Color = TrackGray) = OutlinedTextFieldDefaults.colors(
     focusedTextColor = TextC, unfocusedTextColor = TextC,
-    focusedBorderColor = Orange, unfocusedBorderColor = TrackGray,
+    focusedBorderColor = Orange, unfocusedBorderColor = outline,
     cursorColor = Orange,
 )
 
@@ -586,22 +586,25 @@ fun ZephyrPairCard(
             label = { Text("PC address") }, colors = fieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = code, onValueChange = onCode, singleLine = true,
-            label = { Text("Code (4 digits, or 6 on an older Player)") }, colors = fieldColors(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (error != null) {
+        // Code entry appears once a PC is chosen or an address is typed (BingeMote 1.12.14).
+        if (host.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
-            Text(error, color = ErrorRed, fontSize = 13.sp)
+            OutlinedTextField(
+                value = code, onValueChange = onCode, singleLine = true,
+                label = { Text("Code (4 digits, or 6 on an older Player)") }, colors = fieldColors(outline = Orange),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            if (error != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(error, color = ErrorRed, fontSize = 13.sp)
+            }
+            Spacer(Modifier.height(10.dp))
+            androidx.compose.runtime.LaunchedEffect(code) {
+                if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
+            }
+            OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && (code.trim().length == 4 || code.trim().length == 6) && code.trim().all { it.isDigit() } && host.isNotBlank(), onClick = onPair)
         }
-        Spacer(Modifier.height(10.dp))
-        androidx.compose.runtime.LaunchedEffect(code) {
-            if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
-        }
-        OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && (code.trim().length == 4 || code.trim().length == 6) && code.trim().all { it.isDigit() } && host.isNotBlank(), onClick = onPair)
     }
 }
 
