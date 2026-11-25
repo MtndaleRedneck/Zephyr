@@ -25,6 +25,14 @@ adb install -r /tmp/up/new-test.apk || { echo "UPGRADE FAIL: new test install"; 
 NEW_VC=$(adb shell dumpsys package $PKG | grep -m1 -o 'versionCode=[0-9]*' | cut -d= -f2)
 echo "versionCode old=$OLD_VC new=$NEW_VC"
 [ "${NEW_VC:-0}" -gt "${OLD_VC:-0}" ] || { echo "UPGRADE FAIL: versionCode did not increase"; exit 1; }
+# A fresh headless emulator can still be on the lock screen; wake and dismiss it so a window check is about the app.
+adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
 run com.bingemote.ZephyrUpgradeFixtureTest#verify verify
-grep -q "^OK (1 test)" instrument-results/verify.txt || { echo "UPGRADE FAIL: state or cold open after upgrade"; exit 1; }
+if ! grep -q "^OK (1 test)" instrument-results/verify.txt; then
+  echo "== diagnostics: window and focus state"
+  adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing|mDreamingLockscreen" | head -8
+  echo "== diagnostics: activity and crash log lines"
+  adb logcat -d | grep -E "ActivityTaskManager|AndroidRuntime|FATAL|ANR in|$PKG" | tail -40
+  echo "UPGRADE FAIL: state or cold open after upgrade"; exit 1
+fi
 echo "UPGRADE OK: $OLD_VC -> $NEW_VC, paired state, prefs and cold open survived"
