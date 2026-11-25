@@ -65,6 +65,8 @@ namespace ZephyrPlayer.Tests
         }
         private static void Pump(int ms) { var t = Environment.TickCount64 + ms; PumpUntil(() => Environment.TickCount64 >= t, "pump"); }
         private static void Click(MainWindow v, string name) { var b = (Button)v.NamedForTest(name)!; b.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, b)); }
+        /// <summary>3.0 pop-up rows carry a Grid (label plus check mark); the label is the first TextBlock.</summary>
+        private static string RowText(Button b) => b.Content is string t ? t : ((TextBlock)((Grid)b.Content).Children[0]).Text;
         private static T El<T>(MainWindow v, string name) where T : class => (T)v.NamedForTest(name)!;
 
         // ---------- pop-ups: one at a time ----------
@@ -170,7 +172,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(1, view.SleepPausedCount);
                 Assert.Equal("timer", view.LastSleepFire);
                 Assert.Same(media, view.CurrentMedia);       // not stopped, not reopened
-                Assert.Same(view, host.Content);             // still in the player
+                Assert.True(view.IsVisible);                 // still in the player (the window itself; no shell host in 3.0)
                 Assert.Equal(0, home);                       // nothing navigated
                 Assert.False(view.Sleep.IsActive);           // back to Off
                 Assert.Equal(Visibility.Collapsed, El<TextBlock>(view, "SleepLabel").Visibility);
@@ -190,7 +192,7 @@ namespace ZephyrPlayer.Tests
                 PumpUntil(() => player.State == VLCState.Playing, "clip did not play");
                 Click(view, "SleepButton");
                 var row = (Button)El<StackPanel>(view, "SleepRows").Children[6];
-                Assert.Equal("End of this movie", row.Content);
+                Assert.Equal("End of this movie", RowText(row));
                 row.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, row));
                 Assert.True(view.Sleep.IsEndOfMovie);
                 Assert.Equal("End", El<TextBlock>(view, "SleepLabel").Text);
@@ -200,7 +202,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("end", view.LastSleepFire);
                 Assert.NotEqual(VLCState.Stopped, player.State);
                 Assert.Same(media, view.CurrentMedia);
-                Assert.Same(view, host.Content);
+                Assert.True(view.IsVisible);
                 Assert.Equal(0, home);
                 Assert.False(view.Sleep.IsActive);
                 Assert.Equal(1.0, view.ControlBar.Opacity);
@@ -814,7 +816,7 @@ namespace ZephyrPlayer.Tests
                 {
                     Click(view, "SleepButton");
                     var row = (Button)El<StackPanel>(view, "SleepRows").Children[6];
-                    Assert.Equal("End of this movie", row.Content);
+                    Assert.Equal("End of this movie", RowText(row));
                     row.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, row));
                     Click(view, "SleepButton");
                     Assert.True(view.Sleep.IsEndOfMovie);
@@ -919,7 +921,7 @@ namespace ZephyrPlayer.Tests
                 Start(ClipUrl);
                 Click(view, "SleepButton");
                 var row = (Button)El<StackPanel>(view, "SleepRows").Children[2];
-                Assert.Equal("30 minutes", row.Content);
+                Assert.Equal("30 minutes", RowText(row));
                 row.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, row));
                 Click(view, "SleepButton");
                 Left(30, "30 minutes chosen on clip.mp4");

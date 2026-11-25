@@ -40,7 +40,7 @@ namespace ZephyrPlayer
 
         /// <summary>The subtitle size LibVLC was created with (App sets it); a different saved size takes effect
         /// only after Quit from the tray and opening Zephyr Player again.</summary>
-        internal string LibVlcSubtitleSize { get; set; } = "M";
+        internal string? LibVlcSubtitleSize { get; set; } = "M";
         internal int SubtitleRestartNoticeCount { get; private set; }
         internal string? LastSubtitleRestartNotice { get; private set; }
         /// <summary>Test seam: when set, the restart notice goes here instead of a dialog.</summary>
@@ -80,6 +80,7 @@ namespace ZephyrPlayer
 
         private static void SetChipOn(Button b, bool on)
         {
+            b.Tag = on ? "on" : "";
             b.Background = on ? ChipOnBrush : ChipBrush;
             b.Foreground = on ? Orange : new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7));
             b.BorderBrush = on ? Orange : Brushes.Transparent;
@@ -166,7 +167,7 @@ namespace ZephyrPlayer
             sg.ColumnDefinitions.Add(new ColumnDefinition());
             sg.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             sg.Children.Add(Label("0.25x", 12, false, new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x98))));
-            _speedSlider = new Slider { Minimum = 0.25, Maximum = 4, Value = 1, SmallChange = 0.05, LargeChange = 0.25, Margin = new Thickness(10, 0, 10, 0), Foreground = Orange };
+            _speedSlider = new Slider { Minimum = 0.25, Maximum = 4, Value = 1, TickFrequency = 0.05, SmallChange = 0.05, LargeChange = 0.25, Margin = new Thickness(10, 0, 10, 0), Foreground = Orange };
             if (TryFindResource("PlaybackSlider") is Style ps) _speedSlider.Style = ps;
             _speedSlider.ValueChanged += (_, e) => { if (!_speedSync) SetRate(e.NewValue); };
             Grid.SetColumn(_speedSlider, 1); sg.Children.Add(_speedSlider);

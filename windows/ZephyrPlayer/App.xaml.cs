@@ -52,6 +52,38 @@ namespace ZephyrPlayer
             catch { }
         }
 
+        /// <summary>LibVLC with the subtitle look (S/M/L size, bold with an outline) and the hardware-decoding choice.
+        /// libVLC 3 reads these once, at creation: this is where a subtitle size saved during an earlier session takes
+        /// effect (the restart popup). If libVLC refuses the subtitle options, Zephyr still starts with the hardware
+        /// choice alone, then with libVLC's defaults.</summary>
+        internal static LibVLC CreateLibVlc(PlayerSettings settings) => CreateLibVlc(settings, out _, out _);
+
+        /// <summary>[optionsUsed] are the options handed to the LibVLC constructor and [sizeUsed] the saved size they
+        /// carry (null when libVLC refused them and its defaults are in use).</summary>
+        internal static LibVLC CreateLibVlc(PlayerSettings settings, out string[] optionsUsed, out string? sizeUsed)
+        {
+            double dpi = 1.0;
+            try
+            {
+                using var g = System.Drawing.Graphics.FromHwnd(IntPtr.Zero);
+                dpi = g.DpiY / 96.0;
+            }
+            catch { dpi = 1.0; }
+            var size = settings.SubtitleSize;
+            var hardware = HardwareDecoding.Options(settings.HardwareDecoding);
+            optionsUsed = hardware.Concat(PlayerBarLogic.SubtitleOptions(size, dpi)).ToArray();
+            sizeUsed = size;
+            try { return new LibVLC(optionsUsed); }
+            catch (Exception ex)
+            {
+                LogCrash("libvlc-options", ex.GetType().Name);
+                optionsUsed = hardware;
+                sizeUsed = null;
+                try { return new LibVLC(optionsUsed); }
+                catch { optionsUsed = Array.Empty<string>(); return new LibVLC(); }
+            }
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
@@ -140,8 +172,7 @@ namespace ZephyrPlayer
 
             Core.Initialize();
             var settings = new PlayerSettings();
-            var libVlcOptions = HardwareDecoding.Options(settings.HardwareDecoding).Concat(PlayerBarLogic.SubtitleOptions(settings.SubtitleSize, 1.0)).ToArray();
-            var libvlc = new LibVLC(libVlcOptions);
+            var libvlc = CreateLibVlc(settings, out _, out var libVlcSubtitleSize);
             var player = new MediaPlayer(libvlc);
             player.EnableMouseInput = false;
             player.EnableKeyInput = false;
@@ -166,7 +197,7 @@ namespace ZephyrPlayer
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
             _player.HomeRequested += () => { _player.SavePlaybackProgress(); _player.StopPlaybackSource(); _player.Hide(); _home?.Show(); _home?.Activate(); };
-            _player.LibVlcSubtitleSize = settings.SubtitleSize;
+            _player.LibVlcSubtitleSize = libVlcSubtitleSize;
             _player.Closing += (_, ev) =>
             {
                 if (_reallyQuit) return; // real shutdown: let the window die

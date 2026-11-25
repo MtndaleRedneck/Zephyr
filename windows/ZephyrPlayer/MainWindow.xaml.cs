@@ -536,7 +536,7 @@ namespace ZephyrPlayer
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
         public bool SharedMute => _playerMute;
-        public string CurrentMovieTitle => MovieTitle.Text;
+        public string CurrentMovieTitle => IsLoadingErrorShown ? _errorMessage.Text : MovieTitle.Text;
 
         private void ApplyPlayerGain()
         {

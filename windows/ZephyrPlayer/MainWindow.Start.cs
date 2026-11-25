@@ -282,7 +282,7 @@ namespace ZephyrPlayer
         private static string TitleFor(string url)
         {
             var local = PlaybackHistory.LocalPath(url);
-            return local != null ? System.IO.Path.GetFileNameWithoutExtension(local) : "Playing from phone";
+            return local != null ? System.IO.Path.GetFileNameWithoutExtension(local) : "Movie from your phone";
         }
 
         private void BeginLoading(string url)
