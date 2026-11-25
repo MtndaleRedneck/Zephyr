@@ -27,11 +27,11 @@ run() {
   mkdir -p instrument-results
   adb logcat -d -b main,system,events,crash > "instrument-results/$2-prerun-rawlog.txt" 2>/dev/null || true
   adb logcat -b all -c 2>/dev/null || adb logcat -c
-  adb shell rm -rf /sdcard/Android/data/$PKG/files/verify-fail-hierarchy.xml /sdcard/Android/data/$PKG/files/verify-fail-window.txt /sdcard/Android/data/$PKG/files/verify-fail.png 2>/dev/null || true
+  adb shell rm -rf /sdcard/Android/data/$PKG/files/verify-fail-hierarchy.xml /sdcard/Android/data/$PKG/files/verify-fail-window.txt /sdcard/Android/data/$PKG/files/verify-fail-activities.txt /sdcard/Android/data/$PKG/files/verify-fail-processes.txt /sdcard/Android/data/$PKG/files/verify-fail.png 2>/dev/null || true
   adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
   # Failure-time evidence written by the fixture (screenshot, accessibility tree, dumpsys window). Diagnostic only: never changes a verdict.
   mkdir -p "instrument-results/$2-device"
-  for f in verify-fail.png verify-fail-hierarchy.xml verify-fail-window.txt; do
+  for f in verify-fail.png verify-fail-hierarchy.xml verify-fail-window.txt verify-fail-activities.txt verify-fail-processes.txt; do
     adb pull "/sdcard/Android/data/$PKG/files/$f" "instrument-results/$2-device/$f" >/dev/null 2>&1 || true
   done
   # Diagnostic only, after instrumentation ended (the app was force-stopped by then): window/activity state of a failed run.
