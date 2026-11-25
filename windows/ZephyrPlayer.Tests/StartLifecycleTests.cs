@@ -49,6 +49,8 @@ public class StartLifecycleTests
             Assert.True(w.IsLoadingErrorShown);
             Assert.Equal(MainWindow.OpenFailedMessage, w.LoadingDetailText);
             Assert.Equal("preparation", w.LastStartFailure);
+            Assert.Equal(MainWindow.OpenFailedMessage, w.CurrentMovieTitle);                      // phone status keeps CP1's behaviour
+            Assert.NotEqual(MainWindow.OpenFailedMessage, ((System.Windows.Controls.TextBlock)w.FindName("MovieTitle")!).Text);   // never written into the title
             var before = w.LastStartArgs!.Value;
             var retry = w.RetryLastStartAsync();
             Await(retry);
