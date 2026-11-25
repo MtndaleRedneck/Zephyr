@@ -190,6 +190,14 @@ jobs:
       - name: Build Zephyr VLC Remote helper
         timeout-minutes: 8
         run: dotnet build windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release
+      - name: Real VLC and a short video fixture for the real-VLC subtitle test
+        run: |
+          choco install vlc --no-progress -y
+          choco install ffmpeg --no-progress -y
+          $clip = Join-Path $env:RUNNER_TEMP 'subtitle-fixture.mp4'
+          ffmpeg -y -f lavfi -i testsrc=duration=20:size=320x240:rate=15 -f lavfi -i sine=frequency=440:duration=20 -pix_fmt yuv420p -shortest $clip
+          if (-not (Test-Path $clip)) { throw 'fixture not created' }
+          "BINGEMOTE_SUBTITLE_VIDEO=$clip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Windows test suite (blame-hang bounded; no silent host)
         # Independent suites: a red in one never skips the other - both results are collected.
         if: always()
@@ -200,14 +208,6 @@ jobs:
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "trx;LogFileName=win-tests.trx"
           --logger "console;verbosity=detailed"
-      - name: Real VLC and a short video fixture for the real-VLC subtitle test
-        run: |
-          choco install vlc --no-progress -y
-          choco install ffmpeg --no-progress -y
-          $clip = Join-Path $env:RUNNER_TEMP 'subtitle-fixture.mp4'
-          ffmpeg -y -f lavfi -i testsrc=duration=20:size=320x240:rate=15 -f lavfi -i sine=frequency=440:duration=20 -pix_fmt yuv420p -shortest $clip
-          if (-not (Test-Path $clip)) { throw 'fixture not created' }
-          "BINGEMOTE_SUBTITLE_VIDEO=$clip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Display modes the runner offers (probe only, changes nothing)
         if: always()
         shell: pwsh
