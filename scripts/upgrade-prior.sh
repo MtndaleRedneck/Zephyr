@@ -28,7 +28,23 @@ run() {
   adb logcat -d -b main,system,events,crash > "instrument-results/$2-prerun-rawlog.txt" 2>/dev/null || true
   adb logcat -b all -c 2>/dev/null || adb logcat -c
   adb shell rm -rf /sdcard/Android/data/$PKG/files/verify-fail-hierarchy.xml /sdcard/Android/data/$PKG/files/verify-fail-window.txt /sdcard/Android/data/$PKG/files/verify-fail-activities.txt /sdcard/Android/data/$PKG/files/verify-fail-processes.txt /sdcard/Android/data/$PKG/files/verify-fail.png 2>/dev/null || true
+  # Diagnostic only: a once-per-second focus/resumed-activity sample (device clock + host clock) while the instrumentation runs,
+  # so the onset of any foreign window or ANR dialog can be dated against the launch. It reads only (dumpsys) and never taps or
+  # dismisses. Adds a little load to the emulator (two dumpsys calls a second): that observer effect is real and not measured.
+  local samp="instrument-results/$2-focus-samples.txt" sampler
+  : > "$samp"
+  (
+    while :; do
+      { echo "--- host $(date -u +%H:%M:%S.%N | cut -c1-12)"
+        adb shell "date '+%m-%d %H:%M:%S'; dumpsys activity activities | grep -E 'topResumedActivity|mResumedActivity'; dumpsys window | grep -E 'mCurrentFocus'" 2>&1 | tr -d '\r'
+      } >> "$samp" 2>&1 || true
+      sleep 1
+    done
+  ) &
+  sampler=$!
   adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
+  kill "$sampler" 2>/dev/null || true
+  wait "$sampler" 2>/dev/null || true
   # Failure-time evidence written by the fixture (screenshot, accessibility tree, dumpsys window). Diagnostic only: never changes a verdict.
   mkdir -p "instrument-results/$2-device"
   for f in verify-fail.png verify-fail-hierarchy.xml verify-fail-window.txt verify-fail-activities.txt verify-fail-processes.txt; do
@@ -130,7 +146,7 @@ retry_window_only() { # $1 class#method, $2 result name
   dismiss_foreign_anr "$2" || return 0
   echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
   cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
-  for part in rawlog.txt syslog.txt focus.txt ui.xml anr-log.txt prerun-rawlog.txt dumpsys-window.txt dumpsys-activities.txt; do cp "instrument-results/$2-$part" "instrument-results/$2-first-$part" 2>/dev/null || true; done
+  for part in rawlog.txt syslog.txt focus.txt ui.xml anr-log.txt prerun-rawlog.txt dumpsys-window.txt dumpsys-activities.txt focus-samples.txt; do cp "instrument-results/$2-$part" "instrument-results/$2-first-$part" 2>/dev/null || true; done
   run "$1" "$2"
 }
 # Public-log-safe prefs diagnostic: file names, sizes and times of the app's shared_prefs, plus ONLY these explicit fixture keys
