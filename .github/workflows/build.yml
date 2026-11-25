@@ -21,7 +21,8 @@ on:
         default: false
 
 # Zephyr CI (public repo): unit tests, instrumented suites, screenshot rig.
-# No release/publish job - no downloads while in development. Release signing
+# No release/publish job: nothing here creates a release or tag. The only signed file ever uploaded is the
+# dispatch-only signed-upgrade job's 1-day release-candidate APK (last steps of that job). Release signing
 # uses the existing Android signer from encrypted repo secrets (never committed).
 
 concurrency:
@@ -179,7 +180,8 @@ jobs:
   # recovery-verification.yml. Installs the REAL published 1.5.0 asset (sha256 pinned below), seeds paired state with
   # the existing fixture through a test APK built from the 1.5.0 tag and signed with the same key, installs the signed
   # build of THIS ref over it with `install -r` (no uninstall), then runs the existing verify steps and cold open.
-  # No signed APK and no key material is uploaded or printed; only instrument-results and public cert digests are.
+  # No key material is uploaded or printed. Only instrument-results and public cert digests are uploaded, plus, after the emulator proof
+  # passes, the one tested signed APK as a 1-day release-candidate artifact (see the last two steps).
   signed-upgrade:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.signed_upgrade }}
     runs-on: ubuntu-latest
@@ -223,6 +225,8 @@ jobs:
           cp old/android/build/outputs/apk/androidTest/release/*.apk /tmp/up/old-test.apk
           (cd new && ./gradlew --no-daemon -q -PsignedUpgradeTest assembleRelease assembleReleaseAndroidTest)
           cp new/android/build/outputs/apk/release/*.apk /tmp/up/new-app.apk
+          # Recorded right after the build, before any test touches it; checked again before staging.
+          (cd /tmp/up && sha256sum new-app.apk > new-app.sha256)
           cp new/android/build/outputs/apk/androidTest/release/*.apk /tmp/up/new-test.apk
       - name: Same signer on the real 1.5.0, the new build and both test APKs (public certificate digests only)
         run: |
@@ -235,7 +239,7 @@ jobs:
             echo "$f signer sha256: $d"; echo "$d" >> /tmp/signers.txt
           done
           [ "$(wc -l < /tmp/signers.txt)" = 4 ] && [ "$(sort -u /tmp/signers.txt | wc -l)" = 1 ] || { echo "ASSERT FAIL: signer certificates differ"; exit 1; }
-          echo "new-app sha256 (not uploaded): $(sha256sum /tmp/up/new-app.apk | cut -d' ' -f1)"
+          echo "new-app sha256: $(cut -d' ' -f1 /tmp/up/new-app.sha256)"
       - name: Diagnostic - methods the compiled fixture calls (informational, never fails the job)
         run: |
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
@@ -266,3 +270,42 @@ jobs:
           name: signed-upgrade-results
           path: new/instrument-results/*
           retention-days: 2
+      # Release candidate: ONLY the exact signed APK that just passed pass 1 and pass 2 above, plus a public provenance log.
+      # No keystore, password, test APK or intermediate is copied or uploaded (the keystore file was already removed by the build
+      # step's EXIT trap). Runs only when every earlier step (including the emulator upgrade proof) succeeded. 1-day retention;
+      # the owner downloads it, checks sha256 and signer, publishes it, and deletes the artifact.
+      - name: Stage the tested signed APK and its public provenance
+        run: |
+          set -euo pipefail
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          # The file the emulator proof installed is /tmp/up/new-app.apk: it must still be the bytes recorded after the build.
+          (cd /tmp/up && sha256sum -c new-app.sha256)
+          mkdir -p /tmp/pub
+          cp /tmp/up/new-app.apk /tmp/pub/Zephyr-Android-1.6.0.apk
+          want=$(cut -d' ' -f1 /tmp/up/new-app.sha256)
+          have=$(sha256sum /tmp/pub/Zephyr-Android-1.6.0.apk | cut -d' ' -f1)
+          [ "$want" = "$have" ] || { echo "ASSERT FAIL: staged copy differs from the tested APK"; exit 1; }
+          # Full output is read into a variable (no head/grep -m1 on a pipe), so pipefail cannot report a SIGPIPE on a good APK.
+          badging=$("$BT/aapt2" dump badging /tmp/pub/Zephyr-Android-1.6.0.apk)
+          badge1=$(sed -n 1p <<<"$badging")
+          grep -q "package: name='com.zephyr.remote' versionCode='27' versionName='1.6.0'" <<<"$badge1" || { echo "ASSERT FAIL: unexpected package/version: $badge1"; exit 1; }
+          certs=$("$BT/apksigner" verify --print-certs /tmp/pub/Zephyr-Android-1.6.0.apk)
+          signer=$(awk '/certificate SHA-256 digest/{print $NF; exit}' <<<"$certs")
+          [ "$signer" = "$(sed -n 1p /tmp/signers.txt)" ] || { echo "ASSERT FAIL: signer differs from the verified one"; exit 1; }
+          {
+            echo "source_sha=$GITHUB_SHA"
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "apk=Zephyr-Android-1.6.0.apk"
+            echo "apk_sha256=$have"
+            echo "signer_sha256=$signer"
+            echo "badging=$badge1"
+          } > /tmp/pub/provenance.txt
+          cat /tmp/pub/provenance.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: zephyr-android-release-candidate
+          path: |
+            /tmp/pub/Zephyr-Android-1.6.0.apk
+            /tmp/pub/provenance.txt
+          retention-days: 1
+          if-no-files-found: error
