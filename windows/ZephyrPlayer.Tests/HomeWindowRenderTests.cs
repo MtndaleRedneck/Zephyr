@@ -106,8 +106,8 @@ namespace ZephyrPlayer.Tests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join(30000);
-            Assert.True(error == null, error ?? "STA thread did not finish");
+            Assert.True(t.Join(30000), "STA thread did not finish");
+            Assert.True(error == null, error);
         }
 
         [Fact]
@@ -168,8 +168,8 @@ namespace ZephyrPlayer.Tests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join(30000);
-            Assert.True(error == null, error ?? "STA thread did not finish");
+            Assert.True(t.Join(30000), "STA thread did not finish");
+            Assert.True(error == null, error);
         }
 
         [Fact]
@@ -200,8 +200,8 @@ namespace ZephyrPlayer.Tests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join(30000);
-            Assert.True(error == null, error ?? "STA thread did not finish");
+            Assert.True(t.Join(30000), "STA thread did not finish");
+            Assert.True(error == null, error);
         }
     }
 }
