@@ -28,6 +28,9 @@ class AutomaticOnlySetupTest {
     // below, which have no capture of their own (the *-fail files cover only the
     // reveal asserts). scripts/instrumented.sh pulls these names on a failed suite.
     @get:Rule val failureDump = FailureDumpRule()
+    // Interval bound: FailureDumpRule.starting() runs before this @Before and fails the test on any ANR dialog that is not the
+    // exact Pixel Launcher identity. This Wait click only runs after the rule passed, so an ANR dialog that appears in the gap
+    // between the rule and this line, or any other node labelled "Wait", can still be tapped. Bounded, not proven away.
     @org.junit.Before fun dismissSystemDialogs() {
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
         val wait = device.findObject(By.text("Wait"))
