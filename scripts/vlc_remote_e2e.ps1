@@ -20,10 +20,11 @@ function Redact-Text([string]$t) {
 }
 function Redact-Config([string]$t) { return (Redact-Text $t) }
 # Safe-Body: allowlist projection of an HTTP response body. Only these keys print their value; every other key prints
-# its name and value length. Non-JSON bodies are redacted text, truncated.
+# its name and value length. Non-JSON bodies print only their length.
 function Safe-Body($body) {
     if ($null -eq $body) { return '<no body>' }
-    $allow = @('ok','detail','error','name','code','configured','vlcPending','ask','position','length','atRoot','locked','retryAfter')
+    # error/detail are source literals in every helper Reply/Movies.Error call; no 'name' (machine/phone label) and no credential-bearing keys.
+    $allow = @('ok','detail','error','code','configured','vlcPending','ask','position','length','atRoot')
     try {
         $j = $body | ConvertFrom-Json -ErrorAction Stop
         if ($j -is [System.Array]) { return "<json array of $($j.Count)>" }
@@ -32,15 +33,13 @@ function Safe-Body($body) {
         }
         return '{' + ($parts -join ', ') + '}'
     } catch {
-        $r = Redact-Text ([string]$body)
-        if ($r.Length -gt 200) { $r = $r.Substring(0,200) + '...' }
-        return $r
+        return "<non-JSON body: $(([string]$body).Length) chars withheld>"
     }
 }
 function Show-Log([string]$path, [int]$tail) {
     if (-not (Test-Path $path)) { return }
     $lines = if ($tail -gt 0) { Get-Content $path -Tail $tail } else { Get-Content $path }
-    foreach ($l in $lines) { Write-Host (Redact-Text $l) }
+    foreach ($l in $lines) { if ($l -match '(?i)token|password|secret|dpapi|bearer|authorization|code') { Write-Host '<log line withheld: sensitive keyword>' } else { Write-Host (Redact-Text $l) } }
 }
 function Invoke-Helper($path, $body, $token) {
     $headers = @{}

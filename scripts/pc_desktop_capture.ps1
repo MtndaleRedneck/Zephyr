@@ -17,7 +17,7 @@ Remove-Item $crashLog -ErrorAction SilentlyContinue
 function DumpCrashLog($why) {
     if (Test-Path $crashLog) {
         Write-Host "::error::app crash log after: $why"
-        Get-Content $crashLog | ForEach-Object { Write-Host $_ }
+        Get-Content $crashLog | ForEach-Object { if ($_ -match '(?i)token|password|secret|dpapi|bearer|authorization') { Write-Host '<crash log line withheld: sensitive keyword>' } else { Write-Host $_ } }
     }
 }
 
@@ -641,7 +641,7 @@ if (-not $ctrlUp) { throw "control server did not come up for the phone-start ba
 # hides Home and SHOWS the player window. /control/play only drives the current
 # session (no Show) - using it here proved nothing about the phone-start flow.
 $playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') -SkipHttpErrorCheck
-if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
+if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode) (body of $("$($playResp.Content)".Length) chars withheld from the public log)" }
 # Find the player window BY TITLE: Home and MainWindow are both titled "Zephyr
 # Player", the pairing window has its own title, and any transient dialog (which
 # once masqueraded as the player, then died mid-poll and left a stale handle) is
@@ -662,7 +662,7 @@ foreach ($i in 1..40) {
 if ($hwBar -eq [System.IntPtr]::Zero) {
     # Diagnose, don't just fail: list every visible window this process owns,
     # grab the whole desktop, and dump the crash forensics.
-    Write-Host "play POST answered $($playResp.StatusCode): $($playResp.Content)"
+    Write-Host "play POST answered $($playResp.StatusCode) (body withheld from the public log)"
     Write-Host "process alive: $(-not $pBar.HasExited)"
     foreach ($h in [ZWU32]::FindAllVisible($pBar.Id)) { Write-Host "visible window hwnd=$h" }
     $titles = [ZWU32]::AllTitles($pBar.Id)
