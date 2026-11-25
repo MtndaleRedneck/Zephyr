@@ -66,10 +66,11 @@ namespace ZephyrPlayer.Tests
                     Assert.True(gate.HasActiveCode);
                     Assert.Equal(Visibility.Visible, codePanel.Visibility);
                     Assert.Equal(1, list.Items.Count);
-                    // The big code text is 6 spaced digits.
+                    // The big code text is 4 digits (BingeMote pairing) with thin spaces between them.
                     var codeText = ((TextBlock)w.FindName("PairCodeText")!).Text;
-                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2" with thin spaces, word space in the middle
-                    Assert.Equal(' ', codeText[5]);
+                    Assert.Equal(7, codeText.Length); // "1 3 5 7" with thin spaces
+                    Assert.Equal('\u2009', codeText[1]);
+                    Assert.Matches("^[0-9]{4}$", codeText.Replace("\u2009", ""));
                     // Render the window content offscreen as CI evidence.
                     var root = (FrameworkElement)w.Content;
                     root.Measure(new Size(560, 600));
