@@ -81,30 +81,40 @@ class ZephyrUpgradeFixtureTest {
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
     }
 
-    // No kotlin stdlib calls (the shipped release app shrinks them): Java APIs only, no ==, no templates, no !!.
+    // Diagnostic only; never changes the verdict. No kotlin stdlib calls (the shipped release app shrinks them): Java APIs, int
+    // loops, string + concatenation, no ==, no templates, no `!!`, no extensions. The whole capture is one try/catch so that
+    // nothing here (context lookup, files dir, IO) can throw past the caller; the assert stays outside, in verify().
     private fun captureWindowFailure(device: UiDevice) {
         val tag = "ZephyrVerifyDiag"
-        val dir = ctx.getExternalFilesDir(null)
-        if (dir == null) { Log.e(tag, "no external files dir"); return }
-        try { device.takeScreenshot(java.io.File(dir, "verify-fail.png")) } catch (e: Throwable) { Log.e(tag, "screenshot failed", e) }
         try {
-            val out = java.io.FileOutputStream(java.io.File(dir, "verify-fail-hierarchy.xml"))
-            device.dumpWindowHierarchy(out)
-            out.close()
-        } catch (e: Throwable) { Log.e(tag, "hierarchy dump failed", e) }
-        try {
-            val w = device.executeShellCommand("dumpsys window") as java.lang.String
-            val out = java.io.FileOutputStream(java.io.File(dir, "verify-fail-window.txt"))
-            out.write(w.getBytes())
-            out.close()
-        } catch (e: Throwable) { Log.e(tag, "window dump failed", e) }
-        try {
-            // Is the query wrong or is nothing there? Same package without depth, and every root's package.
-            Log.e(tag, "hasObject(pkg, no depth)=" + device.hasObject(By.pkg(ctx.packageName)))
-            val roots = device.findObjects(By.depth(0))
-            Log.e(tag, "depth-0 roots=" + roots.size)
-            var i = 0
-            while (i < roots.size) { Log.e(tag, "root " + i + " pkg=" + roots.get(i).applicationPackage); i = i + 1 }
-        } catch (e: Throwable) { Log.e(tag, "query diagnostic failed", e) }
+            val dir = ctx.getExternalFilesDir(null)
+            if (dir == null) { Log.e(tag, "no external files dir"); return }
+            try { device.takeScreenshot(java.io.File(dir, "verify-fail.png")) } catch (e: Throwable) { Log.e(tag, "screenshot failed", e) }
+            var out: java.io.OutputStream? = null
+            try {
+                out = java.io.FileOutputStream(java.io.File(dir, "verify-fail-hierarchy.xml"))
+                device.dumpWindowHierarchy(out)
+            } catch (e: Throwable) { Log.e(tag, "hierarchy dump failed", e) } finally {
+                if (out != null) { try { out.close() } catch (e: Throwable) { Log.e(tag, "hierarchy close failed", e) } }
+            }
+            var w: java.io.Writer? = null
+            try {
+                val text = device.executeShellCommand("dumpsys window")
+                if (text != null) {
+                    w = java.io.OutputStreamWriter(java.io.FileOutputStream(java.io.File(dir, "verify-fail-window.txt")), "UTF-8")
+                    w.write(text)
+                }
+            } catch (e: Throwable) { Log.e(tag, "window dump failed", e) } finally {
+                if (w != null) { try { w.close() } catch (e: Throwable) { Log.e(tag, "window close failed", e) } }
+            }
+            try {
+                // Is the query wrong or is nothing there? Same package without depth, and every root's package.
+                Log.e(tag, "hasObject(pkg, no depth)=" + device.hasObject(By.pkg(ctx.packageName)))
+                val roots = device.findObjects(By.depth(0))
+                Log.e(tag, "depth-0 roots=" + roots.size)
+                var i = 0
+                while (i < roots.size) { Log.e(tag, "root " + i + " pkg=" + roots.get(i).applicationPackage); i = i + 1 }
+            } catch (e: Throwable) { Log.e(tag, "query diagnostic failed", e) }
+        } catch (e: Throwable) { Log.e(tag, "capture failed", e) }
     }
 }
