@@ -46,9 +46,11 @@ jobs:
 
       # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
       - name: Install VLC (for the movies launch test)
-        run: choco install vlc --no-progress -y
+        shell: pwsh
+        run: ./scripts/install_pinned_tool.ps1 -Tool vlc
       - name: Install ffmpeg (makes the long clip for the end-to-end resume case)
-        run: choco install ffmpeg --no-progress -y
+        shell: pwsh
+        run: ./scripts/install_pinned_tool.ps1 -Tool ffmpeg
 
       - name: Publish the clean release exe (no CI hooks - the build that ships)
         run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
@@ -287,9 +289,14 @@ jobs:
         timeout-minutes: 8
         run: dotnet build windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release
       - name: Real VLC and a short video fixture for the real-VLC subtitle test
+        shell: pwsh
         run: |
-          choco install vlc --no-progress -y
-          choco install ffmpeg --no-progress -y
+          # Pinned, hash-verified installs (no choco feed). Both are attempted; one failure does not hide the other.
+          $failed = @()
+          foreach ($t in 'vlc','ffmpeg') {
+            try { ./scripts/install_pinned_tool.ps1 -Tool $t } catch { Write-Host "::error::$($_.Exception.Message)"; $failed += $t }
+          }
+          if ($failed) { throw "TOOL NOT RUN: acquisition failed for $($failed -join ', '). Dependent real-VLC steps are skipped; independent steps still run." }
           $clip = Join-Path $env:RUNNER_TEMP 'subtitle-fixture.mp4'
           ffmpeg -y -f lavfi -i testsrc=duration=20:size=320x240:rate=15 -f lavfi -i sine=frequency=440:duration=20 -pix_fmt yuv420p -shortest $clip
           if (-not (Test-Path $clip)) { throw 'fixture not created' }
@@ -336,6 +343,7 @@ jobs:
           dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "trx;LogFileName=zvr-tests.trx"
+          ${{ (env.ZEPHYR_VLC_STATUS == 'notrun' || env.ZEPHYR_FFMPEG_STATUS == 'notrun') && '--filter "FullyQualifiedName!~RealVlcAddsSidecarWithoutRestartAndReusesLoadedTrack"' || '' }}
       - name: Upload test diagnostics (TRX + hang dumps)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -349,7 +357,7 @@ jobs:
             ${{ runner.temp }}/zvr-loneup-proof.txt
           if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
-        if: always()
+        if: always() && env.ZEPHYR_VLC_STATUS != 'notrun' && env.ZEPHYR_FFMPEG_STATUS != 'notrun'
         timeout-minutes: 5
         shell: pwsh
         run: scripts/vlc_http_proof.ps1
@@ -399,7 +407,7 @@ jobs:
           }
           Write-Output 'Player compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
       - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
-        if: always()
+        if: always() && env.ZEPHYR_FFMPEG_STATUS != 'notrun'
         # Passing runs already take ~5:47 of the old 6-minute budget; the
         # poll-close of the first-run Settings window adds seconds per leg.
         timeout-minutes: 10
@@ -1311,6 +1319,7 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          Write-Host "TOOL ACQUISITION: vlc=${{ env.ZEPHYR_VLC_STATUS || 'unset' }} ffmpeg=${{ env.ZEPHYR_FFMPEG_STATUS || 'unset' }} (notrun = real-VLC subtitle test, VLC playback proof and/or desktop capture were NOT RUN, not failed)"
           Write-Host "PLAYER TESTS OUTCOME: ${{ steps.tests.outcome }}"
           Write-Host "HELPER TESTS OUTCOME: ${{ steps.zvrtests.outcome }}"
           Write-Host "Evidence steps run unconditionally; a green job requires tests green too."

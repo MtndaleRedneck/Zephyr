@@ -3,14 +3,14 @@
 # httprequests.lua). The Android-server half of the route is proven separately
 # by ZephyrWireTest's fetch-back through the emulator's real StreamServer.
 $ErrorActionPreference = 'Stop'
-choco install vlc --no-progress -y | Out-Null
+& "$PSScriptRoot/install_pinned_tool.ps1" -Tool vlc
 
 $tmp = "$env:RUNNER_TEMP\vlc-proof"; New-Item -ItemType Directory -Force $tmp | Out-Null
 # Real video fixture (moving pattern) + a sidecar SRT, served with Range
 # support. A WAV taught us: VLC does not register a Subtitle stream on
 # audio-only input in status.json (CI-observed; addsubtitle probe also came
 # back streamless), so the sub-file proof needs actual video.
-choco install ffmpeg --no-progress -y | Out-Null
+& "$PSScriptRoot/install_pinned_tool.ps1" -Tool ffmpeg
 # Resolve ffmpeg honestly: the choco shim path is not guaranteed (transient
 # shim/install failures previously hard-failed here). PATH first, then the
 # shim, then the package tree; a real miss throws instead of a wrong-path error.
@@ -20,7 +20,7 @@ if (-not $ffmpeg) {
     $ffhit = Get-ChildItem 'C:\ProgramData\chocolatey\lib' -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($ffhit) { $ffmpeg = $ffhit.FullName }
 }
-if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
+if (-not $ffmpeg) { throw 'TOOL NOT RUN: ffmpeg unavailable after pinned install' }
 & $ffmpeg -y -f lavfi -i "testsrc=duration=30:size=320x240:rate=10" -pix_fmt yuv420p "$tmp\clip.mp4" 2>$null
 Set-Content "$tmp\clip.srt" "1`r`n00:00:00,000 --> 00:00:04,000`r`nZephyr subtitle proof`r`n"
 

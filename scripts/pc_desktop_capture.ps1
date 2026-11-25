@@ -418,7 +418,7 @@ function WakeControls() {
 }
 
 # Tiny known video fixture: moving test pattern, provable on-screen pixels.
-choco install ffmpeg --no-progress -y | Out-Null
+& "$PSScriptRoot/install_pinned_tool.ps1" -Tool ffmpeg
 # Resolve ffmpeg honestly: the choco shim path is not guaranteed (transient
 # shim/install failures previously hard-failed here). PATH first, then the
 # shim, then the package tree; a real miss throws instead of a wrong-path error.
@@ -428,7 +428,7 @@ if (-not $ffmpeg) {
     $ffhit = Get-ChildItem 'C:\ProgramData\chocolatey\lib' -Recurse -Filter ffmpeg.exe -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($ffhit) { $ffmpeg = $ffhit.FullName }
 }
-if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
+if (-not $ffmpeg) { throw 'TOOL NOT RUN: ffmpeg unavailable after pinned install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
 $streamFixture = Join-Path $env:RUNNER_TEMP "s/tok"
 New-Item -ItemType Directory -Path $streamFixture -Force | Out-Null
