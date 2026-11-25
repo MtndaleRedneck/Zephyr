@@ -30,6 +30,19 @@ namespace ZephyrPlayer.Tests
             File.WriteAllText(_path, good); s.LastVolume = 70;
             Assert.Equal("movies", new PlayerSettings(_path).LibraryFolder);
         }
+        // 2.0.2 Ver201RenderTests.RememberVolume_IsASwitch_OffStartsAt100, original assertions.
+        [Fact]
+        public void RememberVolume_IsASwitch_OffStartsAt100()
+        {
+            var s = new PlayerSettings(_path);
+            Assert.True(s.RememberVolume);
+            s.LastVolume = 37;
+            Assert.Equal(37, s.StartVolume);
+            s.RememberVolume = false;
+            Assert.Equal(100, s.StartVolume);
+            Assert.Equal(37, new PlayerSettings(_path).LastVolume);
+            Assert.False(new PlayerSettings(_path).RememberVolume);
+        }
         [Fact]
         public void ButtonFlash_DefaultOff_ChoicePersists()
         {
