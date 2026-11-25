@@ -64,6 +64,31 @@ com.bingemote.RefinementsUiTest
 com.bingemote.ReleaseIdentityTest
 "
 
+# Clear only our own FailureDumpRule/test-failure outputs so anything pulled later belongs to THIS run.
+EVDIR=/sdcard/Android/data/$PKG/files
+if ! adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*"; then
+  echo "CLEAR DIAG: stale-evidence cleanup failed - pulls may include files from an earlier run on this emulator"
+fi
+# Verified pull: temp name, per-type signature check, keep-or-log. A failed or error-text pull is deleted
+# and logged, never kept as a fake capture.
+pull_device_file() { # $1=device file name under the app files dir, $2=local prefix
+  local name="$1" prefix="$2" out sz sig
+  out="instrument-results/$prefix.$name"
+  if ! adb exec-out cat "$EVDIR/$name" > "$out.tmp" 2>/dev/null; then
+    rm -f "$out.tmp"; echo "PULL DIAG: $name transport failed - not kept"; return 0
+  fi
+  sz=$(stat -c%s "$out.tmp" 2>/dev/null || echo 0)
+  sig=$(file -b "$out.tmp" 2>/dev/null | cut -c1-60)
+  is_adb_error_stub() { [ "$1" -lt 200 ] && grep -qm1 'No such file\|Permission denied' "$2"; }
+  case "$name" in
+    *.png) echo "$sig" | grep -q 'PNG image' || { rm -f "$out.tmp"; echo "PULL DIAG: $name not a PNG ($sz bytes, $sig) - not kept"; return 0; };;
+    *.uix|*.xml) { echo "$sig" | grep -Eq 'XML|text' && ! is_adb_error_stub "$sz" "$out.tmp"; } || { rm -f "$out.tmp"; echo "PULL DIAG: $name not XML ($sz bytes, $sig) - not kept"; return 0; };;
+    *) { [ "$sz" -gt 0 ] && ! is_adb_error_stub "$sz" "$out.tmp"; } || { rm -f "$out.tmp"; echo "PULL DIAG: $name empty/error-stub ($sz bytes) - not kept"; return 0; };;
+  esac
+  mv "$out.tmp" "$out"
+  echo "PULLED: $out ($sz bytes, $sig)"
+}
+
 FAIL=0
 mkdir -p instrument-results
 for cls in $CLASSES; do
@@ -97,6 +122,14 @@ for cls in $CLASSES; do
       adb shell rm -f "$f" 2>/dev/null || true
     done
     adb logcat -d -s ZephyrTriage:E | cut -c1-9000 | tail -20
+    # FailureDumpRule evidence (screenshot, hierarchy, logcat, paired recurrence capture) plus the setup tests' own *-fail captures.
+    if dump_listing=$(adb shell "ls $EVDIR/ 2>/dev/null"); then :; else
+      echo "PULL DIAG: evidence dir listing failed (rc=$?) - cannot confirm which failure evidence exists this run"; dump_listing=""
+    fi
+    dumps=$(printf '%s\n' "$dump_listing" | tr -d '\r' | grep -E '^bm-(dump|andialog|dismissed-dialogs|setup-selected-pc-fail|setup-confirmed-address-fail)' || true)
+    if [ -z "$dumps" ]; then echo "PULL DIAG: no FailureDumpRule/test-failure evidence files listed for $cls"; fi
+    for dump in $dumps; do pull_device_file "$dump" "$(basename $cls)"; done
+    adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*" 2>/dev/null || true
     echo "SUITE FAIL: $cls"
     FAIL=1
   fi
