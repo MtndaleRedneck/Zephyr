@@ -31,8 +31,8 @@ class ZephyrUpgradeFixtureTest {
         s.skipSecondarySec = 60
         s.haptics = false
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
-        // The secure store must be the real one: a Keystore failure falls back to an in-memory stand-in whose token never reaches disk.
-        assertEquals("secure store opened (token will be on disk)", false, Store(ctx).secureStoreBroken)
+        // The secure store must be the real one (checked on the instance that wrote the token, not a fresh open): a Keystore failure falls back to an in-memory stand-in whose token never reaches disk.
+        assertEquals("secure store opened on the WRITING instance (token will be on disk)", false, s.secureStoreBroken)
         // Durable before the script installs the new build. Every setter above uses apply() (async), on TWO files: "settings"
         // (host, port, name, source, skips, haptics) and "secrets" (the paired token, through EncryptedSharedPreferences.create(context,
         // "secrets", ...), whose underlying file is context.getSharedPreferences("secrets")). commit() on each file returns only after
