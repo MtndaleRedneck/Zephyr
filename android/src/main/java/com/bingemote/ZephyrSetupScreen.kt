@@ -132,12 +132,16 @@ fun ZephyrSetupScreen(
                                     // never claims a pairing that would vanish at restart.
                                     store.zephyrToken = token
                                     store.zephyrHost = h
-                                    if (foundName.isNotBlank()) store.zephyrPcName = foundName
+                                    store.zephyrPcName = foundName // blank clears a previous PC's name
                                     code = ""
                                     remote.refreshPairing()
                                     pairedName = foundName.ifBlank { h }
                                 } catch (e: SecureStoreUnavailable) {
                                     error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr Player's pairing list, then pair again."
+                                }catch (e: Exception) {
+                                    // Anything after the token write: the PC did pair, so never say it was unreachable.
+                                    pairedName = null
+                                    error = "The pairing worked but saving the details failed. Close and reopen the app; if this phone is not connected, remove it in Zephyr Player's pairing list and pair again."
                                 }
                             }
                         } catch (e: Exception) {

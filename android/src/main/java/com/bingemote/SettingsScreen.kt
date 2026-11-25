@@ -586,6 +586,11 @@ fun ZephyrPairCard(
             label = { Text("PC address") }, colors = fieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
+        // Keyed on the code alone, outside the host check: editing the address never re-fires
+        // a kept 6-digit code at a half-typed host.
+        androidx.compose.runtime.LaunchedEffect(code) {
+            if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
+        }
         // Code entry appears once a PC is chosen or an address is typed (BingeMote 1.12.14).
         if (host.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
@@ -600,9 +605,6 @@ fun ZephyrPairCard(
                 Text(error, color = ErrorRed, fontSize = 13.sp)
             }
             Spacer(Modifier.height(10.dp))
-            androidx.compose.runtime.LaunchedEffect(code) {
-                if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
-            }
             OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && (code.trim().length == 4 || code.trim().length == 6) && code.trim().all { it.isDigit() } && host.isNotBlank(), onClick = onPair)
         }
     }
