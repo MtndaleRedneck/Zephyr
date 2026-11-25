@@ -109,5 +109,23 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SleepButton")!).Visibility);
             });
         }
+
+        [Fact]
+        public void ColourSets_Apply_To_The_Real_Bar()
+        {
+            Sta((settings, w) =>
+            {
+                Color Ring() => StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!);
+                Color Label() => ((SolidColorBrush)((TextBlock)w.FindName("SkipBackLabel")!).Foreground).Color;
+                Color Sec() => StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipBackIcon")!);
+                var orange = Color.FromRgb(0xFF, 0x95, 0x00); var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
+                void Pick(string style) { settings.BarColorStyle = style; w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle); }
+                Pick("orange"); Assert.Equal(orange, Ring()); Assert.Equal(orange, Label()); Assert.Equal(orange, Sec());
+                Pick("white"); Assert.Equal(white, Ring()); Assert.Equal(white, Label()); Assert.Equal(white, Sec());
+                Pick("twotone"); Assert.Equal(orange, Ring()); Assert.Equal(white, Label()); Assert.Equal(orange, Sec());
+                Pick("inverse"); Assert.Equal(white, Ring()); Assert.Equal(orange, Label()); Assert.Equal(white, Sec());
+                Pick("original"); Assert.Equal(white, Ring()); Assert.Equal(white, Label()); Assert.Equal(orange, Sec());
+            });
+        }
     }
 }
