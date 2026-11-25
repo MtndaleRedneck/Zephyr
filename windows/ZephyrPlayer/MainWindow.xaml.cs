@@ -137,7 +137,7 @@ namespace ZephyrPlayer
             _clock.Tick += (_, __) => UpdatePosition();
 
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(() => { ApplyBarStyle(); RefreshSleepGuard(); });
-            _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => MessageBox.Show(this, "Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved", MessageBoxButton.OK, MessageBoxImage.Warning));
+            _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved"));
 
             // 2.0.2 volume model: the player's OWN volume. Opens at the last
             // volume, or 100 when Remember volume is off. Windows' master volume and mute are

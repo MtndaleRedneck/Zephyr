@@ -331,8 +331,10 @@ namespace ZephyrPlayer
             LastSubtitleRestartNotice = text;
             ClosePopups();
             if (RestartNoticeOverride != null) { RestartNoticeOverride(PlayerBarLogic.SubtitleRestartTitle, text); return; }
+            var dlg = FirewallSetup.NoteWindow(text, PlayerBarLogic.SubtitleRestartTitle);
+            if (IsVisible) { dlg.Owner = this; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
             _restartNoticeOpen = true;
-            try { System.Windows.MessageBox.Show(this, text, PlayerBarLogic.SubtitleRestartTitle, MessageBoxButton.OK, MessageBoxImage.Information); }
+            try { dlg.ShowDialog(); }
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Restart notice failed: " + ex.GetType().Name); ShowOsd("Subtitle size saved. It takes effect after you quit Zephyr Player from the tray icon and open it again."); }
             finally { _restartNoticeOpen = false; }
         }
