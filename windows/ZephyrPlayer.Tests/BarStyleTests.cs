@@ -67,7 +67,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(0, Grid.GetColumn(volumeStack));
                 // Unset default is "original" (2.0.2): the primary rings take the default ring colour, not orange.
                 Assert.Equal("original", settings.BarColorStyle);
-                Assert.NotEqual(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
+                Assert.Equal(Color.FromRgb(0xF5, 0xF5, 0xF7), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
                 // 2.0.2 "original": orange secondary arrows and labels, orange Play ring with the 10 % tint.
                 Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipBackIcon")!));
                 Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!));
@@ -86,8 +86,8 @@ namespace ZephyrPlayer.Tests
                 settings.SecondarySkipSeconds = 60;
                 settings.BarColorStyle = "orange";
                 settings.IconStyle = "filled";
-                settings.ShowSpeed = true;
-                settings.ShowSleepTimer = true;
+                settings.ShowSpeed = false;
+                settings.ShowSleepTimer = false;
                 // Flush the queued Changed handlers: a bare Invoke runs at Send priority and
                 // jumps AHEAD of the Normal-priority ApplyBarStyle callbacks; pumping at
                 // SystemIdle waits until they have all run.
@@ -105,8 +105,8 @@ namespace ZephyrPlayer.Tests
                 // filled semantics, not the hollow one.
                 Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("PlayRing")!).Fill).Color);
                 Assert.Equal(Colors.Transparent, StrokeOf((System.Windows.Shapes.Shape)w.FindName("PlayRing")!));
-                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SpeedButton")!).Visibility);
-                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SleepButton")!).Visibility);
+                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
+                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
             });
         }
 
