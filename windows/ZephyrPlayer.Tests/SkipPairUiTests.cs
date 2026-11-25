@@ -152,6 +152,9 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(new[] { "Speed", "Audio", "Aspect ratio" }, heads);
                 Assert.Equal(6, ((MenuItem)menu.Items[0]).Items.Count);
                 Assert.Equal(4, ((MenuItem)menu.Items[2]).Items.Count);
+                // Pixels of the top level of the menu with the player theme (the submenu popups cannot be rendered offscreen).
+                menu.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("pack://application:,,,/ZephyrPlayer;component/Theme.xaml") });
+                Capture(menu, 220, "pc-redesign-more-menu.png");
                 window.SetFullscreen(false);
                 Assert.Equal(Visibility.Collapsed, more.Visibility);
                 window.Close();
