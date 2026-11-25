@@ -368,6 +368,28 @@ function Wait-MainWindow($proc, $seconds) {
     DumpCrashLog "process $($proc.Id) no main window"
     return [System.IntPtr]::Zero
 }
+function Wait-PlaybackWindow($proc, $seconds) {
+    # --play starts on Home and then swaps to the player window; both are titled
+    # "Zephyr Player" (product behavior: Home hides when playback shows). Wait for
+    # the swap: the video host window is visible AND exactly one visible
+    # "Zephyr Player" window remains, stable across two polls. Never mask a product
+    # state: if the swap does not happen, report both windows and return zero.
+    $last = [System.IntPtr]::Zero; $stable = 0
+    for ($i = 0; $i -lt ($seconds * 4); $i++) {
+        $proc.Refresh()
+        $host_ = [ZWU32]::FindByTitle($proc.Id, 'LibVLCSharp.WPF')
+        $all = @([ZWU32]::FindAllByTitle($proc.Id, 'Zephyr Player'))
+        if ($host_ -ne [System.IntPtr]::Zero -and $all.Count -eq 1) {
+            if ($all[0] -eq $last) { $stable++ } else { $last = $all[0]; $stable = 1 }
+            if ($stable -ge 2) { return $all[0] }
+        } else { $stable = 0 }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Host "::error::playback window swap did not settle after $seconds s: videoHost=$([ZWU32]::FindByTitle($proc.Id, 'LibVLCSharp.WPF')) visibleZephyrPlayerWindows=$(@([ZWU32]::FindAllByTitle($proc.Id, 'Zephyr Player')).Count)"
+    foreach ($t in [ZWU32]::AllTitles($proc.Id)) { Write-Host "diag:   window $t" }
+    DumpCrashLog "process $($proc.Id) playback window did not settle"
+    return [System.IntPtr]::Zero
+}
 function WakeControls() {
     # Real mouse event over the video area: WPF OnMouseMove reveals the bar.
     [ZWU32]::SetCursorPos([int]($vs.Width / 2), [int]($vs.Height / 2)) | Out-Null
@@ -772,7 +794,7 @@ $vidOkParked = ($vidParkedPx -ge 3000)
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
 $p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/s/tok/1" -PassThru
-$hw3 = Wait-MainWindow $p3 15
+$hw3 = Wait-PlaybackWindow $p3 20
 Close-PairingWindow $p3
 FitWindow $hw3
 WakeControls
@@ -881,7 +903,7 @@ StopZephyr
 
 # 4) Real video, real mouse event, controls shown - FULLSCREEN.
 $p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/s/tok/1","--fullscreen" -PassThru
-$hw4 = Wait-MainWindow $p4 15
+$hw4 = Wait-PlaybackWindow $p4 20
 Close-PairingWindow $p4
 # Fullscreen transition and floating VideoView overlay can lag HWND creation.
 # Position the already-fullscreen window on the captured monitor and wait for
