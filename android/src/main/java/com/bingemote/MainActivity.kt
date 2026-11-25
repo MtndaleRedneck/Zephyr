@@ -148,6 +148,14 @@ class MainActivity : ComponentActivity() {
                     current.value = "settings"
                 }
             }
+            // Fresh entry into a sub-page starts at the top (same pattern as openSettings(resetScroll)). Back to Settings is
+            // unchanged: it keeps its position (openSettings() without reset).
+            fun openFromTop(route: String, scroll: androidx.compose.foundation.ScrollState) {
+                navigationScope.launch {
+                    scroll.scrollTo(0)
+                    current.value = route
+                }
+            }
             if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) {
                 androidx.compose.runtime.LaunchedEffect(settingsScroll.maxValue) {
                     if (settingsScroll.maxValue > 0 && settingsScroll.maxValue < Int.MAX_VALUE)
@@ -190,8 +198,8 @@ class MainActivity : ComponentActivity() {
                         settingsScroll,
                         pickerListState,
                         onBack = { current.value = "main" },
-                        onRepair = { current.value = "yourpc" },
-                        onFeedback = { current.value = "feedback" },
+                        onRepair = { openFromTop("yourpc", yourpcScroll) },
+                        onFeedback = { openFromTop("feedback", feedbackScroll) },
                         onZephyrSetup = { current.value = "setup-zephyr" },
                     )
                     // Zephyr Player pairing is its OWN screen: separate
@@ -240,7 +248,7 @@ class MainActivity : ComponentActivity() {
                         remote,
                         yourpcScroll,
                         onBack = { openSettings() },
-                        onPairAgain = { current.value = "setup" },
+                        onPairAgain = { openFromTop("setup", setupScroll) },
                     )
                     "feedback" -> FeedbackScreen(remote, feedbackScroll) { openSettings() }
                     else -> MainScreen(
