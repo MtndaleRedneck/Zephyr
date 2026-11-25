@@ -18,6 +18,40 @@ need_upgrade() { # old new label
   [ "$1" -gt 0 ] && [ "$2" -gt "$1" ] || { echo "UPGRADE FAIL: $3 versionCode did not increase (old=$1 new=$2)"; exit 1; }
 }
 run() { adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"; }
+# A non-app ANR dialog can sit in front of the app and fail ONLY the window assertion. Allowlist of the two emulator
+# packages whose dialog may be dismissed; anything else (the app, an unknown package, no dialog) fails closed.
+ANR_ALLOW="com.google.android.apps.nexuslauncher com.android.systemui"
+# ONE focus capture, read once and kept: dismiss only if it names an allowlisted package exactly. Evidence is saved first.
+dismiss_foreign_anr() { # $1 = label for the saved evidence
+  local focus pkg ok=0
+  focus=$(adb shell dumpsys window | grep -m1 "mCurrentFocus")
+  printf '%s\n' "$focus" > "instrument-results/$1-focus.txt"
+  adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml "instrument-results/$1-ui.xml" >/dev/null 2>&1
+  adb logcat -d | grep -E "ANR in|Application Not Responding" | tail -20 > "instrument-results/$1-anr-log.txt"
+  for pkg in $ANR_ALLOW; do
+    case "$focus" in *"Application Not Responding: $pkg}"*) ok=1;; esac
+  done
+  [ "$ok" = 1 ] || return 1
+  echo "NOTE: allowlisted non-app ANR dialog in focus: $focus"
+  local B X1 Y1 X2 Y2
+  B=$(grep -o 'text="Wait"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "instrument-results/$1-ui.xml" | grep -o "\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]" | head -1)
+  [ -n "$B" ] || { echo "NOTE: no Wait button found in the saved dump"; return 1; }
+  X1=$(echo $B | cut -d'[' -f2 | cut -d',' -f1); Y1=$(echo $B | cut -d'[' -f2 | cut -d',' -f2 | cut -d']' -f1)
+  X2=$(echo $B | cut -d'[' -f3 | cut -d',' -f1); Y2=$(echo $B | cut -d'[' -f3 | cut -d',' -f2 | cut -d']' -f1)
+  adb shell input tap $(( (X1+X2)/2 )) $(( (Y1+Y2)/2 )); sleep 2
+  echo "NOTE: tapped Wait on the allowlisted dialog"
+}
+# Retry ONLY the known window-assertion failure, and only when an allowlisted non-app ANR dialog was in focus.
+# Any other failed assertion (state, port, token, prefs, process death) is never retried.
+retry_window_only() { # $1 class#method, $2 result name
+  grep -q "^OK (1 test)" "instrument-results/$2.txt" && return 0
+  grep -q "app window never appeared after cold open" "instrument-results/$2.txt" || return 0
+  grep -qE "^[0-9]+\) " "instrument-results/$2.txt" && [ "$(grep -cE '^[0-9]+\) ' "instrument-results/$2.txt")" = 1 ] || return 0
+  dismiss_foreign_anr "$2" || return 0
+  echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
+  cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
+  run "$1" "$2"
+}
 adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: old install"; exit 1; }
 adb install -r /tmp/up/old-test.apk || { echo "UPGRADE FAIL: old test install"; exit 1; }
@@ -36,6 +70,7 @@ need_upgrade "$OLD_VC" "$NEW_VC" "pass 1"
 # A fresh headless emulator can still be on the lock screen; wake and dismiss it so a window check is about the app.
 adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
 run com.bingemote.ZephyrUpgradeFixtureTest#verify verify
+retry_window_only com.bingemote.ZephyrUpgradeFixtureTest#verify verify
 if ! grep -q "^OK (1 test)" instrument-results/verify.txt; then
   echo "== diagnostics: window and focus state"
   adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing|mDreamingLockscreen" | head -8
