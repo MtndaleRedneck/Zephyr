@@ -16,8 +16,6 @@ class AutomaticOnlySetupTest {
         // One definition shared by the control and the primary below: the two tests
         // can never drift onto different selectors for the same element.
         const val SETUP_TITLE = "Find your PC"
-        // Last element of the SetupScreen column while no PC is selected (see scrollToExtent).
-        const val LAST_ELEMENT_TEXT = "Use this address"
         const val PAIR_CODE_LABEL = "Code from your PC"
         const val PAIR_CARD_BODY = "Enter the code Zephyr VLC Remote is showing on your PC"
         const val DEMO_PC_ROW = "MY-PC  ("
@@ -116,42 +114,6 @@ class AutomaticOnlySetupTest {
             device.hasObject(By.text(PAIR_CODE_LABEL)))
     }
 
-    // Observed-movement extent proof, container-independent. The earlier helper bound the
-    // first scrollable node and trusted a false return from it, which does not show that
-    // THIS screen's column reached its end (a different or non-reporting scrollable would
-    // also "stop"). Instead: swipe in the upper 55% of the screen, clear of the keyboard (the SetupScreen column is
-    // fillMaxSize, so the swipe lands on it) and compare snapshots of every visible text
-    // node with its on-screen bounds. The extreme is proven only when two consecutive
-    // swipes in that direction leave the snapshot identical, i.e. the visible content
-    // observably stopped moving, and the expected edge element (first: "Find your PC";
-    // last stable: "Use this address") is in that snapshot. The pair card can sit BELOW
-    // the anchor while chosen != null, so the anchor alone proves nothing about the card
-    // region; the stopped-moving snapshot is the extent evidence. Cap 15 swipes, false
-    // (nothing proven) on exhaustion. A fitted screen never moves, so it is proven after
-    // the two unchanged swipes as well. Layout, IME effects and swipe speed are
-    // unmeasured until a first CI read.
-    private fun visibleSnapshot(device: UiDevice): List<String> =
-        device.findObjects(By.text(java.util.regex.Pattern.compile(".+"))).mapNotNull {
-            try { "${it.text}@${it.visibleBounds}" } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
-        }.sorted()
-
-    private fun scrollToExtent(device: UiDevice, forward: Boolean, anchor: String, maxSwipes: Int = 15): Boolean {
-        val x = device.displayWidth / 2
-        val from = if (forward) device.displayHeight * 55 / 100 else device.displayHeight * 15 / 100
-        val to = if (forward) device.displayHeight * 15 / 100 else device.displayHeight * 55 / 100
-        var unchanged = 0
-        var i = 0
-        while (unchanged < 2 && i < maxSwipes) {
-            val before = visibleSnapshot(device)
-            device.swipe(x, from, x, to, 20)
-            device.waitForIdle()
-            val after = visibleSnapshot(device)
-            unchanged = if (before == after) unchanged + 1 else 0
-            i++
-        }
-        return unchanged >= 2 && device.hasObject(By.text(anchor))
-    }
-
     @Test fun pairEntryNeedsSelectedPcOrConfirmedAddress() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -214,15 +176,38 @@ class AutomaticOnlySetupTest {
             device.hasObject(By.text(PAIR_CODE_LABEL)))
         assertTrue("pair card body missing - selection not standing before the clear",
             device.hasObject(By.textContains(PAIR_CARD_BODY)))
-        repeat(4) {
-            if (!device.hasObject(By.text("Or type the PC's address:"))) {
-                device.swipe(device.displayWidth / 2, device.displayHeight / 3,
-                    device.displayWidth / 2, device.displayHeight * 4 / 5, 20)
-                device.waitForIdle()
-            }
+        // Same-viewport precondition (test-proof strategy, no scrolling proof needed): the address
+        // label, the "Use this address" button and the pair-code label must be on screen in ONE
+        // snapshot before typing, with the card label fully inside the window. The pair card renders
+        // below the field (SetupScreen: field, button, optional Selected row (needs a typed address),
+        // then the Pair card), so one viewport that shows both ends of that span is observed
+        // evidence of where the card sits. Nudge the page with small swipes toward that
+        // viewport; if it cannot be established, fail closed (nothing is claimed).
+        val fieldLabel = "Or type the PC's address:"
+        fun sameViewport() = device.hasObject(By.text(fieldLabel)) &&
+            device.hasObject(By.text("Use this address")) && device.hasObject(By.text(PAIR_CODE_LABEL))
+        var nudges = 0
+        while (!sameViewport() && nudges < 8) {
+            if (!device.hasObject(By.text(fieldLabel)))
+                device.swipe(device.displayWidth / 2, device.displayHeight * 45 / 100,
+                    device.displayWidth / 2, device.displayHeight * 70 / 100, 20)
+            else
+                device.swipe(device.displayWidth / 2, device.displayHeight * 70 / 100,
+                    device.displayWidth / 2, device.displayHeight * 55 / 100, 20)
+            device.waitForIdle()
+            nudges++
         }
-        assertTrue("address section lost after the pre-condition pin",
-            device.hasObject(By.text("Or type the PC's address:")))
+        if (!sameViewport()) Triage.tree("same-viewport precondition not established before typing")
+        assertTrue("address field, Use-this-address button and pair-code label are not on screen together - " +
+            "the same-viewport proof cannot be made (fail closed)", sameViewport())
+        fun bounds(text: String) = device.findObject(By.text(text))!!.visibleBounds
+        val appBounds = device.findObject(By.pkg(ctx.packageName))!!.visibleBounds
+        val fieldBefore = bounds(fieldLabel)
+        val buttonBefore = bounds("Use this address")
+        val cardLabelBefore = bounds(PAIR_CODE_LABEL)
+        assertTrue("pair-code label not fully inside the app window before typing",
+            cardLabelBefore.top >= appBounds.top && cardLabelBefore.bottom <= appBounds.bottom &&
+                cardLabelBefore.height() > 0)
         val fields = device.findObjects(By.clazz("android.widget.EditText"))
         val addressField = fields.minBy { it.visibleBounds.top }
         addressField.text = "192.0.2.20"
@@ -246,51 +231,45 @@ class AutomaticOnlySetupTest {
         // IME first: setText can raise the keyboard over the lower half of the screen
         // (where the pair card renders), distorting the tree the poll reads.
         device.waitForIdle()
-        // Viewport-aware bounded poll (review-driven): UiAutomator sees only the
-        // current viewport, and the pin's scroll-back to the address field can leave
-        // the card below the fold, so a bare hasObject absence could skip the whole
-        // budget and a later sweep could catch a slow-but-real hide without it. Per
-        // the actual SetupScreen layout (one verticalScroll Column; the address
-        // field sits ABOVE the pair card), an absence slice
-        // concludes hidden only after revealing the card's region below; a presence
-        // slice gets a 700ms Until.gone window as before. Converges the moment the
-        // state lands; still fails hard when the card genuinely never hides.
-        val hideBy = System.currentTimeMillis() + 10000
-        var hidden = false
-        while (!hidden && System.currentTimeMillis() < hideBy) {
-            if (device.hasObject(By.text(PAIR_CODE_LABEL))) {
-                // Card in viewport: a gone window here is viewport-complete.
-                hidden = device.wait(Until.gone(By.text(PAIR_CODE_LABEL)), 700)
-            } else {
-                // Absence only counts after the bottom region was reached with observed
-                // proof (scrollToExtent: visible content stopped moving over two swipes,
-                // last stable element present). While chosen != null the pair card sits
-                // BELOW that element, so the element alone proves nothing; the unmoved
-                // snapshot is the extent evidence. If the proof fails this slice counts
-                // for nothing and the poll tries again until the budget ends. (Layout not
-                // measured on Zephyr yet: first CI read decides.)
-                val atEnd = scrollToExtent(device, forward = true, anchor = LAST_ELEMENT_TEXT)
-                hidden = atEnd && !device.hasObject(By.text(PAIR_CODE_LABEL))
-            }
+        // Dismiss the keyboard only if it is shown (a blind back could leave the screen), and fail
+        // closed if its state cannot be read: a keyboard over the card region would make an absence
+        // read meaningless. (Window-list reads can lag a frame: one waitForIdle after the back.)
+        fun imeShown(): Boolean {
+            // Interactive window list (API 34 emulator, same source UiDevice reads its roots from): a
+            // readable list always contains the app's own window, so an empty list means "not
+            // readable" and fails closed instead of reading as "no keyboard".
+            val windows = InstrumentationRegistry.getInstrumentation().uiAutomation.windows
+            assertTrue("window list not readable - cannot rule out a keyboard over the card region",
+                windows.isNotEmpty())
+            return windows.any { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_INPUT_METHOD }
         }
-        if (!hidden) Triage.tree("code field still shown after typing an address")
-        assertTrue("pair-code entry still shown after the address cleared the selection", hidden)
-        // Viewport guard, both directions, with POSITIVE extent proof (review-driven:
-        // blind repeat(3) swipes never established that the claimed region was
-        // reached). Top: scroll to the verified beginning and require the
-        // always-rendered "Find your PC" title as the upper anchor. Bottom: scroll to the
-        // verified end - the pair card renders last, so its region is the content
-        // bottom. A viewport-only disappearance resurrects the card at one extreme
-        // and fails here; a real removal passes both. Same not-scrollable reasoning
-        // as the poll: a fitted single viewport is already the whole tree.
-        assertTrue("scroll beginning not positively reached - guard proves nothing", scrollToExtent(device, forward = false, anchor = SETUP_TITLE))
-        assertTrue("top anchor missing - scroll extent not verified, guard proves nothing",
-            device.hasObject(By.text(SETUP_TITLE)))
-        assertFalse("pair-code entry reappeared above the viewport - hide was viewport-only",
-            device.hasObject(By.text(PAIR_CODE_LABEL)))
-        assertTrue("scroll end not positively reached - guard proves nothing", scrollToExtent(device, forward = true, anchor = LAST_ELEMENT_TEXT))
-        assertFalse("pair-code entry reappeared below the viewport - hide was viewport-only",
-            device.hasObject(By.text(PAIR_CODE_LABEL)))
+        if (imeShown()) { device.pressBack(); device.waitForIdle() }
+        assertFalse("keyboard still shown - the card region may be covered", imeShown())
+        // The window must be the one observed before typing (no resize from the keyboard). The card's
+        // disappearance can legitimately move the anchors DOWN: the column is shorter and Compose
+        // clamps its scroll offset. So the anchors are not compared for equality (that could race the
+        // hide and fail red); instead, once the label is gone, the observed anchor shift delta is
+        // measured and the label's old bounds shifted by that same delta must still lie inside the
+        // window. A still-present card moves rigidly with the anchors, so it would then be on screen
+        // and in the tree: its absence is a positive observation of that region, with no scrolling.
+        assertEquals("app window bounds changed after typing", appBounds,
+            device.findObject(By.pkg(ctx.packageName))!!.visibleBounds)
+        val gone = device.wait(Until.gone(By.text(PAIR_CODE_LABEL)), 10000)
+        if (!gone) Triage.tree("code field still shown after typing an address")
+        assertTrue("pair-code entry still shown after the address cleared the selection", gone)
+        assertEquals("app window bounds changed while the card disappeared", appBounds,
+            device.findObject(By.pkg(ctx.packageName))!!.visibleBounds)
+        assertTrue("address label no longer on screen - the observed viewport is not the one before typing",
+            device.hasObject(By.text(fieldLabel)) && device.hasObject(By.text("Use this address")))
+        val fieldAfter = bounds(fieldLabel)
+        val buttonAfter = bounds("Use this address")
+        val delta = fieldAfter.top - fieldBefore.top
+        assertEquals("address label moved sideways", fieldBefore.left, fieldAfter.left)
+        assertEquals("button did not move rigidly with the address label", buttonBefore.top + delta, buttonAfter.top)
+        assertTrue("page moved UP while the card disappeared (delta=$delta): the old label region is not observed",
+            delta >= 0)
+        assertTrue("the old label region (shifted by delta=$delta) is outside the window: absence proves nothing",
+            cardLabelBefore.bottom + delta <= appBounds.bottom)
         repeat(3) {
             if (!device.hasObject(By.text("Use this address"))) {
                 device.swipe(device.displayWidth / 2, device.displayHeight * 4 / 5,
