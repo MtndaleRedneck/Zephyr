@@ -133,6 +133,21 @@ function Invoke-HelperGet($path, $token) {
 }
 
 
+# A freshly started helper treats the display as dark-or-unknown until Windows delivers a real display-state
+# notification, and a /movies/play in that window is (by product design) consumed as a wake tap and answers
+# woke:true without launching VLC. Wait for the helper's own screen-state answer to turn On before a play that
+# follows a restart; if it never does, say so with the observed answer instead of failing later at "VLC is running".
+function Wait-ScreenOn($token, [string]$what) {
+    $last = ''
+    foreach ($i in 1..60) {
+        try { $r = Invoke-HelperGet '/screen-state' $token; $last = "code=$($r.code) dark=$([bool]($r.body -match '\"dark\":true'))"
+            if ($r.code -eq 200 -and $r.body -match '\"dark\":false') { Write-Host "screen-state On after $($i * 0.5)s ($what)"; return }
+        } catch { $last = 'request failed' }
+        Start-Sleep -Milliseconds 500
+    }
+    throw "ASSERT FAILED: the helper never reported the display On after a restart ($what); last answer: $last"
+}
+
 # --- Part 0: per-user install of the CLEAN build; firewall is the app's explained
 # first-run elevation; the shipped exe must ignore the CI pairing hook. ---
 Write-Host "== per-user install + clean-build hook proof =="
@@ -579,6 +594,7 @@ try {
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the resume check"
+    Wait-ScreenOn $token "before the resume play"
     $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
     Write-Host "resume play answer: $($rResume.code) $(Safe-Body $rResume.body)"
     Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
@@ -592,6 +608,7 @@ try {
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the end-to-end resume check"
+    Wait-ScreenOn $token "before the long-clip play"
     $rLong = Invoke-Helper '/movies/play' '{"path":"long.mkv","resume":false}' $token
     Assert ($rLong.code -eq 200) "end-to-end resume: the long clip starts (start-over arm)"
     $vlcUp = $false
