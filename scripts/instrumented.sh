@@ -31,7 +31,7 @@ adb forward tcp:47888 tcp:47888 || true
 
 # UpgradeConnectionTest and RecoveryBridgeTest are NOT in this list on purpose: they need a previously
 # installed release (seed, replace the package, verify) and BingeMote-only package ids, so a plain
-# one-APK session cannot run them. The Zephyr upgrade check is a separate job (1.4.0 source -> this build).
+# one-APK session cannot run them. The Zephyr upgrade check is a separate job (1.5.0 source -> this build).
 CLASSES="
 com.bingemote.ZephyrAutoPairTest
 com.bingemote.AutoSetupCheckTest

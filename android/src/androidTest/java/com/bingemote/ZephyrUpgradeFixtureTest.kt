@@ -11,7 +11,7 @@ import org.junit.Test
 
 /**
  * Real Zephyr upgrade check. The SAME file is compiled into the installed-prior-release build
- * (zephyr-android-v1.4.0) and into the new build: `seed` runs against the old install and writes a paired
+ * (zephyr-android-v1.5.0) and into the new build: `seed` runs against the old install and writes a paired
  * Zephyr state through the app's own Store; the new build is then installed over it with `adb install -r`
  * (no uninstall) and `verify` reads the same state back and cold-opens the app. Test-only fixture values
  * (documentation address 192.0.2.x), never the user's data. No debug hooks are used.

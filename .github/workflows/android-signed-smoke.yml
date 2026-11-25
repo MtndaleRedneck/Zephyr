@@ -4,7 +4,7 @@ name: android-signed-smoke
 #         The owner's runner downloads it, deletes the artifact, and signs it locally from the vault.
 #  smoke: (after resolve validates the producer run) the owner passes only the APK Signing Block (public certificate + signature, about 5 KB, no secret)
 #         as base64. This job takes the unsigned APK from the build run, inserts the block (scripts/sigblock.py),
-#         requires the result to hash to the exact signed file the owner holds, then installs the published 1.4.0
+#         requires the result to hash to the exact signed file the owner holds, then installs the published 1.5.0
 #         and the signed file over it on an emulator and checks the resumed app UI.
 #         The signed APK exists only on this runner. A final always() job deletes the unsigned artifact.
 # Nothing here publishes a release.
@@ -201,7 +201,7 @@ jobs:
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Upgrade the published 1.4.0 to the exact signed build on an emulator
+      - name: Upgrade the published 1.5.0 to the exact signed build on an emulator
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34

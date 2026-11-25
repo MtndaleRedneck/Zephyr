@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Installed-prior-release upgrade check, run on the CI emulator. Expects:
-#   /tmp/up/old-app.apk /tmp/up/old-test.apk   (zephyr-android-v1.4.0 built as debug, plus the fixture test)
+#   /tmp/up/old-app.apk /tmp/up/old-test.apk   (zephyr-android-v1.5.0 built as debug, or the real signed 1.5.0 asset in the signed-upgrade job, plus the fixture test)
 #   /tmp/up/new-app.apk /tmp/up/new-test.apk   (this build)
 # Seeds a paired Zephyr state in the OLD install, installs the NEW build over it with `install -r` (no
 # uninstall), then verifies the state and a cold open.
 set -uo pipefail
-PKG=com.zephyr.remote.debug
+PKG=${UPGRADE_PKG:-com.zephyr.remote.debug}   # com.zephyr.remote for the signed release (signed-upgrade job)
 TESTPKG=$PKG.test
 RUNNER=androidx.test.runner.AndroidJUnitRunner
 mkdir -p instrument-results
