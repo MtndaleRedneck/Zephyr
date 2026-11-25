@@ -8,6 +8,10 @@ if (-not (Test-Path $exe)) { throw "helper exe missing at $exe" }
 
 # Assertions are counted: a run that exercised nothing must FAIL, never pass.
 $script:assertCount = 0
+function Redact-Config([string]$t) {
+    # Job logs are public. Never print token / password values from a config file.
+    return ($t -replace '("(?:token|pendingVlcPassword)"\s*:\s*")[^"]*(")', '$1<redacted>$2')
+}
 function Invoke-Helper($path, $body, $token) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
@@ -276,7 +280,7 @@ try {
         $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
         if (Test-Path $logf) { Write-Host "== helper.log =="; Get-Content $logf }
         $cfgf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json'
-        if (Test-Path $cfgf) { Write-Host "== config.json =="; Get-Content $cfgf -Raw }
+        if (Test-Path $cfgf) { Write-Host "== config.json =="; Redact-Config (Get-Content $cfgf -Raw) }
     }
     Assert ($r.code -eq 200) "pair with right code is 200"
     $paired = $r.body | ConvertFrom-Json
@@ -310,7 +314,7 @@ try {
     # Nothing was imported from BingeMote, so this first pairing is phone #1.
     $cfg = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote/config.json'
     $cfgText = Get-Content $cfg -Raw
-    Assert ($cfgText -match '"name":"Phone 1"') "the first pairing on a fresh Zephyr is named Phone 1: $cfgText"
+    Assert ($cfgText -match '"name":"Phone 1"') "the first pairing on a fresh Zephyr is named Phone 1 (config redacted: $(Redact-Config $cfgText))"
 
     $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($r.code -eq 403) "pairing code is single-use"

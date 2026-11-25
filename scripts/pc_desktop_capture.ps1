@@ -63,6 +63,8 @@ public static class ZWU32 {
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int max);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    public static IntPtr OwnerOf(IntPtr h) { return GetWindow(h, 4 /* GW_OWNER */); }
     delegate bool EnumProc(IntPtr h, IntPtr l);
     public static IntPtr FindByTitle(uint pid, string title) {
         IntPtr found = IntPtr.Zero;
@@ -119,6 +121,8 @@ $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 
 function CaptureWindow($hWnd, $path) {
     # Crop to the app's own window rect: no runner chrome in UI evidence.
+    # Names are reused (cycle files, paused2): remove any earlier file so a failed capture can never leave a stale image for the measurers.
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     if ($hWnd -eq [System.IntPtr]::Zero) { Write-Host "::error::no window handle for $path - capture skipped"; return "0 x 0" }
     # Rendering guards: a hidden or DWM-cloaked window keeps SANE frame/window
     # rects but paints nothing - CopyFromScreen then grabs desktop + whatever
@@ -379,12 +383,17 @@ function Wait-PlaybackWindow($proc, $seconds) {
         $proc.Refresh()
         $host_ = [ZWU32]::FindByTitle($proc.Id, 'LibVLCSharp.WPF')
         $all = @([ZWU32]::FindAllByTitle($proc.Id, 'Zephyr Player'))
-        if ($host_ -ne [System.IntPtr]::Zero -and $all.Count -eq 1) {
+        # Only the player window (MainWindow) hosts the VideoView; Home has none. When the
+        # video host is owned by a window, that owner must be the chosen one (never Home).
+        $owner = if ($host_ -ne [System.IntPtr]::Zero) { [ZWU32]::OwnerOf($host_) } else { [System.IntPtr]::Zero }
+        $ownerOk = ($owner -eq [System.IntPtr]::Zero) -or ($all.Count -eq 1 -and $owner -eq $all[0])
+        if ($host_ -ne [System.IntPtr]::Zero -and $all.Count -eq 1 -and $ownerOk) {
             if ($all[0] -eq $last) { $stable++ } else { $last = $all[0]; $stable = 1 }
-            if ($stable -ge 2) { return $all[0] }
+            if ($stable -ge 2) { Write-Host "playback window: hwnd=$($all[0]) videoHostOwner=$owner"; return $all[0] }
         } else { $stable = 0 }
         Start-Sleep -Milliseconds 250
     }
+    Write-Host "diag: videoHost=$host_ owner=$owner"
     Write-Host "::error::playback window swap did not settle after $seconds s: videoHost=$([ZWU32]::FindByTitle($proc.Id, 'LibVLCSharp.WPF')) visibleZephyrPlayerWindows=$(@([ZWU32]::FindAllByTitle($proc.Id, 'Zephyr Player')).Count)"
     foreach ($t in [ZWU32]::AllTitles($proc.Id)) { Write-Host "diag:   window $t" }
     DumpCrashLog "process $($proc.Id) playback window did not settle"
