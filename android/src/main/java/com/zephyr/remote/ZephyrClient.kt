@@ -67,7 +67,7 @@ object ZephyrClient {
                 val fallback = when (resp.code) {
                     403 -> "Wrong code - check the code on the player screen."
                     410 -> "That code expired - use the code showing on the PC screen now."
-                    429 -> "Too many wrong codes. Wait a few minutes, then try the fresh code on the PC screen."
+                    429 -> "Too many wrong codes. On the PC, press Pair for a new code, then enter it here."
                     409 -> "This PC already has too many phones paired - remove one first."
                     else -> "Player returned ${resp.code}"
                 }
