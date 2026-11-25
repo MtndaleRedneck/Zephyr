@@ -23,6 +23,9 @@ need_upgrade() { # old new label
 # an explicit failure marker, not "no ANR events".
 ANR_ALLOW="com.google.android.apps.nexuslauncher com.android.systemui"
 run() {
+  # Diagnostic only: keep what the system log held BEFORE this run's buffer clear (an ANR between runs is otherwise lost).
+  mkdir -p instrument-results
+  adb logcat -d -b main,system,events,crash > "instrument-results/$2-prerun-rawlog.txt" 2>/dev/null || true
   adb logcat -b all -c 2>/dev/null || adb logcat -c
   adb shell rm -rf /sdcard/Android/data/$PKG/files/verify-fail-hierarchy.xml /sdcard/Android/data/$PKG/files/verify-fail-window.txt /sdcard/Android/data/$PKG/files/verify-fail.png 2>/dev/null || true
   adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
@@ -31,6 +34,11 @@ run() {
   for f in verify-fail.png verify-fail-hierarchy.xml verify-fail-window.txt; do
     adb pull "/sdcard/Android/data/$PKG/files/$f" "instrument-results/$2-device/$f" >/dev/null 2>&1 || true
   done
+  # Diagnostic only, after instrumentation ended (the app was force-stopped by then): window/activity state of a failed run.
+  if ! grep -q "^OK (1 test)" "instrument-results/$2.txt" 2>/dev/null; then
+    adb shell dumpsys window windows > "instrument-results/$2-dumpsys-window.txt" 2>&1 || true
+    adb shell dumpsys activity activities > "instrument-results/$2-dumpsys-activities.txt" 2>&1 || true
+  fi
   local raw="instrument-results/$2-rawlog.txt" sys="instrument-results/$2-syslog.txt" rc
   rm -f "instrument-results/$2-logcapture-failed"
   if adb logcat -d -b main,system,events,crash > "$raw" 2>"instrument-results/$2-rawlog.err" && [ -s "$raw" ]; then
@@ -122,7 +130,7 @@ retry_window_only() { # $1 class#method, $2 result name
   dismiss_foreign_anr "$2" || return 0
   echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
   cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
-  for part in rawlog.txt syslog.txt focus.txt ui.xml anr-log.txt; do cp "instrument-results/$2-$part" "instrument-results/$2-first-$part" 2>/dev/null || true; done
+  for part in rawlog.txt syslog.txt focus.txt ui.xml anr-log.txt prerun-rawlog.txt dumpsys-window.txt dumpsys-activities.txt; do cp "instrument-results/$2-$part" "instrument-results/$2-first-$part" 2>/dev/null || true; done
   run "$1" "$2"
 }
 # Public-log-safe prefs diagnostic: file names, sizes and times of the app's shared_prefs, plus ONLY these explicit fixture keys
