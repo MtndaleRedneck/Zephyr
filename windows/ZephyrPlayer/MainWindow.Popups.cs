@@ -291,15 +291,28 @@ namespace ZephyrPlayer
                 Filter = "Subtitles (*.srt;*.ass;*.ssa;*.vtt)|*.srt;*.ass;*.ssa;*.vtt",
             };
             if (dialog.ShowDialog(this) != true) return;
+            AttachPickedSubtitle(dialog.FileName);
+        }
+
+        /// <summary>A file the user picked goes through the same strict staging as phone and sidecar
+        /// subtitles (2 MiB cap, text-format sniff, playlist and external-resource refusal) before libVLC
+        /// sees it, as 2.0.2 did. Nothing playing = nothing to attach to.</summary>
+        internal bool AttachPickedSubtitle(string file)
+        {
+            var source = _safeSource;
+            if (source == null) return false;
             try
             {
-                _player.AddSlave(MediaSlaveType.Subtitle, new Uri(dialog.FileName).AbsoluteUri, true);
-                ShowOsd("Subtitles: " + System.IO.Path.GetFileNameWithoutExtension(dialog.FileName));
+                var staged = source.StageSubtitle(new Uri(file).AbsoluteUri);
+                _player.AddSlave(MediaSlaveType.Subtitle, new Uri(staged).AbsoluteUri, true);
+                ShowOsd("Subtitles: " + System.IO.Path.GetFileNameWithoutExtension(file));
+                return true;
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Trace.TraceWarning("Subtitle file refused: " + ex.GetType().Name);
                 ShowOsd("That subtitle file could not be used");
+                return false;
             }
         }
 
@@ -331,10 +344,13 @@ namespace ZephyrPlayer
             LastSubtitleRestartNotice = text;
             ClosePopups();
             if (RestartNoticeOverride != null) { RestartNoticeOverride(PlayerBarLogic.SubtitleRestartTitle, text); return; }
-            var dlg = FirewallSetup.NoteWindow(text, PlayerBarLogic.SubtitleRestartTitle);
-            if (IsVisible) { dlg.Owner = this; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
             _restartNoticeOpen = true;
-            try { dlg.ShowDialog(); }
+            try
+            {
+                var dlg = FirewallSetup.NoteWindow(text, PlayerBarLogic.SubtitleRestartTitle);
+                if (IsVisible) { dlg.Owner = this; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+                dlg.ShowDialog();
+            }
             catch (Exception ex) { System.Diagnostics.Trace.TraceWarning("Restart notice failed: " + ex.GetType().Name); ShowOsd("Subtitle size saved. It takes effect after you quit Zephyr Player from the tray icon and open it again."); }
             finally { _restartNoticeOpen = false; }
         }

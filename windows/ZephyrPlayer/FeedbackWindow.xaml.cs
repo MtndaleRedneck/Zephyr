@@ -11,7 +11,7 @@ namespace ZephyrPlayer
     /// sees EXACTLY what would be sent, and submits in the browser via the same
     /// pre-filled Google Form or a pre-filled GitHub issue. The report carries only
     /// what he typed plus app version + Windows version - no PC name, Wi-Fi names,
-    /// paired phones or file paths.
+    /// phone names, tokens or file paths (only the paired-phone count).
     /// </summary>
     public partial class FeedbackWindow : Window
     {

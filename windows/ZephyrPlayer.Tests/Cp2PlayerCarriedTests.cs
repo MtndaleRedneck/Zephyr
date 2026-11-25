@@ -320,6 +320,36 @@ namespace ZephyrPlayer.Tests
             });
         }
 
+        // ---------- Picked subtitle file goes through the strict staging (2.0.2 behaviour) ----------
+
+        [Fact]
+        public void PickedSubtitleFile_IsStagedAndValidated_BeforeLibVlcSeesIt()
+        {
+            WithPlayer((view, player, settings, host) =>
+            {
+                // Nothing playing: nothing to attach to, nothing staged, no claim of success.
+                var idle = Path.Combine(Path.GetTempPath(), "zephyr-pick-" + Guid.NewGuid().ToString("N") + ".srt");
+                File.WriteAllText(idle, "1\r\n00:00:01,000 --> 00:00:02,000\r\nHello\r\n");
+                Assert.False(view.AttachPickedSubtitle(idle));
+                var play = view.PlayFromUrlAsync(ClipUrl, 0, Array.Empty<string>());
+                PumpUntil(() => play.IsCompleted && player.State == VLCState.Playing && !view.IsLoadingShown, "clip did not play");
+                // Over the 2 MiB cap: refused with the notice, even though the extension is .srt.
+                var big = Path.Combine(Path.GetTempPath(), "zephyr-pick-big-" + Guid.NewGuid().ToString("N") + ".srt");
+                File.WriteAllText(big, new string('x', 2 * 1024 * 1024 + 10));
+                Assert.False(view.AttachPickedSubtitle(big));
+                Assert.Equal("That subtitle file could not be used", view.OsdMessage);
+                // A playlist renamed .srt: refused (the staging sniff rejects it), not handed to libVLC.
+                var m3u = Path.Combine(Path.GetTempPath(), "zephyr-pick-pl-" + Guid.NewGuid().ToString("N") + ".srt");
+                File.WriteAllText(m3u, "#EXTM3U\r\nhttp://example.invalid/x.srt\r\n");
+                Assert.False(view.AttachPickedSubtitle(m3u));
+                Assert.Equal("That subtitle file could not be used", view.OsdMessage);
+                // A real subtitle: accepted.
+                Assert.True(view.AttachPickedSubtitle(idle));
+                Assert.StartsWith("Subtitles: ", view.OsdMessage);
+                foreach (var f in new[] { idle, big, m3u }) { try { File.Delete(f); } catch { } }
+            });
+        }
+
         // ---------- Opening reset (carry-forward a) ----------
 
         [Fact]

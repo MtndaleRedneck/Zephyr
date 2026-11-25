@@ -27,7 +27,10 @@ namespace ZephyrPlayer.Tests
                         Assert.False(opened);
                         Assert.NotNull(note);
                         Assert.Contains("No web browser could open the feedback page", note);
+                        // Both outcomes are pinned: a copied note means the clipboard really holds the link;
+                        // a clipboard that could not be written gets the plain note and never claims a copy.
                         if (note!.Contains("copied")) Assert.Equal(url, Clipboard.GetText());
+                        else Assert.Equal("No web browser could open the feedback page on this PC.", note);
                     }
                     finally { FeedbackPanel.LaunchOverride = null; FeedbackPanel.NoteOverride = null; }
                     // A working launch still opens the link and shows nothing.
