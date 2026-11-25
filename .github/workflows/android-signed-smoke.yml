@@ -225,6 +225,12 @@ jobs:
           URL="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
           CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
           [ "$CODE" = 204 ] || { echo "ASSERT FAIL: DELETE returned HTTP $CODE (expected 204)"; exit 1; }
-          GONE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
+          # The API is eventually consistent: a GET right after the DELETE returned 200 once. Poll up to 60 s; only an actual 404 passes.
+          GONE=000
+          for i in $(seq 1 20); do
+            GONE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
+            [ "$GONE" = 404 ] && break
+            sleep 3
+          done
           [ "$GONE" = 404 ] || { echo "ASSERT FAIL: after DELETE the artifact GET returned HTTP $GONE (only 404 proves it is gone)"; exit 1; }
           echo "deleted and confirmed gone: artifact $ARTIFACT_ID"
