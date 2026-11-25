@@ -37,9 +37,10 @@ class ZephyrUpgradeFixtureTest {
         // (host, port, name, source, skips, haptics) and "secrets" (the paired token, through EncryptedSharedPreferences.create(context,
         // "secrets", ...), whose underlying file is context.getSharedPreferences("secrets")). commit() on each file returns only after
         // the earlier queued writes of that file are on disk and must report success. Nothing is printed.
-        listOf("settings", "secrets").forEach { name ->
-            assertTrue("seed commit refused for $name", ctx.getSharedPreferences(name, android.content.Context.MODE_PRIVATE).edit().commit())
-        }
+        // No kotlin-stdlib calls here (no listOf/forEach): in the signed-upgrade job this minified test APK runs against the
+        // REAL shipped 1.5.0 app, whose R8 names for stdlib classes differ from this build's (NoSuchMethodError on run 45666571505).
+        assertTrue("seed commit refused for settings", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit().commit())
+        assertTrue("seed commit refused for secrets", ctx.getSharedPreferences("secrets", android.content.Context.MODE_PRIVATE).edit().commit())
     }
 
     @Test
@@ -55,8 +56,9 @@ class ZephyrUpgradeFixtureTest {
         assertEquals(60, s.skipSecondarySec)
         assertEquals(false, s.haptics)
         // Cold open of the upgraded app on top of that state: it must come up and stay up.
-        val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)!!
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
+        if (launch == null) throw AssertionError("no launcher intent for the app")
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         ctx.startActivity(launch)
         // Real arrival: the app's own window must be on screen (not just a live process).
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
