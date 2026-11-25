@@ -211,6 +211,7 @@ jobs:
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
         run: |
           set -euo pipefail
+          trap 'rm -f "$RUNNER_TEMP/release.keystore"' EXIT
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
           cp new/android/src/androidTest/java/com/bingemote/ZephyrUpgradeFixtureTest.kt old/android/src/androidTest/java/com/bingemote/
@@ -223,7 +224,6 @@ jobs:
           (cd new && ./gradlew --no-daemon -q -PsignedUpgradeTest assembleRelease assembleReleaseAndroidTest)
           cp new/android/build/outputs/apk/release/*.apk /tmp/up/new-app.apk
           cp new/android/build/outputs/apk/androidTest/release/*.apk /tmp/up/new-test.apk
-          rm -f "$RUNNER_TEMP/release.keystore"
       - name: Same signer on the real 1.5.0, the new build and both test APKs (public certificate digests only)
         run: |
           set -euo pipefail
