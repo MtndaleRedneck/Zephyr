@@ -1,6 +1,7 @@
 package com.bingemote
 
 import android.content.Intent
+import android.util.Log
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
@@ -62,7 +63,11 @@ class ZephyrUpgradeFixtureTest {
         ctx.startActivity(launch)
         // Real arrival: the app's own window must be on screen (not just a live process).
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        assertTrue("app window never appeared after cold open", device.wait(Until.hasObject(By.pkg(ctx.packageName).depth(0)), 20000))
+        val windowUp = device.wait(Until.hasObject(By.pkg(ctx.packageName).depth(0)), 20000)
+        // Diagnostic only, BEFORE the assertion fails and the instrumentation tears the app down: what the screen, the focus
+        // and the accessibility tree looked like. The pass/fail criterion below is unchanged (same query, same 20 s, same assert).
+        if (!windowUp) captureWindowFailure(device)
+        assertTrue("app window never appeared after cold open", windowUp)
         Thread.sleep(3000)
         assertTrue("app window gone after cold open", device.hasObject(By.pkg(ctx.packageName).depth(0)))
         val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
@@ -74,5 +79,32 @@ class ZephyrUpgradeFixtureTest {
         assertTrue("app process died after cold open", alive)
         // State still intact after the app itself ran against it.
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
+    }
+
+    // No kotlin stdlib calls (the shipped release app shrinks them): Java APIs only, no ==, no templates, no !!.
+    private fun captureWindowFailure(device: UiDevice) {
+        val tag = "ZephyrVerifyDiag"
+        val dir = ctx.getExternalFilesDir(null)
+        if (dir == null) { Log.e(tag, "no external files dir"); return }
+        try { device.takeScreenshot(java.io.File(dir, "verify-fail.png")) } catch (e: Throwable) { Log.e(tag, "screenshot failed", e) }
+        try {
+            val out = java.io.FileOutputStream(java.io.File(dir, "verify-fail-hierarchy.xml"))
+            device.dumpWindowHierarchy(out)
+            out.close()
+        } catch (e: Throwable) { Log.e(tag, "hierarchy dump failed", e) }
+        try {
+            val w = device.executeShellCommand("dumpsys window") as java.lang.String
+            val out = java.io.FileOutputStream(java.io.File(dir, "verify-fail-window.txt"))
+            out.write(w.getBytes())
+            out.close()
+        } catch (e: Throwable) { Log.e(tag, "window dump failed", e) }
+        try {
+            // Is the query wrong or is nothing there? Same package without depth, and every root's package.
+            Log.e(tag, "hasObject(pkg, no depth)=" + device.hasObject(By.pkg(ctx.packageName)))
+            val roots = device.findObjects(By.depth(0))
+            Log.e(tag, "depth-0 roots=" + roots.size)
+            var i = 0
+            while (i < roots.size) { Log.e(tag, "root " + i + " pkg=" + roots.get(i).applicationPackage); i = i + 1 }
+        } catch (e: Throwable) { Log.e(tag, "query diagnostic failed", e) }
     }
 }

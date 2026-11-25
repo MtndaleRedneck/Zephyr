@@ -24,7 +24,10 @@ need_upgrade() { # old new label
 ANR_ALLOW="com.google.android.apps.nexuslauncher com.android.systemui"
 run() {
   adb logcat -b all -c 2>/dev/null || adb logcat -c
+  adb shell rm -rf /sdcard/Android/data/$PKG/files/verify-fail-hierarchy.xml /sdcard/Android/data/$PKG/files/verify-fail-window.txt /sdcard/Android/data/$PKG/files/verify-fail.png 2>/dev/null || true
   adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
+  # Failure-time evidence written by the fixture (screenshot, accessibility tree, dumpsys window). Diagnostic only: never changes a verdict.
+  mkdir -p "instrument-results/$2-device" && adb pull /sdcard/Android/data/$PKG/files/. "instrument-results/$2-device/" >/dev/null 2>&1 || true
   local raw="instrument-results/$2-rawlog.txt" sys="instrument-results/$2-syslog.txt" rc
   rm -f "instrument-results/$2-logcapture-failed"
   if adb logcat -d -b main,system,events,crash > "$raw" 2>"instrument-results/$2-rawlog.err" && [ -s "$raw" ]; then
