@@ -181,6 +181,9 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "bad artifact id"; exit 1; }
-          gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
-          if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" >/dev/null 2>&1; then echo "ASSERT FAIL: artifact $ARTIFACT_ID still exists"; exit 1; fi
+          URL="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
+          [ "$CODE" = 204 ] || { echo "ASSERT FAIL: DELETE returned HTTP $CODE (expected 204)"; exit 1; }
+          GONE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
+          [ "$GONE" = 404 ] || { echo "ASSERT FAIL: after DELETE the artifact GET returned HTTP $GONE (only 404 proves it is gone)"; exit 1; }
           echo "deleted and confirmed gone: artifact $ARTIFACT_ID"
