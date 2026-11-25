@@ -565,6 +565,18 @@ try {
         if (Get-Process vlc -ErrorAction SilentlyContinue) { $vlcUp = $true; break }
         Start-Sleep -Milliseconds 500
     }
+    if (-not $vlcUp) {
+        # Forensics before failing (no config content; the helper log carries no tokens): who is alive,
+        # what the helper logged, and whether Windows recorded a VLC crash.
+        Write-Host "== forensics: VLC did not appear after the long-clip play =="
+        Write-Host "play answer: $($rLong.code) $($rLong.body)"
+        Get-Process | Where-Object { $_.ProcessName -match 'vlc|Zephyr' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) exited=$($_.HasExited)" }
+        $hl = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
+        if (Test-Path $hl) { Write-Host "== helper.log tail =="; Get-Content $hl -Tail 60 }
+        try { Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -MaxEvents 40 -ErrorAction Stop |
+              Where-Object { $_.Message -match 'vlc' } | ForEach-Object { Write-Host "event $($_.TimeCreated) $($_.ProviderName): $(($_.Message -split "`n")[0..2] -join ' | ')" } } catch { Write-Host "event log read: $($_.Exception.Message)" }
+        Write-Host "long clip present: $(Test-Path (Join-Path $movies 'long.mkv')) size=$((Get-Item (Join-Path $movies 'long.mkv') -ErrorAction SilentlyContinue).Length)"
+    }
     Assert $vlcUp "end-to-end resume: VLC is running the long clip"
     # Seek past the 60s ask floor through VLC's own web interface. The password comes
     # from vlcrc - what the RUNNING VLC actually read at launch - not a saved pair
