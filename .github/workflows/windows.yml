@@ -310,12 +310,14 @@ jobs:
         run: |
           Write-Host "pwsh $($PSVersionTable.PSVersion)"
           $bad = 0
-          foreach ($f in 'scripts/install_pinned_tool.ps1','scripts/vlc_http_proof.ps1','scripts/pc_desktop_capture.ps1','scripts/vlc_remote_e2e.ps1','scripts/pub202_real_data.ps1') {
+          foreach ($f in 'scripts/install_pinned_tool.ps1','scripts/vlc_http_proof.ps1','scripts/pc_desktop_capture.ps1','scripts/vlc_remote_e2e.ps1','scripts/pub202_real_data.ps1','scripts/shellbounds_classify.ps1','scripts/shellbounds_selftest.ps1') {
             $errs = $null; $tokens = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$tokens, [ref]$errs)
             if ($errs -and $errs.Count -gt 0) { $bad++; $errs | ForEach-Object { Write-Host "PARSE ERROR $f line $($_.Extent.StartLineNumber): $($_.Message)" } } else { Write-Host "parse OK $f" }
           }
           if ($bad) { throw "$bad script(s) do not parse under this pwsh; no tool was acquired and no script was run" }
+          # Pure ShellBounds classifier self-test (no app, no tools): a wrong verdict fails this step before anything runs.
+          ./scripts/shellbounds_selftest.ps1
       - name: Real VLC and a short video fixture for the real-VLC subtitle test
         if: steps.scripts_parse.outcome == 'success'
         timeout-minutes: 12

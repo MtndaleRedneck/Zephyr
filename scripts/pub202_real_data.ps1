@@ -41,6 +41,7 @@ Add-Type -Namespace ZW -Name Inp -MemberDefinition @'
 [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, System.UIntPtr extra);
 '@
+. (Join-Path $PSScriptRoot 'shellbounds_classify.ps1')
 function Stop-Player { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
 function Find-InProc($procId, $id) {
     $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -257,6 +258,7 @@ try {
         throw
     }
     Start-Sleep -Seconds 1
+    $mt0 = (Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o')
     $s0 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
     if ($s0.ShowSpeed -ne $speedAfter -or $s0.LibraryFolder -ne $lib) { throw "settings.json does not hold the app-made values (ShowSpeed $($s0.ShowSpeed) want $speedAfter)" }
     Note "settings_created_by_real_${oldTag}" "PROVEN (settings.json written by the published app: ShowSpeed $speedBefore -> $speedAfter, LibraryFolder set through the app's own route)"
@@ -282,6 +284,12 @@ try {
     if ([long]$item0.DurationMs -le 0 -or [long]$item0.PositionMs -lt 100000) { throw "history values are not the played ones (position $($item0.PositionMs) ms, duration $($item0.DurationMs) ms)" }
     Note "history_created_by_real_${oldTag}" "PROVEN (playback-history.json written by the published app: PositionMs $($item0.PositionMs), DurationMs $($item0.DurationMs))"
     Stop-Player
+
+    # Frozen baseline: the old app is stopped, so settings.json can no longer change before the candidate installer. Every
+    # settings comparison below uses THIS read ($sBase), not the earlier $s0 (the old app may write more, e.g. ShellBounds, after $s0).
+    $sBase = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
+    $mtBase = (Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o')
+    Note 'settings_baseline_read' "frozen after the old app stopped: mtime first read $mt0, baseline $mtBase ($(if ($mt0 -ne $mtBase) { 'file changed after the first read' } else { 'unchanged since the first read' })); ShellBounds first read '$($s0.ShellBounds)' baseline '$($sBase.ShellBounds)'"
 
     # --- upgrade to the candidate and prove what carried over ---
     $files = @('paired.json', 'settings.json', 'playback-history.json')
@@ -328,9 +336,9 @@ try {
     # Every setting EXCEPT ShellBounds must be exactly unchanged. ShellBounds (remembered window geometry, a persisted
     # preference) is classified separately below so that its outcome never hides the other checks, including history.
     $others = 0
-    $added = @($s1.PSObject.Properties.Name | Where-Object { $s0.PSObject.Properties.Name -notcontains $_ })
+    $added = @($s1.PSObject.Properties.Name | Where-Object { $sBase.PSObject.Properties.Name -notcontains $_ })
     Note 'settings_keys_added_by_candidate' "$($added.Count): $($added -join ', ')"
-    foreach ($prop in $s0.PSObject.Properties) {
+    foreach ($prop in $sBase.PSObject.Properties) {
         if ($prop.Name -eq 'ShellBounds') { continue }
         if ("$($s1.($prop.Name))" -ne "$($prop.Value)") { throw "settings value $($prop.Name) changed after the candidate ran" }
         $others++
@@ -340,46 +348,17 @@ try {
     $shellProven = $false
     $dpi = try { (Get-ItemProperty 'HKCU:\Control Panel\Desktop\WindowMetrics' -ErrorAction Stop).AppliedDPI } catch { 'unknown' }
     Note 'display_dpi' "AppliedDPI $dpi (96 = 100%; the script reads the virtual screen in pixels and the app works in DIPs, so the expected value is only comparable at 96)"
-    if ($null -eq $s0.PSObject.Properties['ShellBounds']) {
+    if ($null -eq $sBase.PSObject.Properties['ShellBounds']) {
         Note 'shellbounds_before_absent' "the pre-upgrade app wrote no ShellBounds; after: '$($s1.ShellBounds)' (nothing to preserve)"
     }
     else {
-        $inv = [Globalization.CultureInfo]::InvariantCulture
         $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
-        $beforeS = "$($s0.ShellBounds)"; $afterS = "$($s1.ShellBounds)"
-        function Parse-Bounds([string]$t) {
-            $p = $t.Split(',')
-            if ($p.Count -ne 5) { return $null }
-            $n = @(); foreach ($i in 0..3) { $d = 0.0; if (-not [double]::TryParse($p[$i], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d) -or [double]::IsNaN($d) -or [double]::IsInfinity($d)) { return $null }; $n += $d }
-            return [pscustomobject]@{ L = $n[0]; T = $n[1]; W = $n[2]; H = $n[3]; Max = $p[4] }
-        }
-        $bb = Parse-Bounds $beforeS; $aa = Parse-Bounds $afterS
-        $class = $null; $expected = 'n/a'; $sane = $false
-        if (-not $aa) { $class = 'unparseable-after' }
-        else {
-            # Same acceptance the app uses (WindowGeometry.ParseBounds: width >= 200, height >= 150, <= 20000) and the same
-            # visibility rule (ChooseBounds: at least 160 x 120 of the rect on the runner's virtual screen, both axes).
-            $ix = [Math]::Min($aa.L + $aa.W, $vs.Right) - [Math]::Max($aa.L, $vs.Left); $iy = [Math]::Min($aa.T + $aa.H, $vs.Bottom) - [Math]::Max($aa.T, $vs.Top)
-            $ints = ($afterS -match '^-?\d+,-?\d+,\d+,\d+,[01]$')
-            $sane = ($ints -and $aa.W -ge 200 -and $aa.H -ge 150 -and $aa.W -le 20000 -and $aa.H -le 20000 -and $ix -ge 160 -and $iy -ge 120)
-            if ($afterS -eq $beforeS) { $class = 'unchanged' }
-            elseif ($bb) {
-                $w = [Math]::Min($bb.W, $vs.Width); $h = [Math]::Min($bb.H, $vs.Height)
-                $left = [Math]::Max($vs.Left, [Math]::Min($bb.L, $vs.Right - $w)); $top = [Math]::Max($vs.Top, [Math]::Min($bb.T, $vs.Bottom - $h))
-                $expected = (($left, $top, $w, $h | ForEach-Object { [Math]::Round($_).ToString($inv) }) -join ',') + ',' + $bb.Max
-                if ($afterS -eq $expected) {
-                    if ("$dpi" -eq '96') { $class = 'reapplied-clamped-to-this-desktop' } else { $class = "reapplied-clamped-NOT-QUALIFIED-at-dpi-$dpi" }
-                }
-            }
-            if (-not $class) {
-                # HomeWindow.xaml default is Width 1280 x Height 800 (CenterScreen); the player window default is 1920 x 1080.
-                $rw = [Math]::Round($aa.W); $rh = [Math]::Round($aa.H)
-                if (($rw -eq 1280 -and $rh -eq 800) -or ($rw -eq 1920 -and $rh -eq 1080)) { $class = 'RESET-TO-DEFAULT-SIZE' } else { $class = 'resized-or-moved' }
-            }
-        }
-        Note 'shellbounds_before_after' "before '$beforeS' after '$afterS' class=$class sane=$sane virtual-screen $($vs.Left),$($vs.Top),$($vs.Width),$($vs.Height) expected-if-reapplied '$expected' (defaults: Home 1280x800 CenterScreen, player 1920x1080)"
-        if ($class -notin 'unchanged', 'reapplied-clamped-to-this-desktop' -or -not $sane) { $shellFail = "ShellBounds after the candidate ran: class=$class sane=$sane dpi=$dpi before '$beforeS' after '$afterS' (separate finding: not treated as pass; Home and the player window share this one key, last save wins)" }
-        else { $shellProven = $true }
+        $beforeS = "$($sBase.ShellBounds)"; $afterS = "$($s1.ShellBounds)"
+        $v = Get-ShellBoundsVerdict -BeforeS $beforeS -AfterS $afterS -VsLeft $vs.Left -VsTop $vs.Top -VsWidth $vs.Width -VsHeight $vs.Height -Dpi "$dpi"
+        Note 'shellbounds_before_after' "before '$beforeS' after '$afterS' class=$($v.Class) sane=$($v.Sane) virtual-screen $($vs.Left),$($vs.Top),$($vs.Width),$($vs.Height) expected-if-reapplied '$($v.Expected)' (defaults: Home 1280x800 CenterScreen, player 1920x1080)"
+        if ($v.Fail) { $shellFail = "ShellBounds after the candidate ran: class=$($v.Class) sane=$($v.Sane) dpi=$dpi before '$beforeS' after '$afterS' (separate finding: not treated as pass; Home and the player window share this one key, last save wins)" }
+        elseif ($v.Proven) { $shellProven = $true }
+        else { Note 'shellbounds_not_exercised' 'NOT EXERCISED: the old app persisted no geometry and the candidate wrote none; nothing to restore, and this is not proof that a saved geometry is restored' }
     }
     $item1 = (Get-Content $histPath -Raw | ConvertFrom-Json).$key
     if (-not $item1) { throw 'the history entry is gone after the candidate ran' }
@@ -389,7 +368,7 @@ try {
     Note 'history_after_candidate_ran' "PROVEN (PositionMs $($item1.PositionMs), DurationMs $($item1.DurationMs), FileSize and ModifiedUtc exactly as the 2.0.2 app wrote them)"
     if ($shellFail) { throw $shellFail }
     if ($shellProven) { Note 'shellbounds_verdict' 'PROVEN only as string equality to the unchanged or clamped-before value on this runner (not that the app read it); sane' }
-    else { Note 'shellbounds_verdict' 'not evaluated: the pre-upgrade app wrote no ShellBounds' }
+    else { Note 'shellbounds_verdict' 'not evaluated or not exercised: no saved geometry existed before the candidate ran (no restore proof)' }
     $allAssertionsPassed = $true
 }
 finally {
