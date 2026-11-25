@@ -371,6 +371,11 @@ class AutomaticOnlySetupTest {
         fun describe() = "window=${rs(window)} V=${rs(v?.rect)} F=${rs(f?.rect)} tile=${rs(tile)}($tileSource) " +
             "L=${rs(l.firstOrNull()?.rect)} sel=${selected.size} field='${fieldText}'"
         private fun inside(r: Rect, v: Rect) = r.left >= v.left && r.right <= v.right && r.top >= v.top && r.bottom <= v.bottom && r.height() > 0
+        // Text nodes sit inside layout padding, so a node that is only partly visible (its reported
+        // bounds, if the framework clips them to the viewport, then lie ON the viewport edge) must not
+        // count as fully inside: strict on every side. Used for the address label, the button label
+        // and the card label, whose heights or centres the clearance arithmetic is derived from.
+        private fun insideStrict(r: Rect, v: Rect) = r.left > v.left && r.right < v.right && r.top > v.top && r.bottom < v.bottom && r.height() > 0
 
         /** Before typing: label, button tile and card label all fully inside one unambiguous viewport. */
         fun preconditionProblem(): String? {
@@ -380,9 +385,10 @@ class AutomaticOnlySetupTest {
             if (l.isEmpty()) return "pair-code label not found: ${describe()}"
             if (v == null) return "viewport not established ($vProblem): ${describe()}"
             val vr = v.rect
-            if (!inside(f.rect, vr)) return "address label not fully inside V: ${describe()}"
+            if (!insideStrict(f.rect, vr)) return "address label not strictly inside V (clipped or on the edge): ${describe()}"
+            if (!insideStrict(bt.rect, vr)) return "button label not strictly inside V (clipped or on the edge): ${describe()}"
             if (!inside(tile, vr)) return "button tile not fully inside V: ${describe()}"
-            if (!inside(l[0].rect, vr)) return "pair-code label not fully inside V: ${describe()}"
+            if (!insideStrict(l[0].rect, vr)) return "pair-code label not strictly inside V (clipped or on the edge): ${describe()}"
             return null
         }
 
@@ -394,10 +400,14 @@ class AutomaticOnlySetupTest {
             if (v.rect != pre.v!!.rect) return "viewport bounds changed: before=${rs(pre.v.rect)} now=${rs(v.rect)}"
             if (fieldText != typed) return "typed text not in the field in this tree (field='$fieldText')"
             val vr = v.rect
-            if (!inside(f.rect, vr)) return "address label not fully inside V: ${describe()}"
+            if (!insideStrict(f.rect, vr)) return "address label not strictly inside V (clipped or on the edge): ${describe()}"
+            if (!insideStrict(bt.rect, vr)) return "button label not strictly inside V (clipped or on the edge): ${describe()}"
             if (!inside(tile, vr)) return "button tile not fully inside V (top included): ${describe()}"
+            // Row first-line height: the larger of the label heights read before and after typing, so a
+            // label that read short in one tree cannot understate the clearance.
+            val lineH = Math.max(f.rect.height(), pre.f!!.rect.height())
             val rowTop = tile.bottom + Math.round(8 * density)
-            val need = rowTop + f.rect.height() + 4
+            val need = rowTop + lineH + 4
             if (need > vr.bottom) return "first line of a would-be Selected row not observable: rowTop=$rowTop need=$need Vbottom=${vr.bottom} (button moved down, clamp or scroll): ${describe()}"
             return null
         }
@@ -410,7 +420,13 @@ class AutomaticOnlySetupTest {
             val row = selected[0]
             if (row.text != expectedRow) return "Selected text '${row.text}' != '$expectedRow'"
             if (!inside(row.rect, v.rect)) return "Selected row not inside V: row=${rs(row.rect)} ${describe()}"
-            if (l.isEmpty() || !inside(l[0].rect, v.rect)) return "pair-code label not inside V: ${describe()}"
+            if (l.isEmpty() || !insideStrict(l[0].rect, v.rect)) return "pair-code label not strictly inside V: ${describe()}"
+            // Same containment the verdict relies on, so the control proves the routine can see the row
+            // under the same rules (not at the verdict's scroll position, which it does not claim).
+            if (f == null || bt == null || tile == null) return "address label or button missing: ${describe()}"
+            if (!insideStrict(f.rect, v.rect) || !insideStrict(bt.rect, v.rect) || !inside(tile, v.rect))
+                return "address label, button label or tile not inside V: ${describe()}"
+            if (!insideStrict(row.rect, v.rect)) return "Selected row not strictly inside V: row=${rs(row.rect)} ${describe()}"
             return "ok"
         }
     }
