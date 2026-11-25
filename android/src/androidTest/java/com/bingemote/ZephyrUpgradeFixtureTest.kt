@@ -31,9 +31,15 @@ class ZephyrUpgradeFixtureTest {
         s.skipSecondarySec = 60
         s.haptics = false
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
-        // Durable before the script installs the new build: the setters above use apply() (async). commit() on the same
-        // prefs file returns only after every pending edit is written, and must report success.
-        assertTrue("seed prefs commit refused", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit().commit())
+        // The secure store must be the real one: a Keystore failure falls back to an in-memory stand-in whose token never reaches disk.
+        assertEquals("secure store opened (token will be on disk)", false, Store(ctx).secureStoreBroken)
+        // Durable before the script installs the new build. Every setter above uses apply() (async), on TWO files: "settings"
+        // (host, port, name, source, skips, haptics) and "secrets" (the paired token, through EncryptedSharedPreferences.create(context,
+        // "secrets", ...), whose underlying file is context.getSharedPreferences("secrets")). commit() on each file returns only after
+        // the earlier queued writes of that file are on disk and must report success. Nothing is printed.
+        listOf("settings", "secrets").forEach { name ->
+            assertTrue("seed commit refused for $name", ctx.getSharedPreferences(name, android.content.Context.MODE_PRIVATE).edit().commit())
+        }
     }
 
     @Test
