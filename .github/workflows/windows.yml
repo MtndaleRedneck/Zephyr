@@ -86,25 +86,6 @@ jobs:
           name: Zephyr-VLC-Remote-installer
           path: windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe
           if-no-files-found: error
-      - name: Round-trip the uploaded helper installer and compare its bytes with the build
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $id = '${{ steps.up_helper.outputs.artifact-id }}'
-          Write-Host "uploaded helper artifact id $id, zip digest ${{ steps.up_helper.outputs.artifact-digest }}"
-          if (-not $id) { throw 'helper upload step returned no artifact id' }
-          $dir = Join-Path $env:RUNNER_TEMP 'helper-roundtrip'
-          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing
-          if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'helper artifact download failed or is too small' }
-          Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
-          $exe = @(Get-ChildItem "$dir/x" -Filter 'ZephyrVLCRemote-PC-*.exe')
-          if ($exe.Count -ne 1) { throw "expected one helper installer in the artifact, found $($exe.Count)" }
-          & scripts/assert_installer_sha.ps1 -Path $exe[0].FullName -Label 'helper-artifact-roundtrip' -Kind helper
-
-
       - name: Render the helper window for layout review (CI only)
         run: |
           dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
@@ -251,6 +232,38 @@ jobs:
             if (-not $hookedHas) { throw "hooked exe is missing '$needle' in any encoding - wrong build published to out/" }
           }
           Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
+      - name: Round-trip the uploaded helper installer and compare its bytes with the build
+        # Runs after all helper evidence and tests, even when one of them failed, so it can never skip them.
+        if: always() && steps.up_helper.outcome == 'success'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $id = '${{ steps.up_helper.outputs.artifact-id }}'
+          Write-Host "uploaded helper artifact id $id, zip digest ${{ steps.up_helper.outputs.artifact-digest }}"
+          if (-not $id) { throw 'helper upload step returned no artifact id' }
+          $dir = Join-Path $env:RUNNER_TEMP 'helper-roundtrip'
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # Download only: a 404 right after the upload can be artifact-availability lag (not proven), so retry a
+          # 404 up to 6 times, 10 s apart, logging every status. 401/403/other codes and any hash mismatch fail at once.
+          $got = $false
+          for ($try = 1; $try -le 6 -and -not $got; $try++) {
+            Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue
+            $r = Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing -SkipHttpErrorCheck -PassThru
+            if (-not $r) { throw 'helper artifact download returned no response object' }
+            $code = [int]$r.StatusCode
+            Write-Host "helper artifact download attempt ${try}: HTTP $code"
+            if ($code -eq 200) { $got = $true }
+            elseif ($code -eq 404 -and $try -lt 6) { Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 10 }
+            else { throw "helper artifact download failed with HTTP $code on attempt $try" }
+          }
+          if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'helper artifact download failed or is too small' }
+          Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
+          $exe = @(Get-ChildItem "$dir/x" -Filter 'ZephyrVLCRemote-PC-*.exe')
+          if ($exe.Count -ne 1) { throw "expected one helper installer in the artifact, found $($exe.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $exe[0].FullName -Label 'helper-artifact-roundtrip' -Kind helper
+
       - name: Upload helper installer hash log (after the final round trip)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

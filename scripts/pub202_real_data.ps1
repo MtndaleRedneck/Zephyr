@@ -154,9 +154,33 @@ try {
     if (-not $tg) { throw 'SpeedToggle not found through UI Automation' }
     $tp = $tg.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern)
     $speedBefore = ($tp.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
-    $tp.Toggle()
-    Start-Sleep -Seconds 2
-    $speedAfter = ($tp.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
+    # UIA TogglePattern.Toggle() flips the checkbox but does NOT raise the WPF Click event the 2.0.2 Settings
+    # window saves from, so it never persists. Drive the real user path instead: bring the Settings window to the
+    # foreground, focus the SpeedToggle itself, verify the focused element is that control, and press Space.
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -Namespace ZW -Name Fg -MemberDefinition '[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);'
+    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
+    $top = $tg
+    while ($true) { $par = $walker.GetParent($top); if (-not $par -or $par -eq [System.Windows.Automation.AutomationElement]::RootElement) { break }; $top = $par }
+    $hwnd = [IntPtr]$top.Current.NativeWindowHandle
+    if ($hwnd -eq [IntPtr]::Zero) { throw 'could not find the Settings window handle for SpeedToggle' }
+    $focused = $false
+    for ($i = 0; $i -lt 10 -and -not $focused; $i++) {
+        [ZW.Fg]::SetForegroundWindow($hwnd) | Out-Null
+        try { $tg.SetFocus() } catch { }
+        Start-Sleep -Milliseconds 400
+        $fe = [System.Windows.Automation.AutomationElement]::FocusedElement
+        $focused = ($fe -and $fe.Current.AutomationId -eq 'SpeedToggle' -and $fe.Current.ProcessId -eq $p.Id)
+    }
+    Note 'speedtoggle_focus' "focused element is SpeedToggle of the published app: $focused"
+    if (-not $focused) { throw 'SpeedToggle never held keyboard focus in the published app, so Space would not hit the target' }
+    [System.Windows.Forms.SendKeys]::SendWait(' ')
+    $speedAfter = $speedBefore
+    for ($i = 0; $i -lt 10 -and $speedAfter -eq $speedBefore; $i++) {
+        Start-Sleep -Milliseconds 500
+        $speedAfter = ($tp.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::On)
+    }
+    Start-Sleep -Seconds 1
     if ($speedAfter -eq $speedBefore) { throw "the ShowSpeed toggle did not change ($speedBefore)" }
     $s0 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
     if ($s0.ShowSpeed -ne $speedAfter -or $s0.LibraryFolder -ne $lib) { throw "settings.json does not hold the app-made values (ShowSpeed $($s0.ShowSpeed) want $speedAfter)" }
