@@ -111,11 +111,52 @@ internal static class PowerWake
         return true;
     }
 
-    /// <summary>A mouse button frame. Only a PRESS is held back while the screen is dark (the first touch only
-    /// wakes). A RELEASE is never swallowed, so a button that went down on a lit screen can always be let go even if
-    /// the display went dark mid-hold. No state is kept: the release of a press that the wake swallowed reaches the
-    /// mouse as a lone button-up.</summary>
-    public static bool ShouldSwallowButton(bool down) => down && ShouldSwallowDiscrete();
+    // Presses the wake swallowed, per owner (the phone's pairing token, the same on the live connection and on HTTP)
+    // and button. Only these are matched: the release that belongs to a swallowed press is consumed too, so the wake
+    // tap never reaches the PC as a lone button-up (a lone right-up opens a context menu). Nothing else is tracked.
+    private static readonly Dictionary<string, HashSet<string>> SwallowedDowns = new();
+
+    /// <summary>Wire button name to the button the mouse layer uses ("right", anything else is left).</summary>
+    internal static string NormalizeButton(string? button) => button == "right" ? "right" : "left";
+
+    /// <summary>A mouse button frame from one phone. True means do not inject it.
+    /// PRESS: swallowed while the screen is dark (the first touch only wakes), and remembered for this phone and
+    /// button. A press that passes drops any older memory for the same phone and button, so nothing stale can eat
+    /// a later release. RELEASE: swallowed only when it matches a press swallowed for THIS phone and this button
+    /// (one match, then forgotten); every other release, including the release of a press that was delivered before
+    /// the display went dark, always reaches the mouse. Other phones and the other button are never affected.</summary>
+    public static bool ShouldSwallowButton(string owner, string? button, bool down)
+    {
+        var key = NormalizeButton(button);
+        lock (Gate)
+        {
+            if (down)
+            {
+                if (ShouldSwallowDiscreteLocked())
+                {
+                    if (!SwallowedDowns.TryGetValue(owner, out var set)) SwallowedDowns[owner] = set = new HashSet<string>();
+                    set.Add(key);
+                    return true;
+                }
+                ForgetLocked(owner, key);
+                return false;
+            }
+            return ForgetLocked(owner, key);
+        }
+    }
+
+    private static bool ForgetLocked(string owner, string key)
+    {
+        if (!SwallowedDowns.TryGetValue(owner, out var set) || !set.Remove(key)) return false;
+        if (set.Count == 0) SwallowedDowns.Remove(owner);
+        return true;
+    }
+
+    /// <summary>Test fixtures only: forget every remembered swallowed press.</summary>
+    internal static void ForgetSwallowedButtonsForTests() { lock (Gate) SwallowedDowns.Clear(); }
+
+    /// <summary>Test observation only: how many (phone, button) swallowed presses are remembered right now.</summary>
+    internal static int SwallowedButtonCountForTests { get { lock (Gate) return SwallowedDowns.Values.Sum(x => x.Count); } }
 
     /// <summary>The hidden window's thread owns every ES_CONTINUOUS transition. Windows
     /// execution state is per-thread, so a hold set on one thread cannot be released from

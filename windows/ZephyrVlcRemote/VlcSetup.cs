@@ -201,6 +201,8 @@ internal static class VlcSetup
 
     private static string? _candidate;
     internal static void ForgetCandidateForTests() { lock (Gate) _candidate = null; }
+    /// <summary>Test fixtures only (never called by the product): forget a deferred vlcrc password a previous test left behind.</summary>
+    internal static void ForgetPendingForTests() { lock (Gate) _pendingPassword = null; }
 
     /// <summary>Carry out a plan: the idempotent write (also for an existing password, since a vlcrc can carry
     /// one with the web interface off). A write that cannot happen now stays pending (WriteVlcrc does not throw

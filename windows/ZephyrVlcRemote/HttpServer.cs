@@ -243,7 +243,7 @@ internal sealed class HttpServer : IDisposable
 
                 default:
                     if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
-                    RouteCommand(path, ReadBody(req), res);
+                    RouteCommand(path, ReadBody(req), res, req.Headers["X-Zephyr-VLC-Remote-Token"] ?? "");
                     return;
             }
         }
@@ -456,20 +456,22 @@ internal sealed class HttpServer : IDisposable
         return true;
     }
 
-    /// <summary>A button frame over HTTP: only a press can be swallowed, a release never is. A body that cannot be read
+    /// <summary>A button frame over HTTP from the phone with this token: a press can be swallowed, a release only when it
+    /// matches a press swallowed for the same phone and button (see PowerWake.ShouldSwallowButton). A body that cannot be read
     /// falls back to the old rule (the command parse below then fails the same way it always did).</summary>
-    private static bool SwallowHttpButton(string body)
+    private static bool SwallowHttpButton(string body, string token)
     {
         try
         {
             using var d = JsonDocument.Parse(string.IsNullOrWhiteSpace(body) ? "{}" : body);
             var r = d.RootElement;
-            return PowerWake.ShouldSwallowButton(r.GetProperty("down").GetBoolean());
+            var button = r.TryGetProperty("button", out var bp) && bp.ValueKind == JsonValueKind.String ? bp.GetString() : null;
+            return PowerWake.ShouldSwallowButton(token, button, r.GetProperty("down").GetBoolean());
         }
         catch (Exception) { return PowerWake.ShouldSwallowDiscrete(); }
     }
 
-    private static void RouteCommand(string path, string body, HttpListenerResponse res)
+    private static void RouteCommand(string path, string body, HttpListenerResponse res, string token)
     {
         // First press while the screen is dark only wakes it - the tap's action is
         // swallowed whole, never half-applied. Continuous touchpad/scroll input is
@@ -478,7 +480,7 @@ internal sealed class HttpServer : IDisposable
         {
             "/volume/get" => false,
             "/mouse/move" or "/mouse/scroll" or "/mouse/zoom" => PowerWake.ShouldSwallowContinuous(),
-            "/mouse/button" => SwallowHttpButton(body),
+            "/mouse/button" => SwallowHttpButton(body, token),
             _ => PowerWake.ShouldSwallowDiscrete(),
         };
         if (swallowed)
@@ -599,7 +601,7 @@ internal sealed class HttpServer : IDisposable
                     Program.Log("Live mouse connection closed - the phone was removed.");
                     break;
                 }
-                DispatchWs(text.ToString(), pressed, ref lastSeq);
+                DispatchWs(text.ToString(), pressed, ref lastSeq, token);
                 text.Clear();
             }
         }
@@ -624,7 +626,7 @@ internal sealed class HttpServer : IDisposable
 
     /// <summary>Apply one frame from the live connection. Anything malformed costs nothing.
     /// Frame numbers are counted: a gap means a frame went missing between phone and PC.</summary>
-    private static void DispatchWs(string text, HashSet<string> pressed, ref long lastSeq)
+    private static void DispatchWs(string text, HashSet<string> pressed, ref long lastSeq, string token)
     {
         try
         {
@@ -642,7 +644,7 @@ internal sealed class HttpServer : IDisposable
             // First touch while the screen is dark only wakes it: the frame is consumed
             // whole (no half-gestures, no leaked clicks) and nothing is injected.
             if (cmd == "button"
-                ? PowerWake.ShouldSwallowButton(r.GetProperty("down").GetBoolean())
+                ? PowerWake.ShouldSwallowButton(token, r.TryGetProperty("button", out var wb) && wb.ValueKind == JsonValueKind.String ? wb.GetString() : null, r.GetProperty("down").GetBoolean())
                 : PowerWake.ShouldSwallowContinuous()) return;
             switch (cmd)
             {

@@ -17,6 +17,7 @@ public class VlcSetupTests : IDisposable
         Directory.CreateDirectory(_dir);
         VlcSetup.VlcDirOverride = _dir;
         VlcSetup.ForgetCandidateForTests();
+        VlcSetup.ForgetPendingForTests();
         VlcSetup.VlcRunningOverride = () => false;   // the tests must not depend on a VLC open on the machine
     }
 
@@ -26,6 +27,7 @@ public class VlcSetupTests : IDisposable
         VlcSetup.VlcRunningOverride = null;
         VlcSetup.AfterPlanReadForTests = null;
         VlcSetup.ForgetCandidateForTests();
+        VlcSetup.ForgetPendingForTests();
         try { Directory.Delete(_dir, true); } catch { }
     }
 

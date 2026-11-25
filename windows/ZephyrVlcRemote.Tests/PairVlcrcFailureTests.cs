@@ -25,11 +25,12 @@ public class PairVlcrcFailureTests : IDisposable
         VlcSetup.VlcDirOverride = VlcDirPath;
         VlcSetup.VlcRunningOverride = () => false;
         VlcSetup.ForgetCandidateForTests();
+        VlcSetup.ForgetPendingForTests();
     }
 
     public void Dispose()
     {
-        VlcSetup.VlcDirOverride = null; VlcSetup.VlcRunningOverride = null; VlcSetup.ForgetCandidateForTests();
+        VlcSetup.VlcDirOverride = null; VlcSetup.VlcRunningOverride = null; VlcSetup.ForgetCandidateForTests(); VlcSetup.ForgetPendingForTests();
         Program.PairCode = null; Program.StoreBroken = false;
         lock (Program.PhonesLock) { Program.Phones.Clear(); }
         Program.ResetDataDirForTests();
