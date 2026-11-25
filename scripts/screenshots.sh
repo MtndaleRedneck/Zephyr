@@ -17,15 +17,17 @@ dismiss_anr() {
   return 0
 }
 black() { [ "$(stat -c%s "$1")" -lt 30000 ]; }
-shoot() { # $1 screen
+shoot() { # $1 screen name, $2 screen id (default same), rest = extra intent args
+  local NAME="$1" SCR="${2:-$1}"; shift; shift || true
+  [ "$SCR" = "" ] && SCR="$NAME"
   for try in 1 2 3; do
     adb shell am force-stop $PKG
-    adb shell am start -n $PKG/com.bingemote.MainActivity --es screen "$1"
+    adb shell am start -n $PKG/com.bingemote.MainActivity --es screen "$SCR" "$@"
     sleep 8
     adb shell pidof $PKG
     dismiss_anr
-    adb exec-out screencap -p > "screenshots/$1.png"
-    if ! black "screenshots/$1.png"; then break; fi
+    adb exec-out screencap -p > "screenshots/$NAME.png"
+    if ! black "screenshots/$NAME.png"; then break; fi
     echo "black frame on $1 (try $try), retrying"
     sleep 4
   done
@@ -44,6 +46,22 @@ shoot settings-pair-2
 shoot settings-pair-paired
 shoot movies-phone
 shoot movies
+shoot main-connected main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok
+shoot helper-code-entry setup --ez pairdemo true --ez pairdemoselect true
+# Same setup page opened from Settings (Cancel button present): the title must not squeeze Cancel into a column.
+shoot setup-cancel setup --ez pairdemo true --ez setupcancel true
+shoot banner-unreachable main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-g
+shoot banner-helper-note main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-e
+shoot banner-unpaired-note main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-unpaired
+# Settings scrolled to the Feedback card so its forward arrow is in frame.
+adb shell am force-stop $PKG
+adb shell am start -n $PKG/com.bingemote.MainActivity --es screen settings >/dev/null
+sleep 8
+for i in 1 2 3 4; do adb shell input swipe 540 1900 540 700 300; sleep 1; done
+sleep 2
+adb exec-out screencap -p > screenshots/settings-feedback-card.png
+shoot feedback feedback
+shoot update-offer update
 adb shell wm size reset
 adb shell wm density reset
 

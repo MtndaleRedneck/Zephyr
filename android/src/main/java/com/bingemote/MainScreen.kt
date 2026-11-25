@@ -3,6 +3,8 @@ package com.bingemote
 import android.util.Log
 import android.view.MotionEvent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlin.math.roundToInt
@@ -48,6 +51,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 
 @Composable
 fun MainScreen(
@@ -65,7 +69,7 @@ fun MainScreen(
         Column(Modifier.fillMaxSize()) {
             TopBar(
                 source = { SourceSelector(remote) },
-                pill = { StatusPill(paired = remote.pairedForSelected(), connected = !remote.unreachable) },
+                pill = { StatusPill(paired = remote.pairedForSelected(), connected = if (remote.store.selectedSource == Source.ZEPHYR) !remote.unreachable else remote.pcReachable) },
                 settings = {
                     HeaderIconButton(onSettings, remote.store.haptics, startPad = 6.dp) {
                         androidx.compose.material3.Icon(
@@ -174,7 +178,7 @@ private fun HomeContent(
     // When the PC is unreachable the card itself says so; no overlay, no Retry.
     // VLC closed but the PC program answers: say that instead (the helper starts VLC from Movies).
     val vlcOut = remote.vlcClosed && !remote.expectingVlc
-    val lost = remote.unreachable && !remote.expectingVlc && !remote.vlcClosed
+    val lost = !remote.pcReachable && !remote.expectingVlc
     val refused = remote.vlcRefused
     // Teardown A1: nothing paired -> the hero is a quiet way into Settings pairing,
     // never a forced setup screen. One line, whole card tappable.
@@ -196,21 +200,28 @@ private fun HomeContent(
     ) {
         Column {
             if (unpairedSource) {
+                // Same two-line hero as every other state (title + 14sp line), so the card keeps
+                // its size and look; the whole card still opens Settings. Source switching stays
+                // in the header selector.
                 Text(
-                    "Go to Settings to pair to PC",
+                    if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC isn't paired" else "VLC PC isn't paired",
                     color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2,
                 )
+                Text(
+                    "Tap here to open Settings and pair it",
+                    color = Color(0xFF3D2A12), fontSize = 14.sp,
+                )
             } else {
             Text(
-                if (refused) "VLC refused the password" else if (lost) "Can't reach your PC" else if (vlcOut) "VLC isn't open"
+                if (refused) "VLC refused the password" else if (lost) "Trying to reconnect" else if (vlcOut) "VLC isn't open"
                 else s?.title?.let { displayName(it).ifBlank { "Nothing playing" } } ?: "Nothing playing",
                 color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
                 maxLines = 2,
             )
             Text(
-                if (refused) "If you changed it on the PC, re-pair in Settings or set it back by hand"
-                else if (lost) "Trying to reconnect"
+                if (refused) "Pair again in Settings to get the password from your PC"
+                else if (lost) "Both devices need to be on the same network"
                 else if (vlcOut) "Pick a film in Movies and it starts by itself"
                 else when (s?.state) {
                     "playing" -> "Playing"
@@ -218,6 +229,8 @@ private fun HomeContent(
                     else -> "Stopped"
                 },
                 color = Color(0xFF3D2A12), fontSize = 14.sp,
+                // Reconnect line only: slightly tighter tracking so it fits one line (size unchanged).
+                letterSpacing = if (lost) 0.sp else TextUnit.Unspecified,
             )
             }
             // Strictly-necessary helper notices ride the hero itself - no second card.
@@ -303,7 +316,7 @@ private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier =
             Modifier
                 .size(9.dp)
                 .clip(CircleShape)
-                .background(if (!paired) Dimmed else if (connected) Orange else ErrorRed),
+                .background(if (!paired) Dimmed else if (connected) ConnectedGreen else ErrorRed),
         )
         Spacer(Modifier.width(8.dp))
         Text(
@@ -313,6 +326,9 @@ private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier =
         )
     }
 }
+
+/** Header Connected dot (same green as the Your PC screen). */
+private val ConnectedGreen = Color(0xFF4CAF50)
 
 /** Live seek-drag facts shared between the bar (the gesture owner) and the
  * play/pause circle (the cancel target while a drag is active). */
@@ -351,7 +367,7 @@ private fun SeekDrag.trackCircle(finger: Offset, rampPx: Float, insetPx: Float, 
  * the whole time - inside the circle too. */
 @Composable
 private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
-    val s = remote.status
+    val s = remote.shownStatus
     val length = s?.lengthSec ?: 0
     val position = if (length > 0) (s?.timeSec ?: 0).toFloat() / length else 0f
 
@@ -642,7 +658,7 @@ private fun VolumeRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scal
 @Composable
 private fun SkipRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scale: Float = 1f, seekDrag: SeekDrag? = null) {
     val label = formatSkip(remote.store.skipMainSec)
-    val playing = remote.status?.playing == true
+    val playing = remote.shownStatus?.playing == true
     Row(
         Modifier.fillMaxWidth().padding(horizontal = gapDp.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -675,7 +691,8 @@ private fun SkipRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scale:
 private fun PlayPauseButton(remote: RemoteState, playing: Boolean, flashAll: Boolean, scale: Float = 1f, seekDrag: SeekDrag? = null) {
     // During a seek drag this circle is the cancel target, not a button: the tap
     // stays play/pause only when no drag is active.
-    val cancelling = seekDrag?.active == true
+    val activeDrag = seekDrag?.takeIf { it.active }
+    val cancelling = activeDrag != null
     PressTile(
         onTap = { if (!cancelling) remote.togglePause() },
         hapticsOn = remote.store.haptics,
@@ -697,8 +714,8 @@ private fun PlayPauseButton(remote: RemoteState, playing: Boolean, flashAll: Boo
                 ),
             contentAlignment = Alignment.Center,
         ) {
-            if (cancelling && seekDrag != null) {
-                CancelCircleContent(seekDrag, remote.store.cancelStyle)
+            if (activeDrag != null) {
+                CancelCircleContent(activeDrag)
             } else {
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                     drawCircle(if (pressed && flashAll) TextC else Orange, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()))
@@ -709,23 +726,16 @@ private fun PlayPauseButton(remote: RemoteState, playing: Boolean, flashAll: Boo
     }
 }
 
-/** The cancel target that replaces the play/pause glyph during a seek drag.
- * "Ring only": orange ring and label from the start, brightening as the finger
- * closes in. "Fills in": the orange outline is constant and the interior fills
- * dark-to-orange with proximity; the label darkens early so it stays readable.
- * Either way only the wording flips at the border: Cancel -> Release to cancel. */
+/** Filled cancel target. Only the wording flips at the border. */
 @Composable
-private fun CancelCircleContent(drag: SeekDrag, style: String) {
+private fun CancelCircleContent(drag: SeekDrag) {
     val p = drag.proximity
     val dark = Color(0xFF1B1B1E)
-    val fills = style == "fills"
     val ringColor = androidx.compose.ui.graphics.lerp(Orange, OrangeLight, p)
-    val labelColor = if (fills) {
-        androidx.compose.ui.graphics.lerp(Orange, dark, (p * 3f).coerceAtMost(1f))
-    } else ringColor
+    val labelColor = androidx.compose.ui.graphics.lerp(Orange, dark, (p * 3f).coerceAtMost(1f))
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
-            if (fills) drawCircle(androidx.compose.ui.graphics.lerp(Card, Orange, p))
+            drawCircle(androidx.compose.ui.graphics.lerp(Card, Orange, p))
             drawCircle(ringColor, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()))
         }
         Text(
@@ -796,6 +806,41 @@ private fun BottomRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, onSu
 private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
     val tracks = remote.status?.subtitleTracks ?: emptyList()
     val picked = remote.pickedSubtitle
+    val folder = remote.subtitleFolder
+    val mapped = folder?.files?.flatMap { it.trackIds }?.toSet() ?: emptySet()
+    val loadedTracks = tracks.filter { it.id !in mapped }
+    // Screenshot-rig only: once the connected rows have actually composed, hold them
+    // long enough for the test to observe them, then drop the connection mid-view.
+    // The armed flag is read INSIDE the effect: gating the effect itself on the flag
+    // let any recomposition dispose the effect mid-delay and silently skip the drop.
+    if (BuildConfig.DEBUG) {
+        LaunchedEffect(Unit) {
+            if (MainActivity.previewLostRigArmed) {
+                // Wait inside the effect for the connected rows (the effect itself is never gated
+                // on them, so a recomposition cannot dispose it after the flag was consumed).
+                androidx.compose.runtime.snapshotFlow { remote.subtitleFolder?.files?.isNotEmpty() == true }
+                    .first { v -> v }
+                MainActivity.previewLostRigArmed = false
+                android.util.Log.e("ZephyrTriage", "rig: connected rows composed, dropping in 2.5s")
+                kotlinx.coroutines.delay(2500)
+                remote.debugForceStatus(unreachable = true, helperDown = true)
+                android.util.Log.e("ZephyrTriage", "rig: forced unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                repeat(9) {
+                    kotlinx.coroutines.delay(3000)
+                    android.util.Log.e("ZephyrTriage", "rig: +${(it + 1) * 3}s unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                }
+            } else {
+                android.util.Log.e("ZephyrTriage", "rig: not armed when the sheet composed")
+            }
+        }
+    }
+    LaunchedEffect(Unit) {
+        remote.refreshSubtitleFiles()
+        while (true) {
+            kotlinx.coroutines.delay(2000)
+            if (!remote.subtitleFilesLoading) remote.refreshSubtitleFiles(quiet = true)
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -813,28 +858,67 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp))
                 .background(Card)
+                .heightIn(max = 620.dp)
+                .verticalScroll(rememberScrollState())
                 // taps inside the sheet don't close it
                 .pointerInput(Unit) { awaitEachGesture { awaitFirstDown(); waitForUpOrCancellation() } }
                 .padding(horizontal = 22.dp, vertical = 20.dp),
         ) {
             Text("Subtitles", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(14.dp))
-            SubtitleRow("Off", picked == -1 || (picked == null && tracks.none { it.selected }), remote.store.haptics) {
-                remote.pickSubtitle(-1); onClose()
+            SubtitleRow("Off", !remote.subtitleOutcomeUnknown && remote.pickedSubtitleFile == null && (picked == -1 || (picked == null && tracks.none { it.selected })), remote.store.haptics) {
+                remote.pickSubtitle(-1)
             }
-            tracks.forEach { t ->
-                val checked = if (picked != null) picked == t.id else t.selected
-                SubtitleRow(t.name, checked, remote.store.haptics) {
-                    remote.pickSubtitle(t.id); onClose()
+            // Disconnected or helper not answering (same flags as the status pill and
+            // helper notice): the sheet shows only Off, like before folder subtitles
+            // existed. No stale tracks, no folder rows, no loading line, no
+            // error/Retry, no dividers. helperDown only means the helper process
+            // stopped answering - every shippable helper serves /volume/get, and an
+            // older helper that lacks folder subtitles still answers it, so it keeps
+            // helperDown=false and its working embedded rows are untouched.
+            if (BuildConfig.DEBUG) android.util.Log.e("ZephyrTriage", "sheet body composed unreachable=${remote.unreachable} helperDown=${remote.helperDown} rows=${folder?.files?.size}")
+            if (!remote.unreachable && !remote.helperDown) {
+                val showEmptyNotice = tracks.isEmpty() && folder != null && folder.files.isEmpty() && !remote.subtitleFilesLoading && remote.subtitleFileError == null
+                // Dividers only when there is actually something below them to separate
+                // from Off: real folder/track rows or a persistent notice. A transient
+                // "Checking..." line alone gets no divider.
+                if (folder?.files?.isNotEmpty() == true || loadedTracks.isNotEmpty() || remote.subtitleFileError != null || showEmptyNotice) SubtitleDivider()
+                if (remote.subtitleFilesLoading && folder == null) {
+                    Text("Checking subtitle files...", color = Muted, fontSize = 13.sp)
                 }
-            }
-            if (tracks.isEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text("No subtitle tracks in this video.", color = Muted, fontSize = 13.sp)
+                folder?.files?.forEach { file ->
+                    val checked = !remote.subtitleOutcomeUnknown && (remote.pickedSubtitleFile == file.id ||
+                        (remote.pickedSubtitleFile == null && file.trackIds.any { id -> if (picked != null) picked == id else tracks.any { it.id == id && it.selected } }))
+                    SubtitleRow(file.name.substringBeforeLast('.'), checked, remote.store.haptics) {
+                        remote.loadSubtitleFile(file)
+                    }
+                }
+                remote.subtitleFileError?.let {
+                    Text(it, color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+                    SubtitleRow("Retry", false, remote.store.haptics) { remote.refreshSubtitleFiles() }
+                }
+                if (folder?.files?.isNotEmpty() == true && loadedTracks.isNotEmpty()) SubtitleDivider()
+                loadedTracks.forEach { t ->
+                    val checked = !remote.subtitleOutcomeUnknown && remote.pickedSubtitleFile == null && (if (picked != null) picked == t.id else t.selected)
+                    SubtitleRow(t.name, checked, remote.store.haptics) {
+                        remote.pickSubtitle(t.id)
+                    }
+                }
+                if (showEmptyNotice) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("No subtitle tracks or files found.", color = Muted, fontSize = 13.sp)
+                }
             }
             Spacer(Modifier.height(10.dp))
         }
     }
+}
+
+@Composable
+private fun SubtitleDivider() {
+    Spacer(Modifier.height(10.dp))
+    Box(Modifier.fillMaxWidth().height(0.7.dp).background(TrackGray))
+    Spacer(Modifier.height(10.dp))
 }
 
 @Composable

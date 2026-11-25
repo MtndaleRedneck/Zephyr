@@ -1,0 +1,238 @@
+name: android-signed-smoke
+# push to temp branches only (no dispatch). Two stages, no secret, no signing key, no signed file ever uploaded anywhere.
+#  build: builds the UNSIGNED release APK and keeps it as a run artifact named unsigned-apk (1 day retention).
+#         The owner's runner downloads it, deletes the artifact, and signs it locally from the vault.
+#  smoke: (after resolve validates the producer run) the owner passes only the APK Signing Block (public certificate + signature, about 5 KB, no secret)
+#         as base64. This job takes the unsigned APK from the build run, inserts the block (scripts/sigblock.py),
+#         requires the result to hash to the exact signed file the owner holds, then installs the published 1.5.0
+#         and the signed file over it on an emulator and checks the resumed app UI.
+#         The signed APK exists only on this runner. A final always() job deletes the unsigned artifact.
+# Nothing here publishes a release.
+on:
+  # No workflow_dispatch: a dispatch needs the file on the default branch. The owner's push to a temp branch runs this file from that branch.
+  #  smoke-build/android-*: stage build, run at the exact source commit S (an existing commit pushed as a new branch).
+  #  smoke-run/android-*:   stage smoke, run at M, a one-parent child of S whose only change is smoke-inputs.json (public data, no secret).
+  push:
+    branches:
+      - 'smoke-build/android-*'
+      - 'smoke-run/android-*'
+permissions:
+  contents: read
+env:
+  OLD_NAME: '1.5.0'
+  OLD_CODE: '26'
+  NEW_NAME: '1.6.0'
+  NEW_CODE: '27'
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      stage: ${{ steps.g.outputs.stage }}
+    steps:
+      - name: Trusted push source and stage from the branch name only
+        id: g
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERER: ${{ github.triggering_actor }}
+          OWNER: ${{ github.repository_owner }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          [ "$EVENT" = push ] && [ "$REF_TYPE" = branch ] || { echo "ASSERT FAIL: not a branch push"; exit 1; }
+          [ "$ACTOR" = "$OWNER" ] && [ "$TRIGGERER" = "$OWNER" ] || { echo "ASSERT FAIL: pusher is not the repository owner"; exit 1; }
+          [ "$ATTEMPT" = 1 ] || { echo "ASSERT FAIL: re-runs are not allowed"; exit 1; }
+          case "$REF" in
+            refs/heads/smoke-build/android-*) S=build ;;
+            refs/heads/smoke-run/android-*) S=smoke ;;
+            *) echo "ASSERT FAIL: unknown branch"; exit 1 ;;
+          esac
+          [[ "${REF#refs/heads/}" =~ ^smoke-(build|run)/android-[0-9a-z-]{1,40}$ ]] || { echo "ASSERT FAIL: bad branch name"; exit 1; }
+          echo "stage=$S" >> "$GITHUB_OUTPUT"
+  build:
+    needs: guard
+    if: ${{ needs.guard.outputs.stage == 'build' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3
+      - name: Build the unsigned release
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Stage the unsigned APK with its provenance (zipalign checked, no fallback check)
+        run: |
+          set -euo pipefail
+          APKS=(android/build/outputs/apk/release/*.apk)
+          [ "${#APKS[@]}" = 1 ] || { echo "expected exactly one release APK"; exit 1; }
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          "$BT/zipalign" -c -P 16 4 "${APKS[0]}"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "${APKS[0]}" "$RUNNER_TEMP/out/unsigned.apk"
+          H=$(sha256sum "$RUNNER_TEMP/out/unsigned.apk" | cut -d' ' -f1)
+          printf 'source_sha=%s\nrun_id=%s\nunsigned_sha256=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$H" > "$RUNNER_TEMP/out/provenance.txt"
+          cat "$RUNNER_TEMP/out/provenance.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: unsigned-apk
+          path: ${{ runner.temp }}/out/*
+          retention-days: 1
+          if-no-files-found: error
+  resolve:
+    needs: guard
+    if: ${{ needs.guard.outputs.stage == 'smoke' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.r.outputs.artifact_id }}
+      source_sha: ${{ steps.r.outputs.source_sha }}
+      build_run_id: ${{ steps.r.outputs.build_run_id }}
+      unsigned_sha256: ${{ steps.r.outputs.unsigned_sha256 }}
+      expected_signed_sha256: ${{ steps.r.outputs.expected_signed_sha256 }}
+      expected_signer_sha256: ${{ steps.r.outputs.expected_signer_sha256 }}
+      signing_block_b64: ${{ steps.r.outputs.signing_block_b64 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+      - name: Validate the inputs commit, the producer run, its commit, ref and artifact
+        id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          M=$(git rev-parse HEAD)
+          [ "$M" = "$GITHUB_SHA" ] || { echo "ASSERT FAIL: checkout is not the pushed commit"; exit 1; }
+          [ "$(git rev-list --parents -n1 HEAD | wc -w)" = 2 ] || { echo "ASSERT FAIL: run commit must have exactly one parent"; exit 1; }
+          GIT_PARENT=$(git rev-parse HEAD^)
+          [ "$(git diff --name-only --no-renames "$GIT_PARENT" HEAD)" = smoke-inputs.json ] || { echo "ASSERT FAIL: the run commit may change only smoke-inputs.json"; exit 1; }
+          [ "$(git diff --raw --no-renames "$GIT_PARENT" HEAD | awk '{print $1" "$2" "$5}')" = ":000000 100644 A" ] || { echo "ASSERT FAIL: smoke-inputs.json must be one added regular file"; exit 1; }
+          [ "$(wc -c < smoke-inputs.json)" -lt 20000 ] || { echo "ASSERT FAIL: inputs file too large"; exit 1; }
+          jq -e 'keys == ["build_run_id","expected_signed_sha256","expected_signer_sha256","signing_block_b64","source_sha","unsigned_sha256"] and all(.[]; type=="string")' smoke-inputs.json >/dev/null || { echo "ASSERT FAIL: inputs file shape"; exit 1; }
+          jv() { jq -r ".$1" smoke-inputs.json; }
+          SRC=$(jv source_sha); RUN_ID=$(jv build_run_id)
+          [ "$SRC" = "$GIT_PARENT" ] || { echo "ASSERT FAIL: inputs source_sha is not the parent commit"; exit 1; }
+          [[ "$SRC" =~ ^[0-9a-f]{40}$ ]] || { echo "bad source sha"; exit 1; }
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "bad run id"; exit 1; }
+          for k in unsigned_sha256 expected_signed_sha256 expected_signer_sha256; do [[ "$(jv $k)" =~ ^[0-9a-f]{64}$ ]] || { echo "bad $k"; exit 1; }; done
+          SB=$(jv signing_block_b64); [[ "$SB" =~ ^[A-Za-z0-9+/=]+$ ]] && [ "${#SB}" -ge 100 ] && [ "${#SB}" -le 20000 ] || { echo "bad signing block"; exit 1; }
+          RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+          chk() { [ "$(echo "$RUN" | jq -r "$1")" = "$2" ] || { echo "ASSERT FAIL: producer run $1 is not $2"; exit 1; }; }
+          chk .status completed
+          chk .conclusion success
+          chk .event push
+          chk .run_attempt 1
+          chk .head_sha "$SRC"
+          chk .actor.login "$GITHUB_REPOSITORY_OWNER"
+          [ "$(echo "$RUN" | jq -r .head_branch)" = "smoke-build/${GITHUB_REF_NAME#smoke-run/}" ] || { echo "ASSERT FAIL: producer branch is not the matching smoke-build branch"; exit 1; }
+          chk .repository.full_name "$GITHUB_REPOSITORY"
+          chk .head_repository.full_name "$GITHUB_REPOSITORY"
+          RP=$(echo "$RUN" | jq -r .path); WF=.github/workflows/android-signed-smoke.yml
+          [ "$RP" = "$WF" ] || [ "$RP" = "$WF@refs/heads/smoke-build/${GITHUB_REF_NAME#smoke-run/}" ] || { echo "ASSERT FAIL: producer run path is not this workflow on the matching smoke-build branch"; exit 1; }
+          ARTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts")
+          [ "$(echo "$ARTS" | jq '[.artifacts[] | select(.name=="unsigned-apk")] | length')" = 1 ] || { echo "ASSERT FAIL: not exactly one unsigned-apk artifact"; exit 1; }
+          A=$(echo "$ARTS" | jq -c '.artifacts[] | select(.name=="unsigned-apk")')
+          [ "$(echo "$A" | jq -r .expired)" = false ] || { echo "artifact expired"; exit 1; }
+          [ "$(echo "$A" | jq -r .workflow_run.id)" = "$RUN_ID" ] || { echo "artifact belongs to another run"; exit 1; }
+          [ "$(echo "$A" | jq -r .workflow_run.head_sha)" = "$SRC" ] || { echo "artifact head differs"; exit 1; }
+          ID=$(echo "$A" | jq -r .id)
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "bad artifact id"; exit 1; }
+          echo "artifact_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$SRC" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          for k in unsigned_sha256 expected_signed_sha256 expected_signer_sha256 signing_block_b64; do echo "$k=$(jv $k)" >> "$GITHUB_OUTPUT"; done
+          echo "validated: inputs commit $M (parent $SRC), producer run $RUN_ID, artifact $ID"
+  smoke:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 2
+      - name: Scripts and workflow at the run commit must equal the source commit
+        env:
+          SRC: ${{ needs.resolve.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD^)" = "$SRC" ] || { echo "ASSERT FAIL: parent is not the source commit"; exit 1; }
+          git diff --quiet "$SRC" HEAD -- . ':(exclude)smoke-inputs.json' || { echo "ASSERT FAIL: tree differs from the source commit beyond smoke-inputs.json"; exit 1; }
+      - name: Rebuild the exact signed bytes from the validated artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ needs.resolve.outputs.build_run_id }}
+          SRC: ${{ needs.resolve.outputs.source_sha }}
+          ARTIFACT_ID: ${{ needs.resolve.outputs.artifact_id }}
+          WANT_UNSIGNED: ${{ needs.resolve.outputs.unsigned_sha256 }}
+          BLOCK_B64: ${{ needs.resolve.outputs.signing_block_b64 }}
+          WANT_SIGNED: ${{ needs.resolve.outputs.expected_signed_sha256 }}
+          WANT_SIGNER: ${{ needs.resolve.outputs.expected_signer_sha256 }}
+        run: |
+          set -euo pipefail
+          for v in "$WANT_UNSIGNED" "$WANT_SIGNED" "$WANT_SIGNER"; do [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 input"; exit 1; }; done
+          [[ "$BLOCK_B64" =~ ^[A-Za-z0-9+/=]+$ ]] && [ "${#BLOCK_B64}" -ge 100 ] && [ "${#BLOCK_B64}" -le 20000 ] || { echo "bad signing block input"; exit 1; }
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "no validated artifact"; exit 1; }
+          mkdir -p /tmp/zs/in && cd /tmp/zs
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > u.zip
+          [ "$(unzip -Z1 u.zip | sort | tr '\n' ' ')" = "provenance.txt unsigned.apk " ] || { echo "ASSERT FAIL: unexpected artifact contents"; exit 1; }
+          unzip -q u.zip -d in
+          U=$(sha256sum in/unsigned.apk | cut -d' ' -f1)
+          [ "$(cat in/provenance.txt)" = "$(printf 'source_sha=%s\nrun_id=%s\nunsigned_sha256=%s' "$SRC" "$RUN_ID" "$U")" ] || { echo "ASSERT FAIL: provenance differs from the validated run or the file"; exit 1; }
+          [ "$U" = "$WANT_UNSIGNED" ] || { echo "ASSERT FAIL: inputs-file unsigned hash differs from the artifact"; exit 1; }
+          printf '%s' "$BLOCK_B64" | base64 -d > block.bin
+          python3 "$GITHUB_WORKSPACE/scripts/sigblock.py" apply in/unsigned.apk block.bin new.apk
+          H=$(sha256sum new.apk | cut -d' ' -f1)
+          echo "rebuilt signed sha256: $H"
+          [ "$H" = "$WANT_SIGNED" ] || { echo "ASSERT FAIL: rebuilt signed APK is not the owner's signed file"; exit 1; }
+          curl -sfL -o old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.5.0/Zephyr-Android-1.5.0.apk
+          echo "b4230632816f1cb39b669f5d111debfec1c9a4f894b4a709a581225528ebe0aa  old.apk" | sha256sum -c
+          WANT_SIGNER="$WANT_SIGNER" bash "$GITHUB_WORKSPACE/scripts/signed-smoke-verify.sh"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Upgrade the published 1.5.0 to the exact signed build on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-boot-timeout: 1200
+          script: bash scripts/signed-smoke-emulator.sh
+  cleanup:
+    needs: [resolve, smoke]
+    if: ${{ always() && needs.resolve.outputs.artifact_id != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete only the validated unsigned artifact (also after a failed smoke) and confirm
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.resolve.outputs.artifact_id }}
+        run: |
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "bad artifact id"; exit 1; }
+          URL="https://api.github.com/repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+          CODE=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
+          [ "$CODE" = 204 ] || { echo "ASSERT FAIL: DELETE returned HTTP $CODE (expected 204)"; exit 1; }
+          # The API is eventually consistent: a GET right after the DELETE returned 200 once. Poll up to 60 s; only an actual 404 passes.
+          GONE=000
+          for i in $(seq 1 20); do
+            GONE=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" "$URL")
+            [ "$GONE" = 404 ] && break
+            sleep 3
+          done
+          [ "$GONE" = 404 ] || { echo "ASSERT FAIL: after DELETE the artifact GET returned HTTP $GONE (only 404 proves it is gone)"; exit 1; }
+          echo "deleted and confirmed gone: artifact $ARTIFACT_ID"

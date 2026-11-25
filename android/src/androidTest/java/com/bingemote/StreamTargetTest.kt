@@ -41,6 +41,36 @@ class StreamTargetTest {
 
     private fun ok() = MockResponse().setResponseCode(200).setBody("{}")
 
+    @Test fun capturedReceiverSurvivesSourceSwitchAndPausedOldReceiverBlocksIdleStop() {
+        store.selectedSource = Source.ZEPHYR
+        val tapped = StreamTarget.capture(store)
+        store.selectedSource = Source.VLC
+        zephyr.enqueue(ok()); StreamTarget.play(tapped, "http://127.0.0.1:8080/s/t/1", emptyList())
+        assertTrue(com.zephyr.remote.StreamCoordinator.servedReceivers.contains(tapped))
+        assertTrue(zephyr.takeRequest(3, TimeUnit.SECONDS)!!.path == "/play")
+        assertNull(vlc.takeRequest(1, TimeUnit.SECONDS))
+        val other = StreamTarget.capture(store)
+        com.zephyr.remote.StreamCoordinator.servedReceivers.clear()
+        com.zephyr.remote.StreamCoordinator.servedReceivers.add(tapped)
+        com.zephyr.remote.StreamCoordinator.servedReceivers.add(other)
+        val policy = com.zephyr.remote.StreamIdlePolicy()
+        repeat(5) {
+            zephyr.enqueue(MockResponse().setBody("{\"state\":\"Paused\"}"))
+            vlc.enqueue(MockResponse().setBody("{\"state\":\"stopped\"}"))
+            org.junit.Assert.assertFalse(policy.tick(true, 0, com.zephyr.remote.StreamCoordinator.receiverState()))
+            assertTrue(zephyr.takeRequest(3, TimeUnit.SECONDS)!!.path == "/control/status")
+            assertTrue(vlc.takeRequest(3, TimeUnit.SECONDS)!!.path == "/requests/status.json")
+        }
+        val stoppedPolicy = com.zephyr.remote.StreamIdlePolicy()
+        repeat(5) { tick ->
+            zephyr.enqueue(MockResponse().setBody("{\"state\":\"stopped\"}"))
+            vlc.enqueue(MockResponse().setBody("{\"state\":\"stopped\"}"))
+            org.junit.Assert.assertEquals(tick == 4, stoppedPolicy.tick(true, 0, com.zephyr.remote.StreamCoordinator.receiverState()))
+            assertTrue(zephyr.takeRequest(3, TimeUnit.SECONDS)!!.path == "/control/status")
+            assertTrue(vlc.takeRequest(3, TimeUnit.SECONDS)!!.path == "/requests/status.json")
+        }
+        com.zephyr.remote.StreamCoordinator.servedReceivers.clear()
+    }
     @Test fun vlcSelected_phoneMovieGoesToVlcOnly() {
         store.selectedSource = Source.VLC
         vlc.enqueue(ok())
