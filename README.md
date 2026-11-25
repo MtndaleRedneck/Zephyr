@@ -2,6 +2,8 @@
 
 # Zephyr
 
+**Under development.** Will eventually replace BingeMote. Use BingeMote for now.
+
 A phone remote app and Zephyr Media Player for Windows, plus VLC phone remote support.
 
 ## Install
