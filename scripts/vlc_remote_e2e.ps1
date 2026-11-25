@@ -139,13 +139,14 @@ function Invoke-HelperGet($path, $token, [int]$timeoutSec = 10) {
 # answers {"ok":true,"woke":true} BEFORE it parses the request, so no VLC is launched and a repeat cannot
 # duplicate a launch. The phone's behavior is to tap again. Play-Movie does the same, bounded: it re-sends only
 # when the answer is woke:true, between taps it watches /screen-state for dark:false for a bounded time, and it
-# stops after 4 taps or 60 s of wall clock, returning the last answer so the caller's assertion fails visibly.
+# stops after 5 taps (the last one only after the final watch) or the 55 s watch deadline. If the last answer is still woke:true it THROWS that the display never reported On (no later VLC assert has to explain it). Worst case: the 55 s watch deadline plus one in-flight 10 s play request and one 3 s state read, about 70 s.
 function Play-Movie([string]$body, $token, [string]$what) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    $r = $null
-    foreach ($attempt in 1..4) {
-        $r = Invoke-Helper '/movies/play' $body $token 5
+    $r = $null; $dark = 'not read'
+    foreach ($attempt in 1..5) {
+        $r = Invoke-Helper '/movies/play' $body $token
         if ($r.body -notmatch '"woke"\s*:\s*true') { if ($attempt -gt 1) { Write-Host "play ($what) launched on tap $attempt after $([int]$sw.Elapsed.TotalSeconds)s" }; return $r }
+        if ($attempt -eq 5) { break }
         $dark = 'unreadable'
         $wait = [Diagnostics.Stopwatch]::StartNew()
         while ($wait.Elapsed.TotalSeconds -lt 15 -and $sw.Elapsed.TotalSeconds -lt 55) {
@@ -155,6 +156,7 @@ function Play-Movie([string]$body, $token, [string]$what) {
         Write-Host "play ($what) tap $attempt consumed as a wake tap (woke:true); screen-state dark=$dark after $([int]$wait.Elapsed.TotalSeconds)s waiting; elapsed $([int]$sw.Elapsed.TotalSeconds)s"
         if ($sw.Elapsed.TotalSeconds -ge 55) { break }
     }
+    if ($r.body -match '"woke"\s*:\s*true') { throw "ASSERT FAILED: play ($what) was still consumed as a wake tap after $([int]$sw.Elapsed.TotalSeconds)s; the helper never reported the display On (last screen-state dark=$dark)" }
     return $r
 }
 
