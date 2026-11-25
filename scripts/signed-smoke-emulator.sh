@@ -23,9 +23,18 @@ sleep 30
 adb shell pidof "$PKG" >/dev/null || { echo "ASSERT FAIL: process not alive after the upgrade launch"; exit 1; }
 adb shell dumpsys activity activities | grep -E "ResumedActivity" | tee resumed.txt
 grep -q "$PKG/" resumed.txt || { echo "ASSERT FAIL: the app is not the resumed activity"; exit 1; }
-adb shell uiautomator dump /sdcard/ui.xml >/dev/null
-adb shell cat /sdcard/ui.xml > ui.xml
-grep -q "package=\"$PKG\"" ui.xml || { echo "ASSERT FAIL: no app window in the UI hierarchy"; exit 1; }
+# uiautomator can fail to dump while the app still animates ("could not get idle state"), so retry and print what it said.
+adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp" | head -3 || true
+UI_OK=0
+for try in 1 2 3 4 5 6; do
+  rm -f ui.xml; adb shell rm -f /sdcard/ui.xml
+  adb shell uiautomator dump /sdcard/ui.xml 2>&1 | head -3 || true
+  adb shell cat /sdcard/ui.xml > ui.xml 2>/dev/null || true
+  if grep -q "package=\"$PKG\"" ui.xml; then UI_OK=1; break; fi
+  echo "ui dump try $try had no app nodes (size $(wc -c < ui.xml 2>/dev/null || echo 0)); packages seen: $(grep -o 'package="[^"]*"' ui.xml 2>/dev/null | sort -u | tr '\n' ' ')"
+  sleep 5
+done
+[ "$UI_OK" = 1 ] || { echo "ASSERT FAIL: no app window in the UI hierarchy after 6 tries"; exit 1; }
 echo "app UI nodes: $(grep -o "package=\"$PKG\"" ui.xml | wc -l)"
 adb logcat -d -b all > log.txt
 if grep -Eq "Process: $PKG|ANR in $PKG|>>> $PKG <<<|Fatal signal [0-9]+ .*$PKG|am_crash.*$PKG|am_anr.*$PKG" log.txt; then
