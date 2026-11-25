@@ -23,7 +23,7 @@ namespace ZephyrPlayer.Tests
             "\"ShellBounds\":\"10,20,1280,720,0\",\"AnimateOnPress\":false,\"SubtitleSize\":\"L\",\"RememberVolume\":false}";
 
         [Fact]
-        public void Settings202_KeepsEveryStoredChoiceThatStillExists_AndIgnoresRemovedKeys()
+        public void Settings202_KeepsEveryStoredChoice()
         {
             var path = Path.Combine(_dir, "settings.json");
             File.WriteAllText(path, Settings202);
@@ -41,11 +41,16 @@ namespace ZephyrPlayer.Tests
             Assert.Equal("created", s.LibrarySort);
             Assert.False(s.FoldersFirst);
             Assert.True(s.ButtonFlash);
+            Assert.Equal("10,20,1280,720,0", s.ShellBounds);
+            Assert.False(s.AnimateOnPress);
+            Assert.Equal("L", s.SubtitleSize);
+            Assert.False(s.RememberVolume);
+            Assert.Equal(100, s.StartVolume); // Remember volume off: opens at 100, the stored 42 is kept
             // New in 3.0.0: unset in an old file, so they take their defaults.
             Assert.True(s.PreventSleep);
             Assert.Equal("auto", s.HardwareDecoding);
             Assert.False(warned);
-            // A later write keeps the choices that still exist (the removed 2.0.2 keys are dropped on that write).
+            // A later write keeps the choices that still exist (including the 2.0.2-only keys).
             s.HardwareDecoding = "off";
             var again = new PlayerSettings(path);
             Assert.Equal("off", again.HardwareDecoding);
@@ -53,6 +58,10 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(15, again.PrimarySkipSeconds);
             Assert.Equal(120, again.SecondarySkipSeconds);
             Assert.Equal(42, again.LastVolume);
+            Assert.Equal("10,20,1280,720,0", again.ShellBounds);
+            Assert.False(again.AnimateOnPress);
+            Assert.Equal("L", again.SubtitleSize);
+            Assert.False(again.RememberVolume);
         }
 
         [Fact]

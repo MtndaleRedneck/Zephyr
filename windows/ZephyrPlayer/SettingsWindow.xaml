@@ -115,7 +115,9 @@
                     <!-- Volume -->
                     <Border x:Name="SectionVolume" Style="{StaticResource Card}" Visibility="Collapsed">
                         <StackPanel>
-                            <TextBlock Style="{StaticResource Small}" Text="The bar slider always reads 0-100 and matches Windows volume. Boost is extra loudness the player adds on top."/>
+                            <TextBlock Style="{StaticResource Small}" Text="The bar slider always reads 0-100 and is the player's own volume. Windows volume is never changed. Boost is extra loudness the player adds on top."/>
+                            <CheckBox x:Name="RememberToggle" Content="Remember last volume" Margin="0,10,0,0" Click="OnRememberToggle"/>
+                            <TextBlock Style="{StaticResource Small}" Text="Opens at the volume you last used. Off: always opens at 100%."/>
                             <TextBlock Text="Boost up to:" Foreground="{StaticResource TextBrush}" Margin="0,8,0,2"/>
                             <WrapPanel x:Name="BoostPanel"/>
                         </StackPanel>
@@ -129,6 +131,7 @@
                             <TextBlock Text="Secondary skip buttons" Foreground="{StaticResource TextBrush}" Margin="0,6,0,0"/>
                             <WrapPanel x:Name="SecondarySkipPanel"/>
                             <CheckBox x:Name="FlashToggle" Content="Button flash" Margin="0,10,0,0" Click="OnFlashToggle"/>
+                            <CheckBox x:Name="AnimateToggle" Content="Animate on press" Margin="0,10,0,0" Click="OnAnimateToggle"/>
                             <CheckBox x:Name="PreventSleepToggle" Content="Prevent PC sleep while playing" Margin="0,10,0,0" Click="OnPlaybackToggle"/>
                             <TextBlock Style="{StaticResource Small}" Margin="0,0,0,0" Text="The screen can still turn off. The PC stays awake while Zephyr Player has a movie open, and sleeps normally when minimized."/>
                             <TextBlock Text="Hardware decoding" Foreground="{StaticResource TextBrush}" Margin="0,12,0,0"/>

@@ -124,9 +124,7 @@ namespace ZephyrPlayer.Tests
                     NativeVlc.Init();
                     var libvlc = new LibVLC();
                     var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
-                    // Explicit "original" pick: the shipping default is orange now, and this
-                    // render proof's pixel calibration below is gold. Keep the render check
-                    // independent of which style ships as the default.
+                    // Explicit "original" pick (also the shipping default again).
                     var settings = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-" + Guid.NewGuid().ToString("N") + ".json"));
                     settings.BarColorStyle = "original";
                     var w = new MainWindow(libvlc, player, settings, new VolumeService());
@@ -180,7 +178,7 @@ namespace ZephyrPlayer.Tests
                     // orange elapsed/total/remaining text. Same offscreen render, orange
                     // pixel count - visual proof of the default, not just a brush assert.
                     var settingsDefault = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-def-" + Guid.NewGuid().ToString("N") + ".json"));
-                    Assert.Equal("orange", settingsDefault.BarColorStyle); // unset default
+                    Assert.Equal("original", settingsDefault.BarColorStyle); // unset default (2.0.2)
                     var w2 = new MainWindow(libvlc, player, settingsDefault, new VolumeService());
                     var bar2 = w2.ControlBar;
                     bar2.Opacity = 1;

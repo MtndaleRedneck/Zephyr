@@ -37,7 +37,6 @@ namespace ZephyrPlayer
         private readonly SecondarySkipHighlight _secondaryBackHighlight=new(){Width=54,Height=46,Backward=true,IsHitTestVisible=false};
         private readonly SecondarySkipHighlight _secondaryForwardHighlight=new(){Width=54,Height=46,IsHitTestVisible=false};
         private readonly PlayerSettings _settings;
-        private readonly VolumeService _volume;
         private readonly DispatcherTimer _idleTimer = new();
         private readonly DispatcherTimer _clock = new();
 
@@ -85,10 +84,10 @@ namespace ZephyrPlayer
             _libvlc = libvlc;
             _player = player;
             _settings = settings ?? new PlayerSettings();
-            _volume = volume ?? new VolumeService();
+            _ = volume; // 2.0.2: Windows' master volume is never used by the player; the parameter stays for callers.
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _closed = true; _awakeTimer.Stop(); _sleep.ReleaseNow(); };
+            Closed += (_, __) => { _cursorWatch.Stop(); FlushVolumeSave(); StopPlaybackSource(); _closed = true; _awakeTimer.Stop(); _sleep.ReleaseNow(); };
             _cursorWatch.Tick += (_, __) =>
             {
                 if (!IsVisible || !GetCursorPos(out var point)) return;
@@ -140,11 +139,13 @@ namespace ZephyrPlayer
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(() => { ApplyBarStyle(); RefreshSleepGuard(); });
             _settings.WriteFailed += (_, __) => Dispatcher.InvokeAsync(() => MessageBox.Show(this, "Saved settings are unreadable. The original file has been preserved, and changes cannot be saved until it is repaired.", "Settings could not be saved", MessageBoxButton.OK, MessageBoxImage.Warning));
 
-            // Remembered volume restored on open. With the
-            // tied-volume behavior, the slider IS Windows' master volume.
+            // 2.0.2 volume model: the player's OWN volume. Opens at the last
+            // volume, or 100 when Remember volume is off. Windows' master volume and mute are
+            // never read or written by the player.
             _volumeSync = true;
-            VolumeSlider.Value = _settings.LastVolume;
+            VolumeSlider.Value = _settings.StartVolume;
             _volumeSync = false;
+            RefreshVolumeUi();
             ApplyBarStyle();
             UpdatePlayPauseGlyph();
         }
@@ -176,6 +177,7 @@ namespace ZephyrPlayer
 
         public void StopPlaybackSource()
         {
+            HideResumeNotice();
             ++_playGeneration; _preparation?.Cancel();
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
             var old = _safeSource; _safeSource = null;
@@ -184,15 +186,18 @@ namespace ZephyrPlayer
             // never stall stop/cleanup on the UI.
             if (old != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(old));
         }
-        public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles)
+        public async void PlayFromUrl(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
         {
-            try { await PlayFromUrlAsync(url,positionSeconds,subtitles); }
+            try { await PlayFromUrlAsync(url,positionSeconds,subtitles,offerStartOver); }
             catch (OperationCanceledException) { }
             catch { MovieTitle.Text="Could not open this movie safely. Check the file or phone connection."; }
         }
-        public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles)
+        public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
         {
             var generation=++_playGeneration;
+            // A library resume says so with Start over; any other start drops that notice.
+            HideResumeNotice();
+            _startOverGeneration = offerStartOver ? generation : 0;
             _preparation?.Cancel();
             using var timeout=new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(30));
             _preparation=timeout;
@@ -214,17 +219,11 @@ namespace ZephyrPlayer
             var localTitle = PlaybackHistory.LocalPath(url);
             MovieTitle.Text = localTitle != null ? System.IO.Path.GetFileNameWithoutExtension(localTitle) : "Playing from phone";
             _lastHistorySave = DateTime.MinValue;
-            // Restore the player's remembered loudness when a movie starts:
-            // Windows master = the slider number, libVLC adds the boost on top.
-            if (_volume.Available) _volume.SetMaster(_settings.LastVolume);
+            // The slider (the player's own volume) is the loudness; the boost adds decoder gain.
             ApplyPlayerGain();
-            // Preserve the user's mute across the playback start: libVLC resets its
-            // own mute state on a new Media, so carry Windows' truth over BEFORE play
-            // instead of waiting for the next 500 ms poll (a half-second audio blip).
-            var muteAtStart = _volume.TryGetMute();
-            if (muteAtStart.HasValue) { _playerMute = muteAtStart.Value; _player.Mute = _playerMute; }
-            // A failed read (null) keeps the player's previous mute: unknown is
-            // never treated as "unmuted".
+            // Preserve the player's own mute across the playback start: libVLC resets its mute on
+            // a new Media, so re-apply the tracked state BEFORE play.
+            _player.Mute = _playerMute;
             var replaced = _safeSource;
             replaced?.Abort();
             _player.Stop();
@@ -234,7 +233,10 @@ namespace ZephyrPlayer
             // The replaced source tears down off the UI thread (see StopPlaybackSource).
             if (replaced != null) System.Threading.ThreadPool.QueueUserWorkItem(_ => DisposeReplacedSource(replaced));
             if (positionSeconds.HasValue && positionSeconds.Value > 0)
+            {
                 _player.Time = positionSeconds.Value * 1000;
+                if (_startOverGeneration == generation) ShowResumeNotice(positionSeconds.Value);
+            }
             _clock.Start();
             // Phone-started playback shows the bar once (review blocker 3): the PC
             // mouse may never move, so the idle timer alone can't reveal it.
@@ -246,6 +248,58 @@ namespace ZephyrPlayer
             _idleTimer.Start();
             UpdatePlayPauseGlyph();
         }
+
+        // ---------- "Resumed from 42:10 - Start over" ----------
+
+        /// <summary>How long the resume notice stays before it fades (it also leaves on Start over, a new start or stop).</summary>
+        internal static TimeSpan ResumeNoticeTime = TimeSpan.FromSeconds(8);
+        private int _startOverGeneration;
+        private System.Windows.Threading.DispatcherTimer? _resumeTimer;
+        /// <summary>Test seam: the position the current start resumed from (null: none shown).</summary>
+        internal long? ResumedFromSeconds { get; private set; }
+        internal bool IsResumeNoticeShown => ResumeNotice.Visibility == Visibility.Visible;
+        internal int StartOverCount { get; private set; }
+
+        private void ShowResumeNotice(long seconds)
+        {
+            ResumedFromSeconds = seconds;
+            ResumeText.Text = "Resumed from " + Format(seconds * 1000);
+            ResumeNotice.BeginAnimation(OpacityProperty, null);
+            ResumeNotice.Opacity = 1;
+            ResumeNotice.Visibility = Visibility.Visible;
+            _resumeTimer?.Stop();
+            _resumeTimer = new System.Windows.Threading.DispatcherTimer { Interval = ResumeNoticeTime };
+            _resumeTimer.Tick += (_, __) =>
+            {
+                _resumeTimer?.Stop();
+                var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(300));
+                fade.Completed += (_, ___) => { if (ResumeNotice.Opacity <= 0.01) HideResumeNotice(); };
+                ResumeNotice.BeginAnimation(OpacityProperty, fade);
+            };
+            _resumeTimer.Start();
+        }
+
+        private void HideResumeNotice()
+        {
+            _resumeTimer?.Stop();
+            _resumeTimer = null;
+            ResumedFromSeconds = null;
+            ResumeNotice.BeginAnimation(OpacityProperty, null);
+            ResumeNotice.Opacity = 1;
+            ResumeNotice.Visibility = Visibility.Collapsed;
+        }
+
+        /// <summary>Start over: back to 0:00 in the same start (no reopen).</summary>
+        internal void StartOver()
+        {
+            HideResumeNotice();
+            StartOverCount++;
+            _player.Time = 0;
+            if (_player.Length > 0) _history.Save(_currentSource, 0, _player.Length);
+            UpdatePosition();
+        }
+
+        private void OnStartOver(object sender, RoutedEventArgs e) => StartOver();
 
         /// <summary>Poll/first-play mute application: a failed read (null) keeps
         /// the player's CURRENT mute; only a successful read moves it. Pinned by
@@ -261,36 +315,12 @@ namespace ZephyrPlayer
         /// <summary>Test seam (InternalsVisibleTo): the tracked player mute.</summary>
         internal bool TrackedPlayerMute { get => _playerMute; set => _playerMute = value; }
 
-        private DateTime _lastMasterSave;
         private void UpdatePosition()
         {
             if (DateTime.UtcNow - _lastHistorySave >= TimeSpan.FromSeconds(5))
             { SavePlaybackProgress(); _lastHistorySave = DateTime.UtcNow; }
-            // Volume tie, other direction: if Windows' volume changed elsewhere,
-            // the bar follows so both places show the same number.
-            // Mute is applied WITHOUT the Available gate: TryGetMute self-guards
-            // (null when the endpoint is gone or the read failed, and null keeps
-            // the tracked mute), so a flaky Available probe cannot disengage the
-            // tie or clobber the state.
-            _playerMute = MuteAfterRead(_playerMute, _volume.TryGetMute());
+            // The player's own mute and volume only: nothing here reads Windows' master volume or mute.
             _player.Mute = _playerMute;
-            if (_volume.Available)
-            {
-                var master = _volume.GetMaster();
-                if (master >= 0 && Math.Abs(master - VolumeSlider.Value) >= 1)
-                {
-                    _volumeSync = true;
-                    VolumeSlider.Value = master;
-                    _volumeSync = false;
-                    ApplyPlayerGain();
-                }
-            }
-            if (_volume.Available && DateTime.UtcNow - _lastMasterSave >= TimeSpan.FromSeconds(1))
-            {
-                var master = _volume.GetMaster();
-                if (master >= 0 && _settings.LastVolume != master) _settings.LastVolume = master;
-                _lastMasterSave = DateTime.UtcNow;
-            }
             if (!_seeking)
             {
                 var length = _player.Length;
@@ -349,6 +379,8 @@ namespace ZephyrPlayer
                 case Key.Right: OnSkipForward(this, new RoutedEventArgs()); break;
                 case Key.F: SetFullscreen(!IsFullscreen); break;
                 case Key.Escape: if (IsFullscreen) SetFullscreen(false); break;
+                case Key.Up: StepVolume(+VolumeStep); break;
+                case Key.Down: StepVolume(-VolumeStep); break;
                 case Key.M: OnMute(this, new RoutedEventArgs()); break;
                 default: return;
             }
@@ -390,24 +422,37 @@ namespace ZephyrPlayer
             // Nothing loaded = nothing to skip: no time change, no spin, no flash.
             if (_player.Length <= 0) return;
             _player.Time = Math.Clamp(_player.Time + deltaSeconds * 1000L, 0, _player.Length);
-            // Rotate only the ring/arc; the duration label stays upright.
-            var secondary=spin==SecondaryBackSpin||spin==SecondaryForwardSpin;
-            if (spin != null && !secondary)
+            var secondary = spin == SecondaryBackSpin || spin == SecondaryForwardSpin;
+            var effects = new System.Collections.Generic.List<string>();
+            // Press animations live behind "Animate on press" (rotate the ring only, the label stays
+            // upright; the secondary arrow gets a light that runs to the tip). The colour flash
+            // lives behind "Button flash".
+            if (_settings.AnimateOnPress)
             {
-                spin.BeginAnimation(RotateTransform.AngleProperty, null);
-                spin.Angle = 0;
-                var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420), FillBehavior = FillBehavior.Stop };
-                anim.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
-                anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
-                spin.BeginAnimation(RotateTransform.AngleProperty, anim);
+                if (spin != null && !secondary)
+                {
+                    spin.BeginAnimation(RotateTransform.AngleProperty, null);
+                    spin.Angle = 0;
+                    var anim = new DoubleAnimationUsingKeyFrames { Duration = TimeSpan.FromMilliseconds(420), FillBehavior = FillBehavior.Stop };
+                    anim.KeyFrames.Add(new LinearDoubleKeyFrame(0, KeyTime.FromTimeSpan(TimeSpan.Zero)));
+                    anim.KeyFrames.Add(new SplineDoubleKeyFrame(backward ? -360 : 360, KeyTime.FromTimeSpan(TimeSpan.FromMilliseconds(420)), new KeySpline(.4, 0, .2, 1)));
+                    spin.BeginAnimation(RotateTransform.AngleProperty, anim);
+                    effects.Add("spin");
+                }
+                else if (secondary)
+                {
+                    var highlight = backward ? _secondaryBackHighlight : _secondaryForwardHighlight;
+                    highlight.Start(((SolidColorBrush)(backward ? SecondarySkipBackIcon : SecondarySkipForwardIcon).Stroke).Color);
+                    effects.Add("light");
+                }
             }
-            if(secondary)
-            {
-                var highlight=backward?_secondaryBackHighlight:_secondaryForwardHighlight;
-                if(_settings.ButtonFlash)highlight.Start(((SolidColorBrush)(backward?SecondarySkipBackIcon:SecondarySkipForwardIcon).Stroke).Color);else highlight.Stop();
-            }
-            else if (_settings.ButtonFlash) Flash(backward,false);
+            else { _secondaryBackHighlight.Stop(); _secondaryForwardHighlight.Stop(); }
+            if (_settings.ButtonFlash) { Flash(backward, secondary); effects.Add("flash"); }
+            LastPressEffects = string.Join(",", effects);
         }
+
+        /// <summary>Test seam: what the last skip press animated ("spin", "light", "flash").</summary>
+        internal string LastPressEffects { get; private set; } = "";
 
         private void Flash(bool backward, bool secondary)
         {
@@ -421,29 +466,58 @@ namespace ZephyrPlayer
             brush.BeginAnimation(SolidColorBrush.ColorProperty, new ColorAnimation(normal == Brand.Orange ? Colors.WhiteSmoke : Brand.Orange, TimeSpan.FromMilliseconds(110)) { AutoReverse = true });
         }
 
-        // ---------- volume (tied to Windows master; boost from Settings) ----------
+        // ---------- volume (the player's own volume; boost from Settings) ----------
 
         private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
         {
             // XAML sets the slider Value during InitializeComponent, before the
             // ctor assigns _volume/_settings: a load-time change must be a no-op.
-            if (_volume is null || _settings is null) return;
-            if (_volumeSync) return;
-            var v = (int)Math.Round(VolumeSlider.Value);
-            if (_volume.Available) _volume.SetMaster(v);
-            _settings.LastVolume = v;
+            if (_settings is null || _player is null) return;
             ApplyPlayerGain();
+            RefreshVolumeUi();
+            if (_volumeSync) return;
+            ScheduleVolumeSave();
         }
 
-        /// <summary>Phone-driven volume takes the same tied path as the slider.</summary>
+        // The remembered volume is saved once the slider rests (500 ms after the last step, and on
+        // stop/quit), not on every tick of a drag, key or phone step.
+        internal static TimeSpan VolumeSaveDelay = TimeSpan.FromMilliseconds(500);
+        private System.Windows.Threading.DispatcherTimer? _volumeSave;
+        private bool _volumeDirty;
+        internal int VolumeSaveCount { get; private set; }
+
+        private void ScheduleVolumeSave()
+        {
+            _volumeDirty = true;
+            if (_volumeSave == null)
+            {
+                _volumeSave = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background, Dispatcher) { Interval = VolumeSaveDelay };
+                _volumeSave.Tick += (_, __) => FlushVolumeSave();
+            }
+            _volumeSave.Stop();
+            _volumeSave.Interval = VolumeSaveDelay;
+            _volumeSave.Start();
+        }
+
+        /// <summary>Write the remembered volume now if a change is pending.</summary>
+        internal void FlushVolumeSave()
+        {
+            _volumeSave?.Stop();
+            if (!_volumeDirty || _settings is null) return;
+            _volumeDirty = false;
+            VolumeSaveCount++;
+            _settings.LastVolume = (int)Math.Round(VolumeSlider.Value);
+        }
+
+        /// <summary>Phone /control/volume 0-100 maps 1:1 onto the player's own slider.</summary>
         public void SetVolumeTied(int volume)
         {
             VolumeSlider.Value = Math.Clamp(volume, 0, 100);
-            // OnVolumeChanged does the master + gain + save.
+            ShowBarOnce();
         }
 
         public int SharedVolume => (int)Math.Round(VolumeSlider.Value);
-        public bool SharedMute => _volume.TryGetMute() ?? _playerMute;
+        public bool SharedMute => _playerMute;
         public string CurrentMovieTitle => MovieTitle.Text;
 
         private void ApplyPlayerGain()
@@ -453,24 +527,37 @@ namespace ZephyrPlayer
             _player.Volume = (int)(VolumeSlider.Value * _settings.VolumeBoostMaxPct / 100.0);
         }
 
+        private const string MutedGlyph = "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17";
+        private const string VolumeGlyphData = "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8";
+
+        /// <summary>One place that draws volume state: glyph, "62%" or "Muted", and a dimmed slider while muted.</summary>
+        private void RefreshVolumeUi()
+        {
+            if (VolumeLabel == null) return;
+            VolumeButton.Opacity = 1.0;
+            VolumeGlyph.Data = Geometry.Parse(_playerMute ? MutedGlyph : VolumeGlyphData);
+            VolumeLabel.Text = _playerMute ? "Muted" : SharedVolume + "%";
+            VolumeSlider.Opacity = _playerMute ? 0.45 : 1.0;
+        }
+
+        /// <summary>Up/Down volume step, in slider percent.</summary>
+        internal const int VolumeStep = 5;
+        internal void StepVolume(int delta) => VolumeSlider.Value = Math.Clamp(Math.Round(VolumeSlider.Value) + delta, 0, 100);
+
         private void OnMute(object sender, RoutedEventArgs e)
         {
             var mute = !_playerMute;
             _playerMute = mute;
             _player.Mute = mute;
-            if (_volume.Available) _volume.SetMute(mute);
-            VolumeButton.Opacity = 1.0;
-            VolumeGlyph.Data = Geometry.Parse(mute ? "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17" : "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8");
+            RefreshVolumeUi();
         }
 
-        /// <summary>Phone-driven mute takes the same tied path.</summary>
+        /// <summary>Phone-driven mute: the player's own mute.</summary>
         public void SetMuteTied(bool mute)
         {
             _playerMute = mute;
             _player.Mute = mute;
-            if (_volume.Available) _volume.SetMute(mute);
-            VolumeButton.Opacity = 1.0;
-            VolumeGlyph.Data = Geometry.Parse(mute ? "M2,9 H6 L11,5 V21 L6,17 H2 Z M15,9 L23,17 M23,9 L15,17" : "M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8");
+            RefreshVolumeUi();
         }
 
         // ---------- speed + sleep timer (bar toggles, off by default) ----------

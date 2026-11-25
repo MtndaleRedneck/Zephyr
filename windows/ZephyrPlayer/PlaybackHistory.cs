@@ -19,10 +19,24 @@ namespace ZephyrPlayer
             if (Uri.TryCreate(source, UriKind.Absolute, out var uri)) return uri.IsFile ? uri.LocalPath : null;
             return Path.IsPathFullyQualified(source) ? source : null;
         }
-        private Dictionary<string, Item> Read()
+        private Dictionary<string, Item> Read() => Read(out _);
+
+        /// <summary>A missing file is an empty history. A file that exists but cannot be read or
+        /// parsed is reported through <paramref name="unreadable"/> so a later Save never silently
+        /// overwrites it.</summary>
+        private Dictionary<string, Item> Read(out bool unreadable)
         {
+            unreadable = false;
+            if (!File.Exists(_path)) return new();
             try { return JsonSerializer.Deserialize<Dictionary<string, Item>>(File.ReadAllText(_path)) ?? new(); }
-            catch { return new(); }
+            catch { unreadable = true; return new(); }
+        }
+
+        /// <summary>The original file is moved aside, byte for byte, before a new history starts.</summary>
+        private void PreserveUnreadable()
+        {
+            try { File.Move(_path, _path + ".unreadable-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"), false); }
+            catch { }
         }
         public Item? Get(string source)
         {
@@ -80,7 +94,8 @@ namespace ZephyrPlayer
                 try
                 {
                     var f = new FileInfo(path);
-                    var items = Read();
+                    var items = Read(out var unreadable);
+                    if (unreadable) { PreserveUnreadable(); if (File.Exists(_path)) return; } // never overwrite a file we could not read
                     var key = path.ToUpperInvariant();
                     if (metadataOnly && items.TryGetValue(key, out var old) && old.FileSize == f.Length && old.ModifiedUtc == f.LastWriteTimeUtc) return;
                     var played = metadataOnly ? (items.TryGetValue(key, out var prior) ? prior.PlayedUtc : default) : DateTime.UtcNow;
@@ -93,6 +108,19 @@ namespace ZephyrPlayer
                 catch { } // An unreadable/removable library must not interrupt playback.
             }
         }
+        /// <summary>Where a library start picks up. The saved spot, unless it is in the first 10 seconds
+        /// (nothing worth resuming) or past 95 % of the movie (the end or the credits: start from 0:00
+        /// instead). Null means start from the beginning.</summary>
+        internal static long? ResumeSeconds(Item? item)
+        {
+            if (item == null || item.DurationMs <= 0) return null;
+            if (item.PositionMs < ResumeMinMs) return null;
+            if (item.PositionMs >= item.DurationMs * ResumeNearEndFraction) return null;
+            return item.PositionMs / 1000;
+        }
+        internal const long ResumeMinMs = 10_000;
+        internal const double ResumeNearEndFraction = 0.95;
+
         internal static string DurationLabel(long ms) => ms <= 0 ? "" : ms >= 3600000
             ? $"{ms / 3600000}:{ms / 60000 % 60:00}:{ms / 1000 % 60:00}"
             : $"{ms / 60000}:{ms / 1000 % 60:00}";

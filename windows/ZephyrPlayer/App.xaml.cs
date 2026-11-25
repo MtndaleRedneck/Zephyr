@@ -175,7 +175,9 @@ namespace ZephyrPlayer
                     EnsurePlayer();
                     _home?.Hide();
                     _player!.Show();
-                    _player!.PlayFromUrl(url, null, Array.Empty<string>());
+                    // A library start picks up at the saved spot (not in the first 10 s, not past 95 %) and says so with Start over.
+                    var resume = PlaybackHistory.ResumeSeconds(new PlaybackHistory().Get(url));
+                    _player!.PlayFromUrl(url, resume, Array.Empty<string>(), offerStartOver: resume.HasValue);
                 },
                 openPairing: ShowPairingWindow);
             _home.Closing += (_, ev) =>

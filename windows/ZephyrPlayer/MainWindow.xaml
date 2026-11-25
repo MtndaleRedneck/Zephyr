@@ -14,6 +14,13 @@
         <libvlc:VideoView.Content>
             <Grid x:Name="Overlay" Background="#01000000" MouseMove="OnMouseMove">
                 <Border x:Name="TopOverlay" VerticalAlignment="Top" Background="#551B1B1E" Padding="18,10"><DockPanel><Button x:Name="HomeButton" ToolTip="Back to Movies" Click="OnHome" Background="Transparent" Foreground="#F5F5F7" BorderThickness="0" Padding="8"><Path Data="M16,4 L8,12 L16,20 M8,12 H23" Stroke="#F5F5F7" StrokeThickness="1.6" Width="20" Height="20" Stretch="Uniform"/></Button><TextBlock Text="Zephyr Player" Foreground="#F5F5F7" VerticalAlignment="Center" Margin="14,0"/><TextBlock x:Name="MovieTitle" Foreground="#F5F5F7" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/></DockPanel></Border>
+                <!-- A library movie resumed from its saved spot says so for a few seconds, with Start over. -->
+                <Border x:Name="ResumeNotice" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,70,0,0" Background="#F016161A" BorderBrush="#17FFFFFF" BorderThickness="1" CornerRadius="10" Padding="14,5,5,5" Visibility="Collapsed" AutomationProperties.AutomationId="ResumeNotice">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="ResumeText" Foreground="#F5F5F7" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.AutomationId="ResumeText"/>
+                        <Button x:Name="StartOverButton" Content="Start over" Click="OnStartOver" Margin="12,0,0,0" Padding="12,4" Foreground="#FF9500" Background="Transparent" BorderThickness="0" Cursor="Hand" AutomationProperties.AutomationId="StartOverButton"/>
+                    </StackPanel>
+                </Border>
                 <Border x:Name="ControlBar" x:FieldModifier="public"
                         VerticalAlignment="Bottom" Margin="20"
                         Padding="22,14" CornerRadius="16"
@@ -45,9 +52,8 @@
                                     <Path x:Name="VolumeGlyph" Data="M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Stretch="Uniform" Height="16" Width="16"/>
                                 </Button>
                                 <Slider Style="{StaticResource PlaybackSlider}" Foreground="#F5F5F7" x:Name="VolumeSlider" Width="110" Minimum="0" Maximum="100" Value="100"
-                                        VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"
-                                        ToolTip="Volume (matches Windows)"/>
-                                <TextBlock Text="{Binding ElementName=VolumeSlider, Path=Value, StringFormat={}{0:0}}" Foreground="#9696A0" VerticalAlignment="Center" Margin="6,0"/>
+                                        VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"/>
+                                <TextBlock x:Name="VolumeLabel" Text="100%" MinWidth="44" Foreground="#9696A0" VerticalAlignment="Center" Margin="6,0"/>
                             </StackPanel>
                             <StackPanel x:Name="CenterPlaybackControls" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
 

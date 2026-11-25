@@ -112,6 +112,8 @@ namespace ZephyrPlayer
             BuildChoices(HardwarePanel, PlayerSettings.HardwareChoices, v => v == "off" ? "Off" : "Auto", () => _settings.HardwareDecoding, v => _settings.HardwareDecoding = v, "hardware");
             PreventSleepToggle.IsChecked = _settings.PreventSleep;
             FlashToggle.IsChecked = _settings.ButtonFlash;
+            AnimateToggle.IsChecked = _settings.AnimateOnPress;
+            RememberToggle.IsChecked = _settings.RememberVolume;
             SpeedToggle.IsChecked = _settings.ShowSpeed;
             SleepToggle.IsChecked = _settings.ShowSleepTimer;
             PairStatusText.Text = _store.Count > 0
@@ -141,6 +143,8 @@ namespace ZephyrPlayer
             }
         }
 
+        private void OnAnimateToggle(object sender, RoutedEventArgs e) => _settings.AnimateOnPress = AnimateToggle.IsChecked == true;
+        private void OnRememberToggle(object sender, RoutedEventArgs e) => _settings.RememberVolume = RememberToggle.IsChecked == true;
         private void OnFlashToggle(object sender, RoutedEventArgs e) => _settings.ButtonFlash = FlashToggle.IsChecked == true;
 
         private void OnPlaybackToggle(object sender, RoutedEventArgs e) => _settings.PreventSleep = PreventSleepToggle.IsChecked == true;

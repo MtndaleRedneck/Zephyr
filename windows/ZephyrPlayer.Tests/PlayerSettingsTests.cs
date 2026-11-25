@@ -31,12 +31,12 @@ namespace ZephyrPlayer.Tests
             Assert.Equal("movies", new PlayerSettings(_path).LibraryFolder);
         }
         [Fact]
-        public void ButtonFlash_DefaultOn_ChoicePersists()
+        public void ButtonFlash_DefaultOff_ChoicePersists()
         {
             var s = new PlayerSettings(_path);
-            Assert.True(s.ButtonFlash);
-            s.ButtonFlash = false;
-            Assert.False(new PlayerSettings(_path).ButtonFlash);
+            Assert.False(s.ButtonFlash);
+            s.ButtonFlash = true;
+            Assert.True(new PlayerSettings(_path).ButtonFlash);
         }
         [Fact]
         public void Library_Sort_Roundtrips_Without_Losing_Older_Settings()
@@ -55,21 +55,30 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(200, s.VolumeBoostMaxPct);
             Assert.Equal(10, s.PrimarySkipSeconds);
             Assert.Equal(30, s.SecondarySkipSeconds);
-            Assert.Equal("orange", s.BarColorStyle); // unset default
+            Assert.Equal("original", s.BarColorStyle); // unset default (2.0.2)
             Assert.Equal("hollow", s.IconStyle);
-            Assert.False(s.ShowSpeed);
-            Assert.False(s.ShowSleepTimer);
+            Assert.True(s.ShowSpeed);
+            Assert.True(s.ShowSleepTimer);
             Assert.Equal(100, s.LastVolume);
+            Assert.True(s.AnimateOnPress);
+            Assert.Equal("M", s.SubtitleSize);
+            Assert.True(s.RememberVolume);
+            Assert.Equal("", s.ShellBounds);
+            Assert.Equal(100, s.StartVolume);
         }
 
         [Fact]
-        public void Stored_Original_Choice_Survives_The_Default_Change()
+        public void Stored_Choices_Win_Over_Defaults()
         {
-            // The default moved to orange, but an explicit earlier pick is a stored
-            // value, not a missing one: it must read back exactly as chosen.
-            File.WriteAllText(_path, "{\"BarColorStyle\":\"original\"}");
+            // A stored choice is never a missing value: it reads back exactly as chosen.
+            File.WriteAllText(_path, "{\"BarColorStyle\":\"orange\",\"ShowSpeed\":false,\"RememberVolume\":false,\"LastVolume\":42,\"SubtitleSize\":\"L\"}");
             var s = new PlayerSettings(_path);
-            Assert.Equal("original", s.BarColorStyle);
+            Assert.Equal("orange", s.BarColorStyle);
+            Assert.False(s.ShowSpeed);
+            Assert.False(s.RememberVolume);
+            Assert.Equal(42, s.LastVolume);
+            Assert.Equal(100, s.StartVolume); // Remember volume off: always opens at 100
+            Assert.Equal("L", s.SubtitleSize);
         }
 
         [Fact]
@@ -116,7 +125,7 @@ namespace ZephyrPlayer.Tests
             s.PrimarySkipSeconds = 7;
             Assert.Equal(10, s.PrimarySkipSeconds);
             s.BarColorStyle = "purple";
-            Assert.Equal("orange", s.BarColorStyle); // unset default
+            Assert.Equal("original", s.BarColorStyle); // unset default (2.0.2)
             s.IconStyle = "sparkly";
             Assert.Equal("hollow", s.IconStyle);
         }

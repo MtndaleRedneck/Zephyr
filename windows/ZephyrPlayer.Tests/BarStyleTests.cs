@@ -59,14 +59,15 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("10s", w.FindName("SkipForwardLabel") is System.Windows.Controls.TextBlock f ? f.Text : "");
                 Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
                 Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
-                // Speed + sleep hidden by default.
-                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SpeedButton")!).Visibility);
-                Assert.Equal(Visibility.Collapsed, ((UIElement)w.FindName("SleepButton")!).Visibility);
+                // Speed + sleep shown by default (the 2.0.2 defaults); a stored choice is kept.
+                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SpeedButton")!).Visibility);
+                Assert.Equal(Visibility.Visible, ((UIElement)w.FindName("SleepButton")!).Visibility);
                 // Volume left, icons right: volume stack is column 0.
                 var volumeStack = (StackPanel)((Button)w.FindName("VolumeButton")!).Parent;
                 Assert.Equal(0, Grid.GetColumn(volumeStack));
-                // Unset default: the bar is orange when no style was ever picked.
-                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
+                // Unset default is "original" (2.0.2): the primary rings take the default ring colour, not orange.
+                Assert.Equal("original", settings.BarColorStyle);
+                Assert.NotEqual(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
             });
         }
 
