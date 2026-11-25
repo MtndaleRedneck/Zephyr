@@ -1,0 +1,107 @@
+name: android-draft
+# Zero-cost private-output lane for Zephyr Android (workflow_dispatch only, never on push).
+# Source and logs are public; the APK is NOT: it is stored only as an asset of a DRAFT release of
+# this repo (a draft is visible and downloadable only to people with write access; verified
+# unauthenticated 404 on the release, the asset API and the browser URL), never as a run artifact.
+# No signing material and no secret exists in CI. Flow: stage=build (unsigned APK to the draft),
+# the APK is signed locally from the vault and added to the same draft, stage=smoke tests those
+# exact signed bytes against the published 1.4.0 on an emulator, then the SAME draft is published.
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'build or smoke'
+        required: true
+        default: 'build'
+      release_id:
+        description: 'smoke: draft release id'
+        required: false
+      apk_asset_name:
+        description: 'smoke: exact signed APK asset name'
+        required: false
+      expected_sha256:
+        description: 'smoke: sha256 of the signed APK'
+        required: false
+      expected_signer_sha256:
+        description: 'smoke: expected signer cert sha256 (the published 1.4.0 signer)'
+        required: false
+permissions:
+  contents: read
+jobs:
+  build:
+    if: ${{ inputs.stage == 'build' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+      - name: Build unsigned release
+        run: ./gradlew --no-daemon assembleRelease
+      - name: Store unsigned APK in a DRAFT release (not an artifact)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          APK=$(ls android/build/outputs/apk/release/*.apk | head -1)
+          cp "$APK" /tmp/Zephyr-Android-unsigned.apk
+          echo "unsigned sha256: $(sha256sum /tmp/Zephyr-Android-unsigned.apk | cut -d' ' -f1)"
+          gh release create --draft --target "$GITHUB_SHA" --title "draft ${GITHUB_SHA::7}" --notes "draft build of ${GITHUB_SHA}" "tmp-android-${GITHUB_SHA::7}" /tmp/Zephyr-Android-unsigned.apk
+          gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.draft and .name==\"draft ${GITHUB_SHA::7}\") | \"release_id=\(.id)\""
+  smoke:
+    if: ${{ inputs.stage == 'smoke' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download exact signed bytes and the published 1.4.0 APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p /tmp/zs
+          A=$(gh api "repos/$GITHUB_REPOSITORY/releases/${{ inputs.release_id }}/assets" --jq ".[] | select(.name==\"${{ inputs.apk_asset_name }}\") | .id")
+          [ -n "$A" ] || { echo "ASSERT FAIL: asset not found"; exit 1; }
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$A" -H 'Accept: application/octet-stream' > /tmp/zs/new.apk
+          curl -sL -o /tmp/zs/old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.4.0/Zephyr-Android-1.4.0.apk
+          sha256sum /tmp/zs/*.apk; stat -c%s /tmp/zs/*.apk
+          H=$(sha256sum /tmp/zs/new.apk | cut -d' ' -f1)
+          [ "$H" = "${{ inputs.expected_sha256 }}" ] || { echo "ASSERT FAIL: signed APK hash mismatch"; exit 1; }
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          for f in old new; do "$BT/apksigner" verify --print-certs /tmp/zs/$f.apk | grep -i 'SHA-256 digest' | head -1 | tee /tmp/zs/$f.cert; done
+          grep -qi "${{ inputs.expected_signer_sha256 }}" /tmp/zs/new.cert || { echo "ASSERT FAIL: new signer != expected"; exit 1; }
+          grep -qi "${{ inputs.expected_signer_sha256 }}" /tmp/zs/old.cert || { echo "ASSERT FAIL: 1.4.0 signer != expected"; exit 1; }
+          echo "ok: 1.4.0 and 1.5.x carry the same expected signer"
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules || true
+          sudo udevadm control --reload-rules || true
+          sudo udevadm trigger --name-match=kvm || true
+      - name: Upgrade 1.4.0 to signed 1.5.x on an emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-boot-timeout: 1200
+          script: |
+            while [ "$(adb shell service check package 2>/dev/null | tr -d '\r')" != "Service package: found" ]; do sleep 5; done
+            adb shell settings put global verifier_verify_adb_installs 0
+            adb install -r /tmp/zs/old.apk
+            adb shell dumpsys package com.zephyr.remote | grep -E 'versionName|versionCode' | head -2
+            adb shell am start -n com.zephyr.remote/com.bingemote.MainActivity || adb shell monkey -p com.zephyr.remote -c android.intent.category.LAUNCHER 1
+            sleep 20
+            adb shell pidof com.zephyr.remote
+            adb shell am force-stop com.zephyr.remote
+            adb install -r /tmp/zs/new.apk
+            adb shell dumpsys package com.zephyr.remote | grep -E 'versionName|versionCode' | head -2 | tee /tmp/zs/after.txt
+            grep -q 'versionName=1.5.0' /tmp/zs/after.txt
+            adb shell monkey -p com.zephyr.remote -c android.intent.category.LAUNCHER 1
+            sleep 30
+            adb shell pidof com.zephyr.remote
+            ! adb logcat -d | grep -E 'FATAL EXCEPTION.*com.zephyr.remote'
+            adb shell screencap -p /data/local/tmp/up.png && adb pull /data/local/tmp/up.png /tmp/zs/up.png
+            echo "ok: exact signed 1.5 installed over 1.4.0, launched, alive, no fatal exception"
