@@ -90,12 +90,15 @@ function Uninstall-Player {
 $dataDir = "$env:APPDATA\ZephyrPlayer"
 $lib = Join-Path $env:RUNNER_TEMP 'pub202lib'
 $srv = $null
+$allAssertionsPassed = $false
 try {
     # --- clean slate, published installer, sha and version ---
     Uninstall-Player
     Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
     $dl = Join-Path $env:RUNNER_TEMP 'pub202real'
+    $global:LASTEXITCODE = 0
     gh release download player-v2.0.2 -p 'Zephyr-PC-2.0.2.exe' --dir $dl --clobber
+    if ($LASTEXITCODE -ne 0) { throw "gh release download exit $LASTEXITCODE" }
     $old = Join-Path $dl 'Zephyr-PC-2.0.2.exe'
     $sha = (Get-FileHash $old -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($sha -ne $OldSha256) { throw "published 2.0.2 installer sha256 is $sha" }
@@ -120,7 +123,9 @@ try {
         $ff = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
         if (-not $ff -and (Test-Path 'C:\ProgramData\chocolatey\bin\ffmpeg.exe')) { $ff = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe' }
         if (-not $ff) { throw 'no fixture media: neither the capture clip nor an ffmpeg is present on the runner' }
+        $global:LASTEXITCODE = 0
         & $ff -y -f lavfi -i 'testsrc=duration=300:size=320x240:rate=10' -pix_fmt yuv420p $movie 2>$null
+        if ($LASTEXITCODE -ne 0) { throw "ffmpeg fixture exit $LASTEXITCODE" }
     }
     if (-not (Test-Path $movie) -or (Get-Item $movie).Length -lt 10000) { throw 'fixture movie missing or too small' }
 
@@ -307,14 +312,24 @@ try {
         if ("$($item1.$field)" -ne "$($item0.$field)") { throw "history $field changed after the candidate ran ($($item0.$field) -> $($item1.$field))" }
     }
     Note 'history_after_candidate_ran' "PROVEN (PositionMs $($item1.PositionMs), DurationMs $($item1.DurationMs), FileSize and ModifiedUtc exactly as the 2.0.2 app wrote them)"
+    $allAssertionsPassed = $true
 }
 finally {
     # Leave the runner as the next step expects it: no candidate install, no app data, no rules, no reservation.
     Uninstall-Player
     Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item $lib -Recurse -Force -ErrorAction SilentlyContinue
+    # Exit codes only (no output kept): netsh returns 1 when there is nothing left to delete.
     netsh advfirewall firewall delete rule name="Zephyr Player" 2>&1 | Out-Null
+    $ec1 = $LASTEXITCODE
     netsh advfirewall firewall delete rule name="Zephyr Player Discovery" 2>&1 | Out-Null
+    $ec2 = $LASTEXITCODE
     netsh http delete urlacl url=http://+:47823/ 2>&1 | Out-Null
+    $ec3 = $LASTEXITCODE
+    Note 'cleanup_native_exit_codes' "firewall rule 1 = $ec1, firewall rule 2 = $ec2, urlacl = $ec3"
+    Note 'script_state_at_exit' "all assertions passed = $allAssertionsPassed; LASTEXITCODE before reset (reflects the last cleanup netsh call only) = $LASTEXITCODE"
+    # Only a script whose every assertion passed may drop the leaked native status of the cleanup commands. A failure
+    # (throw) is never reset: it still propagates out of this finally block.
+    if ($allAssertionsPassed) { $global:LASTEXITCODE = 0 }
     Write-Host 'real-data step cleanup done'
 }

@@ -1176,8 +1176,20 @@ jobs:
           $dir = Join-Path $env:RUNNER_TEMP 'artifact-roundtrip'
           Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force $dir | Out-Null
-          # Binary-safe download: -OutFile writes the bytes as they are (a pwsh redirect of native output can re-encode them).
-          Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing
+          # Binary-safe download (-OutFile writes the bytes as they are). Same reviewed download-only logic as the
+          # helper job: retry ONLY an HTTP 404, up to 6 attempts 10 s apart, every status logged; 401/403/other codes,
+          # a missing response object, a too-small file and any hash mismatch fail at once. No cause is claimed for a 404.
+          $got = $false
+          for ($try = 1; $try -le 6 -and -not $got; $try++) {
+            Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue
+            $r = Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing -SkipHttpErrorCheck -PassThru
+            if (-not $r) { throw 'artifact download returned no response object' }
+            $code = [int]$r.StatusCode
+            Write-Host "artifact download attempt ${try}: HTTP $code"
+            if ($code -eq 200) { $got = $true }
+            elseif ($code -eq 404 -and $try -lt 6) { Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 10 }
+            else { throw "artifact download failed with HTTP $code on attempt $try" }
+          }
           if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'artifact download failed or is too small' }
           Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
           $exe = @(Get-ChildItem "$dir/x" -Filter 'Zephyr-PC-*.exe')
