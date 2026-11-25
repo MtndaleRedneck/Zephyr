@@ -45,7 +45,7 @@ namespace ZephyrPlayer
                 InstallUpdateButton.Visibility = _updateOffer != null ? Visibility.Visible : Visibility.Collapsed;
                 UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
             };
-            NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
+            NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
             Loaded += (_, __) => _updateStatusTimer.Start();
             Closed += (_, __) => { _updateStatusTimer.Stop(); _store.Changed -= OnStoreChanged; };
             if (PairingFactory != null) { _pairPanel = PairingFactory(); PairingHost.Content = _pairPanel; PairButton.Visibility = Visibility.Collapsed; PairStatusText.Visibility = Visibility.Collapsed; PairHelpText.Visibility = Visibility.Collapsed; }
@@ -118,7 +118,7 @@ namespace ZephyrPlayer
                 ? $"Paired with {_store.Count} phone{(_store.Count == 1 ? "" : "s")}."
                 : "Not paired yet.";
             UpdatePreview();
-            VersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
+            VersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
         }
 
         private static string SkipLabel(int seconds) => PlayerSettings.FormatSkip(seconds);
