@@ -357,18 +357,26 @@ class AutomaticOnlySetupTest {
         fun scrollAncestors(): List<N> = ancestors().filter { it.scrollable }
     }
 
-    private fun walk(info: AccessibilityNodeInfo, parent: N?, out: MutableList<N>, depth: Int) {
+    /** Walks the whole tree. Returns false if ANY node could not be read (a null child or the depth cap),
+     *  because an absence read from an incomplete walk proves nothing; callers must treat that tick as invalid. */
+    private fun walk(info: AccessibilityNodeInfo, parent: N?, out: MutableList<N>, depth: Int): Boolean {
         val n = N(info, parent); out.add(n)
-        if (depth > 60) return
-        for (i in 0 until info.childCount) { val c = info.getChild(i) ?: continue; walk(c, n, out, depth + 1) }
+        if (depth > 60) return info.childCount == 0
+        var complete = true
+        for (i in 0 until info.childCount) {
+            val c = info.getChild(i)
+            if (c == null) { complete = false; continue }
+            if (!walk(c, n, out, depth + 1)) complete = false
+        }
+        return complete
     }
 
     private class SetupView(
         val window: Rect, val f: N?, val bt: N?, val l: List<N>, val selected: List<N>,
         val fieldText: String?, val v: N?, val vProblem: String?, val tile: Rect?, val tileSource: String,
-        val density: Float,
+        val density: Float, val complete: Boolean,
     ) {
-        fun describe() = "window=${rs(window)} V=${rs(v?.rect)} F=${rs(f?.rect)} tile=${rs(tile)}($tileSource) " +
+        fun describe() = "complete=$complete window=${rs(window)} V=${rs(v?.rect)} F=${rs(f?.rect)} tile=${rs(tile)}($tileSource) " +
             "L=${rs(l.firstOrNull()?.rect)} sel=${selected.size} field='${fieldText}'"
         private fun inside(r: Rect, v: Rect) = r.left >= v.left && r.right <= v.right && r.top >= v.top && r.bottom <= v.bottom && r.height() > 0
         // Text nodes sit inside layout padding, so a node that is only partly visible (its reported
@@ -379,6 +387,7 @@ class AutomaticOnlySetupTest {
 
         /** Before typing: label, button tile and card label all fully inside one unambiguous viewport. */
         fun preconditionProblem(): String? {
+            if (!complete) return "accessibility tree walk incomplete (unreadable child or depth cap): ${describe()}"
             if (window.isEmpty) return "window bounds empty"
             if (f == null) return "address label not found: ${describe()}"
             if (bt == null || tile == null) return "button label not found: ${describe()}"
@@ -394,6 +403,7 @@ class AutomaticOnlySetupTest {
 
         /** After typing: the region where a still-present Selected row would start must be observable. */
         fun postProblem(typed: String, pre: SetupView): String? {
+            if (!complete) return "accessibility tree walk incomplete (unreadable child or depth cap): ${describe()}"
             if (window != pre.window) return "window bounds changed: before=${rs(pre.window)} now=${rs(window)}"
             if (f == null || bt == null || tile == null) return "address label or button missing: ${describe()}"
             if (v == null) return "viewport not established ($vProblem): ${describe()}"
@@ -414,6 +424,7 @@ class AutomaticOnlySetupTest {
 
         /** Confirmed-address state: exactly one non-empty Selected row and the card label, inside V. */
         fun controlProblem(typed: String, expectedRow: String): String {
+            if (!complete) return "accessibility tree walk incomplete (unreadable child or depth cap): ${describe()}"
             if (v == null) return "viewport not established ($vProblem): ${describe()}"
             if (fieldText != typed) return "typed text not in the field (field='$fieldText')"
             if (selected.size != 1) return "Selected rows=${selected.size}: ${describe()}"
@@ -435,7 +446,7 @@ class AutomaticOnlySetupTest {
         val ui = InstrumentationRegistry.getInstrumentation().uiAutomation
         val root = ui.rootInActiveWindow ?: return null
         val nodes = ArrayList<N>()
-        walk(root, null, nodes, 0)
+        val complete = walk(root, null, nodes, 0)
         val window = Rect().also { root.getBoundsInScreen(it) }
         val density = InstrumentationRegistry.getInstrumentation().targetContext.resources.displayMetrics.density
         val f = nodes.filter { it.text == "Or type the PC's address:" }.singleOrNull()
@@ -466,7 +477,7 @@ class AutomaticOnlySetupTest {
                 tileSource = "label-center+24dp"
             }
         }
-        return SetupView(window, f, bt, l, selected, field?.text?.toString(), v, vProblem, tile, tileSource, density)
+        return SetupView(window, f, bt, l, selected, field?.text?.toString(), v, vProblem, tile, tileSource, density, complete)
     }
 }
 
