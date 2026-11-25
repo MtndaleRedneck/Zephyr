@@ -26,6 +26,13 @@ namespace ZephyrPlayer
         /// <summary>Pure rule: awake only when the setting is on, a movie is playing or paused, and the window is not minimized.</summary>
         public static bool ShouldHold(bool settingOn, bool mediaOpen, bool minimized) => settingOn && mediaOpen && !minimized;
 
+        /// <summary>For window close: the timer is stopped there, so a failed release is retried a few times right away.
+        /// Windows also drops a thread's execution state when the thread ends, so this is belt and braces.</summary>
+        public void ReleaseNow()
+        {
+            for (var i = 0; i < 3 && Held; i++) Update(false);
+        }
+
         public void Update(bool want)
         {
             var thread = Environment.CurrentManagedThreadId;

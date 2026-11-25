@@ -88,7 +88,7 @@ namespace ZephyrPlayer
             _volume = volume ?? new VolumeService();
             Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
-            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _closed = true; _awakeTimer.Stop(); _sleep.Update(false); };
+            Closed += (_, __) => { _cursorWatch.Stop(); StopPlaybackSource(); _closed = true; _awakeTimer.Stop(); _sleep.ReleaseNow(); };
             _cursorWatch.Tick += (_, __) =>
             {
                 if (!IsVisible || !GetCursorPos(out var point)) return;

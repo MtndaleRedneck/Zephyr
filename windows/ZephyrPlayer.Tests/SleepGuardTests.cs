@@ -44,6 +44,15 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void ReleaseNow_RetriesFailedReleases_BeforeGivingUp()
+        {
+            var n = 0;
+            var g = new SleepGuard(f => { n++; return n is 2 or 3 ? 0u : 1u; }); // take ok, two releases fail, third ok
+            g.Update(true); g.ReleaseNow();
+            Assert.False(g.Held);
+        }
+
+        [Fact]
         public void OtherThread_CannotReleaseWhatTheOwnerHolds()
         {
             var calls = 0;
