@@ -165,7 +165,7 @@ class MainActivity : ComponentActivity() {
                         remote,
                         setupScroll,
                         onDone = { store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
-                        onCancel = if (store.setupDone) ({ openSettings() }) else null,
+                        onCancel = if (store.setupDone || (BuildConfig.DEBUG && intent.hasExtra("setupcancel"))) ({ openSettings() }) else null,
                         demoVlcPending = BuildConfig.DEBUG && intent.hasExtra("vlcpending"),
                         demoPair = BuildConfig.DEBUG && intent.hasExtra("pairdemo"),
                         demoPreselect = BuildConfig.DEBUG && intent.hasExtra("pairdemoselect"),
