@@ -294,9 +294,17 @@ try {
     Note 'candidate_installed_version' "PROVEN (installed ProductVersion equals exactly $wantPv; was $pv0)"
     Note 'installer_left_real_data_identical' "PROVEN (3 real files byte-identical after the candidate installer)"
     Stop-Player
-    $null = Start-Process $exe -PassThru
+    $mtBefore = (Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o')
+    $cp = Start-Process $exe -PassThru
     if (-not (Wait-Server 40)) { throw "candidate control server never came up on the real $OldVersion data" }
     Start-Sleep -Seconds 4
+    # Diagnostic only (never fails): the candidate's top-level windows just before it is killed (a force-kill raises no Closing).
+    try {
+        $rootEl2 = [System.Windows.Automation.AutomationElement]::RootElement
+        $pcond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $cp.Id)
+        $wins = @($rootEl2.FindAll([System.Windows.Automation.TreeScope]::Children, $pcond) | ForEach-Object { "'$($_.Current.Name)' offscreen=$($_.Current.IsOffscreen) rect=$($_.Current.BoundingRectangle)" })
+        Note 'candidate_windows_before_kill' "$($wins.Count) top-level window(s): $($wins -join ' | ')"
+    } catch { Note 'candidate_windows_before_kill' "unavailable ($($_.Exception.GetType().Name))" }
     $null = Expect 'candidate-real-token' 'Get' '/control/status' $token $null 200
     $null = Expect 'candidate-wrong-token' 'Get' '/control/status' 'not-a-real-token' $null 401
     Stop-Player
@@ -305,15 +313,66 @@ try {
     if ($paired2 -notmatch 'dpapi:' -or $paired2.Contains($token) -or $e2.name -ne $entries[0].name -or @($paired2 | ConvertFrom-Json).Count -ne 1) { throw 'paired.json changed shape or lost the phone after the candidate ran' }
     Note 'paired_after_candidate_ran' 'PROVEN (same entry name, still DPAPI-protected, plain token absent, real token authenticated with 200)'
     $s1 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
+    Note 'settings_mtime_before_after_candidate' "before $mtBefore after $((Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o')) ($(if ((Get-Item "$dataDir\settings.json").LastWriteTimeUtc.ToString('o') -ne $mtBefore) { 'file was rewritten' } else { 'file not rewritten' }))"
     if ($s1.ShowSpeed -ne $speedAfter -or $s1.LibraryFolder -ne $lib) { throw "settings changed after the candidate ran (ShowSpeed $($s1.ShowSpeed) want $speedAfter)" }
-    foreach ($prop in $s0.PSObject.Properties) { if ("$($s1.($prop.Name))" -ne "$($prop.Value)") { throw "settings value $($prop.Name) changed after the candidate ran" } }
-    Note 'settings_after_candidate_ran' "PROVEN (ShowSpeed $speedAfter, LibraryFolder and all $($s0.PSObject.Properties.Count) values unchanged)"
+    # Every setting EXCEPT ShellBounds must be exactly unchanged. ShellBounds (remembered window geometry, a persisted
+    # preference) is classified separately below so that its outcome never hides the other checks, including history.
+    $others = 0
+    $added = @($s1.PSObject.Properties.Name | Where-Object { $s0.PSObject.Properties.Name -notcontains $_ })
+    Note 'settings_keys_added_by_candidate' "$($added.Count): $($added -join ', ')"
+    foreach ($prop in $s0.PSObject.Properties) {
+        if ($prop.Name -eq 'ShellBounds') { continue }
+        if ("$($s1.($prop.Name))" -ne "$($prop.Value)") { throw "settings value $($prop.Name) changed after the candidate ran" }
+        $others++
+    }
+    Note 'settings_after_candidate_ran' "PROVEN (ShowSpeed $speedAfter, LibraryFolder and all $others non-ShellBounds values exactly unchanged; ShellBounds classified separately)"
+    $shellFail = $null
+    if ($null -eq $s0.PSObject.Properties['ShellBounds']) {
+        Note 'shellbounds_before_absent' "the pre-upgrade app wrote no ShellBounds; after: '$($s1.ShellBounds)' (nothing to preserve)"
+    }
+    else {
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        $vs = [System.Windows.Forms.SystemInformation]::VirtualScreen
+        $beforeS = "$($s0.ShellBounds)"; $afterS = "$($s1.ShellBounds)"
+        function Parse-Bounds([string]$t) {
+            $p = $t.Split(',')
+            if ($p.Count -ne 5) { return $null }
+            $n = @(); foreach ($i in 0..3) { $d = 0.0; if (-not [double]::TryParse($p[$i], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$d) -or [double]::IsNaN($d) -or [double]::IsInfinity($d)) { return $null }; $n += $d }
+            return [pscustomobject]@{ L = $n[0]; T = $n[1]; W = $n[2]; H = $n[3]; Max = $p[4] }
+        }
+        $bb = Parse-Bounds $beforeS; $aa = Parse-Bounds $afterS
+        $class = $null; $expected = 'n/a'; $sane = $false
+        if (-not $aa) { $class = 'unparseable-after' }
+        else {
+            # Same acceptance the app uses (WindowGeometry.ParseBounds: width >= 200, height >= 150, <= 20000) and the same
+            # visibility rule (ChooseBounds: at least 160 x 120 of the rect on the runner's virtual screen, both axes).
+            $ix = [Math]::Min($aa.L + $aa.W, $vs.Right) - [Math]::Max($aa.L, $vs.Left); $iy = [Math]::Min($aa.T + $aa.H, $vs.Bottom) - [Math]::Max($aa.T, $vs.Top)
+            $ints = ($afterS -match '^-?\d+,-?\d+,\d+,\d+,[01]$')
+            $sane = ($ints -and $aa.W -ge 200 -and $aa.H -ge 150 -and $aa.W -le 20000 -and $aa.H -le 20000 -and $ix -ge 160 -and $iy -ge 120)
+            if ($afterS -eq $beforeS) { $class = 'unchanged' }
+            elseif ($bb) {
+                $w = [Math]::Min($bb.W, $vs.Width); $h = [Math]::Min($bb.H, $vs.Height)
+                $left = [Math]::Max($vs.Left, [Math]::Min($bb.L, $vs.Right - $w)); $top = [Math]::Max($vs.Top, [Math]::Min($bb.T, $vs.Bottom - $h))
+                $expected = (($left, $top, $w, $h | ForEach-Object { [Math]::Round($_).ToString($inv) }) -join ',') + ',' + $bb.Max
+                if ($afterS -eq $expected) { $class = 'reapplied-clamped-to-this-desktop' }
+            }
+            if (-not $class) {
+                # HomeWindow.xaml default is Width 1280 x Height 800 (CenterScreen); the player window default is 1920 x 1080.
+                $rw = [Math]::Round($aa.W); $rh = [Math]::Round($aa.H)
+                if (($rw -eq 1280 -and $rh -eq 800) -or ($rw -eq 1920 -and $rh -eq 1080)) { $class = 'RESET-TO-DEFAULT-SIZE' } else { $class = 'resized-or-moved' }
+            }
+        }
+        Note 'shellbounds_before_after' "before '$beforeS' after '$afterS' class=$class sane=$sane virtual-screen $($vs.Left),$($vs.Top),$($vs.Width),$($vs.Height) expected-if-reapplied '$expected' (defaults: Home 1280x800 CenterScreen, player 1920x1080)"
+        if ($class -notin 'unchanged', 'reapplied-clamped-to-this-desktop' -or -not $sane) { $shellFail = "ShellBounds after the candidate ran: class=$class sane=$sane before '$beforeS' after '$afterS' (separate finding: not treated as pass)" }
+    }
     $item1 = (Get-Content $histPath -Raw | ConvertFrom-Json).$key
     if (-not $item1) { throw 'the history entry is gone after the candidate ran' }
     foreach ($field in 'PositionMs', 'DurationMs', 'FileSize', 'ModifiedUtc') {
         if ("$($item1.$field)" -ne "$($item0.$field)") { throw "history $field changed after the candidate ran ($($item0.$field) -> $($item1.$field))" }
     }
     Note 'history_after_candidate_ran' "PROVEN (PositionMs $($item1.PositionMs), DurationMs $($item1.DurationMs), FileSize and ModifiedUtc exactly as the 2.0.2 app wrote them)"
+    if ($shellFail) { throw $shellFail }
+    Note 'shellbounds_verdict' 'PROVEN (ShellBounds unchanged or re-applied and clamped to this desktop, and sane)'
     $allAssertionsPassed = $true
 }
 finally {
