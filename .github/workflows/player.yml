@@ -41,10 +41,31 @@ jobs:
       - name: Player tests
         if: always()
         timeout-minutes: 12
-        run: >
-          dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
-          --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
-          --logger "console;verbosity=normal"
+        run: |
+          # Evidence for the intermittent STA hang: if the test host is still alive after 100 s (a green run
+          # needs about 30 s), write every managed thread stack of it to a file that the next step prints.
+          # Diagnostic only: it changes no timeout and no test.
+          dotnet tool install --global dotnet-stack 2>&1 | Out-Host
+          $stacks = Join-Path $env:RUNNER_TEMP 'hang-stacks.txt'
+          $watch = Start-Job -ArgumentList $stacks -ScriptBlock {
+            param($out)
+            Start-Sleep -Seconds 100
+            $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+            Get-Process | Where-Object { $_.ProcessName -like 'testhost*' } | ForEach-Object {
+              "== managed stacks of $($_.ProcessName) pid $($_.Id) at $(Get-Date -Format o)" | Out-File $out -Append
+              dotnet-stack report -p $_.Id 2>&1 | Out-File $out -Append
+            }
+          }
+          dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --logger "console;verbosity=normal"
+          $code = $LASTEXITCODE
+          Stop-Job $watch -ErrorAction SilentlyContinue
+          Remove-Job $watch -Force -ErrorAction SilentlyContinue
+          exit $code
+      - name: Print hang stacks (only exists after a slow run)
+        if: always()
+        run: |
+          $f = Join-Path $env:RUNNER_TEMP 'hang-stacks.txt'
+          if (Test-Path $f) { Get-Content $f | Select-Object -First 400 } else { 'no hang watcher output (tests finished within 100 s)' }
       - name: Publish check (win-x64 single file, locked; nothing is uploaded)
         if: always()
         run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
