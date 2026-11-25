@@ -28,14 +28,20 @@ internal static class NativeVlc
             }
             catch (Exception e)
             {
+                // Best effort: this describes the failure, so it must never replace it with a second exception.
                 var dir = Path.Combine(AppContext.BaseDirectory, "libvlc", "win-x64");
-                var listing = Directory.Exists(dir)
-                    ? string.Join(", ", Directory.EnumerateFileSystemEntries(dir).Select(Path.GetFileName).Take(40))
-                    : "(directory missing)";
-                var dll = Path.Combine(dir, "libvlc.dll");
-                var size = File.Exists(dll) ? new FileInfo(dll).Length + " bytes" : "missing";
+                string listing = "(unavailable)", size = "unknown";
+                try
+                {
+                    listing = Directory.Exists(dir)
+                        ? string.Join(", ", Directory.EnumerateFileSystemEntries(dir).Select(Path.GetFileName).Take(40))
+                        : "(directory missing)";
+                    var dll = Path.Combine(dir, "libvlc.dll");
+                    size = File.Exists(dll) ? new FileInfo(dll).Length + " bytes" : "missing";
+                }
+                catch { }
                 throw new InvalidOperationException(
-                    $"libvlc load failed. dir={dir} exists={Directory.Exists(dir)} libvlc.dll={size} entries=[{listing}] x64process={Environment.Is64BitProcess}", e);
+                    $"libvlc load failed. dir={dir}  libvlc.dll={size} entries=[{listing}] x64process={Environment.Is64BitProcess}", e);
             }
         }
     }
