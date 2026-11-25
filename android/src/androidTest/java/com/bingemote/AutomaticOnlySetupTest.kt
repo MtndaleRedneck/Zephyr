@@ -4,8 +4,6 @@ import android.content.Intent
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
-import androidx.test.uiautomator.UiScrollable
-import androidx.test.uiautomator.UiSelector
 import androidx.test.uiautomator.Until
 import org.junit.Assert.*
 import org.junit.Rule
@@ -118,27 +116,40 @@ class AutomaticOnlySetupTest {
             device.hasObject(By.text(PAIR_CODE_LABEL)))
     }
 
-    // Verified-extent scrolling, two independent proofs. (1) UiScrollable.scrollForward /
-    // scrollBackward document "true if scrolled, false if can't scroll anymore", so a
-    // false return means no further scroll. (2) A known edge element of the actual
-    // SetupScreen column must be in the tree: "Find your PC" is the first element; with
-    // no PC selected (chosen == null) the last stable element is the "Use this address" button
-    // (only an optional discovery-message line can follow it; the Selected row needs chosen, the Pair block needs chosen, the VLC block needs
-    // successVisible). The helper returns true only when BOTH hold within the cap; the
-    // old capped scrollToEnd(4)/scrollToBeginning(4) calls could stop short and the
-    // caller never saw whether the edge was reached. A fitted (non-scrollable) screen
-    // passes on the anchor alone.
+    // Observed-movement extent proof, container-independent. The earlier helper bound the
+    // first scrollable node and trusted a false return from it, which does not show that
+    // THIS screen's column reached its end (a different or non-reporting scrollable would
+    // also "stop"). Instead: swipe in the upper 55% of the screen, clear of the keyboard (the SetupScreen column is
+    // fillMaxSize, so the swipe lands on it) and compare snapshots of every visible text
+    // node with its on-screen bounds. The extreme is proven only when two consecutive
+    // swipes in that direction leave the snapshot identical, i.e. the visible content
+    // observably stopped moving, and the expected edge element (first: "Find your PC";
+    // last stable: "Use this address") is in that snapshot. The pair card can sit BELOW
+    // the anchor while chosen != null, so the anchor alone proves nothing about the card
+    // region; the stopped-moving snapshot is the extent evidence. Cap 15 swipes, false
+    // (nothing proven) on exhaustion. A fitted screen never moves, so it is proven after
+    // the two unchanged swipes as well. Layout, IME effects and swipe speed are
+    // unmeasured until a first CI read.
+    private fun visibleSnapshot(device: UiDevice): List<String> =
+        device.findObjects(By.text(java.util.regex.Pattern.compile(".+"))).mapNotNull {
+            try { "${it.text}@${it.visibleBounds}" } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
+        }.sorted()
+
     private fun scrollToExtent(device: UiDevice, forward: Boolean, anchor: String, maxSwipes: Int = 15): Boolean {
-        val scroller = UiScrollable(UiSelector().scrollable(true))
-        var stopped = !scroller.exists()
+        val x = device.displayWidth / 2
+        val from = if (forward) device.displayHeight * 55 / 100 else device.displayHeight * 15 / 100
+        val to = if (forward) device.displayHeight * 15 / 100 else device.displayHeight * 55 / 100
+        var unchanged = 0
         var i = 0
-        while (!stopped && i < maxSwipes) {
-            val moved = if (forward) scroller.scrollForward(20) else scroller.scrollBackward(20)
+        while (unchanged < 2 && i < maxSwipes) {
+            val before = visibleSnapshot(device)
+            device.swipe(x, from, x, to, 20)
             device.waitForIdle()
-            if (!moved) stopped = true
+            val after = visibleSnapshot(device)
+            unchanged = if (before == after) unchanged + 1 else 0
             i++
         }
-        return stopped && device.hasObject(By.text(anchor))
+        return unchanged >= 2 && device.hasObject(By.text(anchor))
     }
 
     @Test fun pairEntryNeedsSelectedPcOrConfirmedAddress() {
@@ -251,19 +262,13 @@ class AutomaticOnlySetupTest {
                 // Card in viewport: a gone window here is viewport-complete.
                 hidden = device.wait(Until.gone(By.text(PAIR_CODE_LABEL)), 700)
             } else {
-                // Absence only counts where the card renders, so first get there
-                // POSITIVELY (review-driven: an unverified swipe cannot show the
-                // region was reached). Per the actual SetupScreen layout the pair
-                // card is the last element of the scroll column in this state (the VLC
-                // handoff below it needs successVisible, false here), so its region
-                // is the content bottom - UiScrollable.scrollToEnd stops only when
-                // no forward scroll remains. When the hide has landed, chosen == null
-                // leaves only the cards above the pair card. If that content does not
-                // scroll, one viewport is the complete tree; if it does, scrollToEnd reaches
-                // its end first. (Not measured on Zephyr yet: first CI read decides.)
-                // Absence counts only if the end was positively reached (a false
-                // scrollForward return and the last element in the tree); otherwise this slice proves nothing and the
-                // poll tries again until the budget ends.
+                // Absence only counts after the bottom region was reached with observed
+                // proof (scrollToExtent: visible content stopped moving over two swipes,
+                // last stable element present). While chosen != null the pair card sits
+                // BELOW that element, so the element alone proves nothing; the unmoved
+                // snapshot is the extent evidence. If the proof fails this slice counts
+                // for nothing and the poll tries again until the budget ends. (Layout not
+                // measured on Zephyr yet: first CI read decides.)
                 val atEnd = scrollToExtent(device, forward = true, anchor = LAST_ELEMENT_TEXT)
                 hidden = atEnd && !device.hasObject(By.text(PAIR_CODE_LABEL))
             }
