@@ -46,7 +46,12 @@ class ZephyrAutoPairTest {
             val deadline = System.currentTimeMillis() + 8000
             while (store.zephyrToken != "autopair-test-token" && System.currentTimeMillis() < deadline) Thread.sleep(100)
             assertEquals("successful token not saved", "autopair-test-token", store.zephyrToken)
-            assertNotNull("successful pairing did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
+            // BingeMote flow: the success card sits under the form with Continue; it does not jump away.
+            assertNotNull("success card did not appear", device.wait(Until.findObject(By.textContains("Paired with")), 8000))
+            val cont = device.wait(Until.findObject(By.text("Continue")), 3000)
+            assertNotNull("Continue button missing", cont)
+            cont!!.click()
+            assertNotNull("Continue did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
             device.executeShellCommand("screencap -p /sdcard/zephyr-autopair-success.png")
             Thread.sleep(700)
             assertEquals("one entry must create exactly one pairing request", 1, server.requestCount)
