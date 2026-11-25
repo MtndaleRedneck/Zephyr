@@ -229,10 +229,12 @@ jobs:
           set -euo pipefail
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
           for f in old-app old-test new-app new-test; do
-            d=$("$BT/apksigner" verify --print-certs /tmp/up/$f.apk | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}')
+            out=$("$BT/apksigner" verify --print-certs /tmp/up/$f.apk)
+            d=$(grep -m1 'certificate SHA-256 digest' <<<"$out" | awk '{print $NF}')
+            [[ "$d" =~ ^[0-9a-f]{64}$ ]] || { echo "ASSERT FAIL: no valid signer digest for $f"; exit 1; }
             echo "$f signer sha256: $d"; echo "$d" >> /tmp/signers.txt
           done
-          [ "$(sort -u /tmp/signers.txt | wc -l)" = 1 ] && [ -s /tmp/signers.txt ] || { echo "ASSERT FAIL: signer certificates differ"; exit 1; }
+          [ "$(wc -l < /tmp/signers.txt)" = 4 ] && [ "$(sort -u /tmp/signers.txt | wc -l)" = 1 ] || { echo "ASSERT FAIL: signer certificates differ"; exit 1; }
           echo "new-app sha256 (not uploaded): $(sha256sum /tmp/up/new-app.apk | cut -d' ' -f1)"
       - name: Enable KVM
         run: |
