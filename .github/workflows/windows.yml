@@ -45,6 +45,19 @@ jobs:
         run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/out
 
       # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
+      - name: Parse-check the tool helper and the scripts that call it (before any tool acquisition)
+        id: scripts_parse
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          Write-Host "pwsh $($PSVersionTable.PSVersion)"
+          $bad = 0
+          foreach ($f in 'scripts/install_pinned_tool.ps1','scripts/vlc_http_proof.ps1','scripts/pc_desktop_capture.ps1','scripts/vlc_remote_e2e.ps1','scripts/pub202_real_data.ps1') {
+            $errs = $null; $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$tokens, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) { $bad++; $errs | ForEach-Object { Write-Host "PARSE ERROR $f line $($_.Extent.StartLineNumber): $($_.Message)" } } else { Write-Host "parse OK $f" }
+          }
+          if ($bad) { throw "$bad script(s) do not parse under this pwsh; no tool was acquired and no script was run" }
       - name: Install VLC (for the movies launch test)
         shell: pwsh
         run: ./scripts/install_pinned_tool.ps1 -Tool vlc
@@ -288,7 +301,21 @@ jobs:
       - name: Build Zephyr VLC Remote helper
         timeout-minutes: 8
         run: dotnet build windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release
+      - name: Parse-check the tool helper and the scripts that call it (before any tool acquisition)
+        id: scripts_parse
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          Write-Host "pwsh $($PSVersionTable.PSVersion)"
+          $bad = 0
+          foreach ($f in 'scripts/install_pinned_tool.ps1','scripts/vlc_http_proof.ps1','scripts/pc_desktop_capture.ps1','scripts/vlc_remote_e2e.ps1','scripts/pub202_real_data.ps1') {
+            $errs = $null; $tokens = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$tokens, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) { $bad++; $errs | ForEach-Object { Write-Host "PARSE ERROR $f line $($_.Extent.StartLineNumber): $($_.Message)" } } else { Write-Host "parse OK $f" }
+          }
+          if ($bad) { throw "$bad script(s) do not parse under this pwsh; no tool was acquired and no script was run" }
       - name: Real VLC and a short video fixture for the real-VLC subtitle test
+        if: steps.scripts_parse.outcome == 'success'
         shell: pwsh
         run: |
           # Pinned, hash-verified installs (no choco feed). Both are attempted; one failure does not hide the other.
@@ -343,7 +370,7 @@ jobs:
           dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "trx;LogFileName=zvr-tests.trx"
-          ${{ (env.ZEPHYR_VLC_STATUS == 'notrun' || env.ZEPHYR_FFMPEG_STATUS == 'notrun') && '--filter "FullyQualifiedName!~RealVlcAddsSidecarWithoutRestartAndReusesLoadedTrack"' || '' }}
+          ${{ (env.ZEPHYR_VLC_STATUS != 'ok' || env.ZEPHYR_FFMPEG_STATUS != 'ok') && '--filter "FullyQualifiedName!~RealVlcAddsSidecarWithoutRestartAndReusesLoadedTrack"' || '' }}
       - name: Upload test diagnostics (TRX + hang dumps)
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -357,7 +384,7 @@ jobs:
             ${{ runner.temp }}/zvr-loneup-proof.txt
           if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
-        if: always() && env.ZEPHYR_VLC_STATUS != 'notrun' && env.ZEPHYR_FFMPEG_STATUS != 'notrun'
+        if: always() && env.ZEPHYR_VLC_STATUS == 'ok' && env.ZEPHYR_FFMPEG_STATUS == 'ok'
         timeout-minutes: 5
         shell: pwsh
         run: scripts/vlc_http_proof.ps1
@@ -407,7 +434,7 @@ jobs:
           }
           Write-Output 'Player compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
       - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
-        if: always() && env.ZEPHYR_FFMPEG_STATUS != 'notrun'
+        if: always() && env.ZEPHYR_FFMPEG_STATUS == 'ok'
         # Passing runs already take ~5:47 of the old 6-minute budget; the
         # poll-close of the first-run Settings window adds seconds per leg.
         timeout-minutes: 10
@@ -1323,6 +1350,8 @@ jobs:
           Write-Host "PLAYER TESTS OUTCOME: ${{ steps.tests.outcome }}"
           Write-Host "HELPER TESTS OUTCOME: ${{ steps.zvrtests.outcome }}"
           Write-Host "Evidence steps run unconditionally; a green job requires tests green too."
+          # Fail closed: a required tool that was not acquired means skipped tests/evidence, which is never green.
+          if ('${{ env.ZEPHYR_VLC_STATUS }}' -ne 'ok' -or '${{ env.ZEPHYR_FFMPEG_STATUS }}' -ne 'ok') { throw "TOOL NOT RUN: vlc=${{ env.ZEPHYR_VLC_STATUS || 'unset' }} ffmpeg=${{ env.ZEPHYR_FFMPEG_STATUS || 'unset' }}; the real-VLC subtitle test, VLC playback proof and desktop capture were skipped or not run, so this job cannot be green" }
           # Migration opt-in gate: when this run asked for the published 2.0.2 migration, both migration steps must
           # have EXECUTED and succeeded. A skipped step is not green evidence.
           $migrationRequested = '${{ github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration }}'
