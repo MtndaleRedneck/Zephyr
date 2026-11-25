@@ -25,20 +25,26 @@ ANR_ALLOW="com.google.android.apps.nexuslauncher com.android.systemui"
 run() {
   adb logcat -b all -c 2>/dev/null || adb logcat -c
   adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
-  local raw="instrument-results/$2-rawlog.txt"
+  local raw="instrument-results/$2-rawlog.txt" sys="instrument-results/$2-syslog.txt" rc
+  rm -f "instrument-results/$2-logcapture-failed"
   if adb logcat -d -b main,system,events,crash > "$raw" 2>"instrument-results/$2-rawlog.err" && [ -s "$raw" ]; then
-    grep -E "ANR in |am_anr|FATAL EXCEPTION|am_crash|AndroidRuntime.*Process: " "$raw" > "instrument-results/$2-syslog.txt" || true
-    rm -f "instrument-results/$2-logcapture-failed"
+    # grep exit 1 means "no matching lines" (a clean log); exit 2+ or a failed write is a capture failure, never "no events".
+    if : > "$sys"; then
+      grep -E "ANR in |am_anr|FATAL EXCEPTION|am_crash|AndroidRuntime.*Process: " "$raw" > "$sys"; rc=$?
+      if [ "$rc" -gt 1 ]; then echo "LOG FILTER FAILED for $2 (grep rc=$rc)" | tee "instrument-results/$2-logcapture-failed"; fi
+    else
+      echo "LOG FILTER FAILED for $2: cannot write $sys" | tee "instrument-results/$2-logcapture-failed"
+    fi
   else
     echo "LOG CAPTURE FAILED for $2: no usable system log (see $2-rawlog.err); the run is treated as unverifiable" | tee "instrument-results/$2-logcapture-failed"
-    : > "instrument-results/$2-syslog.txt"
+    : > "$sys" 2>/dev/null || true
   fi
 }
 # Exact package of an ANR line: "ANR in <pkg>" (ActivityManager) or the third field of an am_anr event.
 anr_pkg() { # $1 = one log line
   case "$1" in
     *"ANR in "*) printf '%s\n' "$1" | sed -n 's/.*ANR in \([A-Za-z0-9_.]*\).*/\1/p' | head -1;;
-    *am_anr*) printf '%s\n' "$1" | sed -n 's/.*am_anr: *\[[^,]*,[^,]*,\([^,]*\),.*/\1/p' | head -1;;
+    *am_anr*) printf '%s\n' "$1" | sed -n 's/.*am_anr[[:space:]]*:[[:space:]]*\[[^,]*,[^,]*,\([^,]*\),.*/\1/p' | head -1;;
   esac
 }
 # True (0) = this run is NOT eligible for any retry and a pass of it must not be trusted: unusable log capture, any
@@ -49,7 +55,7 @@ app_failure_in_log() { # $1 = result name
   [ -e "instrument-results/$1-logcapture-failed" ] && return 0
   [ -s "instrument-results/$1-rawlog.txt" ] || return 0
   grep -qE "FATAL EXCEPTION|am_crash|AndroidRuntime.*Process: " "$f" 2>/dev/null && return 0
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *"ANR in "*|*am_anr*)
       pkg=$(anr_pkg "$line"); ok=0
       [ -n "$pkg" ] || return 0
@@ -62,7 +68,7 @@ app_failure_in_log() { # $1 = result name
 # Positive evidence that an allowlisted non-app ANR happened during this run (exact package).
 foreign_anr_in_log() { # $1 = result name
   local f="instrument-results/$1-syslog.txt" line pkg p
-  while IFS= read -r line; do
+  while IFS= read -r line || [ -n "$line" ]; do
     pkg=$(anr_pkg "$line")
     for p in $ANR_ALLOW; do [ -n "$pkg" ] && [ "$pkg" = "$p" ] && return 0; done
   done < "$f"
