@@ -37,7 +37,7 @@ namespace ZephyrPlayer
             _gate = gate;
             _store = store;
             _pairStarted = pairStarted;
-            _storeChanged = (_, __) => Dispatcher.InvokeAsync(() => { if (_codeShowing && _gate.CodeTimeLeft == null) OnPairSucceeded(); else RefreshPhones(); });
+            _storeChanged = (_, __) => Dispatcher.InvokeAsync(() => { if (_codeShowing && _store.Count > _countAtShow) OnPairSucceeded(); else RefreshPhones(); });
             _tick.Tick += (_, __) => { TickCountdown(); RefreshPhones(); };
             Loaded += (_, __) =>
             {
@@ -93,6 +93,9 @@ namespace ZephyrPlayer
         // Window-side "a code is on screen" flag: the gate's HasActiveCode goes false at
         // expiry, so gating renewal on it meant the code NEVER renewed (review blocker 1).
         private bool _codeShowing;
+        // Success is a new phone in the store, never just "the code went away" (a lock, expiry
+        // or cancel also clears the code).
+        private int _countAtShow;
 
         private void OnPair(object sender, RoutedEventArgs e)
         {
@@ -150,6 +153,7 @@ namespace ZephyrPlayer
 
         private void ShowCode()
         {
+            if (!_codeShowing) _countAtShow = _store.Count;
             _codeShowing = true;
             CodePanel.Visibility = Visibility.Visible;
             // The code is already live: a Pair button that only re-shows the same
