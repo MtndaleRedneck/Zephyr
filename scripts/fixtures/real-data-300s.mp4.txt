@@ -1,0 +1,5 @@
+real-data-300s.mp4: test input for scripts/pub202_real_data.ps1 only (not shipped).
+sha256 3dde90dd670b42bfdd5d831fb2a8fa10486769e22733f42600ae607768c9514e, 1007052 bytes, h264 High yuv420p, 320x240, 10 fps, 300.0 s, 3000 frames.
+Generated with ffmpeg 4.4.2-0ubuntu0.22.04.1 using the same arguments the script used before:
+  ffmpeg -y -f lavfi -i 'testsrc=duration=300:size=320x240:rate=10' -pix_fmt yuv420p real-data-300s.mp4
+The same command run twice on that machine gave byte-identical files.

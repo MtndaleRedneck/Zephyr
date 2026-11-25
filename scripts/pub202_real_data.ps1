@@ -120,7 +120,15 @@ try {
     New-Item -ItemType Directory -Force $lib | Out-Null
     $movie = Join-Path $lib "Real${oldTag}Movie.mp4"
     $existingClip = Join-Path $env:RUNNER_TEMP 'clip.mp4'
-    if (Test-Path $existingClip) { Copy-Item $existingClip $movie -Force }
+    $pinnedClip = Join-Path $PSScriptRoot 'fixtures\real-data-300s.mp4'
+    $pinnedSha = '3dde90dd670b42bfdd5d831fb2a8fa10486769e22733f42600ae607768c9514e'
+    if (Test-Path $pinnedClip) {
+        $gotSha = (Get-FileHash $pinnedClip -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($gotSha -ne $pinnedSha) { throw "pinned fixture sha256 is $gotSha, expected $pinnedSha" }
+        Copy-Item $pinnedClip $movie -Force
+        Note 'fixture_media' "pinned repo fixture, sha256 $gotSha (no ffmpeg or package feed used)"
+    }
+    elseif (Test-Path $existingClip) { Copy-Item $existingClip $movie -Force }
     else {
         $ff = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
         if (-not $ff -and (Test-Path 'C:\ProgramData\chocolatey\bin\ffmpeg.exe')) { $ff = 'C:\ProgramData\chocolatey\bin\ffmpeg.exe' }
