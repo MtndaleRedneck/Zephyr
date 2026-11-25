@@ -9,12 +9,20 @@ PKG=com.zephyr.remote.debug
 TESTPKG=$PKG.test
 RUNNER=androidx.test.runner.AndroidJUnitRunner
 mkdir -p instrument-results
+# Version gate, fail closed: both numbers must be present, numeric and positive, and the new one strictly greater.
+vc() { adb shell dumpsys package $PKG | grep -m1 -o 'versionCode=[0-9]*' | cut -d= -f2; }
+need_upgrade() { # old new label
+  case "$1" in ''|*[!0-9]*) echo "UPGRADE FAIL: $3 old versionCode unreadable ('$1')"; exit 1;; esac
+  case "$2" in ''|*[!0-9]*) echo "UPGRADE FAIL: $3 new versionCode unreadable ('$2')"; exit 1;; esac
+  case "$1$2" in ''|*[!0-9]*) echo "UPGRADE FAIL: $3 versionCode unreadable (old='$1' new='$2')"; exit 1;; esac
+  [ "$1" -gt 0 ] && [ "$2" -gt "$1" ] || { echo "UPGRADE FAIL: $3 versionCode did not increase (old=$1 new=$2)"; exit 1; }
+}
 run() { adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"; }
 adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: old install"; exit 1; }
 adb install -r /tmp/up/old-test.apk || { echo "UPGRADE FAIL: old test install"; exit 1; }
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS
-OLD_VC=$(adb shell dumpsys package $PKG | grep -m1 -o 'versionCode=[0-9]*' | cut -d= -f2)
+OLD_VC=$(vc)
 run com.bingemote.ZephyrUpgradeFixtureTest#seed seed
 grep -q "^OK (1 test)" instrument-results/seed.txt || { echo "UPGRADE FAIL: seed did not pass on the old install"; exit 1; }
 # Make sure the seeded prefs are on disk before the install replaces the app.
@@ -22,9 +30,9 @@ adb shell sync; sleep 3
 # New build over the old one, NO uninstall (this is the user's update path).
 adb install -r /tmp/up/new-app.apk || { echo "UPGRADE FAIL: new build does not install over the old one"; exit 1; }
 adb install -r /tmp/up/new-test.apk || { echo "UPGRADE FAIL: new test install"; exit 1; }
-NEW_VC=$(adb shell dumpsys package $PKG | grep -m1 -o 'versionCode=[0-9]*' | cut -d= -f2)
+NEW_VC=$(vc)
 echo "versionCode old=$OLD_VC new=$NEW_VC"
-[ "${NEW_VC:-0}" -gt "${OLD_VC:-0}" ] || { echo "UPGRADE FAIL: versionCode did not increase"; exit 1; }
+need_upgrade "$OLD_VC" "$NEW_VC" "pass 1"
 # A fresh headless emulator can still be on the lock screen; wake and dismiss it so a window check is about the app.
 adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
 run com.bingemote.ZephyrUpgradeFixtureTest#verify verify
@@ -44,11 +52,15 @@ adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: pass 2 old install"; exit 1; }
 adb install -r /tmp/up/old-test.apk || { echo "UPGRADE FAIL: pass 2 old test install"; exit 1; }
 adb shell pm grant $PKG android.permission.POST_NOTIFICATIONS
+OLD_VC2=$(vc)
 run com.bingemote.UpgradeConnectionTest#seedOldRelease vlcseed
 grep -q "^OK (1 test)" instrument-results/vlcseed.txt || { echo "UPGRADE FAIL: VLC-source seed did not pass on the old install"; exit 1; }
 adb shell sync; sleep 3
 adb install -r /tmp/up/new-app.apk || { echo "UPGRADE FAIL: pass 2 new build does not install over the old one"; exit 1; }
 adb install -r /tmp/up/new-test.apk || { echo "UPGRADE FAIL: pass 2 new test install"; exit 1; }
+NEW_VC2=$(vc)
+echo "pass 2 versionCode old=$OLD_VC2 new=$NEW_VC2"
+need_upgrade "$OLD_VC2" "$NEW_VC2" "pass 2"
 adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
 run com.bingemote.UpgradeConnectionTest#verifyNewReleaseAfterUpdate vlcverify
 if ! grep -q "^OK (1 test)" instrument-results/vlcverify.txt; then
