@@ -823,22 +823,10 @@ try {
     Assert ($rFs3.code -eq 200) "the same code pairs once the file is writable again"
     Assert ((($rFs3.body | ConvertFrom-Json).token).Length -eq 64) "the retried pair returns a real token"
 
-    # Round-6: an expired code answers 410 and a guess against it is told expired (it
-    # never spends a lockout try).
-    Write-Host "== expired code =="
-    Stop-HelperVerified
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = '1'
-    $p = Start-Process $exe -PassThru
-    Wait-HelperListening $p.Id "helper did not restart for the expired-code check"
-    $rEx1 = Invoke-Helper '/pair' '{"code":"4242"}' $null
-    Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code): $(Safe-Body $rEx1.body))"
-    $rEx2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
-    Assert ($rEx2.code -eq 410) "a retried expired code stays 410"
-    $rEx3 = Invoke-Helper '/pair' '{"code":"999999"}' $null
-    Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code): $(Safe-Body $rEx3.body))"
-    $rEx4 = Invoke-Helper '/pair' '{"code":"4242"}' $null
-    Assert ($rEx4.code -eq 410) "the expired code still answers 410 after the guess - no lock was spent"
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = $null
+    # The old "expired code answers 410" section was removed: the helper (BingeMote PC 1.9 baseline, 5ef5b68) has
+    # no pairing-code expiry (HelperWindow.TickStatus: "codes never expire"), no ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST
+    # handler exists anywhere under windows/, and no earlier CI run reached this section (the harness stopped
+    # at the long-clip assert first). Wrong-code lockout (5 tries, 429) and the pair-spent paths stay covered above.
 
     if ($script:assertCount -lt 80) { throw "only $script:assertCount assertions ran - the harness did not exercise the full flow" }
     Write-Host "HELPER E2E PASSED ($script:assertCount assertions)"

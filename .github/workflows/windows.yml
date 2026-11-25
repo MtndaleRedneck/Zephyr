@@ -76,7 +76,6 @@ jobs:
           dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
           $shots = @(
             @('window', 'window.png'),
-            @('pairing-expired', 'window-pairing-expired.png'),
             @('pairing', 'window-pairing.png'),
             @('broken-store', 'window-broken-store.png'),
             @('remove', 'dialog-remove.png'),
