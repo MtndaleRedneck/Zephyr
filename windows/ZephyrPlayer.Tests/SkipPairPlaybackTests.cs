@@ -97,7 +97,7 @@ namespace ZephyrPlayer.Tests
                                     player.Time=240000;Await(()=>Math.Abs(player.Time-240000)<=1000,"reset midpoint for animate-off proof");
                                     settings.AnimateOnPress=false;var offBefore=player.Time;button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent,button));
                                     Await(()=>Math.Abs(player.Time-(offBefore+step.Delta*1000L))<=1000,"animate off changed seek behavior");
-                                    Assert.False(highlight.HasAnimatedProperties,"animate off must disable traveling highlight");settings.AnimateOnPress=true;
+                                    Assert.False(highlight.HasAnimatedProperties,"animate off must disable traveling highlight");Assert.Equal("",window.LastPressEffects);settings.AnimateOnPress=true;
                                 }
 
                                 Console.WriteLine($"REAL_SKIP_PASS {step.Name}: before={before}ms delta={step.Delta}s after={player.Time}ms");

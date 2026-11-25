@@ -45,6 +45,7 @@ namespace ZephyrPlayer.Tests
             Sta(() =>
             {
                 var window = NewWindow(out _);
+                Assert.Equal("Zephyr Settings", window.Title);   // 2.0.2 title assert, 3.0 window
                 var titles = new System.Collections.Generic.Dictionary<string, string>
                 {
                     { "movies", "Movies folder" }, { "volume", "Volume" }, { "skip", "Playback" }, { "bar", "Controls" },

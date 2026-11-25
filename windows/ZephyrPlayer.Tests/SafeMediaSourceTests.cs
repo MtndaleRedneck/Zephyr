@@ -106,6 +106,7 @@ public sealed class SafeMediaSourceTests
         // Body-entered signal: the 3 body bytes were actually delivered before the stall, so the
         // cancellation hit a read inside the body, not the constructor/header phase.
         Assert.Equal(3,bodyBytes);
+        Assert.True(watch.Elapsed>=TimeSpan.FromMilliseconds(350),"cancelled before the armed 400 ms deadline: not the body-phase path");
         Assert.True(watch.Elapsed<TimeSpan.FromSeconds(3),$"stalled read took {watch.Elapsed}");
     }
     [Fact]

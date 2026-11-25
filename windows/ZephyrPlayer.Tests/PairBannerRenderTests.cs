@@ -68,7 +68,8 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal(1, list.Items.Count);
                     // The big code text is 6 spaced digits.
                     var codeText = ((TextBlock)w.FindName("PairCodeText")!).Text;
-                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2"
+                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2" with thin spaces, word space in the middle
+                    Assert.Equal(' ', codeText[5]);
                     // Render the window content offscreen as CI evidence.
                     var root = (FrameworkElement)w.Content;
                     root.Measure(new Size(560, 600));

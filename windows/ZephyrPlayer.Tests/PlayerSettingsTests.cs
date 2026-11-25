@@ -228,9 +228,13 @@ namespace ZephyrPlayer.Tests
             var s = new PlayerSettings(_path);
             var fired = 0;
             s.Changed += (_, __) => fired++;
-            s.ShowSpeed = true;
+            s.ShowSpeed = false;
+            Assert.Equal(1, fired);
+            // 2.0.2: the remembered volume is written without Changed (nothing else shows it,
+            // so no screen rebuilds per volume step), and it is still saved.
             s.LastVolume = 33;
-            Assert.Equal(2, fired);
+            Assert.Equal(1, fired);
+            Assert.Equal(33, new PlayerSettings(_path).LastVolume);
         }
     }
 }

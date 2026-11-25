@@ -460,6 +460,19 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(4, PlayerBarLogic.ReflowLevel(302 + 2 * 170, 302, 214, 164));
         }
 
+        // 2.0.2 Cp2PlayerTests.FullscreenPill_780IsAMax_ClampedToTheScreen, original assertions on the
+        // unchanged PlayerBarLogic pure functions (the 3.0 shell sizes its bar differently; these keep the
+        // helper's contract pinned, no visual claim).
+        [Fact]
+        public void FullscreenPill_780IsAMax_ClampedToTheScreen()
+        {
+            Assert.Equal(780, PlayerBarLogic.PillDrawnWidth(1920), 3);
+            Assert.Equal(780, PlayerBarLogic.PillDrawnWidth(1024), 3);
+            Assert.Equal(752, PlayerBarLogic.PillDrawnWidth(800), 3);
+            Assert.Equal(780, PlayerBarLogic.PillLayoutWidth(1920), 3);
+            Assert.True(PlayerBarLogic.PillLayoutWidth(640) * PlayerBarLogic.PillScale <= 640 - 48 + 0.001);
+        }
+
         [Fact]
         public void MetaLine_And_Delay_Format()
         {
