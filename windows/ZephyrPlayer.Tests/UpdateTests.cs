@@ -59,6 +59,23 @@ namespace ZephyrPlayer.Tests
             ",\"assets\":[{\"name\":\"" + assetName + "\",\"browser_download_url\":\"http://127.0.0.1:47895/exe\"" +
             (digest != null ? ",\"digest\":\"sha256:" + digest + "\"" : "") + "}]}";
 
+        private static string ReleaseAt(string tag, string assetName, string url) =>
+            "{\"tag_name\":\"" + tag + "\",\"draft\":false,\"prerelease\":false,\"assets\":[{\"name\":\"" + assetName +
+            "\",\"browser_download_url\":\"" + url + "\",\"digest\":\"sha256:" + new string('c', 64) + "\"}]}";
+
+        [Fact]
+        public void ProductionAssetOrigin_IsTheZephyrRepoNotTheOldZephyrDevRedirect()
+        {
+            // A non-loopback asset URL only passes when it is exactly the Zephyr repo's release download path.
+            Feed("[" + ReleaseAt("player-v3.1.0", "Zephyr-PC-3.1.0.exe",
+                "https://github.com/MtndaleRedneck/Zephyr/releases/download/player-v3.1.0/Zephyr-PC-3.1.0.exe") + "]");
+            Assert.Equal("available: 3.1.0", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Feed("[" + ReleaseAt("player-v3.1.0", "Zephyr-PC-3.1.0.exe",
+                "https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/player-v3.1.0/Zephyr-PC-3.1.0.exe") + "]");
+            Assert.Equal("no_release", UpdateCheck.CheckOutcomeOrThrow("1.0.0", _base + "/releases"));
+            Assert.Equal("https://github.com/MtndaleRedneck/Zephyr/releases", UpdateCheck.ReleasePage);
+        }
+
         [Fact]
         public void MissingDigest_NotOffered()
         {

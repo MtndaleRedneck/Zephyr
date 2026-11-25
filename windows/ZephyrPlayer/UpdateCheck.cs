@@ -35,11 +35,11 @@ namespace ZephyrPlayer
 
     internal static class UpdateCheck
     {
-        private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30";
+        private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr/releases?per_page=30";
         /// <summary>Phone, helper and player release separately; this only looks at player-v* tags.</summary>
         private const string TagPrefix = "player-v";
         private const string AssetPrefix = "Zephyr-PC";
-        public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases";
+        public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr/releases";
 
         /// <summary>The published version newer than [current] shipping the installer, else null. Never throws.</summary>
         public static (string Version, string ExeUrl, string? Sha256)? LatestNewerThan(string current)
@@ -107,7 +107,7 @@ namespace ZephyrPlayer
                     var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                     if (name != $"{AssetPrefix}-{version}.exe") continue;
                     var url = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
-                    var expected = $"https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/{tag}/{name}";
+                    var expected = $"https://github.com/MtndaleRedneck/Zephyr/releases/download/{tag}/{name}";
                     // Loopback feed tests may use a loopback asset; production never can.
                     bool testAsset = apiOverride != null && Uri.TryCreate(apiOverride, UriKind.Absolute, out var apiUri) && apiUri.IsLoopback
                         && Uri.TryCreate(url, UriKind.Absolute, out var assetUri) && assetUri.IsLoopback;
