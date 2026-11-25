@@ -33,6 +33,7 @@ namespace ZephyrPlayer
         private readonly bool _loopbackOnly;
         private readonly InputLease? _inputLease;
         private readonly Timer? _inputTimer;
+        private readonly DisplayGate? _display;
 
         private static readonly System.Collections.Generic.HashSet<string> NamedKeys = new()
             { "enter", "backspace", "escape", "space", "tab", "up", "down", "left", "right" };
@@ -51,8 +52,10 @@ namespace ZephyrPlayer
             Func<string, (PairOutcome outcome, string? token)>? onPair = null,
             PlayerSettings? settings = null,
             IInputSink? input = null,
-            IPlaybackControl? control = null)
+            IPlaybackControl? control = null,
+            DisplayGate? display = null)
         {
+            _display = display;
             _onPlay = onPlay;
             _validateToken = validateToken ?? throw new ArgumentNullException(nameof(validateToken));
             _onPair = onPair;
@@ -191,6 +194,8 @@ namespace ZephyrPlayer
                         ? System.Text.Json.JsonSerializer.Deserialize<string[]>(s.GetRawText()) ?? Array.Empty<string>()
                         : Array.Empty<string>();
                     if (!PlaybackSourcePolicy.AllowedSet(url, subs, _settings.LibraryFolder, ctx.Request.RemoteEndPoint.Address)) { await Reply(ctx, 400, "{\"error\":\"playback source not allowed\"}"); return; }
+                    // Dark PC screen: starting a movie is a press, so this tap only wakes the screen.
+                    if (_display != null && _display.ShouldSwallowDiscrete()) { await Reply(ctx, 200, "{\"ok\":true,\"woke\":true}"); return; }
                     await _onPlay(url, position, subs);
                     await Reply(ctx, 200, "{\"ok\":true}");
                     return;
@@ -238,7 +243,21 @@ namespace ZephyrPlayer
                         await Reply(ctx, 200, _control.StatusJson());
                         return;
                     }
+                    if (ctx.Request.HttpMethod == "GET" && path == "/control/screen-state")
+                    {
+                        // Dark or unknown counts as dark. With no display source the gate is off: not dark.
+                        await Reply(ctx, 200, "{\"dark\":" + (_display != null && _display.DarkOrUnknown ? "true" : "false") + "}");
+                        return;
+                    }
                     if (ctx.Request.HttpMethod != "POST") { await Reply(ctx, 404, "{}"); return; }
+                    if (path == "/control/wake-display")
+                    {
+                        _display?.Wake();
+                        await Reply(ctx, 200, "{\"ok\":true}");
+                        return;
+                    }
+                    // First press while the PC screen is dark only wakes it (playback commands are presses).
+                    if (_display != null && _display.ShouldSwallowDiscrete()) { await Reply(ctx, 200, "{\"ok\":true,\"woke\":true}"); return; }
                     System.Text.Json.JsonElement cjson = default;
                     var hasBody = ctx.Request.HasEntityBody;
                     if (hasBody)
@@ -289,6 +308,19 @@ namespace ZephyrPlayer
                     if (_input == null) { await Reply(ctx, 404, "{}"); return; }
                     var inputBody = await ReadBody(ctx);
                     var json = System.Text.Json.JsonDocument.Parse(inputBody).RootElement;
+                    if (_display != null && path != "/input/heartbeat")
+                    {
+                        // Dark PC screen: the first touch only wakes it; a gesture is eaten to its end.
+                        var swallowed = path switch
+                        {
+                            "/input/move" or "/input/scroll" or "/input/zoom" => _display.ShouldSwallowContinuous(),
+                            "/input/button" => _display.ShouldSwallowButton(token,
+                                json.TryGetProperty("button", out var bb) ? bb.GetString() : null,
+                                json.TryGetProperty("down", out var dd) && dd.ValueKind == System.Text.Json.JsonValueKind.True),
+                            _ => _display.ShouldSwallowDiscrete(),
+                        };
+                        if (swallowed) { await Reply(ctx, 200, "{\"ok\":true,\"woke\":true}"); return; }
+                    }
                     switch (path)
                     {
                         case "/input/heartbeat":

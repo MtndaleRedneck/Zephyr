@@ -14,6 +14,7 @@ namespace ZephyrPlayer
         private System.Threading.Mutex? _singleInstance;
         private EventWaitHandle? _restoreSignal;
         private TrayService? _tray;
+        private readonly DisplayWatch _displayWatch = new();
         private MainWindow? _player;
         private HomeWindow? _home;
         private LibVLC? _libvlc;
@@ -191,6 +192,7 @@ namespace ZephyrPlayer
                 _tray = new TrayService();
                 _tray.OpenRequested += RestoreApp;
                 _tray.QuitRequested += QuitApp;
+                InputSender.BlockedStateChanged += OnInputBlocked;
             }
             catch (Exception ex) { LogCrash("tray", ex.ToString()); _tray = null; }
 
@@ -248,6 +250,10 @@ namespace ZephyrPlayer
                 _player!.Show();
                 return _player!.PlayFromUrlAsync(url, pos, subs);
             }
+            // Display state for the wake-only first press. Registration failure disables the gate
+            // (a remote stuck on "unknown" would swallow every press), and says so in the crash log.
+            _displayWatch.Start();
+            if (!_displayWatch.Available) LogCrash("display-watch", "Display power notification unavailable; wake-only first press is off.");
             _server = new PlaybackServer(
                 onPlay: (url, pos, subs) =>
                     Current.Dispatcher.InvokeAsync(() => ShowPlayerAndPlay(url, pos, subs)).Task.Unwrap(),
@@ -299,6 +305,7 @@ namespace ZephyrPlayer
                     return (outcome, token);
                 },
                 input: new SendInputSink(),
+                display: _displayWatch.CreateGate(),
                 control: new MainWindowPlaybackControl(_player, player,
                     showForPlayback: () => { EnsurePlayer(); _home?.Hide(); _player!.Show(); }),
                 settings: settings);
@@ -431,10 +438,19 @@ namespace ZephyrPlayer
             Shutdown();
         }
 
+        // Windows did not play phone input (for example an administrator window is in front).
+        // Observed fact only; no cause is claimed beyond the hint in the notice.
+        private void OnInputBlocked(bool blocked)
+        {
+            try { Dispatcher.BeginInvoke(new Action(() => _tray?.SetInputBlocked(blocked))); } catch { }
+        }
+
         protected override void OnExit(ExitEventArgs e)
         {
+            InputSender.BlockedStateChanged -= OnInputBlocked;
             _updateTimer?.Stop();
             _tray?.Dispose();
+            _displayWatch.Dispose();
             _discovery?.Dispose();
             _server?.Dispose();
             _restoreSignal?.Dispose();

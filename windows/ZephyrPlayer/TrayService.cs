@@ -45,6 +45,34 @@ namespace ZephyrPlayer
             catch { return null; }
         }
 
+        /// <summary>Balloon throttle: first fire always, then at most once a minute. The sentinel is
+        /// checked before the subtraction (TickCount64 - long.MinValue would overflow).</summary>
+        internal static bool BalloonDue(long lastMs, long nowMs) => lastMs == long.MinValue || nowMs - lastMs > 60_000;
+
+        private long _lastBlockBalloonMs = long.MinValue;
+
+        /// <summary>The tooltip carries the state for as long as it lasts; the balloon fires at most
+        /// once a minute so flapping input never spams. Mouse and keyboard share one send path, so
+        /// the words say input.</summary>
+        public void SetInputBlocked(bool blocked)
+        {
+            try
+            {
+                if (blocked)
+                {
+                    var now = Environment.TickCount64;
+                    if (BalloonDue(_lastBlockBalloonMs, now))
+                    {
+                        _lastBlockBalloonMs = now;
+                        _icon.ShowNotification("Zephyr Player", "Input could not be sent. Check whether an administrator window is in front.");
+                    }
+                    _icon.ToolTipText = "Zephyr Player - input could not be sent";
+                }
+                else _icon.ToolTipText = "Zephyr Player";
+            }
+            catch { }
+        }
+
         public TrayService()
         {
             _icon = new TaskbarIcon
