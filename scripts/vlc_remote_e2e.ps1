@@ -134,12 +134,12 @@ Assert ($fw0.ExitCode -eq 0) "installed exe's elevated firewall setup succeeds"
 Assert-HelperFirewallRules $installed
 # Negative hook proof on the SHIPPED build: it was published without PAIR_CODE_HOOK,
 # so ZEPHYR_VLC_REMOTE_PAIR_CODE must NOT produce a working pairing.
-$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
 Remove-Item (Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote') -Recurse -Force -ErrorAction SilentlyContinue
 Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
 $pClean = Start-Process $installed -PassThru
 Wait-HelperListening $pClean.Id "installed clean helper did not start listening"
-$rClean = Invoke-Helper '/pair' '{"code":"424242"}' $null
+$rClean = Invoke-Helper '/pair' '{"code":"4242"}' $null
 Assert ($rClean.code -eq 403) "the shipped build ignores the CI pairing hook (got $($rClean.code))"
 Stop-HelperVerified
 # Silent uninstall: app files go away, and the uninstaller's elevated cleanup removes
@@ -226,7 +226,7 @@ Assert-HelperFirewallRules $exe
 
 # --- Part 2: run the helper and drive its HTTP API over loopback ---
 Write-Host "== helper runtime =="
-$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
 $p = Start-Process $exe -PassThru
 try {
     Wait-HelperListening $p.Id "helper did not start listening on 8492"
@@ -249,7 +249,10 @@ try {
     Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the BingeMote config is untouched"
     $ownCfg = Join-Path $ownDir 'config.json'
     Assert ((-not (Test-Path $ownCfg)) -or ((Get-Content $ownCfg -Raw) -notmatch 'CI legacy phone|CI-HomeLAN')) "nothing from BingeMote was copied into the Zephyr config"
-    # helper stays running for the sections below
+    # The sections below run against a helper that already has its own config on disk (the shape every later launch has).
+    Stop-HelperVerified
+    $p = Start-Process $exe -PassThru
+    Wait-HelperListening $p.Id "helper did not restart after the no-import check"
     Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
 
@@ -261,12 +264,12 @@ try {
     Assert ($r.body -match 'detail') "wrong code answers with a written-for-him detail"
 
     # CSRF / DNS-rebinding guards (round-5): browsers send Origin; rebound names fail Host.
-    $rOrigin = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/pair' -Method Post -Body '{"code":"424242"}' -Headers @{ Origin = 'http://evil.example' } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    $rOrigin = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/pair' -Method Post -Body '{"code":"4242"}' -Headers @{ Origin = 'http://evil.example' } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
     Assert ([int]$rOrigin.StatusCode -eq 403) "a browser-style Origin header is refused"
     $rHost = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/ping' -Headers @{ Host = 'evil.example.com'; 'X-Zephyr-VLC-Remote-Token' = ('a1' * 32) } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
     Assert ([int]$rHost.StatusCode -eq 403) "a rebound DNS name in Host is refused"
 
-    $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Write-Host "right-code pair -> $($r.code): $($r.body)"
     if ($r.code -ne 200) {
         Get-Process | Where-Object { $_.ProcessName -like '*ZephyrVlcRemote*' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) path=$($_.Path)" }
@@ -309,7 +312,7 @@ try {
     $cfgText = Get-Content $cfg -Raw
     Assert ($cfgText -match '"name":"Phone 2"') "the first NEW pairing after a migration is named Phone 2: $cfgText"
 
-    $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($r.code -eq 403) "pairing code is single-use"
 
     $r = Invoke-Helper '/ping' '{}' $token
@@ -365,7 +368,7 @@ try {
     Remove-Item Env:ZEPHYR_VLC_REMOTE_PAIR_CODE -ErrorAction SilentlyContinue
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart"
-    $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($r.code -eq 403) "no live pair code after pairing (got $($r.code))"
     $r = Invoke-Helper '/ping' '{}' $token
     Assert ($r.code -eq 200) "saved token still works after restart"
@@ -377,10 +380,10 @@ try {
     # A second phone pairs with a fresh code and both phones stay connected.
     Write-Host "== multi-phone pairing =="
     Stop-HelperVerified
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '123456'
+    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '1234'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for second pairing"
-    $r = Invoke-Helper '/pair' '{"code":"123456"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"1234"}' $null
     Assert ($r.code -eq 200) "second phone pairs with a fresh code"
     $token2 = ($r.body | ConvertFrom-Json).token
     Assert ($token2 -ne $token) "second phone gets its own token"
@@ -437,13 +440,13 @@ try {
     Assert (-not $fakeVlc.HasExited) "the simulated VLC process is running"
     try {
         Stop-HelperVerified
-        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '555555'
+        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '5555'
         $p = Start-Process $exe -PassThru
         Wait-HelperListening $p.Id "helper did not restart for the pending-write test"
         $r = Invoke-HelperGet '/vlc/setup-status' $token
         $ss = $r.body | ConvertFrom-Json
         Assert ($ss.configured -eq $false -and $ss.pending -eq $false) "with vlcrc deleted, setup-status attests neither configured nor pending"
-        $r = Invoke-Helper '/pair' '{"code":"555555"}' $null
+        $r = Invoke-Helper '/pair' '{"code":"5555"}' $null
         Assert ($r.code -eq 200) "third phone pairs while VLC is running"
         $paired3 = $r.body | ConvertFrom-Json
         Assert ($paired3.vlcPending -eq $true) "pair reports the vlcrc write is pending while VLC runs"
@@ -476,10 +479,10 @@ try {
         Start-Sleep -Seconds 2
         Assert (-not $fakeVlc2.HasExited) "the simulated VLC is running for the re-pair test"
         Stop-HelperVerified
-        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '777777'
+        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '7777'
         $p = Start-Process $exe -PassThru
         Wait-HelperListening $p.Id "helper did not restart for the re-pair test"
-        $r = Invoke-Helper '/pair' '{"code":"777777"}' $null
+        $r = Invoke-Helper '/pair' '{"code":"7777"}' $null
         Assert ($r.code -eq 200) "fourth phone pairs while VLC runs with the settings already written"
         Assert ((($r.body | ConvertFrom-Json).vlcPending) -ne $true) "no false pending when vlcrc already has the settings"
         $r = Invoke-HelperGet '/vlc/setup-status' $token
@@ -535,7 +538,7 @@ try {
     Stop-HelperVerified
     $resumeJson = '{"' + ($clipFull -replace '\\','\\') + '":{"Position":120.0,"Length":600.0}}'
     Set-Content (Join-Path $resumeDir 'resume-places.json') $resumeJson -NoNewline
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the resume check"
     $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
@@ -616,7 +619,7 @@ try {
     }
     $rLocked = Invoke-Helper '/pair' '{"code":"999999"}' $null
     Assert ($rLocked.code -eq 429) "the 6th wrong code is 429 (locked)"
-    $rLockedRight = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rLockedRight = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rLockedRight.code -eq 429) "even the right code is 429 while locked"
     Assert ($rLocked.body -match 'Pair again') "the lockout text says press Pair again, not restart"
 
@@ -631,7 +634,7 @@ try {
     $before = Get-Content $corruptPath -Raw
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not start on the corrupt-config run"
-    $rCorrupt = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rCorrupt = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rCorrupt.code -eq 503) "a broken store refuses pairing with 503 (got $($rCorrupt.code))"
     Assert ($rCorrupt.body -match 'detail') "the broken store answers with a written-for-him detail"
     Assert ((Get-Content $corruptPath -Raw) -eq $before) "the unreadable config is preserved byte-for-byte"
@@ -648,7 +651,7 @@ try {
     Set-Content $mixPath $mixText -NoNewline
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not start on the mixed-record run"
-    $rMix = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rMix = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rMix.code -eq 503) "one unreadable record fails the whole store closed (got $($rMix.code))"
     Assert ($rMix.body -match 'detail') "the mixed broken store answers with a written-for-him detail"
     Assert ((Get-Content $mixPath -Raw) -eq $mixText) "the mixed config is preserved byte-for-byte"
@@ -657,7 +660,7 @@ try {
     # Restore a good paired state for the takeover phase.
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the takeover phase"
-    $rPair2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rPair2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rPair2.code -eq 200) "re-pair after the corrupt-config phase"
     $token = ($rPair2.body | ConvertFrom-Json).token
 
@@ -733,13 +736,13 @@ try {
     Write-Host "== failed save keeps the code =="
     $cfgRo = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json'
     Set-ItemProperty $cfgRo -Name IsReadOnly -Value $true
-    $rFs1 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rFs1 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rFs1.code -eq 503) "a failed save refuses the pair with 503 (got $($rFs1.code))"
     Assert ($rFs1.body -match 'detail') "the failed save answers with a written-for-him detail"
-    $rFs2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rFs2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rFs2.code -eq 503) "the failed save did not spend the code (got $($rFs2.code))"
     Set-ItemProperty $cfgRo -Name IsReadOnly -Value $false
-    $rFs3 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rFs3 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rFs3.code -eq 200) "the same code pairs once the file is writable again"
     Assert ((($rFs3.body | ConvertFrom-Json).token).Length -eq 64) "the retried pair returns a real token"
 
@@ -750,13 +753,13 @@ try {
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = '1'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the expired-code check"
-    $rEx1 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rEx1 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code): $($rEx1.body))"
-    $rEx2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rEx2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rEx2.code -eq 410) "a retried expired code stays 410"
     $rEx3 = Invoke-Helper '/pair' '{"code":"999999"}' $null
     Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code): $($rEx3.body))"
-    $rEx4 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rEx4 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rEx4.code -eq 410) "the expired code still answers 410 after the guess - no lock was spent"
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = $null
 
