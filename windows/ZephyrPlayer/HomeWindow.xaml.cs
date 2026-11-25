@@ -84,6 +84,11 @@ namespace ZephyrPlayer
             var statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
             statusTimer.Tick += (_, __) => RefreshStatus();
             Loaded += (_, __) => statusTimer.Start();
+            // The small "Update available" notice follows the automatic check and opens Settings > Updates.
+            Action onUpdate = () => Dispatcher.InvokeAsync(RefreshUpdateNotice);
+            Loaded += (_, __) => { UpdateState.Changed -= onUpdate; UpdateState.Changed += onUpdate; RefreshUpdateNotice(); };
+            Unloaded += (_, __) => UpdateState.Changed -= onUpdate;
+            RefreshUpdateNotice();
             Closed += (_, __) => statusTimer.Stop();
             Refresh();
         }
@@ -409,6 +414,15 @@ namespace ZephyrPlayer
             if (picker.ShowDialog(this) == true) _settings.LibraryFolder = picker.FolderName;
         }
         private void OnRefresh(object sender, RoutedEventArgs e) => Refresh();
+        internal void RefreshUpdateNotice()
+        {
+            var version = UpdateState.AvailableVersion;
+            UpdateNoticeButton.Visibility = version != null ? Visibility.Visible : Visibility.Collapsed;
+            UpdateNoticeButton.ToolTip = version != null ? $"Zephyr Player {version} is ready to install" : null;
+        }
+        internal bool IsUpdateNoticeShown => UpdateNoticeButton.Visibility == Visibility.Visible;
+        private void OnUpdateNotice(object sender, RoutedEventArgs e) => OpenSettings("updates");
+
         private void OnPairing(object sender, RoutedEventArgs e) => OpenSettings("remote");
 
         private void OnSort(object sender, RoutedEventArgs e)

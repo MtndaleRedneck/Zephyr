@@ -1,7 +1,8 @@
 // Downloads an update's installer, verifies the release SHA-256, hands it to
 // Windows. Ported from the BingeMote helper's SelfUpdate. Only GitHub hosts are
 // followed (test seam overrides the host check for loopback). Nothing installs
-// on its own: the installer still shows and Windows asks for permission once.
+// on its own: the user starts it from Settings > Updates, and the per-user
+// installer then runs silently (no permission prompt) and reopens the app.
 using System;
 using System.Diagnostics;
 using System.IO;
@@ -36,6 +37,11 @@ namespace ZephyrPlayer
         {
             if (sha256 == null || !System.Text.RegularExpressions.Regex.IsMatch(sha256, "^[0-9a-fA-F]{64}$"))
                 throw new InvalidOperationException("The release has no valid SHA-256. Nothing was downloaded.");
+            // CP4 item 94: in production the download must START at a release download of
+            // MtndaleRedneck/Zephyr on github.com; the
+            // redirect hops after it keep the host rule below. Tests pass their own host rule.
+            if (hostAllowed == null && !UpdateCheck.IsAcceptedReleaseDownload(exeUrl))
+                throw new InvalidOperationException("The download address was not trusted.");
             hostAllowed ??= host =>
                 host.Equals("github.com", StringComparison.OrdinalIgnoreCase) ||
                 host.EndsWith(".githubusercontent.com", StringComparison.OrdinalIgnoreCase);
@@ -117,8 +123,8 @@ namespace ZephyrPlayer
             catch { stream.Dispose(); Verified.TryRemove(path, out _); try { File.Delete(path); } catch { } throw; }
         }
 
-        /// <summary>Open the downloaded installer (one Windows permission prompt) and
-        /// quit so it can replace the running exe. The installer relaunches the app.</summary>
+        /// <summary>Open the downloaded installer (per-user, silent) and quit so it can
+        /// replace the running exe. The installer relaunches the app.</summary>
         public static void LaunchAndQuit(string path)
         {
             // Keep a read-only, non-delete-sharing handle through process creation.
@@ -129,7 +135,17 @@ namespace ZephyrPlayer
                 UseShellExecute = true,
                 Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS",
             });
-            System.Windows.Application.Current?.Shutdown();
+            RequestQuit();
+        }
+
+        /// <summary>2.0.2: the app's own Quit (App.QuitApp: playback stopped, overlay hidden,
+        /// window bounds saved, then Shutdown), set by the App at launch.</summary>
+        internal static Action? Quit;
+
+        internal static void RequestQuit()
+        {
+            if (Quit != null) Quit();
+            else System.Windows.Application.Current?.Shutdown();
         }
     }
 }

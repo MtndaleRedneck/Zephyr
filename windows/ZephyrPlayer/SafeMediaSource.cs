@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -59,22 +60,107 @@ internal sealed class SafeMediaSource : IDisposable
         if (uri.Scheme != "http") throw new InvalidDataException("Unsupported media source");
         return new PeerRangeStream(uri,cancellation);
     }
-    internal void AddSubtitle(string source,CancellationToken cancellation = default)
+    internal void AddSubtitle(string source,CancellationToken cancellation = default,uint priority = 0)
+    {
+        var path=StageSubtitle(source,cancellation);
+        Media.AddSlave(MediaSlaveType.Subtitle,priority,new Uri(path).AbsoluteUri);
+    }
+    /// <summary>Attach a start's subtitles. Phone subtitles keep the strict 1.x
+    /// behaviour (a bad one refuses the start, priority 0). Local sidecars (P0-3)
+    /// are a bonus: an unreadable one is skipped, and the first one gets libVLC's top
+    /// slave priority (4) so it is selected FROM THE START like VLC does - a track
+    /// selected later never shows the cues the demuxer already passed (a cue at
+    /// 0:00 was lost that way; reproduced with libVLC 3.0 callback and path media).</summary>
+    internal void AddSubtitles(System.Collections.Generic.IEnumerable<string> subtitles,CancellationToken cancellation = default)
+    {
+        var firstLocal=true;
+        foreach (var sub in subtitles)
+        {
+            var local=Uri.TryCreate(sub,UriKind.Absolute,out var u)&&u.IsFile;
+            if (!local) { AddSubtitle(sub,cancellation); continue; }
+            try { AddSubtitle(sub,cancellation,firstLocal ? 4u : 0u); firstLocal=false; }
+            catch (Exception) when (!cancellation.IsCancellationRequested) { }
+        }
+    }
+    /// <summary>Validate a subtitle source (phone sidecar, local sidecar next to the
+    /// movie, or a file the user picked) and write a strict, bounded private copy.
+    /// Returns the private copy's path; it is deleted with this source.</summary>
+    internal string StageSubtitle(string source,CancellationToken cancellation = default)
     {
         // Phone sidecars carry no filename extension. Detect a supported text
         // format from contents and write a strict, bounded private local file.
         cancellation.ThrowIfCancellationRequested();
         using var stream = Open(source,cancellation);
         if (stream.Length > 2*1024*1024) throw new InvalidDataException("Subtitle too large");
-        using var reader = new StreamReader(stream, new UTF8Encoding(false,true), true);
-        var text = reader.ReadToEnd().TrimStart('\uFEFF');
+        var raw = new MemoryStream();
+        stream.CopyTo(raw);
+        var text = DecodeSubtitle(raw.ToArray(), new Uri(source).IsFile);
         cancellation.ThrowIfCancellationRequested();
         text=text.TrimStart();
         var ext = SubtitleExtension(text);
         var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZephyrPlayer","Subtitles",Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir); var path=Path.Combine(dir,"subtitle"+ext);
-        File.WriteAllText(path,text,new UTF8Encoding(false)); _subtitles.Add(path);
-        Media.AddSlave(MediaSlaveType.Subtitle,0,new Uri(path).AbsoluteUri);
+        File.WriteAllText(path,text,new UTF8Encoding(false)); lock(_subtitles) _subtitles.Add(path);
+        return path;
+    }
+    /// <summary>Subtitle text decoding. Accepted: UTF-8 (with or without BOM), and
+    /// UTF-16 LE/BE or UTF-32 LE with a BOM. A LOCAL file that is none of those is read as
+    /// Windows-1252 (the code page most Windows-saved .srt files use: 0x80 is the
+    /// euro sign, 0x93/0x94 curly quotes), never as Latin-1. Phone subtitles stay
+    /// strict: anything that is not valid UTF-8/UTF-16-with-BOM is refused.</summary>
+    internal static string DecodeSubtitle(byte[] raw, bool localFile)
+    {
+        if (raw.Length >= 4 && raw[0]==0xFF && raw[1]==0xFE && raw[2]==0 && raw[3]==0)
+            return new UTF32Encoding(false,true,true).GetString(raw, 4, raw.Length-4);
+        if (raw.Length >= 2 && ((raw[0]==0xFF && raw[1]==0xFE) || (raw[0]==0xFE && raw[1]==0xFF)))
+        {
+            Encoding utf16 = raw[0]==0xFF ? new UnicodeEncoding(false,true,true) : new UnicodeEncoding(true,true,true);
+            return utf16.GetString(raw, 2, raw.Length-2);
+        }
+        var bom = raw.Length >= 3 && raw[0]==0xEF && raw[1]==0xBB && raw[2]==0xBF ? 3 : 0;
+        try { return new UTF8Encoding(false,true).GetString(raw, bom, raw.Length-bom).TrimStart('\uFEFF'); }
+        catch (DecoderFallbackException) when (localFile && bom == 0)
+        {
+            return Windows1252.GetString(raw);
+        }
+    }
+    private static readonly Encoding Windows1252 = CreateWindows1252();
+    private static Encoding CreateWindows1252()
+    {
+        // .NET (Core) ships only UTF/ASCII/Latin-1 until the code-pages provider is registered.
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        return Encoding.GetEncoding(1252);
+    }
+    /// <summary>Local sidecars for a local movie (P0-3): "&lt;movie&gt;.srt/.ass/.ssa/.vtt"
+    /// first, then "&lt;movie&gt;.*.srt" style language variants, from the movie's own
+    /// folder, as file URIs. Remote sources have none. Bounded and never throws.</summary>
+    internal static string[] LocalSidecars(string movieUrl)
+    {
+        try
+        {
+            var uri = new Uri(movieUrl);
+            if (!uri.IsFile) return Array.Empty<string>();
+            var movie = uri.LocalPath;
+            var dir = Path.GetDirectoryName(movie);
+            if (dir == null || !Directory.Exists(dir)) return Array.Empty<string>();
+            var stem = Path.GetFileNameWithoutExtension(movie);
+            var exts = new[] { ".srt", ".ass", ".ssa", ".vtt" };
+            var exact = new System.Collections.Generic.List<string>();
+            var variants = new System.Collections.Generic.List<string>();
+            foreach (var file in Directory.EnumerateFiles(dir).Take(4000))
+            {
+                var name = Path.GetFileName(file);
+                var ext = Path.GetExtension(name);
+                if (Array.IndexOf(exts, ext.ToLowerInvariant()) < 0) continue;
+                var baseName = Path.GetFileNameWithoutExtension(name);
+                if (baseName.Equals(stem, StringComparison.OrdinalIgnoreCase)) exact.Add(file);
+                else if (baseName.StartsWith(stem + ".", StringComparison.OrdinalIgnoreCase)) variants.Add(file);
+            }
+            exact.Sort((a, b) => Array.IndexOf(exts, Path.GetExtension(a).ToLowerInvariant()).CompareTo(Array.IndexOf(exts, Path.GetExtension(b).ToLowerInvariant())));
+            variants.Sort(StringComparer.OrdinalIgnoreCase);
+            return exact.Concat(variants).Take(8).Select(f => new Uri(f).AbsoluteUri).ToArray();
+        }
+        catch { return Array.Empty<string>(); }
     }
     internal static string SubtitleExtension(string text)
     {
@@ -93,13 +179,21 @@ internal sealed class SafeMediaSource : IDisposable
         var root=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"ZephyrPlayer","Subtitles");
         try {foreach(var dir in Directory.GetDirectories(root)) if(Directory.GetLastWriteTimeUtc(dir)<DateTime.UtcNow.AddDays(-1)){try{Directory.Delete(dir,true);}catch{}}}catch{}
     }
-    private static bool Matches(string text,string pattern) => Regex.IsMatch(text,pattern,RegexOptions.NonBacktracking,TimeSpan.FromMilliseconds(250));
+    private static bool Matches(string text,string pattern)
+    {
+        // A pathological input (for example megabytes of blank lines) can run past
+        // the match budget on a slow machine: that is a refusal, not a crash.
+        try { return Regex.IsMatch(text,pattern,RegexOptions.NonBacktracking,TimeSpan.FromMilliseconds(250)); }
+        catch (RegexMatchTimeoutException) { throw new InvalidDataException("Subtitle could not be checked in time"); }
+    }
     internal void Abort() => _input.Abort();
+    internal long BytesDelivered => _input.BytesDelivered;
     public void Dispose()
     {
         if(Interlocked.Exchange(ref _disposed,1)!=0)return;
         _input.Abort(); Media.ParseStop(); Media.Dispose(); _input.Dispose(); _stream.Dispose();
-        foreach(var path in _subtitles) { try { Directory.Delete(Path.GetDirectoryName(path)!,true); } catch { } }
+        string[] staged; lock(_subtitles) staged=_subtitles.ToArray();
+        foreach(var path in staged) { try { Directory.Delete(Path.GetDirectoryName(path)!,true); } catch { } }
     }
 }
 
@@ -119,8 +213,12 @@ internal sealed class SafeCallbackInput : MediaInput
     }
     public override int Read(IntPtr buffer,uint length)
     {
-        try {lock(_gate){if(_closing)return -1;var n=_stream.Read(_bytes,0,(int)Math.Min(length,(uint)_bytes.Length));System.Runtime.InteropServices.Marshal.Copy(_bytes,0,buffer,n);return n;}}catch{return -1;}
+        try {lock(_gate){if(_closing)return -1;var n=_stream.Read(_bytes,0,(int)Math.Min(length,(uint)_bytes.Length));System.Runtime.InteropServices.Marshal.Copy(_bytes,0,buffer,n);if(n>0)Interlocked.Add(ref _delivered,n);return n;}}catch{return -1;}
     }
+    private long _delivered;
+    /// <summary>Bytes handed to libVLC so far: the native start's progress signal
+    /// (a slow phone keeps this moving; a hung decoder does not).</summary>
+    internal long BytesDelivered => Interlocked.Read(ref _delivered);
     public override bool Seek(ulong offset)
     {
         try {lock(_gate){if(_closing||offset>long.MaxValue)return false;_stream.Seek((long)offset,SeekOrigin.Begin);return true;}}catch{return false;}

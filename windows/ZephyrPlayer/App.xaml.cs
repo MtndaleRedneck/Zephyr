@@ -23,6 +23,7 @@ namespace ZephyrPlayer
         private PlayerSettings? _settings;
         private bool _reallyQuit;
         private bool _startupDone;
+        private System.Windows.Threading.DispatcherTimer? _updateTimer;
         private volatile string? _pendingPhoneName;
 
         // Own identity, never shared with BingeMote (protocol.md Coexistence):
@@ -313,22 +314,14 @@ namespace ZephyrPlayer
                 ConnectionState.NotifyChanged();
                 NetworkCheck.QueueCheck(p => { ConnectionState.PublicWifiName = p.Name; ConnectionState.NotifyChanged(); });
             };
-            // Auto-update check on launch. Missing releases and failures remain
-            // distinct from a verified current published installer.
-            _ = Task.Run(() =>
-            {
-                UpdateState.Outcome = "checking";
-                try
-                {
-                    var current = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
-                    UpdateState.Outcome = UpdateCheck.CheckOutcomeOrThrow(current);
-                }
-                catch (Exception ex)
-                {
-                    // Diagnosable failure, not a fake "no update" (private-feed 404s land here too).
-                    UpdateState.Outcome = "failed: " + ex.GetType().Name;
-                }
-            });
+            // Automatic update check: at launch, every 6 hours while the app runs (it lives in the tray
+            // for days), and when it comes back from the tray (RestoreApp, at most every 30 minutes). A later
+            // failed check keeps an offer already found.
+            _ = BackgroundUpdateCheck.Run(first: true);
+            _updateTimer = new System.Windows.Threading.DispatcherTimer { Interval = BackgroundUpdateCheck.Interval };
+            _updateTimer.Tick += (_, __) => _ = BackgroundUpdateCheck.Run();
+            _updateTimer.Start();
+            SelfUpdate.Quit = QuitApp;     // the updater quits through the app's own Quit
             _home.Show();
             // Owner requires a window that HAS BEEN SHOWN (InvalidOperationException
             // otherwise): Home goes up first, then the pairing screen over it.
@@ -382,6 +375,7 @@ namespace ZephyrPlayer
         private void RestoreApp()
         {
             if (_reallyQuit) return;
+            if (BackgroundUpdateCheck.DueOnRestore(DateTime.UtcNow)) _ = BackgroundUpdateCheck.Run();
             if (_player != null && (_player.IsVisible || _player.IsPlayingMedia))
             {
                 _player.Show();
@@ -408,6 +402,7 @@ namespace ZephyrPlayer
 
         protected override void OnExit(ExitEventArgs e)
         {
+            _updateTimer?.Stop();
             _tray?.Dispose();
             _discovery?.Dispose();
             _server?.Dispose();

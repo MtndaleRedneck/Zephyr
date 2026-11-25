@@ -71,24 +71,52 @@ namespace ZephyrPlayer
             _ = Task.Run(Loop);
         }
 
+        /// <summary>Test seam: replaces the accept call (to inject a failing accept).</summary>
+        internal Func<HttpListener, Task<HttpListenerContext>>? AcceptForTest;
+        /// <summary>Accept or triage errors survived since Start (2.0.2).</summary>
+        internal int LoopErrors => _loopErrors;
+        private int _loopErrors;
+        internal static TimeSpan LoopErrorPause = TimeSpan.FromMilliseconds(250);
+
         private async Task Loop()
         {
             while (!_cts.IsCancellationRequested)
             {
                 HttpListenerContext ctx;
-                try { ctx = await _listener.GetContextAsync(); }
-                catch { break; }
-                if (!TrustedRequest(ctx)) {ctx.Response.StatusCode=403;ctx.Response.Close();continue;}
-                var pair = ctx.Request.HttpMethod == "POST" && ctx.Request.Url?.AbsolutePath == "/pair";
-                if (!pair)
+                try { ctx = await (AcceptForTest?.Invoke(_listener) ?? _listener.GetContextAsync()); }
+                catch (Exception ex)
                 {
-                    var auth = ctx.Request.Headers["Authorization"] ?? "";
-                    if (!auth.StartsWith("Bearer ") || !_validateToken(auth.Substring(7)))
-                    { ctx.Response.StatusCode = 401; ctx.Response.Close(); continue; }
+                    // 2.0.2: one failed accept used to end the loop for good (the phone remote
+                    // was dead until a restart). Only a stop ends it now; anything else is
+                    // logged, and the loop pauses briefly and goes on.
+                    if (_cts.IsCancellationRequested || !_listener.IsListening) break;
+                    Interlocked.Increment(ref _loopErrors);
+                    System.Diagnostics.Trace.TraceWarning("Phone server accept failed, continuing: " + ex.GetType().Name + ": " + ex.Message);
+                    try { await Task.Delay(LoopErrorPause, _cts.Token); } catch (OperationCanceledException) { break; }
+                    continue;
                 }
-                var slots = pair ? _pairRequests : _requests;
-                if (!slots.Wait(0)) { ctx.Response.StatusCode = 503; ctx.Response.Close(); continue; }
-                _ = Task.Run(async () => { try { await Handle(ctx); } finally { slots.Release(); } });
+                try
+                {
+                    if (!TrustedRequest(ctx)) {ctx.Response.StatusCode=403;ctx.Response.Close();continue;}
+                    var pair = ctx.Request.HttpMethod == "POST" && ctx.Request.Url?.AbsolutePath == "/pair";
+                    if (!pair)
+                    {
+                        var auth = ctx.Request.Headers["Authorization"] ?? "";
+                        if (!auth.StartsWith("Bearer ") || !_validateToken(auth.Substring(7)))
+                        { ctx.Response.StatusCode = 401; ctx.Response.Close(); continue; }
+                    }
+                    var slots = pair ? _pairRequests : _requests;
+                    if (!slots.Wait(0)) { ctx.Response.StatusCode = 503; ctx.Response.Close(); continue; }
+                    _ = Task.Run(async () => { try { await Handle(ctx); } finally { slots.Release(); } });
+                }
+                catch (Exception ex)
+                {
+                    // A client that hung up while being turned away (or any triage error)
+                    // costs that one request, not the server.
+                    Interlocked.Increment(ref _loopErrors);
+                    System.Diagnostics.Trace.TraceWarning("Phone server request triage failed, continuing: " + ex.GetType().Name);
+                    try { ctx.Response.Abort(); } catch { }
+                }
             }
         }
 

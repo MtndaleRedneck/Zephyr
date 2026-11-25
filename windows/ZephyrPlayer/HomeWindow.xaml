@@ -31,6 +31,7 @@
           <Grid><Button x:Name="LibraryTab" Style="{StaticResource TabButton}" Content="Library" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold"/><Border Height="2" CornerRadius="1" Background="{StaticResource OrangeBrush}" VerticalAlignment="Bottom" Margin="14,0,14,0" IsHitTestVisible="False"/></Grid>
           <Button x:Name="PhonesTab" Style="{StaticResource TabButton}" Content="Phones" Click="OnPairing"/>
           <Button x:Name="SettingsButton" Style="{StaticResource TabButton}" Content="Settings" Click="OnSettings"/>
+          <Button x:Name="UpdateNoticeButton" Style="{StaticResource TabButton}" Content="Update available" Foreground="{StaticResource OrangeBrush}" Click="OnUpdateNotice" Visibility="Collapsed" AutomationProperties.AutomationId="NavUpdateAvailable" ToolTip="A new version of Zephyr Player is ready to install"/>
         </StackPanel>
         <Border Grid.Column="2" Width="260" Height="34" Margin="0,0,12,0" Background="{StaticResource PanelBrush}" BorderThickness="1" CornerRadius="10">
           <Border.Style><Style TargetType="Border"><Setter Property="BorderBrush" Value="{StaticResource PanelLineBrush}"/><Style.Triggers><DataTrigger Binding="{Binding IsKeyboardFocused, ElementName=SearchBox}" Value="True"><Setter Property="BorderBrush" Value="{StaticResource OrangeBrush}"/></DataTrigger></Style.Triggers></Style></Border.Style>
