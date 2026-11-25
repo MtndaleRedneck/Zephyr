@@ -81,13 +81,13 @@ namespace ZephyrPlayer
             return sb.ToString();
         }
 
-        private void Mint()
+        private void Mint(bool userStarted = false)
         {
             var name = PhoneNameBox.Text.Trim();
             _pairStarted(name);
             PhoneNameBox.IsReadOnly = true;
             // The gate hands the code out only at mint time; mirror it for display.
-            PairCodeText.Text = FormatCode(_gate.NewCode());
+            PairCodeText.Text = FormatCode(_gate.NewCode(userStarted));
         }
 
         // Window-side "a code is on screen" flag: the gate's HasActiveCode goes false at
@@ -100,7 +100,7 @@ namespace ZephyrPlayer
             if (PhoneNameBox.Text.Trim().Length == 0) { PhoneNameBox.Focus(); return; }
             // Never quietly swap a code the phone may already be typing (name/Pair flow):
             // mint only when no code is live; the name box edits the pending name live.
-            if (!_gate.HasActiveCode) Mint();
+            if (!_gate.HasActiveCode || _gate.Locked) Mint(userStarted: true);
             ShowCode();
         }
 
@@ -115,6 +115,18 @@ namespace ZephyrPlayer
 
         private void TickCountdown()
         {
+            if (_codeShowing && _gate.Locked)
+            {
+                // Too many wrong codes: take the code down and say so, instead of leaving a
+                // code on screen that the phone can no longer use. Pair (a person) re-opens it.
+                _gate.CancelCode();
+                PhoneNameBox.IsReadOnly = false;
+                _codeShowing = false;
+                CodePanel.Visibility = Visibility.Collapsed;
+                PairButton.Visibility = Visibility.Visible;
+                RefreshStatus();
+                return;
+            }
             if (!_codeShowing) return; // cancelled / paired: stay in the name + Pair state
             var left = _gate.CodeTimeLeft;
             if (left == null)
@@ -219,6 +231,11 @@ namespace ZephyrPlayer
             {
                 StatusDot.Fill = WarnOrange;
                 StatusText.Text = "No network address found. Connect this PC to the same Wi-Fi as your phone.";
+            }
+            else if (_gate.Locked)
+            {
+                StatusDot.Fill = WarnOrange;
+                StatusText.Text = "Too many wrong codes were entered. Click Pair to get a new code.";
             }
             else if (ConnectionState.DiscoveryOff)
             {

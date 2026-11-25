@@ -112,5 +112,37 @@ namespace ZephyrPlayer.Tests
             now += TimeSpan.FromMinutes(1);
             Assert.Equal(PairingGate.CodeLifetime - TimeSpan.FromMinutes(1), gate.CodeTimeLeft);
         }
+
+        [Fact]
+        public void UserStartedCode_ClearsLock_RenewalDoesNot()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            gate.NewCode();
+            for (var i = 0; i < PairingGate.MaxFailures; i++)
+                Assert.Equal(PairOutcome.BadCode, gate.TryPair("000000", 0, () => "t", out _));
+            Assert.True(gate.Locked);
+            gate.NewCode(); // automatic renewal: the lock stays
+            Assert.True(gate.Locked);
+            var fresh = gate.NewCode(userStarted: true); // the user pressed Pair
+            Assert.False(gate.Locked);
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(fresh, 0, () => "minted", out var token));
+            Assert.Equal("minted", token);
+        }
+
+        [Fact]
+        public void NewCode_IsFourDigits()
+        {
+            var gate = new PairingGate();
+            for (var i = 0; i < 50; i++) Assert.Matches("^[0-9]{4}$", gate.NewCode());
+        }
+
+        [Fact]
+        public void SixDigitGuess_AgainstFourDigitCode_IsAStrike()
+        {
+            var gate = new PairingGate();
+            gate.NewCode();
+            Assert.Equal(PairOutcome.BadCode, gate.TryPair("123456", 0, () => "t", out _));
+        }
     }
 }

@@ -39,10 +39,15 @@ namespace ZephyrPlayer
         public PairingGate(Func<DateTime>? now = null) { _now = now ?? (() => DateTime.UtcNow); }
 
         /// <summary>Show a fresh code (invalidates the old one). One active code at a time.</summary>
-        public string NewCode()
+        /// <param name="userStarted">True only for the user pressing Pair (a person is present):
+        /// it clears the wrong-guess count and any lock, like BingeMote's helper where a new
+        /// Pair press re-opens pairing. Automatic renewal never clears them, so a guesser cannot
+        /// get fresh attempts from the timer.</param>
+        public string NewCode(bool userStarted = false)
         {
             lock (_lock)
             {
+                if (userStarted) { _failures = 0; _lockedUntil = DateTime.MinValue; }
                 // Grace only for a LIVE code: an already-expired code (UI stall,
                 // sleep/wake) must not be revived for another 30s (round-3 P6).
                 if (_code != null && _now() <= _expires) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }

@@ -39,7 +39,7 @@
 
         <!-- Public Wi-Fi notice. Notice only: the wording never claims a block, and the button only READS the existing
              firewall setup (FirewallSetup.SetupIsCurrent); nothing is changed. -->
-        <Border x:Name="WifiBanner" Visibility="Collapsed" Margin="0,0,0,12" Padding="14,10" CornerRadius="10" BorderThickness="1" BorderBrush="#80F97C02" Background="#0FFF9500" AutomationProperties.AutomationId="WifiBanner">
+        <Border x:Name="WifiBanner" Visibility="Collapsed" Margin="0,0,0,12" Padding="14,10" CornerRadius="10" BorderThickness="1" BorderBrush="#80F97C02" Background="#0FF97C02" AutomationProperties.AutomationId="WifiBanner">
             <Grid>
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <TextBlock x:Name="WifiBannerText" AutomationProperties.AutomationId="WifiBannerText" Foreground="{StaticResource TextBrush}" FontSize="13" TextWrapping="Wrap" VerticalAlignment="Center"

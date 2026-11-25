@@ -150,7 +150,7 @@ namespace ZephyrPlayer
                         case PairOutcome.Locked:
                             // Time-based lock: the phone says "try again in a few
                             // minutes", never "restart the PC" (1.2.0).
-                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Try again in a few minutes.\"}");
+                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair on the PC for a new code.\"}");
                             return;
                         case PairOutcome.TooManyPhones:
                             await Reply(ctx, 409, "{\"error\":\"too many phones\"}");

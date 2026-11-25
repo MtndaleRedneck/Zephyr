@@ -200,7 +200,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal((HttpStatusCode)429, (await Pair(Client(null), "000000")).StatusCode);
                 Assert.Equal((HttpStatusCode)429, (await Pair(Client(null), code!)).StatusCode);
                 var body = await (await Pair(Client(null), code!)).Content.ReadAsStringAsync();
-                Assert.Contains("few minutes", body);
+                Assert.Contains("Press Pair", body);
                 Assert.DoesNotContain("Restart", body);
             }
         }
