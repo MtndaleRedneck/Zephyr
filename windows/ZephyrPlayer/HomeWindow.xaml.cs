@@ -459,16 +459,31 @@ namespace ZephyrPlayer
                     {
                         if (generation != _thumbGeneration) return;
                         var path = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
-                        if (_history.Get(path) != null) continue;
+                        if (_history.Get(path) is { DurationMs: > 0 }) continue; // 2.0.1: a saved spot with no length still gets its badge
                         try
                         {
                             using var safe = new SafeMediaSource(vlc, new Uri(path).AbsoluteUri);
                             var media = safe.Media;
                             // Keep native release on this worker, never on LibVLC's ParsedChanged
                             // callback thread (Parse's completion can run continuations inline).
-                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 1500).GetAwaiter().GetResult(); }
+                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 5000).GetAwaiter().GetResult(); }
                             finally { media.ParseStop(); }
                             var duration = media.Duration;
+                            if (duration <= 0)
+                            {
+                                // 2.0.1: libVLC 3 skips the preparser for media fed through our own stream input (parsed
+                                // status "skipped"), so Parse reads no length. Open it silently (this LibVLC has no video or
+                                // audio output) until the demuxer knows the length. Bounded to 4 s, abandoned when the scan
+                                // is superseded, stopped and released here on the worker.
+                                using var probe = new LibVLCSharp.Shared.MediaPlayer(media);
+                                if (probe.Play())
+                                {
+                                    var until = DateTime.UtcNow.AddSeconds(4);
+                                    while (DateTime.UtcNow < until && (duration = probe.Length) <= 0 && generation == _thumbGeneration)
+                                        System.Threading.Thread.Sleep(30);
+                                    try { probe.Stop(); } catch { }
+                                }
+                            }
                             if (duration <= 0) { NoteDuration($"{Path.GetFileName(entry.Rel)}: duration {duration} ms after Parse"); continue; }
                             _history.Save(path, 0, duration, metadataOnly: true);
                             Dispatcher.BeginInvoke(new Action(() => { if (generation == _thumbGeneration) entry.SetMetadata(_history.Get(path)?.PositionMs ?? 0, duration); }));

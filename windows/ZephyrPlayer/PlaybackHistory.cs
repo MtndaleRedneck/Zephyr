@@ -97,9 +97,13 @@ namespace ZephyrPlayer
                     var items = Read(out var unreadable);
                     if (unreadable) { PreserveUnreadable(); if (File.Exists(_path)) return; } // never overwrite a file we could not read
                     var key = path.ToUpperInvariant();
-                    if (metadataOnly && items.TryGetValue(key, out var old) && old.FileSize == f.Length && old.ModifiedUtc == f.LastWriteTimeUtc) return;
+                    // A metadata-only save never touches the SAVED SPOT of an unchanged file (the position is read here, under the lock, from the file just
+                    // read: a snapshot taken before a slow length probe could be stale). It returns when the length is already known and otherwise only fills the length in.
+                    Item? old = null;
+                    var sameFile = metadataOnly && items.TryGetValue(key, out old) && old.FileSize == f.Length && old.ModifiedUtc == f.LastWriteTimeUtc;
+                    if (sameFile && old!.DurationMs > 0) return;
                     var played = metadataOnly ? (items.TryGetValue(key, out var prior) ? prior.PlayedUtc : default) : DateTime.UtcNow;
-                    items[key] = new(Math.Clamp(positionMs, 0, durationMs), durationMs, f.Length, f.LastWriteTimeUtc, played, metadataOnly && items.TryGetValue(key, out var prior2) ? prior2.Path : path);
+                    items[key] = new(Math.Clamp(sameFile ? items[key].PositionMs : positionMs, 0, durationMs), durationMs, f.Length, f.LastWriteTimeUtc, played, metadataOnly && items.TryGetValue(key, out var prior2) ? prior2.Path : path);
                     Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
                     var temp = _path + ".tmp";
                     File.WriteAllText(temp, JsonSerializer.Serialize(items));

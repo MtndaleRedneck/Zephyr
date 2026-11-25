@@ -23,6 +23,28 @@ namespace ZephyrPlayer.Tests
             Assert.Null(history.Get(video));
             Directory.Delete(dir, true);
         }
+        [Fact] public void MetadataOnlySave_FillsInAMissingLength_AndKeepsTheSavedSpotAndPlayedTime()
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "zephyr-history-" + Guid.NewGuid()); Directory.CreateDirectory(dir);
+            var video = Path.Combine(dir, "movie.mp4"); File.WriteAllText(video, "video fixture");
+            var file = Path.Combine(dir, "history.json");
+            var f = new FileInfo(video); var played = new DateTime(2026, 11, 1, 12, 0, 0, DateTimeKind.Utc);
+            // An old entry: a saved spot, no length (Save never writes this today; older data can).
+            File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(new System.Collections.Generic.Dictionary<string, PlaybackHistory.Item>
+            { [video.ToUpperInvariant()] = new(50_000, 0, f.Length, f.LastWriteTimeUtc, played, video) }));
+            var history = new PlaybackHistory(file);
+            history.Save(video, 0, 100_000, metadataOnly: true);
+            var got = history.Get(video)!;
+            Assert.Equal(50_000, got.PositionMs);     // the saved spot is kept
+            Assert.Equal(100_000, got.DurationMs);    // the length is filled in
+            Assert.Equal(played, got.PlayedUtc);
+            // A known length is left alone, and a later real save still moves the spot.
+            history.Save(video, 0, 90_000, metadataOnly: true);
+            Assert.Equal(100_000, history.Get(video)!.DurationMs);
+            history.Save(video, 70_000, 100_000);
+            Assert.Equal(70_000, history.Get(video)!.PositionMs);
+            Directory.Delete(dir, true);
+        }
         [Fact] public void Recent_ListsUnfinishedNewestFirst_AndSkipsFinishedChangedAndOutsideRoot()
         {
             var root = Path.Combine(Path.GetTempPath(), "zephyr-recent-" + Guid.NewGuid());
