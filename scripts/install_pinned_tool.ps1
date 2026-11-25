@@ -3,7 +3,7 @@
 # Same versions the choco feed supplied in the last green run 45666576153: vlc v3.0.24 and ffmpeg v9.1.0
 # (its log also printed 'ffmpeg version 9.1-essentials_build-www.gyan.dev'). Pins:
 #  - VLC installer sha256: from the publisher's checksum file
-#    https://get.videolan.org/vlc/3.0.24/win64/vlc-3.0.24-win64.exe.sha256
+#    https://get.videolan.org/vlc/3.0.24/win64/vlc-3.0.24-win64.exe.sha256 (the installer itself is fetched from download.videolan.org: get.videolan.org answers a PowerShell user agent with an HTML page)
 #  - ffmpeg 9.1 essentials build: sha256 digest reported by the GitHub release API for
 #    https://github.com/GyanD/codexffmpeg/releases/tag/9.1. Same version as the choco package (9.1.0);
 #    NOT asserted byte-identical to what choco installed.
@@ -17,7 +17,7 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $tmp = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { [IO.Path]::GetTempPath() }
 $pins = @{
-  vlc    = @{ Url = 'https://get.videolan.org/vlc/3.0.24/win64/vlc-3.0.24-win64.exe'
+  vlc    = @{ Url = 'https://download.videolan.org/vlc/3.0.24/win64/vlc-3.0.24-win64.exe'
               Sha = 'd711e1e1fe52052748c39080c7dce63f6b7e4c315efedf1774a3f1957b782ff3'; File = 'vlc-3.0.24-win64.exe' }
   ffmpeg = @{ Url = 'https://github.com/GyanD/codexffmpeg/releases/download/9.1/ffmpeg-9.1-essentials_build.zip'
               Sha = 'b9bbbb3acece000cbeec994f856649354e52c773807841e78908374b24d658fd'; File = 'ffmpeg-9.1-essentials_build.zip' }
