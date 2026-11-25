@@ -74,7 +74,7 @@ namespace ZephyrPlayer
             var b = new Button { Content = text, Height = height, MinWidth = 36, Padding = new Thickness(10, 0, 10, 0), Cursor = Cursors.Hand,
                 Background = ChipBrush, Foreground = (Brush)new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)), BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent };
             if (!double.IsNaN(width)) b.Width = width;
-            b.Click += click;
+            b.Click += click; b.Focusable = false;
             return b;
         }
 
@@ -421,8 +421,6 @@ namespace ZephyrPlayer
         internal object? CurrentMedia => _safeSource?.Media;
         internal double LastSeekFraction { get; private set; } = -1;
         internal int PlayPauseHandedCount { get; private set; }
-        /// <summary>Test seam: a key as the window's own PreviewKeyDown handler gets it.</summary>
-        internal void HandleKey(KeyEventArgs e) => OnPlayerKeyDown(this, e);
 
         /// <summary>Time is up: PAUSE and stay in the player (progress saved). Never stop, never leave for Home.</summary>
         private void SleepFire(string why)

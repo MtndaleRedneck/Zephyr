@@ -84,7 +84,8 @@ namespace ZephyrPlayer
             _player = player;
             _settings = settings ?? new PlayerSettings();
             _ = volume; // 2.0.2: Windows' master volume is never used by the player; the parameter stays for callers.
-            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); };
+            Loaded += (_, __) => { Video.MediaPlayer = _player; _cursorWatch.Start(); ShowBarOnce(); HookOverlayKeys(); };
+            Overlay.Loaded += (_, __) => HookOverlayKeys();
             IsVisibleChanged += (_, __) => { if (IsVisible) { _cursorWatch.Start(); ShowBarOnce(); } else _cursorWatch.Stop(); };
             Closed += (_, __) => { _cursorWatch.Stop(); FlushVolumeSave(); StopPlaybackSource(); _closed = true; _awakeTimer.Stop(); _sleep.ReleaseNow(); };
             _cursorWatch.Tick += (_, __) =>
@@ -148,6 +149,7 @@ namespace ZephyrPlayer
             ApplyBarStyle();
             InitPopups();
             InitStartUi();
+            MakeNonFocusable(Overlay);
             UpdatePlayPauseGlyph();
         }
 
@@ -348,25 +350,55 @@ namespace ZephyrPlayer
         }
 
         private static string ShortSkip(int seconds) => PlayerSettings.FormatSkip(seconds);
-        private void OnPlayerKeyDown(object sender, KeyEventArgs e)
+        private void OnPlayerKeyDown(object sender, KeyEventArgs e) => HandleKey(e);
+
+        /// <summary>The one key map. Keys reach it from this window and from LibVLCSharp's overlay window (which has focus
+        /// after any click on the bar): Space, Left/Right skips, Up/Down volume, F, M, Esc (pop-up first, then full screen).
+        /// Anything else, Alt/Ctrl/Win combinations and keys typed into a text box pass through unhandled.</summary>
+        internal void HandleKey(KeyEventArgs e)
         {
+            if (e.Handled) return;
+            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase) return;
+            var key = e.Key == Key.System ? e.SystemKey : e.Key;
+            if ((Keyboard.Modifiers & (ModifierKeys.Alt | ModifierKeys.Control | ModifierKeys.Windows)) != 0) return;
+            if (key == Key.Escape && (_openPopup != null || _menuOpen)) { ClosePopups(); e.Handled = true; return; }
             ShowBarOnce();
-            if (e.Key == Key.Escape && _openPopup != null) { ClosePopups(); e.Handled = true; return; }
-            if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || _menuOpen) return;
-            switch (e.Key)
+            switch (key)
             {
                 case Key.Space: OnPlayPause(this, new RoutedEventArgs()); break;
                 case Key.Left: OnSkipBack(this, new RoutedEventArgs()); break;
                 case Key.Right: OnSkipForward(this, new RoutedEventArgs()); break;
-                case Key.F: SetFullscreen(!IsFullscreen); break;
-                case Key.Escape: if (IsFullscreen) SetFullscreen(false); break;
                 case Key.Up: StepVolume(+VolumeStep); break;
                 case Key.Down: StepVolume(-VolumeStep); break;
+                case Key.F: SetFullscreen(!IsFullscreen); break;
+                case Key.Escape: if (IsFullscreen) SetFullscreen(false); else return; break;
                 case Key.M: OnMute(this, new RoutedEventArgs()); break;
                 default: return;
             }
             e.Handled = true;
         }
+
+        private Window? _overlayWindow;
+
+        /// <summary>LibVLCSharp hosts the Overlay in its own window; keys pressed there reach the same key map.</summary>
+        private void HookOverlayKeys()
+        {
+            var overlay = Window.GetWindow(Overlay);
+            if (overlay == null || ReferenceEquals(overlay, this) || ReferenceEquals(overlay, _overlayWindow)) return;
+            _overlayWindow = overlay;
+            overlay.PreviewKeyDown += (_, e) => { if (IsLoaded) HandleKey(e); };
+        }
+
+        /// <summary>Bar buttons and sliders never take keyboard focus: a click on one would strand the key map.</summary>
+        private static void MakeNonFocusable(DependencyObject node)
+        {
+            if (node is System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.Slider) ((FrameworkElement)node).Focusable = false;
+            foreach (var child in LogicalTreeHelper.GetChildren(node)) if (child is DependencyObject d) MakeNonFocusable(d);
+        }
+
+        /// <summary>Up/Down volume step, in slider percent.</summary>
+        internal const int VolumeStep = 5;
+        internal void StepVolume(int delta) => VolumeSlider.Value = Math.Clamp(Math.Round(VolumeSlider.Value) + delta, 0, 100);
         private void OnVideoDoubleClick(object sender, MouseButtonEventArgs e)
         {
             if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
@@ -525,10 +557,6 @@ namespace ZephyrPlayer
             VolumeLabel.Text = _playerMute ? "Muted" : SharedVolume + "%";
             VolumeSlider.Opacity = _playerMute ? 0.45 : 1.0;
         }
-
-        /// <summary>Up/Down volume step, in slider percent.</summary>
-        internal const int VolumeStep = 5;
-        internal void StepVolume(int delta) => VolumeSlider.Value = Math.Clamp(Math.Round(VolumeSlider.Value) + delta, 0, 100);
 
         private void OnMute(object sender, RoutedEventArgs e)
         {
