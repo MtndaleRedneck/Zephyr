@@ -74,15 +74,15 @@
           </StackPanel>
 
           <!-- Where you are: back, up, crumbs on the left; count and sort on the right. -->
-          <Grid Grid.Row="1" Margin="0,0,0,14">
+          <Grid x:Name="CommandRow" Grid.Row="1" Margin="0,0,0,14" SizeChanged="OnCommandRowSizeChanged">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="CommandLeft" Orientation="Horizontal" VerticalAlignment="Center">
               <Button x:Name="BackButton" Style="{StaticResource GhostButton}" Click="OnBack" ToolTip="Back" AutomationProperties.Name="Back"><Path Data="M16,4 L8,12 L16,20 M8,12 H23" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="16" Height="16" Stretch="Uniform"/></Button>
               <Button x:Name="UpButton" Style="{StaticResource GhostButton}" Click="OnUp" ToolTip="Up one folder" AutomationProperties.Name="Up one folder"><Path Data="M4,16 L12,8 L20,16 M12,8 V23" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="16" Height="16" Stretch="Uniform"/></Button>
               <ItemsControl x:Name="Breadcrumb" VerticalAlignment="Center" Margin="6,0,0,0"><ItemsControl.ItemsPanel><ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate></ItemsControl.ItemsPanel></ItemsControl>
               <TextBlock x:Name="CountText" Foreground="{StaticResource MutedBrush}" FontSize="13" VerticalAlignment="Center" Margin="14,0,0,0"/>
             </StackPanel>
-            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+            <StackPanel x:Name="CommandRight" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
               <Button Style="{StaticResource GhostButton}" Click="OnBrowseFolder" ToolTip="Change movies folder" Content="Change folder" FontSize="13"/>
               <Button Style="{StaticResource GhostButton}" Click="OnRefresh" ToolTip="Refresh" AutomationProperties.Name="Refresh"><Path Data="M20,8 A8,8 0 1 0 20,17 M20,8 H14 M20,8 V2" Stroke="{StaticResource MutedBrush}" StrokeThickness="1.6" Width="15" Height="15" Stretch="Uniform"/></Button>
               <Button x:Name="SortButton" Style="{StaticResource GhostButton}" Content="Sort: Name" Click="OnSort" FontSize="13"/>

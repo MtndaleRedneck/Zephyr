@@ -162,6 +162,44 @@ namespace ZephyrPlayer
 
         // ---------- breadcrumb ----------
 
+        /// <summary>Every real folder above the library root, drive first (C:\Users\TestUser\Videos\Movies gives C:, Users, TestUser, Videos).
+        /// 2.0.1: the whole path is shown; the bar folds the middle into "..." only when it would not fit. Pure, for tests.</summary>
+        internal static string[] RootPrefix(string folder)
+        {
+            var trimmed = folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var parent = Path.GetDirectoryName(trimmed);
+            if (string.IsNullOrEmpty(parent)) return Array.Empty<string>();
+            var root = Path.GetPathRoot(trimmed) ?? "";
+            var drive = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var rest = parent.Length > root.Length ? parent.Substring(root.Length) : "";
+            var parts = new List<string>();
+            if (drive.Length > 0) parts.Add(drive);
+            parts.AddRange(rest.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries));
+            return parts.ToArray();
+        }
+
+        /// <summary>Which crumbs to show when the full trail is too wide: indices kept, in order, -1 standing for one "...". Pure, for tests.</summary>
+        internal static int[] FoldPlan(double[] widths, double ellipsisWidth, double available)
+        {
+            var n = widths.Length;
+            var all = Enumerable.Range(0, n).ToArray();
+            if (n <= 2 || widths.Sum() <= available) return all;
+            var used = widths[0] + ellipsisWidth + widths[n - 1];
+            var keepFrom = n - 1;
+            while (keepFrom - 1 > 1 && used + widths[keepFrom - 1] <= available) { keepFrom--; used += widths[keepFrom]; }
+            if (keepFrom <= 1) return all;
+            return new[] { 0, -1 }.Concat(Enumerable.Range(keepFrom, n - keepFrom)).ToArray();
+        }
+
+        private System.Windows.Controls.TextBlock Chevron() => new()
+        {
+            Text = ">", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0),
+        };
+
+        private readonly List<FrameworkElement> _crumbParts = new();
+        private string _crumbFolder = "";
+
         private void BuildBreadcrumb(string folder)
         {
             var crumbs = new List<Crumb>
@@ -174,19 +212,72 @@ namespace ZephyrPlayer
                 rel = rel.Length == 0 ? part : rel + "/" + part;
                 crumbs.Add(new Crumb(part, rel));
             }
-            Breadcrumb.Items.Clear();
+            _crumbParts.Clear();
+            foreach (var prefix in RootPrefix(folder))
+                _crumbParts.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = prefix, Foreground = (Brush)FindResource("MutedBrush"), FontSize = 13,
+                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0),
+                });
             for (var i = 0; i < crumbs.Count; i++)
             {
-                if (i > 0) Breadcrumb.Items.Add(new System.Windows.Controls.TextBlock
-                {
-                    Text = ">", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 12,
-                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0),
-                });
                 var crumb = crumbs[i];
                 var b = new System.Windows.Controls.Button { Content = crumb.Label, Style = (Style)FindResource("CrumbButton") };
                 b.Click += (_, __) => NavigateTo(crumb.Rel, pushHistory: true);
-                Breadcrumb.Items.Add(b);
+                _crumbParts.Add(b);
             }
+            var full = folder.TrimEnd(Path.DirectorySeparatorChar);
+            if (_currentRel.Length > 0) full = Path.Combine(full, _currentRel.Replace('/', Path.DirectorySeparatorChar));
+            _crumbFolder = full;
+            Breadcrumb.ToolTip = full;
+            FitBreadcrumb();
+        }
+
+        /// <summary>Lays the trail out in full, or folds the middle into one "..." when the row has no room. Re-run on every size change.</summary>
+        private void FitBreadcrumb()
+        {
+            if (Breadcrumb == null) return;
+            Breadcrumb.Items.Clear();
+            if (_crumbParts.Count == 0) return;
+            var inf = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            var chevron = Chevron(); chevron.Measure(inf);
+            var chevronW = chevron.DesiredSize.Width + chevron.Margin.Left + chevron.Margin.Right;
+            var widths = _crumbParts.Select(p => { p.Measure(inf); return p.DesiredSize.Width + chevronW; }).ToArray();
+            var dots = MakeDots(); dots.Measure(inf);
+            var plan = FoldPlan(widths, dots.DesiredSize.Width + chevronW, BreadcrumbRoom());
+            var first = true;
+            foreach (var idx in plan)
+            {
+                if (!first) Breadcrumb.Items.Add(Chevron());
+                first = false;
+                Breadcrumb.Items.Add(idx < 0 ? MakeDots() : _crumbParts[idx]);
+            }
+        }
+
+        private System.Windows.Controls.TextBlock MakeDots() => new()
+        {
+            Text = "...", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0), ToolTip = _crumbFolder,
+        };
+
+        /// <summary>Width the trail may use: the command row minus every other control in it.</summary>
+        private double BreadcrumbRoom()
+        {
+            if (CommandRow == null || CommandRow.ActualWidth <= 0) return double.PositiveInfinity;
+            var inf = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            double others = 0;
+            foreach (UIElement c in CommandLeft.Children)
+            {
+                if (ReferenceEquals(c, Breadcrumb) || c.Visibility == Visibility.Collapsed) continue;
+                c.Measure(inf); others += c.DesiredSize.Width;
+            }
+            CommandRight.Measure(inf); others += CommandRight.DesiredSize.Width;
+            return Math.Max(120, CommandRow.ActualWidth - others - 24);
+        }
+
+        private void OnCommandRowSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5) FitBreadcrumb();
         }
 
         // ---------- entries ----------
