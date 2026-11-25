@@ -55,12 +55,6 @@ namespace ZephyrPlayer
                 return true;
             }
         }
-        /// <summary>True when the token is still paired. Unlike ValidateAndTouch it does NOT mark the
-        /// phone as seen, so background housekeeping never makes an idle phone look connected.</summary>
-        public bool IsPaired(string token)
-        {
-            lock (_sync) return EntriesLocked().Any(e => FixedTime(e.Token, token));
-        }
         public DateTime? LastSeen(string token) { lock (_sync) return _lastSeen.TryGetValue(token, out var seen) ? seen : null; }
         public bool IsConnected(string token) => LastSeen(token) is DateTime seen && DateTime.UtcNow - seen < TimeSpan.FromSeconds(15);
 
