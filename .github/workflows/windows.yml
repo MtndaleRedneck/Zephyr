@@ -828,6 +828,18 @@ jobs:
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Write-Output "published 1.4.0 -> $v upgrade OK (ProductVersion $pv)"
 
+      - name: Parse-check the migration script with the same pwsh the steps use
+        id: migration_script_parse
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          Write-Host "pwsh $($PSVersionTable.PSVersion)"
+          $errs = $null; $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/pub202_real_data.ps1).Path, [ref]$tokens, [ref]$errs)
+          if ($errs -and $errs.Count -gt 0) { $errs | ForEach-Object { Write-Host "PARSE ERROR line $($_.Extent.StartLineNumber): $($_.Message)" }; throw "scripts/pub202_real_data.ps1 does not parse under this pwsh" }
+          Write-Host "parse OK"
+
       - name: Published 2.0.2 -> candidate upgrade smoke with seeded settings and history (real published asset)
         id: pub202_seeded
         if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration

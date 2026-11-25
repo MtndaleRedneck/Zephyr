@@ -359,7 +359,9 @@ try {
                 $w = [Math]::Min($bb.W, $vs.Width); $h = [Math]::Min($bb.H, $vs.Height)
                 $left = [Math]::Max($vs.Left, [Math]::Min($bb.L, $vs.Right - $w)); $top = [Math]::Max($vs.Top, [Math]::Min($bb.T, $vs.Bottom - $h))
                 $expected = (($left, $top, $w, $h | ForEach-Object { [Math]::Round($_).ToString($inv) }) -join ',') + ',' + $bb.Max
-                if ($afterS -eq $expected) { $class = 'reapplied-clamped-to-this-desktop' }
+                if ($afterS -eq $expected) {
+                    if ("$dpi" -eq '96') { $class = 'reapplied-clamped-to-this-desktop' } else { $class = "reapplied-clamped-NOT-QUALIFIED-at-dpi-$dpi" }
+                }
             }
             if (-not $class) {
                 # HomeWindow.xaml default is Width 1280 x Height 800 (CenterScreen); the player window default is 1920 x 1080.
