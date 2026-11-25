@@ -9,6 +9,8 @@
 #    NOT asserted byte-identical to what choco installed.
 # Failure is distinct: "TOOL NOT RUN: <tool> acquisition failed ..." and ZEPHYR_<TOOL>_STATUS=notrun is exported
 # to later steps so dependent steps skip instead of running and failing for a missing tool.
+# Budget note: -TimeoutSec is Invoke-WebRequest's request timeout, not a documented total-transfer limit; the real hard bound is
+# the workflow step timeout-minutes (12 for both tools), the ~260 s per tool figure is NOT guaranteed.
 # There is deliberately no unverified fallback (no choco) after a download or hash failure.
 param([Parameter(Mandatory)][ValidateSet('vlc','ffmpeg')][string]$Tool)
 $ErrorActionPreference = 'Stop'

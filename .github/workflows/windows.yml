@@ -318,7 +318,7 @@ jobs:
           if ($bad) { throw "$bad script(s) do not parse under this pwsh; no tool was acquired and no script was run" }
       - name: Real VLC and a short video fixture for the real-VLC subtitle test
         if: steps.scripts_parse.outcome == 'success'
-        timeout-minutes: 9
+        timeout-minutes: 12
         shell: pwsh
         run: |
           # Pinned, hash-verified installs (no choco feed). Both are attempted; one failure does not hide the other.
