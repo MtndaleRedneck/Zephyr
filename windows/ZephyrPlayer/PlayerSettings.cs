@@ -36,6 +36,8 @@ namespace ZephyrPlayer
         private bool _saveFailWarned;
 
         public PlayerSettings(string? path = null) { _path = path ?? DefaultPath; }
+        /// <summary>Test seam (InternalsVisibleTo): the settings file this instance reads and writes.</summary>
+        internal string PathForTest => _path;
 
         public string LibraryFolder
         {

@@ -136,4 +136,113 @@ public class PopupTests
             Assert.False(w.Sleep.IsActive);
         });
     }
+
+    // ---- 2.0.2 SubtitleRestartNoticeTests, carried with their full assertions (the first two used to be name-only in the map) ----
+
+    [Fact]
+    public void RestartNotice_Words_AreTheExactApprovedText()
+    {
+        Assert.Equal(
+            "Subtitle size is saved as Large.\n\n"
+            + "The new size takes effect only after a full restart of Zephyr Player. The subtitles on screen stay the size they are now.\n\n"
+            + "To restart: right-click the Zephyr Player icon in the system tray (next to the clock), choose Quit Zephyr Player, then open Zephyr Player again.\n\n"
+            + "Closing the window is not enough, because Zephyr Player keeps running in the tray.\n\n"
+            + "Your movie keeps playing. Zephyr will not restart or reopen it.",
+            PlayerBarLogic.SubtitleRestartNotice("L"));
+        Assert.StartsWith("Subtitle size is saved as Small.", PlayerBarLogic.SubtitleRestartNotice("S"));
+        Assert.StartsWith("Subtitle size is saved as Medium.", PlayerBarLogic.SubtitleRestartNotice("M"));
+        var l = PlayerBarLogic.SubtitleRestartNotice("L");
+        Assert.Contains("only after a full restart", l);
+        Assert.Contains("choose Quit Zephyr Player", l);
+        Assert.Contains("Closing the window is not enough", l);
+        Assert.Contains("will not restart or reopen it", l);
+        Assert.DoesNotContain("applied", l, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RestartPopup_Window_CarriesTheWords_AndOneOk()
+    {
+        VolumeMuteTests.Sta((w, settings) =>
+        {
+            var text = PlayerBarLogic.SubtitleRestartNotice("L");
+            var dlg = FirewallSetup.NoteWindow(text, PlayerBarLogic.SubtitleRestartTitle);
+            Assert.Equal("Subtitle size saved", dlg.Title);
+            // The themed DarkDialog wraps its content in a 1 px top-line Border.
+            var frame = Assert.IsType<Border>(dlg.Content);
+            var stack = Assert.IsType<StackPanel>(frame.Child);
+            Assert.Equal(text, ((TextBlock)stack.Children[0]).Text);
+            var buttons = (StackPanel)stack.Children[1];
+            Assert.Single(buttons.Children);
+            Assert.Equal("OK", ((Button)buttons.Children[0]).Content);
+            var all = new System.Collections.Generic.List<Button>();
+            void Walk(object node)
+            {
+                if (node is Button b) all.Add(b);
+                if (node is DependencyObject d)
+                    foreach (var child in System.Windows.LogicalTreeHelper.GetChildren(d)) Walk(child);
+            }
+            Walk(dlg);
+            Assert.Single(all);
+            Assert.Equal("OK", all[0].Content);
+            dlg.Close();
+        });
+    }
+
+    [Fact]
+    public void SizeChange_DuringPlayback_ShowsRestartPopup_LeavesPlaybackAlone_AndSaves()
+    {
+        VolumeMuteTests.Sta((w, settings) =>
+        {
+            var shown = new System.Collections.Generic.List<(string Title, string Text)>();
+            w.RestartNoticeOverride = (title, text) => shown.Add((title, text));
+            Assert.Equal("M", w.LibVlcSubtitleSize);
+            var clip = new Uri(System.IO.Path.Combine(AppContext.BaseDirectory, "fixtures", "clip.mp4")).AbsoluteUri;
+            var start = w.PlayFromUrlAsync(clip, null, Array.Empty<string>());
+            var until = Environment.TickCount64 + 15000;
+            while ((!start.IsCompleted || w.PlayerStateForTest != LibVLCSharp.Shared.VLCState.Playing) && Environment.TickCount64 < until)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => frame.Continue = false));
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+                System.Threading.Thread.Sleep(10);
+            }
+            Assert.True(start.IsCompleted && w.PlayerStateForTest == LibVLCSharp.Shared.VLCState.Playing, "clip did not play");
+            var media = w.CurrentMedia; var generation = w.PlayGeneration; var starts = w.StartCount; var seek = w.LastSeekFraction;
+            Assert.NotNull(media);
+
+            w.ChooseSubtitleSize("L");
+            Assert.Single(shown);
+            Assert.Equal(PlayerBarLogic.SubtitleRestartTitle, shown[0].Title);
+            Assert.Equal(PlayerBarLogic.SubtitleRestartNotice("L"), shown[0].Text);
+            Assert.Equal(1, w.SubtitleRestartNoticeCount);
+            // Nothing that plays was touched: same media, no new start, no seek, still playing, LibVLC still carries M.
+            Assert.Same(media, w.CurrentMedia);
+            Assert.Equal(generation, w.PlayGeneration);
+            Assert.Equal(starts, w.StartCount);
+            Assert.Equal(seek, w.LastSeekFraction);
+            Assert.Equal(LibVLCSharp.Shared.VLCState.Playing, w.PlayerStateForTest);
+            Assert.Equal("M", w.LibVlcSubtitleSize);
+            // Saved: the file on disk carries L.
+            Assert.Equal("L", settings.SubtitleSize);
+            Assert.Equal("L", new PlayerSettings(settings.PathForTest).SubtitleSize);
+            Assert.Contains("\"SubtitleSize\":\"L\"", System.IO.File.ReadAllText(settings.PathForTest).Replace(" ", ""));
+            // Same choice again: no second popup, a short reminder only.
+            w.ChooseSubtitleSize("L");
+            Assert.Single(shown);
+            Assert.Contains("is saved", w.OsdMessage);
+            // Back to the size in use: no popup.
+            w.ChooseSubtitleSize("M");
+            Assert.Single(shown);
+            Assert.Equal("Subtitle size: Medium (the size in use now)", w.OsdMessage);
+            Assert.Equal("M", new PlayerSettings(settings.PathForTest).SubtitleSize);
+            // And S: a popup again, naming Small, still nothing touched.
+            w.ChooseSubtitleSize("S");
+            Assert.Equal(2, shown.Count);
+            Assert.Equal(PlayerBarLogic.SubtitleRestartNotice("S"), shown[1].Text);
+            Assert.Same(media, w.CurrentMedia);
+            Assert.Equal(starts, w.StartCount);
+            Assert.Equal(LibVLCSharp.Shared.VLCState.Playing, w.PlayerStateForTest);
+            w.StopPlaybackSource();
+        }, joinMs: 45000, mustFinish: true);
+    }
 }
