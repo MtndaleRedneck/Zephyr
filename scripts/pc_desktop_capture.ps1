@@ -268,7 +268,7 @@ function Measure-Bar($path) {
             $o = $y * $band.S + $x * 4
             $b = $band.B[$o]; $g = $band.B[$o + 1]; $r = $band.B[$o + 2]
             # ElapsedText signature: gold #F0C23E for an explicit "original" pick,
-            # brand orange #FF9500 for the default style. Counting only gold went
+            # brand orange #F97C02 for the default style. Counting only gold went
             # blind the day the default became orange (b11db80 run: bar visible,
             # seekRun 88%, golden 0).
             $isGold = [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40

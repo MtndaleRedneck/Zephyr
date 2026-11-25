@@ -18,7 +18,7 @@ namespace ZephyrPlayer
         private static readonly SolidColorBrush PopupCardBrush = Frozen(Color.FromArgb(0xF0, 0x16, 0x16, 0x1A));
         private static readonly SolidColorBrush PopupLineBrush = Frozen(Color.FromArgb(0x17, 0xFF, 0xFF, 0xFF));
         private static readonly SolidColorBrush ChipBrush = Frozen(Color.FromRgb(0x3A, 0x3A, 0x44));
-        private static readonly SolidColorBrush ChipOnBrush = Frozen(Color.FromArgb(0x33, 0xFF, 0x95, 0x00));
+        private static readonly SolidColorBrush ChipOnBrush = Frozen(Color.FromArgb(0x33, 0xF9, 0x7C, 0x02));
         private static readonly SolidColorBrush RowOnBrush = Frozen(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF));
         private static SolidColorBrush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
 

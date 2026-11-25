@@ -693,7 +693,7 @@ namespace ZephyrPlayer
         private static readonly LinearGradientBrush AccentGradient = MakeAccent();
         private static LinearGradientBrush MakeAccent()
         {
-            var g = new LinearGradientBrush(Color.FromRgb(0xFF, 0xA2, 0x33), Color.FromRgb(0xFF, 0x95, 0x00), 90);
+            var g = new LinearGradientBrush(Color.FromRgb(0xFB, 0x9E, 0x2E), Color.FromRgb(0xF9, 0x7C, 0x02), 90);
             g.Freeze();
             return g;
         }

@@ -15,7 +15,7 @@ namespace ZephyrPlayer
     {
         private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
         private static readonly SolidColorBrush Orange = new(Brand.Orange);
-        private static readonly SolidColorBrush OrangeTint = new(Color.FromArgb(0x1A, 0xFF, 0x95, 0x00));
+        private static readonly SolidColorBrush OrangeTint = new(Color.FromArgb(0x1A, 0xF9, 0x7C, 0x02));
         private static readonly SolidColorBrush WhiteTint = new(Color.FromArgb(0x1A, 0xF5, 0xF5, 0xF7));
         private static readonly SolidColorBrush Gold = new(Color.FromRgb(0xF0, 0xC2, 0x3E));
         private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));

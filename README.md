@@ -9,7 +9,7 @@ A phone remote and an integrated PC movie player.
 ## Install
 
 Get the Android app and PC installer from the repository's Releases page.
-Open Zephyr Player, then follow the phone app's setup to pair using its six-digit code.
+Open Zephyr Player, then follow the phone app's setup to pair using its short code.
 Keep the phone and PC on the same Wi-Fi.
 
 Already using VLC with BingeMote? That connection stays separate. In the phone app's

@@ -43,7 +43,7 @@ namespace ZephyrPlayer
         /// in tests without it.</param>
         /// <param name="port">Listening port; tests pass an explicit loopback port.</param>
         /// <param name="loopbackOnly">Bind 127.0.0.1 only (CI harness); production binds all interfaces.</param>
-        /// <param name="onPair">6-digit code in, (outcome, token) out - the PairingGate
+        /// <param name="onPair">pairing code in, (outcome, token) out - the PairingGate
         /// owns code lifetime, one-shot spend, lockout and the phone cap. Optional so the
         /// loopback harness can run without pairing; production wires it.</param>
         public PlaybackServer(Func<string, long?, string[], Task> onPlay, Func<string, bool> validateToken,

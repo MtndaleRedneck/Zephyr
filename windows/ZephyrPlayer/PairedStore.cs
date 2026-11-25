@@ -8,7 +8,7 @@ namespace ZephyrPlayer
     /// <summary>
     /// Paired-phone token store for the player (separate identity from the
     /// BingeMote helper's store). JSON at %AppData%/ZephyrPlayer/paired.json,
-    /// written by the pairing flow (6-digit code, protocol.md). Secure default:
+    /// written by the pairing flow (pairing code, protocol.md). Secure default:
     /// no file = no paired phones = every /play gets 401.
     /// Format: 1.2.0 stores entries {token, name} so the Pairing screen can list
     /// "My phone" with Remove. The 1.1.0 file was a plain JSON string array of

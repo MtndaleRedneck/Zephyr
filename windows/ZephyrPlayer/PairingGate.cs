@@ -7,7 +7,7 @@ namespace ZephyrPlayer
 
     /// <summary>
     /// Pairing protections, mirroring the inherited BingeMote helper model
-    /// (helper/Program.cs + HttpServer.cs): crypto-RNG 6-digit code, 10-minute
+    /// (helper/Program.cs + HttpServer.cs): crypto-RNG 4-digit code (same length as BingeMote), 10-minute
     /// lifetime, one-shot on success, constant-time compare, wrong guesses while
     /// NO code is showing never count (a LAN guest must not be able to lock
     /// pairing while the user is not pairing), and the store caps at MaxPhones
@@ -46,7 +46,7 @@ namespace ZephyrPlayer
                 // Grace only for a LIVE code: an already-expired code (UI stall,
                 // sleep/wake) must not be revived for another 30s (round-3 P6).
                 if (_code != null && _now() <= _expires) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }
-                _code = RandomNumberGenerator.GetInt32(0, 1_000_000).ToString("D6");
+                _code = RandomNumberGenerator.GetInt32(0, 10_000).ToString("D4");
                 _expires = _now() + CodeLifetime;
                 return _code;
             }

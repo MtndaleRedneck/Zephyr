@@ -227,7 +227,7 @@ namespace ZephyrPlayer.Tests
                     for (var i = 0; i < wide2.Length; i += 4)
                     {
                         var b = wide2[i]; var g = wide2[i + 1]; var r = wide2[i + 2];
-                        if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #FF9500
+                        if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #F97C02
                     }
                     Assert.True(orangePx > 30, $"orange elapsed-text pixels {orangePx} - default control bar not rendered in the shipping style");
                     w2.Close();

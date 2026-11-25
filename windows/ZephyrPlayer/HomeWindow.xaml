@@ -103,7 +103,7 @@
                         <TextBlock Text="{Binding Name}" Foreground="{StaticResource TextBrush}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                         <TextBlock Text="{Binding Detail}" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="0,2,0,0"/>
                       </StackPanel>
-                      <Border Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" Background="#FF9500" CornerRadius="8" Width="18" Height="18" Visibility="{Binding WatchedVis}" ToolTip="Watched"><Path Data="M4,9 L7,12 L14,5" Stroke="#1B1B1E" StrokeThickness="2" Margin="1"/></Border>
+                      <Border Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" Background="#F97C02" CornerRadius="8" Width="18" Height="18" Visibility="{Binding WatchedVis}" ToolTip="Watched"><Path Data="M4,9 L7,12 L14,5" Stroke="#1B1B1E" StrokeThickness="2" Margin="1"/></Border>
                     </Grid>
                   </Border>
                   <!-- Video: a 16:9 picture with length and progress, name and details under it. -->
