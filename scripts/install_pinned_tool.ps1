@@ -1,6 +1,7 @@
 # Installs a CI tool from a pinned official download, verified by sha256 BEFORE it is executed or extracted.
 # Replaces `choco install vlc|ffmpeg` (the package feed returned 503/504 and no run could proceed).
-# Same versions the feed supplied: VLC 3.0.24, ffmpeg 9.1. Pins:
+# Same versions the choco feed supplied in the last green run 45666576153: vlc v3.0.24 and ffmpeg v9.1.0
+# (its log also printed 'ffmpeg version 9.1-essentials_build-www.gyan.dev'). Pins:
 #  - VLC installer sha256: from the publisher's checksum file
 #    https://get.videolan.org/vlc/3.0.24/win64/vlc-3.0.24-win64.exe.sha256
 #  - ffmpeg 9.1 essentials build: sha256 digest reported by the GitHub release API for
@@ -26,15 +27,20 @@ function Set-Status([string]$v) {
   if ($env:GITHUB_ENV) { "ZEPHYR_$($Tool.ToUpper())_STATUS=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8 }
   Set-Item "env:ZEPHYR_$($Tool.ToUpper())_STATUS" $v
 }
+$script:seen = ''
 function Test-Installed {
   # Existing tool counts only if its VERSION is the pinned one, not on mere presence.
   if ($Tool -eq 'vlc') {
     if (-not (Test-Path $vlcExe)) { return $false }
+    $script:seen = "vlc.exe ProductVersion '$((Get-Item $vlcExe).VersionInfo.ProductVersion)'"
+    Write-Host "found $script:seen"
     return ((Get-Item $vlcExe).VersionInfo.ProductVersion -like '3.0.24*')
   }
   $ff = (Get-Command ffmpeg.exe -ErrorAction SilentlyContinue).Source
   if (-not $ff) { return $false }
   $line = (& $ff -version 2>&1 | Select-Object -First 1) | Out-String
+  $script:seen = "$ff first line '$($line.Trim())'"
+  Write-Host "found $script:seen"
   return ($line -match '^ffmpeg version 9\.1(\D|$)')
 }
 function Fail([string]$why) {
@@ -46,11 +52,14 @@ if (Test-Installed) { Write-Host "$Tool already present at the pinned version; s
 
 $dest = Join-Path $tmp $pin.File
 $ok = $false; $last = ''
+$clock = [Diagnostics.Stopwatch]::StartNew()
 foreach ($attempt in 1..3) {
+  # Bounded budget: no new attempt after 150 s, so one tool costs at most ~260 s and cannot starve later steps.
+  if ($attempt -gt 1 -and $clock.Elapsed.TotalSeconds -ge 150) { Write-Host "download budget used ($([int]$clock.Elapsed.TotalSeconds) s); no further attempts"; break }
   try {
     if (Test-Path $dest) { Remove-Item $dest -Force }
     Write-Host "download attempt $attempt/3: $($pin.Url)"
-    Invoke-WebRequest -Uri $pin.Url -OutFile $dest -UseBasicParsing -TimeoutSec 300
+    Invoke-WebRequest -Uri $pin.Url -OutFile $dest -UseBasicParsing -TimeoutSec 120
     $got = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLower()
     if ($got -ne $pin.Sha) { throw "sha256 mismatch: expected $($pin.Sha) got $got" }
     $ok = $true; break
@@ -76,6 +85,6 @@ if ($Tool -eq 'vlc') {
   $env:PATH = "$($exe.DirectoryName);$env:PATH"
   if ($env:GITHUB_PATH) { $exe.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8 }
 }
-if (-not (Test-Installed)) { Fail "installed but the expected path/version check failed" }
+if (-not (Test-Installed)) { Fail "installed but the expected path/version check failed; saw: $(if ($script:seen) { $script:seen } else { 'nothing at the expected path/PATH' })" }
 Set-Status 'ok'
 Write-Host "$Tool ready"

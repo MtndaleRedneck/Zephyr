@@ -59,9 +59,11 @@ jobs:
           }
           if ($bad) { throw "$bad script(s) do not parse under this pwsh; no tool was acquired and no script was run" }
       - name: Install VLC (for the movies launch test)
+        timeout-minutes: 6
         shell: pwsh
         run: ./scripts/install_pinned_tool.ps1 -Tool vlc
       - name: Install ffmpeg (makes the long clip for the end-to-end resume case)
+        timeout-minutes: 6
         shell: pwsh
         run: ./scripts/install_pinned_tool.ps1 -Tool ffmpeg
 
@@ -316,6 +318,7 @@ jobs:
           if ($bad) { throw "$bad script(s) do not parse under this pwsh; no tool was acquired and no script was run" }
       - name: Real VLC and a short video fixture for the real-VLC subtitle test
         if: steps.scripts_parse.outcome == 'success'
+        timeout-minutes: 9
         shell: pwsh
         run: |
           # Pinned, hash-verified installs (no choco feed). Both are attempted; one failure does not hide the other.
