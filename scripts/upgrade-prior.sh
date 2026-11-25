@@ -17,7 +17,31 @@ need_upgrade() { # old new label
   case "$1$2" in ''|*[!0-9]*) echo "UPGRADE FAIL: $3 versionCode unreadable (old='$1' new='$2')"; exit 1;; esac
   [ "$1" -gt 0 ] && [ "$2" -gt "$1" ] || { echo "UPGRADE FAIL: $3 versionCode did not increase (old=$1 new=$2)"; exit 1; }
 }
-run() { adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"; }
+# Every run starts from empty log buffers and keeps its own system log, so ANR evidence belongs to exactly one run.
+run() {
+  adb logcat -b all -c 2>/dev/null || adb logcat -c
+  adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
+  adb logcat -d -b main,system,events,crash 2>/dev/null | grep -E "ANR in |am_anr|FATAL EXCEPTION|Process: |Process $PKG .*has died|am_crash|am_proc_died" | tail -60 > "instrument-results/$2-syslog.txt"
+}
+# App-owned failure evidence in ONE run's saved log: an ANR or crash naming the app or its test package, or any ANR
+# line that names no allowlisted package. True (0) means the run is NOT eligible for any retry and must fail.
+app_failure_in_log() { # $1 = result name
+  local f="instrument-results/$1-syslog.txt" line pkg ok
+  grep -qE "ANR in $PKG|ANR in $TESTPKG|Process: $PKG|Process $PKG |am_crash.*$PKG|am_anr.*$PKG" "$f" 2>/dev/null && return 0
+  while IFS= read -r line; do
+    case "$line" in *"ANR in "*|*am_anr*) ok=0
+      for pkg in $ANR_ALLOW; do case "$line" in *"$pkg"*) ok=1;; esac; done
+      [ "$ok" = 1 ] || return 0;;
+    esac
+  done < "$f"
+  return 1
+}
+# Positive evidence that an allowlisted non-app ANR happened during this run (not only a focus read afterwards).
+foreign_anr_in_log() { # $1 = result name
+  local f="instrument-results/$1-syslog.txt" pkg
+  for pkg in $ANR_ALLOW; do grep -qE "ANR in $pkg|am_anr.*$pkg" "$f" 2>/dev/null && return 0; done
+  return 1
+}
 # A non-app ANR dialog can sit in front of the app and fail ONLY the window assertion. Allowlist of the two emulator
 # packages whose dialog may be dismissed; anything else (the app, an unknown package, no dialog) fails closed.
 ANR_ALLOW="com.google.android.apps.nexuslauncher com.android.systemui"
@@ -47,6 +71,9 @@ retry_window_only() { # $1 class#method, $2 result name
   grep -q "^OK (1 test)" "instrument-results/$2.txt" && return 0
   grep -q "app window never appeared after cold open" "instrument-results/$2.txt" || return 0
   grep -qE "^[0-9]+\) " "instrument-results/$2.txt" && [ "$(grep -cE '^[0-9]+\) ' "instrument-results/$2.txt")" = 1 ] || return 0
+  # Gate on this run's own log first: any app-owned ANR/crash evidence, or an ANR line naming no allowlisted package, is final.
+  if app_failure_in_log "$2"; then echo "NOTE: $2 saved log shows an app-owned or unknown ANR/crash: no retry (see $2-syslog.txt)"; return 0; fi
+  foreign_anr_in_log "$2" || { echo "NOTE: $2 saved log has no allowlisted ANR evidence: no retry"; return 0; }
   dismiss_foreign_anr "$2" || return 0
   echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
   cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
@@ -71,6 +98,9 @@ need_upgrade "$OLD_VC" "$NEW_VC" "pass 1"
 adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
 run com.bingemote.ZephyrUpgradeFixtureTest#verify verify
 retry_window_only com.bingemote.ZephyrUpgradeFixtureTest#verify verify
+if grep -q "^OK (1 test)" instrument-results/verify.txt && app_failure_in_log verify; then
+  echo "UPGRADE FAIL: verify passed but its own log records an app-owned or unknown ANR/crash (see verify-syslog.txt)"; exit 1
+fi
 if ! grep -q "^OK (1 test)" instrument-results/verify.txt; then
   echo "== diagnostics: window and focus state"
   adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing|mDreamingLockscreen" | head -8
