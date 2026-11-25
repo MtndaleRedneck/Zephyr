@@ -51,10 +51,11 @@ anr_pkg() { # $1 = one log line
 # crash (FATAL EXCEPTION / am_crash / AndroidRuntime Process:) from ANY process (an unclassified non-app crash forbids a retry
 # conservatively until someone classifies it), any ANR whose exact package is not allowlisted or cannot be parsed.
 app_failure_in_log() { # $1 = result name
-  local f="instrument-results/$1-syslog.txt" line pkg ok p
+  local f="instrument-results/$1-syslog.txt" line pkg ok p lines
   [ -e "instrument-results/$1-logcapture-failed" ] && return 0
   [ -s "instrument-results/$1-rawlog.txt" ] || return 0
   grep -qE "FATAL EXCEPTION|am_crash|AndroidRuntime.*Process: " "$f" 2>/dev/null && return 0
+  lines=$(cat "$f") || return 0   # an unreadable filtered log is never "clean"
   while IFS= read -r line || [ -n "$line" ]; do
     case "$line" in *"ANR in "*|*am_anr*)
       pkg=$(anr_pkg "$line"); ok=0
@@ -62,16 +63,17 @@ app_failure_in_log() { # $1 = result name
       for p in $ANR_ALLOW; do [ "$pkg" = "$p" ] && ok=1; done
       [ "$ok" = 1 ] || return 0;;
     esac
-  done < "$f"
+  done <<< "$lines"
   return 1
 }
 # Positive evidence that an allowlisted non-app ANR happened during this run (exact package).
 foreign_anr_in_log() { # $1 = result name
-  local f="instrument-results/$1-syslog.txt" line pkg p
+  local f="instrument-results/$1-syslog.txt" line pkg p lines
+  lines=$(cat "$f") || return 1   # unreadable = no positive evidence = no retry
   while IFS= read -r line || [ -n "$line" ]; do
     pkg=$(anr_pkg "$line")
     for p in $ANR_ALLOW; do [ -n "$pkg" ] && [ "$pkg" = "$p" ] && return 0; done
-  done < "$f"
+  done <<< "$lines"
   return 1
 }
 # A green instrument result is only trusted when its own log is clean: no app or unknown ANR/crash, usable capture.
