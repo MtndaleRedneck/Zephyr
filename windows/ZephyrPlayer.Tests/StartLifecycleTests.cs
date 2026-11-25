@@ -33,6 +33,15 @@ public class StartLifecycleTests
         Assert.True(test(), message);
     }
 
+    // Same wait and same assertion; the message is built when the wait ends, so it can carry the state at failure.
+    private static void PumpUntil(Func<bool> test, Func<string> message, int ms = 8000)
+    {
+        var until = Environment.TickCount64 + ms;
+        while (!test() && Environment.TickCount64 < until) Pump(20);
+        var ok = test(); // one final evaluation, as the string overload does
+        Assert.True(ok, ok ? "" : message());
+    }
+
     private static void Await(Task t, int ms = 8000) { PumpUntil(() => t.IsCompleted, "the start did not finish", ms); }
 
     [Fact]
@@ -99,7 +108,7 @@ public class StartLifecycleTests
             var start = w.CurrentNativeStart;
             Assert.NotNull(start);
             w.RaiseNativeEvent(start!, "error");
-            PumpUntil(() => w.IsLoadingErrorShown, "a native error did not end loading");
+            PumpUntil(() => w.IsLoadingErrorShown, () => $"a native error did not end loading (Waiting={start!.Waiting}, PlayingSeen={start.PlayingSeen}, CompletedBy={start.CompletedBy ?? "none"}, LastStartFailure={w.LastStartFailure ?? "none"})");
             Assert.Equal(MainWindow.NativeFailedMessage, w.LoadingDetailText);
             Assert.Equal("native-error", w.LastStartFailure);
         });
@@ -136,10 +145,15 @@ public class StartLifecycleTests
             try
             {
                 w.NativeStallWindow = TimeSpan.FromMilliseconds(600);
-                w.PrepareOverride = (url, subs, token) => new SafeMediaSource(w.LibVlcForTest, new Uri(src).AbsoluteUri);
+                string? prepError = null;
+                w.PrepareOverride = (url, subs, token) => { try { return new SafeMediaSource(w.LibVlcForTest, new Uri(src).AbsoluteUri); } catch (Exception ex) { prepError = ex.ToString(); throw; } };
                 Await(w.PlayFromUrlAsync(new Uri(src).AbsoluteUri, null, Array.Empty<string>()));
                 PumpUntil(() => w.IsLoadingErrorShown || w.LastStartFailure != null || w.CurrentNativeStart?.PlayingSeen == true, "neither a failure nor Playing arrived", 20000);
-                if (w.CurrentNativeStart?.PlayingSeen != true) Assert.Equal("native-stalled", w.LastStartFailure ?? "native-stalled");
+                if (w.CurrentNativeStart?.PlayingSeen != true)
+                {
+                    var failure = w.LastStartFailure ?? "native-stalled";
+                    Assert.True(failure == "native-stalled", $"expected native-stalled, got [{failure}]; exception thrown while preparing: {prepError ?? "none"}");
+                }
             }
             finally { w.StopPlaybackSource(); try { File.Delete(src); } catch { } }
         });

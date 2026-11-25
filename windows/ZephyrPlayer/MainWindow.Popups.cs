@@ -228,8 +228,8 @@ namespace ZephyrPlayer
             {
                 var center = anchor.TransformToAncestor(Overlay).Transform(new Point(anchor.ActualWidth / 2, 0)).X;
                 var barTop = ControlBar.TransformToAncestor(Overlay).Transform(new Point(0, 0)).Y;
-                var left = Math.Max(10, Math.Min(center - popup.Width / 2, Math.Max(10, Overlay.ActualWidth - popup.Width - 10)));
-                popup.Margin = new Thickness(left, 0, 0, Math.Max(10, Overlay.ActualHeight - barTop + 12));
+                var left = Math.Max(20, Math.Min(center - popup.Width / 2, Math.Max(20, Overlay.ActualWidth - popup.Width - 20)));
+                popup.Margin = new Thickness(left, 0, 0, Math.Max(10, Overlay.ActualHeight - barTop + 20));
             }
             catch { popup.Margin = new Thickness(0, 0, 40, 130); popup.HorizontalAlignment = HorizontalAlignment.Right; }
         }

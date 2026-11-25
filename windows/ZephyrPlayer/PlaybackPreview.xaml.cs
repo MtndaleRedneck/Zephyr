@@ -5,7 +5,7 @@ namespace ZephyrPlayer {
  public partial class PlaybackPreview : UserControl {
   public PlaybackPreview(PlayerSettings settings) { InitializeComponent(); Update(settings); }
   public void Update(PlayerSettings settings) {
-   var orange = new SolidColorBrush(Brand.Orange); var white = Brushes.WhiteSmoke;
+   var orange = new SolidColorBrush(Brand.Orange); var white = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7));
    var ring = settings.BarColorStyle is "orange" or "twotone" ? orange : white;
    var glyph = settings.BarColorStyle is "orange" or "inverse" ? orange : white;
    SkipBackRing.Stroke = SkipForwardRing.Stroke = ring; SkipBackArrow.Fill = SkipForwardArrow.Fill = ring;

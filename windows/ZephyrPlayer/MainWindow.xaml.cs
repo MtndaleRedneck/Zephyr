@@ -303,6 +303,9 @@ namespace ZephyrPlayer
             { SavePlaybackProgress(); _lastHistorySave = DateTime.UtcNow; }
             // The player's own mute and volume only: nothing here reads Windows' master volume or mute.
             _player.Mute = _playerMute;
+            // While a new start is opening the timeline belongs to it: an older movie may still be playing
+            // underneath and its numbers must not show (2.0.2 PlayerView.UpdatePosition, carry-forward a).
+            if (_opening) { UpdatePlayPauseGlyph(); return; }
             if (!_seeking)
             {
                 var length = _player.Length;
@@ -392,7 +395,8 @@ namespace ZephyrPlayer
         /// <summary>Bar buttons and sliders never take keyboard focus: a click on one would strand the key map.</summary>
         private static void MakeNonFocusable(DependencyObject node)
         {
-            if (node is System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.Slider) ((FrameworkElement)node).Focusable = false;
+            // MoreButton stays Tab-reachable (keyboard access to the fullscreen overflow menu); every other bar control never takes focus.
+            if (node is System.Windows.Controls.Primitives.ButtonBase or System.Windows.Controls.Slider && node is not FrameworkElement { Name: "MoreButton" }) ((FrameworkElement)node).Focusable = false;
             foreach (var child in LogicalTreeHelper.GetChildren(node)) if (child is DependencyObject d) MakeNonFocusable(d);
         }
 
@@ -404,7 +408,19 @@ namespace ZephyrPlayer
             if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
         }
 
-        private void OnSeekDown(object sender, RoutedEventArgs e) { if (!_opening) _seeking = true; }
+        private void OnSeekDown(object sender, RoutedEventArgs e)
+        {
+            if (_opening) { _seeking = false; return; } // Opening: no seek reaches the old movie (2.0.2)
+            _seeking = true;
+        }
+
+        /// <summary>While the thumb is held the elapsed label previews where it will land; during Opening the new start's timeline stays at zero (2.0.2).</summary>
+        private void OnSeekValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_opening) { if (SeekBar.Value != 0) SeekBar.Value = 0; return; }
+            if (!_seeking || _player.Length <= 0) return;
+            ElapsedText.Text = Format((long)(SeekBar.Value / 1000.0 * _player.Length));
+        }
 
         private void OnSeekUp(object sender, RoutedEventArgs e)
         {

@@ -74,20 +74,63 @@ namespace ZephyrPlayer.Tests
                 var view = new MainWindow(libvlc, player, new PlayerSettings(TempSettings()), null);
                 var overlay = (FrameworkElement)view.FindName("Overlay")!;
                 var found = 0;
+                var focusable = new System.Collections.Generic.List<string>();
                 void Walk(object node)
                 {
                     if (node is ButtonBase or Slider)
                     {
                         found++;
                         var fe = (FrameworkElement)node;
-                        Assert.False(fe.Focusable, (fe.Name.Length > 0 ? fe.Name : fe.GetType().Name) + " can take keyboard focus: a click would strand the key map");
+                        if (fe.Focusable) focusable.Add(fe.Name.Length > 0 ? fe.Name : fe.GetType().Name);
                     }
                     if (node is DependencyObject d)
                         foreach (var child in LogicalTreeHelper.GetChildren(d)) Walk(child);
                 }
                 Walk(overlay);
                 Assert.True(found >= 12, "expected every bar button and slider, found " + found);
+                // Scoped 3.0 contract: the fullscreen More button is the ONE bar control that takes keyboard focus (Tab-reachable overflow menu,
+                // SkipPairUiTests.More_Menu...). Every other bar button and slider stays non-focusable: a click on one would strand the key map.
+                Assert.True(focusable.SequenceEqual(new[] { "MoreButton" }), "focusable bar controls must be exactly [MoreButton], found [" + string.Join(", ", focusable) + "]");
                 view.ReleasePlayback();
+            });
+        }
+
+        [Fact]
+        public void MoreButton_HasFocus_OldKeyMapStillRoutesFromIt_AndEnterIsLeftToTheButton()
+        {
+            Sta(() =>
+            {
+                Core.Initialize();
+                using var libvlc = new LibVLC();
+                using var player = new MediaPlayer(libvlc);
+                var view = new MainWindow(libvlc, player, new PlayerSettings(TempSettings()), null);
+                var host = view; host.Width = 800; host.Height = 450; host.Left = -20000; host.Top = -20000; host.ShowInTaskbar = false; host.WindowStartupLocation = WindowStartupLocation.Manual;
+                host.Show();
+                try
+                {
+                    var more = (Button)view.FindName("MoreButton")!;
+                    more.Visibility = Visibility.Visible; // the state SetFullscreen(true) gives it, without maximizing a test window
+                    view.UpdateLayout();
+                    Assert.True(more.Focusable && more.IsTabStop && more.IsEnabled, "More must be Tab-reachable");
+                    Assert.True(more.Focus(), "More could not take keyboard focus");
+                    Assert.Same(more, FocusManager.GetFocusedElement(view));
+                    var source = PresentationSource.FromVisual(host)!;
+                    // Keys raised FROM the focused More button tunnel through the window's PreviewKeyDown, the same one key map.
+                    KeyEventArgs From(Key k) { var e = new KeyEventArgs(Keyboard.PrimaryDevice, source, 0, k) { RoutedEvent = Keyboard.PreviewKeyDownEvent, Source = more }; more.RaiseEvent(e); return e; }
+                    view.SetVolumeTied(50);
+                    var up = From(System.Windows.Input.Key.Up);
+                    Assert.True(up.Handled);
+                    Assert.Equal(55, view.SharedVolume);
+                    var m = From(System.Windows.Input.Key.M);
+                    Assert.True(m.Handled);
+                    Assert.True(view.SharedMute);
+                    From(System.Windows.Input.Key.M);
+                    Assert.False(view.SharedMute);
+                    Assert.True(From(System.Windows.Input.Key.Space).Handled); // Space stays the player's play/pause, never More's click
+                    Assert.False(From(System.Windows.Input.Key.Enter).Handled); // Enter is not in the key map: left to the focused button
+                    Assert.False(From(System.Windows.Input.Key.Escape).Handled); // Esc means something only in full screen or with a pop-up open
+                }
+                finally { view.ReleasePlayback(); }
             });
         }
 
