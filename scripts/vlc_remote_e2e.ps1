@@ -46,10 +46,10 @@ function Show-Log([string]$path, [int]$tail) {
     $out = foreach ($k in $cats.Keys) { "$k=$(@($lines | Where-Object { $_ -match $cats[$k] }).Count)" }
     Write-Host "helper.log: $($lines.Count) lines read; known-message counts: $($out -join ', '); line text withheld from the public log"
 }
-function Invoke-Helper($path, $body, $token) {
+function Invoke-Helper($path, $body, $token, [int]$timeoutSec = 10) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec $timeoutSec -SkipHttpErrorCheck
     return @{ code = [int]$r.StatusCode; body = $r.Content }
 }
 function Assert($cond, $msg) { $script:assertCount++; if (-not $cond) { throw "ASSERT FAILED: $msg" } ; Write-Host "ok ($script:assertCount): $msg" }
@@ -125,27 +125,37 @@ function Assert-HelperFirewallRules([string]$exePath) {
     Assert ($actual -eq $expected) "the listen permission names the installing user's SID, not Everyone"
     Assert ($acl -notmatch 'S-1-1-0') "the listen permission is not Everyone"
 }
-function Invoke-HelperGet($path, $token) {
+function Invoke-HelperGet($path, $token, [int]$timeoutSec = 10) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec $timeoutSec -SkipHttpErrorCheck
     return @{ code = [int]$r.StatusCode; body = $r.Content }
 }
 
 
-# A freshly started helper treats the display as dark-or-unknown until Windows delivers a real display-state
-# notification, and a /movies/play in that window is (by product design) consumed as a wake tap and answers
-# woke:true without launching VLC. Wait for the helper's own screen-state answer to turn On before a play that
-# follows a restart; if it never does, say so with the observed answer instead of failing later at "VLC is running".
-function Wait-ScreenOn($token, [string]$what) {
-    $last = ''
-    foreach ($i in 1..60) {
-        try { $r = Invoke-HelperGet '/screen-state' $token; $last = "code=$($r.code) dark=$([bool]($r.body -match '\"dark\":true'))"
-            if ($r.code -eq 200 -and $r.body -match '\"dark\":false') { Write-Host "screen-state On after $($i * 0.5)s ($what)"; return }
-        } catch { $last = 'request failed' }
-        Start-Sleep -Milliseconds 500
+# Real protocol, from the helper source: a freshly started helper holds the display as Unknown until Windows
+# delivers a display-state notification, and /screen-state is READ-ONLY (it cannot wake anything). A discrete press
+# while the display is not On (here: /movies/play) is consumed as a wake tap: the helper calls WakeDisplay and
+# answers {"ok":true,"woke":true} BEFORE it parses the request, so no VLC is launched and a repeat cannot
+# duplicate a launch. The phone's behavior is to tap again. Play-Movie does the same, bounded: it re-sends only
+# when the answer is woke:true, between taps it watches /screen-state for dark:false for a bounded time, and it
+# stops after 4 taps or 60 s of wall clock, returning the last answer so the caller's assertion fails visibly.
+function Play-Movie([string]$body, $token, [string]$what) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $r = $null
+    foreach ($attempt in 1..4) {
+        $r = Invoke-Helper '/movies/play' $body $token 5
+        if ($r.body -notmatch '"woke"\s*:\s*true') { if ($attempt -gt 1) { Write-Host "play ($what) launched on tap $attempt after $([int]$sw.Elapsed.TotalSeconds)s" }; return $r }
+        $dark = 'unreadable'
+        $wait = [Diagnostics.Stopwatch]::StartNew()
+        while ($wait.Elapsed.TotalSeconds -lt 15 -and $sw.Elapsed.TotalSeconds -lt 55) {
+            try { $g = Invoke-HelperGet '/screen-state' $token 3; if ($g.code -eq 200) { $dark = if ($g.body -match '"dark"\s*:\s*false') { 'false' } else { 'true' }; if ($dark -eq 'false') { break } } } catch { $dark = 'request failed' }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Host "play ($what) tap $attempt consumed as a wake tap (woke:true); screen-state dark=$dark after $([int]$wait.Elapsed.TotalSeconds)s waiting; elapsed $([int]$sw.Elapsed.TotalSeconds)s"
+        if ($sw.Elapsed.TotalSeconds -ge 55) { break }
     }
-    throw "ASSERT FAILED: the helper never reported the display On after a restart ($what); last answer: $last"
+    return $r
 }
 
 # --- Part 0: per-user install of the CLEAN build; firewall is the app's explained
@@ -571,7 +581,7 @@ try {
     Assert ($r.code -eq 404) "list outside the folder is refused (got $($r.code))"
     $r = Invoke-Helper '/movies/play' '{"path":"../Windows/win.ini"}' $token
     Assert ($r.code -eq 400) "play outside the folder is refused (got $($r.code))"
-    $r = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
+    $r = Play-Movie '{"path":"clip.mkv"}' $token 'first play'
     Assert ($r.code -eq 200) "play starts VLC: $(Safe-Body $r.body)"
     $vlcUp = $false
     foreach ($i in 1..20) {
@@ -594,8 +604,7 @@ try {
     $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the resume check"
-    Wait-ScreenOn $token "before the resume play"
-    $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
+    $rResume = Play-Movie '{"path":"clip.mkv"}' $token 'resume ask after restart'
     Write-Host "resume play answer: $($rResume.code) $(Safe-Body $rResume.body)"
     Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
     Assert ($rResume.body -match '"position":120') "the saved place's position comes back"
@@ -608,8 +617,7 @@ try {
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the end-to-end resume check"
-    Wait-ScreenOn $token "before the long-clip play"
-    $rLong = Invoke-Helper '/movies/play' '{"path":"long.mkv","resume":false}' $token
+    $rLong = Play-Movie '{"path":"long.mkv","resume":false}' $token 'long clip after restart'
     Assert ($rLong.code -eq 200) "end-to-end resume: the long clip starts (start-over arm)"
     $vlcUp = $false
     foreach ($i in 1..40) {
@@ -652,7 +660,7 @@ try {
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart after the app's own save"
-    $rResume2 = Invoke-Helper '/movies/play' '{"path":"long.mkv"}' $token
+    $rResume2 = Play-Movie '{"path":"long.mkv"}' $token 'saved-place ask after restart'
     Write-Host "end-to-end resume play answer: $($rResume2.code) $(Safe-Body $rResume2.body)"
     Assert ($rResume2.body -match '"ask"') "end-to-end resume: the helper's own saved place survives a restart"
     Assert ($rResume2.body -match '"position":1[0-4][0-9]') "end-to-end resume: the saved position is the one VLC reported"
