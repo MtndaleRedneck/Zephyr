@@ -18,6 +18,8 @@ class AutomaticOnlySetupTest {
         // One definition shared by the control and the primary below: the two tests
         // can never drift onto different selectors for the same element.
         const val SETUP_TITLE = "Find your PC"
+        // Last element of the SetupScreen column while no PC is selected (see scrollToExtent).
+        const val LAST_ELEMENT_TEXT = "Use this address"
         const val PAIR_CODE_LABEL = "Code from your PC"
         const val PAIR_CARD_BODY = "Enter the code Zephyr VLC Remote is showing on your PC"
         const val DEMO_PC_ROW = "MY-PC  ("
@@ -114,6 +116,29 @@ class AutomaticOnlySetupTest {
             device.wait(Until.gone(By.text(PAIR_CODE_LABEL)), 2000))
         assertTrue("pair-code entry vanished while the selection still stood",
             device.hasObject(By.text(PAIR_CODE_LABEL)))
+    }
+
+    // Verified-extent scrolling, two independent proofs. (1) UiScrollable.scrollForward /
+    // scrollBackward document "true if scrolled, false if can't scroll anymore", so a
+    // false return means no further scroll. (2) A known edge element of the actual
+    // SetupScreen column must be in the tree: "Find your PC" is the first element; with
+    // no PC selected (chosen == null) the last stable element is the "Use this address" button
+    // (only an optional discovery-message line can follow it; the Selected row needs chosen, the Pair block needs chosen, the VLC block needs
+    // successVisible). The helper returns true only when BOTH hold within the cap; the
+    // old capped scrollToEnd(4)/scrollToBeginning(4) calls could stop short and the
+    // caller never saw whether the edge was reached. A fitted (non-scrollable) screen
+    // passes on the anchor alone.
+    private fun scrollToExtent(device: UiDevice, forward: Boolean, anchor: String, maxSwipes: Int = 15): Boolean {
+        val scroller = UiScrollable(UiSelector().scrollable(true))
+        var stopped = !scroller.exists()
+        var i = 0
+        while (!stopped && i < maxSwipes) {
+            val moved = if (forward) scroller.scrollForward(20) else scroller.scrollBackward(20)
+            device.waitForIdle()
+            if (!moved) stopped = true
+            i++
+        }
+        return stopped && device.hasObject(By.text(anchor))
     }
 
     @Test fun pairEntryNeedsSelectedPcOrConfirmedAddress() {
@@ -236,10 +261,11 @@ class AutomaticOnlySetupTest {
                 // leaves only the cards above the pair card. If that content does not
                 // scroll, one viewport is the complete tree; if it does, scrollToEnd reaches
                 // its end first. (Not measured on Zephyr yet: first CI read decides.)
-                val scroller = UiScrollable(UiSelector().scrollable(true))
-                if (scroller.exists()) scroller.scrollToEnd(4)
-                device.waitForIdle()
-                hidden = !device.hasObject(By.text(PAIR_CODE_LABEL))
+                // Absence counts only if the end was positively reached (a false
+                // scrollForward return and the last element in the tree); otherwise this slice proves nothing and the
+                // poll tries again until the budget ends.
+                val atEnd = scrollToExtent(device, forward = true, anchor = LAST_ELEMENT_TEXT)
+                hidden = atEnd && !device.hasObject(By.text(PAIR_CODE_LABEL))
             }
         }
         if (!hidden) Triage.tree("code field still shown after typing an address")
@@ -252,15 +278,12 @@ class AutomaticOnlySetupTest {
         // bottom. A viewport-only disappearance resurrects the card at one extreme
         // and fails here; a real removal passes both. Same not-scrollable reasoning
         // as the poll: a fitted single viewport is already the whole tree.
-        val guardScroller = UiScrollable(UiSelector().scrollable(true))
-        if (guardScroller.exists()) guardScroller.scrollToBeginning(4)
-        device.waitForIdle()
+        assertTrue("scroll beginning not positively reached - guard proves nothing", scrollToExtent(device, forward = false, anchor = SETUP_TITLE))
         assertTrue("top anchor missing - scroll extent not verified, guard proves nothing",
             device.hasObject(By.text(SETUP_TITLE)))
         assertFalse("pair-code entry reappeared above the viewport - hide was viewport-only",
             device.hasObject(By.text(PAIR_CODE_LABEL)))
-        if (guardScroller.exists()) guardScroller.scrollToEnd(4)
-        device.waitForIdle()
+        assertTrue("scroll end not positively reached - guard proves nothing", scrollToExtent(device, forward = true, anchor = LAST_ELEMENT_TEXT))
         assertFalse("pair-code entry reappeared below the viewport - hide was viewport-only",
             device.hasObject(By.text(PAIR_CODE_LABEL)))
         repeat(3) {
