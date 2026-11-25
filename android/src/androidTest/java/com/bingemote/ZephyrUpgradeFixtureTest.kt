@@ -60,10 +60,21 @@ class ZephyrUpgradeFixtureTest {
         val launch = ctx.packageManager.getLaunchIntentForPackage(ctx.packageName)
         if (launch == null) throw AssertionError("no launcher intent for the app")
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
-        ctx.startActivity(launch)
+        // Annotations only (Log.e lines with wall-clock ms; the same clock as the saved logcat): when the launch was requested,
+        // whether startActivity returned or threw (a throw is re-thrown unchanged), and when the window wait began and ended.
+        Log.e("ZephyrVerifyDiag", "verify: before startActivity t=" + System.currentTimeMillis())
+        try {
+            ctx.startActivity(launch)
+        } catch (e: Throwable) {
+            Log.e("ZephyrVerifyDiag", "verify: startActivity threw t=" + System.currentTimeMillis(), e)
+            throw e
+        }
+        Log.e("ZephyrVerifyDiag", "verify: startActivity returned t=" + System.currentTimeMillis())
         // Real arrival: the app's own window must be on screen (not just a live process).
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
+        Log.e("ZephyrVerifyDiag", "verify: window wait begins t=" + System.currentTimeMillis())
         val windowUp = device.wait(Until.hasObject(By.pkg(ctx.packageName).depth(0)), 20000)
+        Log.e("ZephyrVerifyDiag", "verify: window wait ended windowUp=" + windowUp + " t=" + System.currentTimeMillis())
         // Diagnostic only, BEFORE the assertion fails and the instrumentation tears the app down: what the screen, the focus
         // and the accessibility tree looked like. The pass/fail criterion below is unchanged (same query, same 20 s, same assert).
         if (!windowUp) captureWindowFailure(device)
@@ -81,14 +92,33 @@ class ZephyrUpgradeFixtureTest {
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
     }
 
+    // Diagnostic only: one shell command's output into one file under the app's external files dir (pulled by the script).
+    private fun writeShell(device: UiDevice, dir: java.io.File, cmd: String, name: String) {
+        val tag = "ZephyrVerifyDiag"
+        var w: java.io.Writer? = null
+        try {
+            val text = device.executeShellCommand(cmd)
+            if (text != null) {
+                w = java.io.OutputStreamWriter(java.io.FileOutputStream(java.io.File(dir, name)), "UTF-8")
+                w.write(text)
+            }
+        } catch (e: Throwable) { Log.e(tag, name + " failed", e) } finally {
+            if (w != null) { try { w.close() } catch (e: Throwable) { Log.e(tag, name + " close failed", e) } }
+        }
+    }
+
     // Diagnostic only; never changes the verdict. No kotlin stdlib calls (the shipped release app shrinks them): Java APIs, int
     // loops, string + concatenation, no ==, no templates, no `!!`, no extensions. The whole capture is one try/catch so that
     // nothing here (context lookup, files dir, IO) can throw past the caller; the assert stays outside, in verify().
     private fun captureWindowFailure(device: UiDevice) {
         val tag = "ZephyrVerifyDiag"
         try {
+            Log.e(tag, "capture begins t=" + System.currentTimeMillis())
             val dir = ctx.getExternalFilesDir(null)
             if (dir == null) { Log.e(tag, "no external files dir"); return }
+            // Pre-teardown process/activity state (the app and the instrumentation are still alive here).
+            writeShell(device, dir, "dumpsys activity activities", "verify-fail-activities.txt")
+            writeShell(device, dir, "dumpsys activity processes", "verify-fail-processes.txt")
             try { device.takeScreenshot(java.io.File(dir, "verify-fail.png")) } catch (e: Throwable) { Log.e(tag, "screenshot failed", e) }
             var out: java.io.OutputStream? = null
             try {
