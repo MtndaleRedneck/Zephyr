@@ -39,6 +39,7 @@ fun ZephyrSetupScreen(
     var findNote by remember { mutableStateOf<String?>(null) }
     var found by remember { mutableStateOf<List<DiscoveredHelper>>(emptyList()) }
     var foundName by remember { mutableStateOf("") }
+    var pairedName by remember { mutableStateOf<String?>(null) } // set after a pair on this screen: confirmation shows under the form
 
     BackHandler { if (step > 1) { step -= 1; error = null } else onCancel() }
 
@@ -49,21 +50,20 @@ fun ZephyrSetupScreen(
             Text("Set up Zephyr Player", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
         }
-        Text("Step $step of 2", color = Orange, fontSize = 13.sp)
         Spacer(Modifier.height(12.dp))
 
         if (step == 1) {
             SetupCard {
                 Text("1. Install and open the Zephyr Player on your PC.", color = TextC, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
-                Text("2. Find the 6-digit code on its home screen, or in its Settings > Android remote.", color = TextC, fontSize = 14.sp)
+                Text("2. Open Zephyr Player (it sits in the tray by the clock), type a name under Pair new phone, and tap Pair. It shows a code for the next step.", color = TextC, fontSize = 14.sp)
                 Spacer(Modifier.height(6.dp))
                 Text("3. Keep this phone and the PC on the same Wi-Fi.", color = TextC, fontSize = 14.sp)
             }
             Spacer(Modifier.height(14.dp))
             OrangeButton("Zephyr Player is open") { step = 2 }
         } else {
-            if (store.zephyrToken.isNotBlank()) {
+            if (store.zephyrToken.isNotBlank() && pairedName == null) {
                 SetupCard {
                     Text("Already paired with ${store.zephyrPcName.ifBlank { store.zephyrHost }}", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(4.dp))
@@ -83,8 +83,8 @@ fun ZephyrSetupScreen(
             ZephyrPairCard(
                 // N-5: a hand-typed address is a different PC - drop the stale Find
                 // result's name so the moved notice never names the wrong machine.
-                host = host, onHost = { host = it; foundName = "" },
-                code = code, onCode = { code = it },
+                host = host, onHost = { host = it; foundName = ""; pairedName = null },
+                code = code, onCode = { code = it.filter(Char::isDigit).take(6) },
                 busy = busy, error = error,
                 finding = finding, findNote = findNote, found = found,
                 onFind = {
@@ -119,6 +119,7 @@ fun ZephyrSetupScreen(
                     if (busy) return@ZephyrPairCard
                     busy = true
                     error = null
+                    pairedName = null // a new attempt clears any earlier success card
                     val h = host.trim()
                     val c = code.trim()
                     scope.launch(Dispatchers.IO) {
@@ -131,12 +132,16 @@ fun ZephyrSetupScreen(
                                     // never claims a pairing that would vanish at restart.
                                     store.zephyrToken = token
                                     store.zephyrHost = h
-                                    if (foundName.isNotBlank()) store.zephyrPcName = foundName
+                                    store.zephyrPcName = foundName // blank clears a previous PC's name
                                     code = ""
                                     remote.refreshPairing()
-                                    onDone()
+                                    pairedName = foundName.ifBlank { h }
                                 } catch (e: SecureStoreUnavailable) {
                                     error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr Player's pairing list, then pair again."
+                                }catch (e: Exception) {
+                                    // Anything after the token write: the PC did pair, so never say it was unreachable.
+                                    pairedName = null
+                                    error = "The pairing worked but saving the details failed. Close and reopen the app; if this phone is not connected, remove it in Zephyr Player's pairing list and pair again."
                                 }
                             }
                         } catch (e: Exception) {
@@ -144,6 +149,7 @@ fun ZephyrSetupScreen(
                                 // Pairing refusals carry the PC's plain reason
                                 // (NEW-A1); raw network failures become one
                                 // plain sentence (teardown A3).
+                                pairedName = null
                                 error = if (e is ZephyrClient.PairFailed) (e.message ?: "Pairing failed - try again.")
                                     else "Can't reach Zephyr Player at $h. Check it's open and on the same Wi-Fi."
                             }
@@ -151,8 +157,15 @@ fun ZephyrSetupScreen(
                     }
                 },
             )
-            Spacer(Modifier.height(10.dp))
-            androidx.compose.material3.TextButton(onClick = { step = 1; error = null }) { Text("Back", color = Muted) }
+            if (pairedName != null) {
+                Spacer(Modifier.height(10.dp))
+                SetupCard {
+                    Text("\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(10.dp))
+                    OrangeButton("Continue", onClick = onDone)
+                }
+            }
+            // No bottom Back button: Cancel (top) and system Back still work (BingeMote 1.12.14).
         }
     }
 }

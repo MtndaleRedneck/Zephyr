@@ -19,7 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-const val REPO_ISSUES = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues"
+const val REPO_ISSUES = "https://github.com/MtndaleRedneck/Zephyr/issues"
 /** The Zephyr family's own form (BingeMote's is untouched). Entry IDs come from the form's
  *  pre-filled link; the reply-email field (entry.1538046022) is NEVER prefilled. */
 const val BUG_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdzwHtL4OAUFpffzp0WqLq99AfY0QIHrl-CPjFLTp4nL1ThuA/viewform"
@@ -128,7 +128,7 @@ fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> 
         BackHandler { onBack() }
 
         SettingsSection("") {
-            Text("Tell us what is on your mind: a bug, an idea, or general feedback. Reports may become public issues on GitHub, so leave out personal details.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+            Text("Tell us what is on your mind: a bug, an idea, or general feedback. Reports may become public issues on GitHub, so leave out personal details, passwords, pairing codes and other secrets.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
             Spacer(Modifier.height(10.dp))
             OutlinedTextField(
                 text, { text = it.take(MAX_TEXT) },
@@ -142,8 +142,6 @@ fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> 
 
         SettingsSection("What will be sent") {
             Text(Feedback.preview(text, c), color = Muted, fontSize = 13.sp, lineHeight = 19.sp)
-            Spacer(Modifier.height(8.dp))
-            Text("No PC name, Wi-Fi names, paired phone names, or file paths are included. Nothing is sent until you tap a button below, and then it opens in your browser for you to review and submit.", color = Muted, fontSize = 12.sp, lineHeight = 17.sp)
         }
         Spacer(Modifier.height(14.dp))
 
@@ -164,12 +162,6 @@ fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> 
                 if (text.isBlank()) Toast.makeText(ctx, "Write your message first.", Toast.LENGTH_SHORT).show()
                 else open(Feedback.formUrl(text, c))
             }
-        }
-        Spacer(Modifier.height(14.dp))
-
-        // Done is just Back: a quiet text button, not a third orange button competing with the two send buttons.
-        androidx.compose.material3.TextButton(onClick = onBack, modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-            Text("Done", color = Muted, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

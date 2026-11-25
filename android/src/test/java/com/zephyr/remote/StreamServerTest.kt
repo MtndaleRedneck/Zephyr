@@ -9,15 +9,20 @@ import org.junit.Test
  *  emulator/hardware territory). RFC 7233: no Range -> 200 full; bytes=a-b ->
  *  206 with the resolved inclusive span clamped to the file. */
 class StreamServerTest {
-    // resolveRange is an instance method on StreamServer, which needs a Context;
-    // exercise the same math through a tiny pure mirror to keep this a JVM test.
+    // Exercise the same production helper used by StreamServer.
     private fun resolve(size: Long, range: LongRange?): Triple<Int, Long, Long> {
-        if (range == null) return Triple(200, 0L, size - 1)
-        val start = range.first.coerceIn(0, size - 1)
-        val end = minOf(range.last, size - 1)
-        return Triple(206, start, end)
+        return HttpRange.resolve(size, range)
     }
 
+    @Test fun unsatisfiable() {
+        assertEquals(416, resolve(1000, 1000L..Long.MAX_VALUE).first)
+        assertEquals(416, resolve(1000, 100L..50L).first)
+        assertEquals(416, resolve(0, 0L..10L).first)
+        assertEquals(Triple(200, 0L, -1L), resolve(0, null))
+        assertEquals(null, HttpRange.parse("items=0-9"))
+        assertEquals(null, HttpRange.parse("bytes=0-9,20-30"))
+        assertEquals(null, HttpRange.parse("bytes=-9"))
+    }
     @Test fun noRange_fullFile() =
         assertEquals(Triple(200, 0L, 999L), resolve(1000, null))
 
