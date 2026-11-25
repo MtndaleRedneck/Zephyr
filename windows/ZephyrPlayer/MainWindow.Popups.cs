@@ -61,7 +61,7 @@ namespace ZephyrPlayer
             Foreground = fg ?? (Brush)new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)), VerticalAlignment = VerticalAlignment.Center,
         };
 
-        private static Border PopupCard(double width, string name, UIElement content) => new()
+        private static Border PopupCard(double width, string name, UIElement content) => new Border
         {
             Width = width, Background = PopupCardBrush, BorderBrush = PopupLineBrush, BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(14), Padding = new Thickness(10, 8, 10, 10), Visibility = Visibility.Collapsed,
