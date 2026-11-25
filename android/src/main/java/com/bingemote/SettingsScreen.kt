@@ -565,7 +565,7 @@ fun ZephyrPairCard(
     ) {
         Text("Pair with the Zephyr Player", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
-        Text("Type a name in Settings > Paired phones on the PC, tap Pair, then enter the code here.", color = Muted, fontSize = 13.sp)
+        Text("Enter the code Zephyr Player is showing on your PC. No code on screen? Open Zephyr Player, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp)
         Spacer(Modifier.height(10.dp))
         // Same automated discovery as the helper setup ("Find my PC").
         OrangeButton(if (finding) "Looking\u2026" else "Find my PC", enabled = !finding, onClick = onFind)
@@ -589,7 +589,7 @@ fun ZephyrPairCard(
         Spacer(Modifier.height(8.dp))
         OutlinedTextField(
             value = code, onValueChange = onCode, singleLine = true,
-            label = { Text("6-digit code") }, colors = fieldColors(),
+            label = { Text("Code (4 digits, or 6 on an older Player)") }, colors = fieldColors(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
             modifier = Modifier.fillMaxWidth(),
         )
@@ -601,7 +601,7 @@ fun ZephyrPairCard(
         androidx.compose.runtime.LaunchedEffect(code) {
             if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
         }
-        OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && code.trim().length == 6 && host.isNotBlank(), onClick = onPair)
+        OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && (code.trim().length == 4 || code.trim().length == 6) && code.trim().all { it.isDigit() } && host.isNotBlank(), onClick = onPair)
     }
 }
 
