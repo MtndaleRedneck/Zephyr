@@ -31,7 +31,7 @@ class ZephyrAutoPairTest {
             context.startActivity(Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra("screen", "settings-pair-2"))
-            assertNotNull("pair form absent", device.wait(Until.findObject(By.text("6-digit code")), 15000))
+            assertNotNull("pair form absent", device.wait(Until.findObject(By.text("Code (4 digits, or 6 on an older Player)")), 15000))
             val fields = device.findObjects(By.clazz("android.widget.EditText"))
             assertEquals("address and code fields expected", 2, fields.size)
             fields[1].text = "12345"
