@@ -34,6 +34,8 @@ namespace ZephyrPlayer
         private readonly InputLease? _inputLease;
         private readonly Timer? _inputTimer;
         private readonly DisplayGate? _display;
+        // Non-touching "still paired" read for housekeeping (falls back to the request validator).
+        private readonly Func<string, bool>? _isPaired;
 
         private static readonly System.Collections.Generic.HashSet<string> NamedKeys = new()
             { "enter", "backspace", "escape", "space", "tab", "up", "down", "left", "right" };
@@ -53,15 +55,17 @@ namespace ZephyrPlayer
             PlayerSettings? settings = null,
             IInputSink? input = null,
             IPlaybackControl? control = null,
-            DisplayGate? display = null)
+            DisplayGate? display = null,
+            Func<string, bool>? isPaired = null)
         {
             _display = display;
+            _isPaired = isPaired;
             _onPlay = onPlay;
             _validateToken = validateToken ?? throw new ArgumentNullException(nameof(validateToken));
             _onPair = onPair;
             _settings = settings ?? new PlayerSettings();
             _input = input;
-            if (input != null) { _inputLease = new InputLease(input); _inputTimer = new Timer(_ => { try { _inputLease.Expire(DateTime.UtcNow, _validateToken); _display?.Prune(_validateToken); } catch { } }, null, 500, 500); }
+            if (input != null) { _inputLease = new InputLease(input); _inputTimer = new Timer(_ => { try { _inputLease.Expire(DateTime.UtcNow, _validateToken); _display?.Prune(_isPaired ?? _validateToken); } catch { } }, null, 500, 500); }
             _control = control;
             _loopbackOnly = loopbackOnly;
             Port = port;

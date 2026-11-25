@@ -114,11 +114,15 @@ namespace ZephyrPlayer
         /// lease timer, so stale entries live at most one tick.</summary>
         public void Prune(Func<string, bool> valid)
         {
-            lock (_gate)
-            {
-                foreach (var m in new[] { _swallowedDowns, _deliveredDowns })
-                    foreach (var k in new List<string>(m.Keys)) if (!valid(k)) m.Remove(k);
-            }
+            List<string> owners;
+            lock (_gate) { owners = new List<string>(_swallowedDowns.Keys); foreach (var k in _deliveredDowns.Keys) if (!owners.Contains(k)) owners.Add(k); }
+            if (owners.Count == 0) return;
+            // Validity is asked OUTSIDE the gate lock (the store may take its own lock or touch disk),
+            // so a slow store never stalls input presses. The check must NOT mark the phone as seen.
+            var gone = new List<string>();
+            foreach (var o in owners) { bool ok; try { ok = valid(o); } catch { ok = true; } if (!ok) gone.Add(o); }
+            if (gone.Count == 0) return;
+            lock (_gate) foreach (var o in gone) { _swallowedDowns.Remove(o); _deliveredDowns.Remove(o); }
         }
 
         /// <summary>Drop all per-phone button memory (token revoked or lease expired).</summary>

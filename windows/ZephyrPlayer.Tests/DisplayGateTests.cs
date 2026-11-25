@@ -100,6 +100,27 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void PairedStore_IsPaired_DoesNotMarkPhoneAsSeen_ValidateAndTouchDoes()
+        {
+            var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zp-ispaired-" + Guid.NewGuid().ToString("N"));
+            System.IO.Directory.CreateDirectory(dir);
+            try
+            {
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-1", "Phone");
+                Assert.True(store.IsPaired("tok-1"));
+                Assert.False(store.IsPaired("other"));
+                Assert.Null(store.LastSeen("tok-1"));          // housekeeping must not look like a connection
+                Assert.False(store.IsConnected("tok-1"));
+                Assert.True(store.ValidateAndTouch("tok-1"));
+                Assert.NotNull(store.LastSeen("tok-1"));
+                store.Remove("tok-1");
+                Assert.False(store.IsPaired("tok-1"));
+            }
+            finally { try { System.IO.Directory.Delete(dir, true); } catch { } }
+        }
+
+        [Fact]
         public void DisplayStateMapping_OnlyOneMeansOn()
         {
             Assert.Equal(DisplayWatch.MonitorState.Off, DisplayWatch.Map(0));

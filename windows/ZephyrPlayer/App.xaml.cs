@@ -270,6 +270,7 @@ namespace ZephyrPlayer
 #endif
                     return false;
                 },
+                isPaired: t => store.IsPaired(t),
                 onPair: code =>
                 {
                     // Fail-closed store: no code is consumed and the phone gets a
