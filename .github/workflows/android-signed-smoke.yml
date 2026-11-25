@@ -121,7 +121,7 @@ jobs:
           [[ "$SRC" =~ ^[0-9a-f]{40}$ ]] || { echo "bad source sha"; exit 1; }
           [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "bad run id"; exit 1; }
           for k in unsigned_sha256 expected_signed_sha256 expected_signer_sha256; do [[ "$(jv $k)" =~ ^[0-9a-f]{64}$ ]] || { echo "bad $k"; exit 1; }; done
-          [[ "$(jv signing_block_b64)" =~ ^[A-Za-z0-9+/=]{100,20000}$ ]] || { echo "bad signing block"; exit 1; }
+          SB=$(jv signing_block_b64); [[ "$SB" =~ ^[A-Za-z0-9+/=]+$ ]] && [ "${#SB}" -ge 100 ] && [ "${#SB}" -le 20000 ] || { echo "bad signing block"; exit 1; }
           RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
           chk() { [ "$(echo "$RUN" | jq -r "$1")" = "$2" ] || { echo "ASSERT FAIL: producer run $1 is not $2"; exit 1; }; }
           chk .status completed
@@ -178,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           for v in "$WANT_UNSIGNED" "$WANT_SIGNED" "$WANT_SIGNER"; do [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 input"; exit 1; }; done
-          [[ "$BLOCK_B64" =~ ^[A-Za-z0-9+/=]{100,20000}$ ]] || { echo "bad signing block input"; exit 1; }
+          [[ "$BLOCK_B64" =~ ^[A-Za-z0-9+/=]+$ ]] && [ "${#BLOCK_B64}" -ge 100 ] && [ "${#BLOCK_B64}" -le 20000 ] || { echo "bad signing block input"; exit 1; }
           [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "no validated artifact"; exit 1; }
           mkdir -p /tmp/zs/in && cd /tmp/zs
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > u.zip
