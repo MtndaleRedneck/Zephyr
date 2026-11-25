@@ -91,10 +91,36 @@ namespace ZephyrPlayer
 
         private void UpdatePreview() => PreviewText.Text = Preview(MessageTextBox.Text);
 
-        private void OnForm(object sender, RoutedEventArgs e) =>
-            Process.Start(new ProcessStartInfo(FormUrl()) { UseShellExecute = true });
+        private void OnForm(object sender, RoutedEventArgs e) => OpenInBrowser(FormUrl());
 
-        private void OnIssue(object sender, RoutedEventArgs e) =>
-            Process.Start(new ProcessStartInfo(IssueUrl()) { UseShellExecute = true });
+        private void OnIssue(object sender, RoutedEventArgs e) => OpenInBrowser(IssueUrl());
+
+        /// <summary>Test seam: replaces the browser launch (throw to act as a PC with no browser).</summary>
+        internal static Action<string>? LaunchOverride;
+        /// <summary>Test seam: the note shown when no browser could open the link.</summary>
+        internal static Action<string>? NoteOverride;
+
+        /// <summary>2.0.2: a PC with no default browser (or a blocked launch) used to close the
+        /// app here. Now the link is put on the clipboard and the user is told so.</summary>
+        internal static bool OpenInBrowser(string url)
+        {
+            try
+            {
+                if (LaunchOverride != null) LaunchOverride(url);
+                else Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                return true;
+            }
+            catch (Exception ex) when (ex is System.ComponentModel.Win32Exception || ex is InvalidOperationException || ex is System.IO.FileNotFoundException || ex is PlatformNotSupportedException)
+            {
+                System.Diagnostics.Trace.TraceWarning("Feedback link could not be opened: " + ex.GetType().Name);
+                bool copied;
+                try { Clipboard.SetText(url); copied = true; } catch { copied = false; }
+                var text = copied
+                    ? "No web browser could open the feedback page on this PC. The link has been copied, so you can paste it into a browser yourself."
+                    : "No web browser could open the feedback page on this PC.";
+                if (NoteOverride != null) NoteOverride(text); else FirewallSetup.Note(text);
+                return false;
+            }
+        }
     }
 }

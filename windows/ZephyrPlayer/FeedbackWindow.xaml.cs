@@ -92,10 +92,15 @@ namespace ZephyrPlayer
 
         private void UpdatePreview() => PreviewText.Text = Preview(MessageTextBox.Text);
 
-        private void OnForm(object sender, RoutedEventArgs e) =>
-            Process.Start(new ProcessStartInfo(FormUrl()) { UseShellExecute = true });
+        private void OnForm(object sender, RoutedEventArgs e) => OpenInBrowser(FormUrl());
 
-        private void OnIssue(object sender, RoutedEventArgs e) =>
-            Process.Start(new ProcessStartInfo(IssueUrl()) { UseShellExecute = true });
+        private void OnIssue(object sender, RoutedEventArgs e) => OpenInBrowser(IssueUrl());
+
+        /// <summary>Test seam: replaces the browser launch (throw to act as a PC with no browser).</summary>
+        internal static Action<string>? LaunchOverride { get => FeedbackPanel.LaunchOverride; set => FeedbackPanel.LaunchOverride = value; }
+        /// <summary>Test seam: the note shown when no browser could open the link.</summary>
+        internal static Action<string>? NoteOverride { get => FeedbackPanel.NoteOverride; set => FeedbackPanel.NoteOverride = value; }
+
+        internal static bool OpenInBrowser(string url) => FeedbackPanel.OpenInBrowser(url);
     }
 }
