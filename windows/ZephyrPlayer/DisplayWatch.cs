@@ -7,8 +7,8 @@ namespace ZephyrPlayer
     /// <summary>
     /// Production display-state source: GUID_CONSOLE_DISPLAY_STATE power notifications on a
     /// message-only window. Only a real notification marks the display On (a wake call never does),
-    /// and "no notification yet" counts as dark (fail-safe: an uncertain press wakes, never fires
-    /// blind). Windows reports the current state when the registration is made. If the registration
+    /// and "no notification yet" counts as NOT dark (fail-open, same as 3.0.0; a remote that never
+    /// leaves unknown must not swallow every press). Windows reports the current state when registered. If the registration
     /// itself fails the gate is disabled instead (Available = false), because a remote that can
     /// never leave "unknown" would swallow every press forever; that is logged by the caller.
     /// </summary>
@@ -39,7 +39,9 @@ namespace ZephyrPlayer
         internal bool Available { get; private set; }
 
         internal MonitorState State => _state;
-        internal bool DarkOrUnknown => _state != MonitorState.On;
+        /// <summary>Dark means the display is reported Off or Dimmed. No notification yet (Unknown) is NOT dark:
+        /// the remote then behaves exactly like shipped 3.0.0 instead of swallowing every press.</summary>
+        internal bool DarkOrUnknown => _state == MonitorState.Off || _state == MonitorState.Dimmed;
 
         /// <summary>Raw GUID_CONSOLE_DISPLAY_STATE value to state: 0 off, 1 on, 2 dimmed.</summary>
         internal static MonitorState Map(uint raw) => raw switch { 0 => MonitorState.Off, 1 => MonitorState.On, 2 => MonitorState.Dimmed, _ => MonitorState.Unknown };

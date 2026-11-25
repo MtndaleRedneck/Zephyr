@@ -308,6 +308,13 @@ namespace ZephyrPlayer
                     if (_input == null) { await Reply(ctx, 404, "{}"); return; }
                     var inputBody = await ReadBody(ctx);
                     var json = System.Text.Json.JsonDocument.Parse(inputBody).RootElement;
+                    // Validate before the dark gate so a bad key/button is a 400 even while dark.
+                    if (path == "/input/key" && !NamedKeys.Contains(json.GetProperty("key").GetString() ?? "")) { await Reply(ctx, 400, "{\"error\":\"unknown key\"}"); return; }
+                    if (path == "/input/button")
+                    {
+                        var vb = json.GetProperty("button").GetString() ?? "";
+                        if (vb != "left" && vb != "right") { await Reply(ctx, 400, "{\"error\":\"unknown button\"}"); return; }
+                    }
                     if (_display != null && path != "/input/heartbeat")
                     {
                         // Dark PC screen: the first touch only wakes it; a gesture is eaten to its end.

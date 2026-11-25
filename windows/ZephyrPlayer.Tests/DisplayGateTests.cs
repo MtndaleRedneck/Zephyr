@@ -80,6 +80,21 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void Button_DeliveredDownThenDarkThenSwallowedSecondDown_StillReleasesOsButton()
+        {
+            var (gate, _, setDark, _, _) = Make(dark: false);
+            Assert.False(gate.ShouldSwallowButton("A", "left", true));   // delivered
+            setDark(true);
+            Assert.True(gate.ShouldSwallowButton("A", "left", true));    // duplicate down swallowed
+            Assert.False(gate.ShouldSwallowButton("A", "left", false));  // the real up must pass: OS button was down
+            Assert.Equal(0, gate.SwallowedButtonCountForTests);
+            Assert.True(gate.ShouldSwallowButton("A", "left", true));
+            Assert.True(gate.ShouldSwallowButton("A", "left", false));   // its own up is eaten
+            gate.ForgetOwner("A");
+            Assert.Equal(0, gate.SwallowedButtonCountForTests);
+        }
+
+        [Fact]
         public void DisplayStateMapping_OnlyOneMeansOn()
         {
             Assert.Equal(DisplayWatch.MonitorState.Off, DisplayWatch.Map(0));
@@ -87,7 +102,8 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(DisplayWatch.MonitorState.Dimmed, DisplayWatch.Map(2));
             Assert.Equal(DisplayWatch.MonitorState.Unknown, DisplayWatch.Map(7));
             var w = new DisplayWatch();
-            Assert.True(w.DarkOrUnknown);        // no notification yet counts as dark
+            Assert.False(w.DarkOrUnknown);       // no notification yet fails open (same as 3.0.0)
+            w.NoteRaw(0); Assert.True(w.DarkOrUnknown);
             w.NoteRaw(1); Assert.False(w.DarkOrUnknown);
             w.NoteRaw(2); Assert.True(w.DarkOrUnknown);
         }
@@ -170,6 +186,12 @@ namespace ZephyrPlayer.Tests
             // heartbeat is never gated and a bad key is still a 400, not a wake
             var hb = await c.PostAsync("/input/heartbeat", Json("{}"));
             Assert.Equal(System.Net.HttpStatusCode.OK, hb.StatusCode);
+
+            var badKey = await c.PostAsync("/input/key", Json("{\"key\":\"nope\"}"));
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, badKey.StatusCode);
+            var badBtn = await c.PostAsync("/input/button", Json("{\"button\":\"middle\",\"down\":true}"));
+            Assert.Equal(System.Net.HttpStatusCode.BadRequest, badBtn.StatusCode);
+            Assert.Equal(2, wakes);
 
             var wake = await c.PostAsync("/control/wake-display", new StringContent(""));
             Assert.Equal(System.Net.HttpStatusCode.OK, wake.StatusCode);

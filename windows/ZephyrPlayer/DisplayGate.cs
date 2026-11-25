@@ -23,6 +23,7 @@ namespace ZephyrPlayer
         private readonly object _gate = new();
         private DateTime _swallowUntil = DateTime.MinValue;
         private readonly Dictionary<string, HashSet<string>> _swallowedDowns = new();
+        private readonly Dictionary<string, HashSet<string>> _deliveredDowns = new();
 
         public static readonly TimeSpan GestureQuiet = TimeSpan.FromMilliseconds(400);
 
@@ -89,18 +90,30 @@ namespace ZephyrPlayer
                         set.Add(key);
                         return true;
                     }
-                    Forget(owner, key); // a press that passes drops older memory so nothing stale eats a later release
+                    Forget(_swallowedDowns, owner, key); // a press that passes drops older memory so nothing stale eats a later release
+                    if (!_deliveredDowns.TryGetValue(owner, out var del)) _deliveredDowns[owner] = del = new HashSet<string>();
+                    del.Add(key);
                     return false;
                 }
-                return Forget(owner, key);
+                // A press that was really delivered always gets its release, even if the screen went dark
+                // in between or a second press from that phone was swallowed since (otherwise the OS
+                // button would stay held while the phone keeps its heartbeat alive).
+                if (Forget(_deliveredDowns, owner, key)) { Forget(_swallowedDowns, owner, key); return false; }
+                return Forget(_swallowedDowns, owner, key);
             }
         }
 
-        private bool Forget(string owner, string key)
+        private static bool Forget(Dictionary<string, HashSet<string>> map, string owner, string key)
         {
-            if (!_swallowedDowns.TryGetValue(owner, out var set) || !set.Remove(key)) return false;
-            if (set.Count == 0) _swallowedDowns.Remove(owner);
+            if (!map.TryGetValue(owner, out var set) || !set.Remove(key)) return false;
+            if (set.Count == 0) map.Remove(owner);
             return true;
+        }
+
+        /// <summary>Drop all per-phone button memory (token revoked or lease expired).</summary>
+        public void ForgetOwner(string owner)
+        {
+            lock (_gate) { _swallowedDowns.Remove(owner); _deliveredDowns.Remove(owner); }
         }
 
         public int SwallowedButtonCountForTests { get { lock (_gate) { var n = 0; foreach (var s in _swallowedDowns.Values) n += s.Count; return n; } } }
