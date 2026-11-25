@@ -126,11 +126,34 @@ namespace ZephyrPlayer.Tests
                 var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
                 window.SetMuteTied(false);
                 Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
-                Assert.Equal(Math.Clamp(System.Windows.SystemParameters.PrimaryScreenWidth * 0.5, 760, 1100), window.ControlBar.MaxWidth); // floating bar: about half the screen
+                Assert.Equal(MainWindow.FullscreenBarWidth(window.ActualWidth > 0 ? window.ActualWidth : System.Windows.SystemParameters.PrimaryScreenWidth), window.ControlBar.MaxWidth); // floating bar: about half the window width
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;
+                ((FrameworkElement)window.FindName("PlayGlyph")!).Visibility = Visibility.Collapsed; // fixture: show only the pause state, not both glyphs stacked
                 Capture(window.ControlBar,(int)window.ControlBar.MaxWidth,"pc-redesign-fullscreen-pill.png");
                 window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Stretch,window.ControlBar.HorizontalAlignment);
+                window.Close();
+            });
+        }
+
+        [Fact]
+        public void More_Menu_Has_Speed_Audio_Aspect_And_Button_Is_Keyboard_Reachable()
+        {
+            Sta(path => {
+                NativeVlc.Init(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
+                var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
+                window.SetFullscreen(true);
+                var more = (Button)window.FindName("MoreButton")!;
+                Assert.Equal(Visibility.Visible, more.Visibility);
+                Assert.True(more.Focusable && more.IsTabStop, "More must be reachable with the keyboard");
+                Assert.False(string.IsNullOrWhiteSpace(System.Windows.Automation.AutomationProperties.GetName(more)));
+                var menu = window.BuildMoreMenu();
+                var heads = menu.Items.OfType<MenuItem>().Select(i => i.Header.ToString()).ToArray();
+                Assert.Equal(new[] { "Speed", "Audio", "Aspect ratio" }, heads);
+                Assert.Equal(6, ((MenuItem)menu.Items[0]).Items.Count);
+                Assert.Equal(4, ((MenuItem)menu.Items[2]).Items.Count);
+                window.SetFullscreen(false);
+                Assert.Equal(Visibility.Collapsed, more.Visibility);
                 window.Close();
             });
         }

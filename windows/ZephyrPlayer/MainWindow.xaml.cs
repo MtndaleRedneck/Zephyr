@@ -476,7 +476,7 @@ namespace ZephyrPlayer
         // ---------- speed + sleep timer (bar toggles, off by default) ----------
 
         /// <summary>Fullscreen overflow: speed, audio track and aspect ratio, so the floating bar stays compact.</summary>
-        private void OnMore(object sender, RoutedEventArgs e)
+        internal ContextMenu BuildMoreMenu()
         {
             var menu = new ContextMenu();
             var speed = new MenuItem { Header = "Speed" };
@@ -508,6 +508,12 @@ namespace ZephyrPlayer
                 aspect.Items.Add(item);
             }
             menu.Items.Add(aspect);
+            return menu;
+        }
+
+        private void OnMore(object sender, RoutedEventArgs e)
+        {
+            var menu = BuildMoreMenu();
             _menuOpen = true;
             menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
             menu.IsOpen = true;
