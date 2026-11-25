@@ -68,6 +68,12 @@ namespace ZephyrPlayer.Tests
                 // Unset default is "original" (2.0.2): the primary rings take the default ring colour, not orange.
                 Assert.Equal("original", settings.BarColorStyle);
                 Assert.NotEqual(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
+                // 2.0.2 "original": orange secondary arrows and labels, orange Play ring with the 10 % tint.
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipBackIcon")!));
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!));
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), StrokeOf((System.Windows.Shapes.Shape)w.FindName("PlayRing")!));
+                Assert.Equal(Color.FromArgb(0x1A, 0xFF, 0x95, 0x00), ((SolidColorBrush)((System.Windows.Shapes.Shape)w.FindName("PlayRing")!).Fill).Color);
+                Assert.Equal(Color.FromRgb(0xFF, 0x95, 0x00), ((SolidColorBrush)((TextBlock)w.FindName("SecondarySkipBackLabel")!).Foreground).Color);
             });
         }
 

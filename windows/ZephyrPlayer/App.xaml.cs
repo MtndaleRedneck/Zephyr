@@ -165,11 +165,7 @@ namespace ZephyrPlayer
             var volume = new VolumeService();
             _player = new MainWindow(libvlc, player, settings, volume);
             _player.HomeRequested += () => { _player.SavePlaybackProgress(); _player.StopPlaybackSource(); _player.Hide(); _home?.Show(); _home?.Activate(); };
-            _player.SleepFired += () =>
-            {
-                _player.Hide();
-                if (_home != null && !_reallyQuit) { _home.Show(); _home.Activate(); }
-            };
+            _player.LibVlcSubtitleSize = settings.SubtitleSize;
             _player.Closing += (_, ev) =>
             {
                 if (_reallyQuit) return; // real shutdown: let the window die

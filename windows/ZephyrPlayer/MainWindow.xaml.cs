@@ -15,6 +15,8 @@ namespace ZephyrPlayer
     {
         private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
         private static readonly SolidColorBrush Orange = new(Brand.Orange);
+        private static readonly SolidColorBrush OrangeTint = new(Color.FromArgb(0x1A, 0xFF, 0x95, 0x00));
+        private static readonly SolidColorBrush WhiteTint = new(Color.FromArgb(0x1A, 0xF5, 0xF5, 0xF7));
         private static readonly SolidColorBrush Gold = new(Color.FromRgb(0xF0, 0xC2, 0x3E));
         private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));
         private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x1B, 0x1B, 0x1E));
@@ -25,7 +27,7 @@ namespace ZephyrPlayer
         static MainWindow()
         {
             RingDefault.Freeze();
-            Orange.Freeze();
+            Orange.Freeze(); OrangeTint.Freeze(); WhiteTint.Freeze();
             Gold.Freeze();
             Muted.Freeze();
             Dark.Freeze();
@@ -40,7 +42,6 @@ namespace ZephyrPlayer
         private readonly DispatcherTimer _idleTimer = new();
         private readonly DispatcherTimer _clock = new();
 
-        private DispatcherTimer? _sleepTimer;
         private readonly DispatcherTimer _cursorWatch = new() { Interval = TimeSpan.FromMilliseconds(150) };
         [StructLayout(LayoutKind.Sequential)] private struct CursorPoint { public int X; public int Y; }
         [DllImport("user32.dll")] private static extern bool GetCursorPos(out CursorPoint point);
@@ -58,8 +59,6 @@ namespace ZephyrPlayer
             if (_player.Length > 0 && _player.Time >= 0) _history.Save(_currentSource, _player.Time, _player.Length);
         }
 
-        /// <summary>Fired when the sleep timer ends playback; App lands on Home.</summary>
-        public event Action? SleepFired;
         public event Action? HomeRequested;
 
         protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
@@ -147,6 +146,7 @@ namespace ZephyrPlayer
             _volumeSync = false;
             RefreshVolumeUi();
             ApplyBarStyle();
+            InitPopups();
             UpdatePlayPauseGlyph();
         }
 
@@ -177,6 +177,7 @@ namespace ZephyrPlayer
 
         public void StopPlaybackSource()
         {
+            DropEndOfMovieSleep();
             HideResumeNotice();
             ++_playGeneration; _preparation?.Cancel();
             _safeSource?.Abort(); _player.Stop(); _player.Media=null;
@@ -195,6 +196,7 @@ namespace ZephyrPlayer
         public async System.Threading.Tasks.Task PlayFromUrlAsync(string url,long? positionSeconds,string[] subtitles,bool offerStartOver=false)
         {
             var generation=++_playGeneration;
+            DropEndOfMovieSleep();
             // A library resume says so with Start over; any other start drops that notice.
             HideResumeNotice();
             _startOverGeneration = offerStartOver ? generation : 0;
@@ -366,6 +368,7 @@ namespace ZephyrPlayer
         private void OnPlayerKeyDown(object sender, KeyEventArgs e)
         {
             ShowBarOnce();
+            if (e.Key == Key.Escape && _openPopup != null) { ClosePopups(); e.Handled = true; return; }
             if (Keyboard.FocusedElement is System.Windows.Controls.Primitives.TextBoxBase || _menuOpen) return;
             switch (e.Key)
             {
@@ -565,8 +568,8 @@ namespace ZephyrPlayer
             foreach (var rate in new[] { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
             {
                 var r = (float)rate;
-                var item = new MenuItem { Header = rate + "x", IsChecked = Math.Abs(_player.Rate - rate) < 0.01 };
-                item.Click += (_, __) => { _player.SetRate(r); SpeedLabel.Text = rate + "x"; };
+                var item = new MenuItem { Header = rate + "x", IsChecked = Math.Abs(_rate - rate) < 0.01 };
+                item.Click += (_, __) => SetRate(rate);
                 speed.Items.Add(item);
             }
             menu.Items.Add(speed);
@@ -601,64 +604,7 @@ namespace ZephyrPlayer
             menu.IsOpen = true;
         }
 
-        private void OnSpeed(object sender, RoutedEventArgs e)
-        {
-            var menu = new ContextMenu();
-            foreach (var rate in new[] { 0.5, 0.75, 1.0, 1.25, 1.5, 2.0 })
-            {
-                var item = new MenuItem { Header = rate + "x", IsChecked = Math.Abs(_player.Rate - rate) < 0.01 };
-                var r = (float)rate;
-                item.Click += (_, __) => { _player.SetRate(r); SpeedLabel.Text = rate + "x"; };
-                menu.Items.Add(item);
-            }
-            _menuOpen = true;
-            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
-            menu.IsOpen = true;
-        }
-
-        private void OnSleep(object sender, RoutedEventArgs e)
-        {
-            var menu = new ContextMenu();
-            var off = new MenuItem { Header = "Off", IsChecked = _sleepTimer == null };
-            off.Click += (_, __) => { _sleepTimer?.Stop(); _sleepTimer = null; SleepLabel.Text = "zZ"; };
-            menu.Items.Add(off);
-            foreach (var min in new[] { 15, 30, 45, 60 })
-            {
-                var item = new MenuItem { Header = min + " min" };
-                item.Click += (_, __) =>
-                {
-                    _sleepTimer?.Stop();
-                    _sleepTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(min) };
-                    _sleepTimer.Tick += (_, ___) =>
-                    {
-                        _sleepTimer?.Stop();
-                        _sleepTimer = null;
-                        SleepLabel.Text = "zZ";
-                        SavePlaybackProgress();
-                        StopPlaybackSource();
-                        SleepFired?.Invoke();
-                    };
-                    _sleepTimer.Start();
-                    SleepLabel.Text = min + "m";
-                };
-                menu.Items.Add(item);
-            }
-            _menuOpen = true;
-            menu.Closed += (_, __) => { _menuOpen = false; ShowBarOnce(); };
-            menu.IsOpen = true;
-        }
-
         // ---------- captions / fullscreen ----------
-
-        private void OnCaptions(object sender, RoutedEventArgs e)
-        {
-            // Scaffold behavior: cycle subtitle tracks (off -> 1 -> 2 ... -> off).
-            var tracks = _player.SpuDescription;
-            if (tracks == null || tracks.Length == 0) return;
-            var current = _player.Spu;
-            var next = current == -1 ? tracks[0].Id : (current == tracks[^1].Id ? -1 : tracks[Array.FindIndex(tracks, t => t.Id == current) + 1].Id);
-            _player.SetSpu(next);
-        }
 
         /// <summary>Phone-initiated pause/resume shows the bar once (review blocker 3).</summary>
         public void ShowBarOnce()
@@ -713,22 +659,31 @@ namespace ZephyrPlayer
         {
             _secondaryBackHighlight.Stop();_secondaryForwardHighlight.Stop();
             var style = _settings.BarColorStyle;
-            var ring = style is "orange" or "twotone" ? Orange : RingDefault;
-            var label = style is "orange" or "inverse" ? Orange : RingDefault;
+            // The 2.0.2 colour matrix (original: white primary rings and labels, orange secondary arrows and
+            // labels, orange Play), applied to the 3.0 controls.
+            Brush priRing, priLabel, secRing, secLabel, play, icons;
+            switch (style)
+            {
+                case "orange": priRing = priLabel = secRing = secLabel = play = Orange; icons = Orange; break;
+                case "white": priRing = priLabel = secRing = secLabel = play = RingDefault; icons = RingDefault; break;
+                case "twotone": priRing = secRing = Orange; priLabel = secLabel = RingDefault; play = Orange; icons = RingDefault; break;
+                case "inverse": priRing = secRing = RingDefault; priLabel = secLabel = Orange; play = Orange; icons = Orange; break;
+                default: priRing = priLabel = RingDefault; secRing = secLabel = Orange; play = Orange; icons = RingDefault; break;
+            }
             var times = Orange;
 
-            SkipBackRing.Stroke = ring;
-            SkipForwardRing.Stroke = ring;
-            SkipBackArrow.Fill = ring;
-            SkipForwardArrow.Fill = ring;
-            SkipBackLabel.Foreground = label;
-            SkipForwardLabel.Foreground = label;
+            SkipBackRing.Stroke = priRing;
+            SkipForwardRing.Stroke = priRing;
+            SkipBackArrow.Fill = priRing;
+            SkipForwardArrow.Fill = priRing;
+            SkipBackLabel.Foreground = priLabel;
+            SkipForwardLabel.Foreground = priLabel;
             SkipBackLabel.Text = PlayerSettings.FormatSkip(_settings.PrimarySkipSeconds);
             SkipForwardLabel.Text = PlayerSettings.FormatSkip(_settings.PrimarySkipSeconds);
-            SecondarySkipBackIcon.Stroke = ring;
-            SecondarySkipForwardIcon.Stroke = ring;
-            SecondarySkipBackLabel.Foreground = label;
-            SecondarySkipForwardLabel.Foreground = label;
+            SecondarySkipBackIcon.Stroke = secRing;
+            SecondarySkipForwardIcon.Stroke = secRing;
+            SecondarySkipBackLabel.Foreground = secLabel;
+            SecondarySkipForwardLabel.Foreground = secLabel;
             // Settled units: minutes read as minutes (60 -> "1m"), never raw seconds.
             SecondarySkipBackLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
             SecondarySkipForwardLabel.Text = ShortSkip(_settings.SecondarySkipSeconds);
@@ -736,25 +691,28 @@ namespace ZephyrPlayer
             SecondarySkipForwardButton.ToolTip = $"Forward {_settings.SecondarySkipSeconds} s";
 
             var hollow = _settings.IconStyle == "hollow";
-            PlayRing.Stroke = hollow ? ring : Brushes.Transparent;
-            PlayRing.Fill = hollow ? Brushes.Transparent : ring;
-            PlayGlyph.Fill = hollow ? ring : Dark;
+            var playIsOrange = ReferenceEquals(play, Orange);
+            PlayRing.Stroke = hollow ? play : Brushes.Transparent;
+            PlayRing.Fill = hollow ? (playIsOrange ? OrangeTint : WhiteTint) : play;   // 2.0.2: 10 % tint inside the ring
+            PlayGlyph.Fill = hollow ? play : Dark;
             foreach (var child in PauseGlyph.Children)
-                if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? ring : Dark;
+                if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? play : Dark;
 
             ElapsedText.Foreground = times;
             TotalText.Foreground = style == "original" ? Muted : times;
             RemainingText.Foreground = style == "orange" ? Orange : RingDefault;
-            VolumeButton.Foreground = label;
-            SpeedButton.Foreground = label;
-            SleepButton.Foreground = label;
-            CaptionsButton.Foreground = label;
-            FullscreenButton.Foreground = label;
+            VolumeButton.Foreground = icons;
+            SpeedButton.Foreground = icons;
+            SleepButton.Foreground = icons;
+            CaptionsButton.Foreground = icons;
+            FullscreenButton.Foreground = icons;
             foreach (var button in new[] { VolumeButton, SpeedButton, SleepButton, CaptionsButton, FullscreenButton })
-                ApplyGlyphBrush(button, label);
+                ApplyGlyphBrush(button, icons);
 
             SpeedButton.Visibility = _settings.ShowSpeed ? Visibility.Visible : Visibility.Collapsed;
             SleepButton.Visibility = _settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
+            RefreshSpeedUi();       // a non-normal speed or a running timer keeps its orange icon
+            RefreshSleepUi();
         }
     }
 }
