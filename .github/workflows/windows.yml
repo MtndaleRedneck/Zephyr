@@ -680,7 +680,7 @@ jobs:
           $newInstalled = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           if (-not (Test-Path $newInstalled)) { throw "upgraded exe missing: $newInstalled" }
           $pv = (Get-Item $newInstalled).VersionInfo.ProductVersion
-          if ($pv -notlike '1.4*') { throw "upgraded exe ProductVersion is $pv, expected 1.4.x" }
+          if ($pv -notlike "$v*") { throw "upgraded exe ProductVersion is $pv, expected $v.x" }
           Start-Process $newInstalled
           $alive2 = $false
           for ($i = 0; $i -lt 30 -and -not $alive2; $i++) { Start-Sleep -Seconds 1; $alive2 = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
