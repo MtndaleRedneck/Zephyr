@@ -249,5 +249,69 @@ namespace ZephyrPlayer.Tests
             Assert.Empty(HardwareDecoding.Options("auto"));
             Assert.Equal(new[] { "--avcodec-hw=none" }, HardwareDecoding.Options("off"));
         }
+    
+        [Fact]
+        public void AnimateOnPress_DefaultOn_And_SubtitleSize_DefaultM()
+        {
+            var s = new PlayerSettings(_path);
+            Assert.True(s.AnimateOnPress);
+            Assert.Equal("M", s.SubtitleSize);
+            s.AnimateOnPress = false;
+            s.SubtitleSize = "L";
+            s.SubtitleSize = "XL"; // ignored
+            var reread = new PlayerSettings(_path);
+            Assert.False(reread.AnimateOnPress);
+            Assert.Equal("L", reread.SubtitleSize);
+        }
+
+        [Fact]
+        public void Stored_Orange_Choice_Survives_The_Default_Change()
+        {
+            // The default is "original" again (render 06b), but an explicit earlier pick
+            // is a stored value, not a missing one: it must read back exactly as chosen.
+            File.WriteAllText(_path, "{\"BarColorStyle\":\"orange\"}");
+            var s = new PlayerSettings(_path);
+            Assert.Equal("orange", s.BarColorStyle);
+        }
+
+        [Fact]
+        public void Stored_Speed_And_Sleep_Choices_Survive_The_Default_Change()
+        {
+            // U8: the new "on" default applies only when the key was never written.
+            File.WriteAllText(_path, "{\"ShowSpeed\":false,\"ShowSleepTimer\":false}");
+            var s = new PlayerSettings(_path);
+            Assert.False(s.ShowSpeed);
+            Assert.False(s.ShowSleepTimer);
+        }
+
+        [Fact]
+        public void WriteFailure_IsReported_Once_AndNeverThrows()
+        {
+            // The settings "file" path is a directory: every write fails with an I/O error.
+            var dir = Path.Combine(Path.GetTempPath(), "zephyr-202-savefail-" + Guid.NewGuid().ToString("N"));
+            var blocked = Path.Combine(dir, "settings.json");
+            Directory.CreateDirectory(blocked);
+            try
+            {
+                var s = new PlayerSettings(blocked);
+                var failed = new System.Collections.Generic.List<Exception>();
+                var changed = 0;
+                s.SaveFailed += (_, ex) => failed.Add(ex);
+                s.Changed += (_, __) => changed++;
+                var ex1 = Record.Exception(() => { s.ShowSpeed = true; s.LastVolume = 40; s.LibraryFolder = "x"; });
+                Assert.Null(ex1);
+                Assert.Single(failed);
+                Assert.Equal(0, changed);
+                // A file that can be written again clears the warning; the next failure is said again.
+                Directory.Delete(blocked);
+                s.ShowSpeed = true;
+                Assert.Equal(1, changed);
+                File.Delete(blocked);
+                Directory.CreateDirectory(blocked);
+                s.ShowSpeed = false;
+                Assert.Equal(2, failed.Count);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
+        }
     }
 }

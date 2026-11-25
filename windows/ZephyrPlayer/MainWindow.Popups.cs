@@ -367,6 +367,7 @@ namespace ZephyrPlayer
             var brush = normal ? IconBrushNow() : Orange;
             SpeedButton.Foreground = brush; ApplyGlyphBrush(SpeedButton, brush);
             SpeedButton.ToolTip = normal ? "Playback speed" : "Playback speed (" + label + ")";
+            Reflow();
         }
 
         // ---------- sleep timer ----------
@@ -423,6 +424,7 @@ namespace ZephyrPlayer
             var on = _sleep.IsActive;
             SleepLabel.Text = _sleep.Badge(now);
             SleepLabel.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+            Reflow();
             _sleepHeader.Text = _sleep.Header(now);
             _sleepRows.Children.Clear();
             foreach (var (label, minutes) in SleepTimerState.Choices)

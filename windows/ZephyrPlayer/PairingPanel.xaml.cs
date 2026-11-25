@@ -68,13 +68,26 @@ namespace ZephyrPlayer
             return n;
         }
 
+        /// <summary>The digits with a thin space between them (WPF has no letter spacing) and a word space in the
+        /// middle of a six-digit code.</summary>
+        internal static string FormatCode(string code)
+        {
+            var sb = new System.Text.StringBuilder();
+            for (var i = 0; i < code.Length; i++)
+            {
+                if (i > 0) sb.Append(code.Length == 6 && i == 3 ? ' ' : '\u2009');
+                sb.Append(code[i]);
+            }
+            return sb.ToString();
+        }
+
         private void Mint()
         {
             var name = PhoneNameBox.Text.Trim();
             _pairStarted(name);
             PhoneNameBox.IsReadOnly = true;
             // The gate hands the code out only at mint time; mirror it for display.
-            PairCodeText.Text = string.Join(" ", _gate.NewCode().ToCharArray());
+            PairCodeText.Text = FormatCode(_gate.NewCode());
         }
 
         // Window-side "a code is on screen" flag: the gate's HasActiveCode goes false at
@@ -149,17 +162,48 @@ namespace ZephyrPlayer
         public void RefreshPhones()
         {
             var entries = _store.Entries();
-            PhoneList.ItemsSource = entries.Select(e => new {
-                e.Name, e.Token,
-                Detail = _store.IsConnected(e.Token) ? "Connected now" : _store.LastSeen(e.Token) is DateTime seen ? "Last seen " + seen.ToLocalTime().ToString("g") : "Not connected this session",
-                Paired = e.PairedAt is DateTime date ? "Paired " + date.ToLocalTime().ToString("d") : "Previously paired"
+            var cards = entries.Select(e => new PhoneCard {
+                Name = e.Name, Token = e.Token,
+                Detail = PhoneStatus(_store.IsConnected(e.Token), _store.LastSeen(e.Token), DateTime.Now),
+                Paired = e.PairedAt is DateTime date ? "Paired " + date.ToLocalTime().ToString("d") : "Previously paired",
+                ForgetId = "Forget:" + e.Name,
+                ForgetName = "Forget " + e.Name,
             }).ToList();
+            // The panel's tick refreshes every second; replacing an unchanged list rebuilt every card each second, so UI
+            // Automation (screen readers, CI's card lookups) kept losing the Forget buttons mid-lookup. Only swap the
+            // list when a card changed. A class (reference equality), not an anonymous type: automation peers match
+            // items by Equals, and an unchanged card matched its OLD peer whose container was gone.
+            if (!(PhoneList.ItemsSource is System.Collections.Generic.List<PhoneCard> shown && shown.Select(c => c.Key).SequenceEqual(cards.Select(c => c.Key))))
+                PhoneList.ItemsSource = cards;
             NoPhonesText.Visibility = entries.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        internal sealed class PhoneCard
+        {
+            public string Name { get; init; } = "";
+            public string Token { get; init; } = "";
+            public string Detail { get; init; } = "";
+            public string Paired { get; init; } = "";
+            public string ForgetId { get; init; } = "";
+            public string ForgetName { get; init; } = "";
+            internal string Key => string.Join("\u0001", Name, Token, Detail, Paired);
+        }
+
+        /// <summary>"Connected now", "Last seen today, 3:41 PM", "Last seen yesterday", "Last seen Oct 28", or "Not connected this session".</summary>
+        internal static string PhoneStatus(bool connected, DateTime? lastSeenUtc, DateTime nowLocal)
+        {
+            if (connected) return "Connected now";
+            if (lastSeenUtc is not DateTime seen) return "Not connected this session";
+            var local = seen.ToLocalTime();
+            if (local.Date == nowLocal.Date) return "Last seen today, " + local.ToString("t");
+            if (local.Date == nowLocal.Date.AddDays(-1)) return "Last seen yesterday";
+            return "Last seen " + local.ToString(local.Year == nowLocal.Year ? "MMM d" : "MMM d, yyyy");
         }
 
         private void RefreshStatus()
         {
             WarningPanel.Visibility = Visibility.Visible;
+            WifiBanner.Visibility = ConnectionState.PublicWifiName != null ? Visibility.Visible : Visibility.Collapsed;
             var ip = ConnectionState.PrimaryIPv4();
             ThisPcText.Text = ip != null ? "This PC: " + ip : "This PC: address unavailable";
             ResetPairingsButton.Visibility = _store.CanResetUnreadable ? Visibility.Visible : Visibility.Collapsed;
@@ -181,11 +225,6 @@ namespace ZephyrPlayer
                 StatusDot.Fill = WarnOrange;
                 StatusText.Text = "Find my PC is off: another app is using it. Pair with the code above instead.";
             }
-            else if (ConnectionState.PublicWifiName != null)
-            {
-                StatusDot.Fill = WarnOrange;
-                StatusText.Text = "Windows is treating this Wi-Fi as public, which can block your phone from finding this PC.";
-            }
             else
             {
                 StatusDot.Fill = OkGreen;
@@ -194,10 +233,34 @@ namespace ZephyrPlayer
             }
         }
 
+        /// <summary>The banner's button runs the EXISTING firewall check (read only: the same
+        /// verification the app runs at every start) and says what it found. It never changes
+        /// a firewall rule, the network profile or any other Windows setting.</summary>
+        private void OnFirewallCheck(object sender, RoutedEventArgs e)
+        {
+            var current = FirewallSetup.SetupIsCurrent();
+            var text = FirewallSetup.LastReadFailed
+                ? "Windows Firewall settings could not be read on this PC, so Zephyr cannot check its setup right now. A restart of Windows usually fixes the read."
+                : current
+                    ? "Zephyr's firewall setup is in place for home (Private) networks. Windows is treating this Wi-Fi as public, and Zephyr does not change that. If this is your home Wi-Fi, you can set it to Private in Windows Settings, under Network & internet."
+                    : "Zephyr's firewall setup is not complete. Quit Zephyr from the tray icon and open it again: it will offer the setup.";
+            FirewallCheckResult?.Invoke(text);
+            var dlg = FirewallSetup.NoteWindow(text, "Firewall setup");
+            var owner = Window.GetWindow(this);
+            if (owner != null && owner.IsVisible) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
+            if (SuppressDialogsForTest) return;
+            dlg.ShowDialog();
+        }
+
+        /// <summary>Test seams: the firewall check's text, and no modal dialogs on test threads.</summary>
+        internal static event Action<string>? FirewallCheckResult;
+        internal static bool SuppressDialogsForTest;
+
         private void OnResetPairings(object sender,RoutedEventArgs e)
         {
             if(!_store.CanResetUnreadable)return;
-            if(MessageBox.Show(Window.GetWindow(this),"Reset all saved pairings? Every paired phone will be removed and must pair again. The unreadable file will be kept privately for recovery.","Reset pairings",MessageBoxButton.YesNo,MessageBoxImage.Warning,MessageBoxResult.No)!=MessageBoxResult.Yes)return;
+            // The app's own dark confirm (CP4: no stock light MessageBox); No is the default.
+            if(!SuppressDialogsForTest&&!FirewallSetup.Confirm(Window.GetWindow(this),"Reset all saved pairings? Every paired phone will be removed and must pair again. The unreadable file will be kept privately for recovery.","Reset pairings","Reset","Cancel"))return;
             try{_store.ResetUnreadablePairings();PairButton.IsEnabled=true;RefreshPhones();RefreshStatus();}
             catch{StatusText.Text="Pairings could not be reset. Nothing was changed; try closing and reopening the Player.";}
         }
@@ -214,6 +277,7 @@ namespace ZephyrPlayer
                 {
                     // Broken/refused store: nothing changed; say so instead of
                     // letting the exception reach the unhandled handler (round-3 P4).
+                    WarningPanel.Visibility = Visibility.Visible; StatusDot.Fill = WarnOrange;
                     StatusText.Text = "That change could not be saved - nothing was changed. Close and reopen the Player; if it still fails, send feedback from Settings and we will help.";
                     return;
                 }
