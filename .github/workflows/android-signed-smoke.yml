@@ -2,7 +2,7 @@ name: android-signed-smoke
 # workflow_dispatch only. Two stages, no secret, no signing key, no signed file ever uploaded anywhere.
 #  build: builds the UNSIGNED release APK and keeps it as a run artifact named unsigned-apk (1 day retention).
 #         The owner's runner downloads it, deletes the artifact, and signs it locally from the vault.
-#  smoke: the owner passes only the APK Signing Block (public certificate + signature, about 5 KB, no secret)
+#  smoke: (after resolve validates the producer run) the owner passes only the APK Signing Block (public certificate + signature, about 5 KB, no secret)
 #         as base64. This job takes the unsigned APK from the build run, inserts the block (scripts/sigblock.py),
 #         requires the result to hash to the exact signed file the owner holds, then installs the published 1.4.0
 #         and the signed file over it on an emulator and checks the resumed app UI.
@@ -32,8 +32,23 @@ on:
         required: false
 permissions:
   contents: read
+env:
+  OLD_NAME: '1.4.0'
+  OLD_CODE: '25'
+  NEW_NAME: '1.5.0'
+  NEW_CODE: '26'
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only the two known stages run
+        env:
+          STAGE: ${{ inputs.stage }}
+        run: |
+          set -euo pipefail
+          [ "$STAGE" = build ] || [ "$STAGE" = smoke ] || { echo "invalid stage"; exit 1; }
   build:
+    needs: guard
     if: ${{ inputs.stage == 'build' }}
     runs-on: ubuntu-latest
     steps:
@@ -45,23 +60,64 @@ jobs:
       - uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3
       - name: Build the unsigned release
         run: ./gradlew --no-daemon assembleRelease
-      - name: Check the unsigned APK is zipaligned (signing must not move entries)
+      - name: Stage the unsigned APK with its provenance (zipalign checked, no fallback check)
         run: |
-          set -e
-          APK=$(ls android/build/outputs/apk/release/*.apk | head -1)
+          set -euo pipefail
+          APKS=(android/build/outputs/apk/release/*.apk)
+          [ "${#APKS[@]}" = 1 ] || { echo "expected exactly one release APK"; exit 1; }
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          "$BT/zipalign" -c -P 16 4 "$APK" || "$BT/zipalign" -c -p 4 "$APK"
-          cp "$APK" "$RUNNER_TEMP/unsigned.apk"
-          echo "unsigned sha256: $(sha256sum "$RUNNER_TEMP/unsigned.apk" | cut -d' ' -f1)"
-          echo "source: $GITHUB_SHA"
+          "$BT/zipalign" -c -P 16 4 "${APKS[0]}"
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "${APKS[0]}" "$RUNNER_TEMP/out/unsigned.apk"
+          H=$(sha256sum "$RUNNER_TEMP/out/unsigned.apk" | cut -d' ' -f1)
+          printf 'source_sha=%s\nrun_id=%s\nunsigned_sha256=%s\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$H" > "$RUNNER_TEMP/out/provenance.txt"
+          cat "$RUNNER_TEMP/out/provenance.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: unsigned-apk
-          path: ${{ runner.temp }}/unsigned.apk
+          path: ${{ runner.temp }}/out/*
           retention-days: 1
           if-no-files-found: error
-  smoke:
+  resolve:
+    needs: guard
     if: ${{ inputs.stage == 'smoke' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.r.outputs.artifact_id }}
+    steps:
+      - name: Validate the producer run, its commit, ref and artifact
+        id: r
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.build_run_id }}
+        run: |
+          set -euo pipefail
+          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "bad run id"; exit 1; }
+          RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+          chk() { [ "$(echo "$RUN" | jq -r "$1")" = "$2" ] || { echo "ASSERT FAIL: producer run $1 is not $2"; exit 1; }; }
+          chk .status completed
+          chk .conclusion success
+          chk .event workflow_dispatch
+          chk .head_sha "$GITHUB_SHA"
+          chk .head_branch "$GITHUB_REF_NAME"
+          chk .repository.full_name "$GITHUB_REPOSITORY"
+          chk .head_repository.full_name "$GITHUB_REPOSITORY"
+          echo "$RUN" | jq -r .path | grep -q '^\.github/workflows/android-signed-smoke\.yml' || { echo "ASSERT FAIL: producer run is another workflow"; exit 1; }
+          ARTS=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts")
+          [ "$(echo "$ARTS" | jq '[.artifacts[] | select(.name=="unsigned-apk")] | length')" = 1 ] || { echo "ASSERT FAIL: not exactly one unsigned-apk artifact"; exit 1; }
+          A=$(echo "$ARTS" | jq -c '.artifacts[] | select(.name=="unsigned-apk")')
+          [ "$(echo "$A" | jq -r .expired)" = false ] || { echo "artifact expired"; exit 1; }
+          [ "$(echo "$A" | jq -r .workflow_run.id)" = "$RUN_ID" ] || { echo "artifact belongs to another run"; exit 1; }
+          [ "$(echo "$A" | jq -r .workflow_run.head_sha)" = "$GITHUB_SHA" ] || { echo "artifact head differs"; exit 1; }
+          ID=$(echo "$A" | jq -r .id)
+          [[ "$ID" =~ ^[0-9]+$ ]] || { echo "bad artifact id"; exit 1; }
+          echo "artifact_id=$ID" >> "$GITHUB_OUTPUT"
+          echo "validated: run $RUN_ID at $GITHUB_SHA on $GITHUB_REF_NAME, artifact $ID"
+  smoke:
+    needs: resolve
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -69,45 +125,40 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Rebuild the exact signed bytes and verify them
+      - name: Rebuild the exact signed bytes from the validated artifact
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.build_run_id }}
+          ARTIFACT_ID: ${{ needs.resolve.outputs.artifact_id }}
           WANT_UNSIGNED: ${{ inputs.unsigned_sha256 }}
           BLOCK_B64: ${{ inputs.signing_block_b64 }}
           WANT_SIGNED: ${{ inputs.expected_signed_sha256 }}
           WANT_SIGNER: ${{ inputs.expected_signer_sha256 }}
         run: |
-          set -e
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || { echo "bad run id"; exit 1; }
+          set -euo pipefail
           for v in "$WANT_UNSIGNED" "$WANT_SIGNED" "$WANT_SIGNER"; do [[ "$v" =~ ^[0-9a-f]{64}$ ]] || { echo "bad sha256 input"; exit 1; }; done
           [[ "$BLOCK_B64" =~ ^[A-Za-z0-9+/=]{100,20000}$ ]] || { echo "bad signing block input"; exit 1; }
-          mkdir -p /tmp/zs && cd /tmp/zs
-          RUN_REPO=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.repository.full_name + " " + .name')
-          echo "build run: $RUN_REPO"
-          AID=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[] | select(.name=="unsigned-apk" and (.expired|not)) | .id')
-          [ -n "$AID" ] || { echo "unsigned-apk artifact not found or expired"; exit 1; }
-          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$AID/zip" > u.zip
-          unzip -q u.zip && mv unsigned.apk unsigned.bin
-          [ "$(sha256sum unsigned.bin | cut -d' ' -f1)" = "$WANT_UNSIGNED" ] || { echo "ASSERT FAIL: unsigned APK hash differs"; exit 1; }
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "no validated artifact"; exit 1; }
+          mkdir -p /tmp/zs/in && cd /tmp/zs
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID/zip" > u.zip
+          [ "$(unzip -Z1 u.zip | sort | tr '\n' ' ')" = "provenance.txt unsigned.apk " ] || { echo "ASSERT FAIL: unexpected artifact contents"; exit 1; }
+          unzip -q u.zip -d in
+          U=$(sha256sum in/unsigned.apk | cut -d' ' -f1)
+          [ "$(cat in/provenance.txt)" = "$(printf 'source_sha=%s\nrun_id=%s\nunsigned_sha256=%s' "$GITHUB_SHA" "$RUN_ID" "$U")" ] || { echo "ASSERT FAIL: provenance differs from the validated run or the file"; exit 1; }
+          [ "$U" = "$WANT_UNSIGNED" ] || { echo "ASSERT FAIL: dispatcher unsigned hash differs from the artifact"; exit 1; }
           printf '%s' "$BLOCK_B64" | base64 -d > block.bin
-          python3 "$GITHUB_WORKSPACE/scripts/sigblock.py" apply unsigned.bin block.bin new.apk
+          python3 "$GITHUB_WORKSPACE/scripts/sigblock.py" apply in/unsigned.apk block.bin new.apk
           H=$(sha256sum new.apk | cut -d' ' -f1)
           echo "rebuilt signed sha256: $H"
           [ "$H" = "$WANT_SIGNED" ] || { echo "ASSERT FAIL: rebuilt signed APK is not the owner's signed file"; exit 1; }
-          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          "$BT/apksigner" verify --print-certs new.apk | tee new.certs
           curl -sfL -o old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.4.0/Zephyr-Android-1.4.0.apk
-          "$BT/apksigner" verify --print-certs old.apk | tee old.certs
-          grep -i 'SHA-256 digest' new.certs | head -1 | grep -qi "$WANT_SIGNER" || { echo "ASSERT FAIL: new signer differs"; exit 1; }
-          grep -i 'SHA-256 digest' old.certs | head -1 | grep -qi "$WANT_SIGNER" || { echo "ASSERT FAIL: 1.4.0 signer differs"; exit 1; }
-          echo "ok: exact signed bytes rebuilt, same signer as the published 1.4.0"
+          WANT_SIGNER="$WANT_SIGNER" bash "$GITHUB_WORKSPACE/scripts/signed-smoke-verify.sh"
       - name: Enable KVM
         run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules || true
-          sudo udevadm control --reload-rules || true
-          sudo udevadm trigger --name-match=kvm || true
-      - name: Upgrade 1.4.0 to the exact signed build on an emulator
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Upgrade the published 1.4.0 to the exact signed build on an emulator
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
@@ -115,43 +166,21 @@ jobs:
           arch: x86_64
           profile: pixel_6
           emulator-boot-timeout: 1200
-          script: |
-            while [ "$(adb shell service check package 2>/dev/null | tr -d '\r')" != "Service package: found" ]; do sleep 5; done
-            adb shell settings put global verifier_verify_adb_installs 0
-            adb install -r /tmp/zs/old.apk
-            adb shell dumpsys package com.zephyr.remote | grep -E 'versionName|versionCode' | head -2
-            adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard
-            adb shell monkey -p com.zephyr.remote -c android.intent.category.LAUNCHER 1
-            sleep 20
-            adb shell pidof com.zephyr.remote
-            adb shell am force-stop com.zephyr.remote
-            adb install -r /tmp/zs/new.apk
-            adb shell dumpsys package com.zephyr.remote | grep -E 'versionName|versionCode' | head -2 | tee /tmp/zs/after.txt
-            grep -q 'versionName=1.5.0' /tmp/zs/after.txt
-            adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard
-            adb shell monkey -p com.zephyr.remote -c android.intent.category.LAUNCHER 1
-            sleep 30
-            adb shell pidof com.zephyr.remote
-            adb shell dumpsys activity activities | grep -E "ResumedActivity" | tee /tmp/zs/resumed.txt
-            grep -q "com.zephyr.remote/" /tmp/zs/resumed.txt
-            adb shell uiautomator dump /sdcard/ui.xml >/dev/null && adb shell cat /sdcard/ui.xml > /tmp/zs/ui.xml
-            grep -q 'package="com.zephyr.remote"' /tmp/zs/ui.xml
-            echo "ui nodes from the app: $(grep -o 'package="com.zephyr.remote"' /tmp/zs/ui.xml | wc -l)"
-            ! adb logcat -d | grep -E 'FATAL EXCEPTION.*com.zephyr.remote'
-            echo "ok: exact signed 1.5 installed over 1.4.0, resumed activity and app UI present, no fatal exception"
+          script: bash scripts/signed-smoke-emulator.sh
   cleanup:
-    if: ${{ always() && inputs.stage == 'smoke' }}
-    needs: smoke
+    needs: [resolve, smoke]
+    if: ${{ always() && needs.resolve.outputs.artifact_id != '' }}
     runs-on: ubuntu-latest
     permissions:
       actions: write
     steps:
-      - name: Delete the unsigned artifact of the build run (also on failure)
+      - name: Delete only the validated unsigned artifact (also after a failed smoke) and confirm
         env:
           GH_TOKEN: ${{ github.token }}
-          RUN_ID: ${{ inputs.build_run_id }}
+          ARTIFACT_ID: ${{ needs.resolve.outputs.artifact_id }}
         run: |
-          [[ "$RUN_ID" =~ ^[0-9]+$ ]] || exit 0
-          for a in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" --jq '.artifacts[].id'); do
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$a" && echo "deleted artifact $a"
-          done
+          set -euo pipefail
+          [[ "$ARTIFACT_ID" =~ ^[0-9]+$ ]] || { echo "bad artifact id"; exit 1; }
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
+          if gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID" >/dev/null 2>&1; then echo "ASSERT FAIL: artifact $ARTIFACT_ID still exists"; exit 1; fi
+          echo "deleted and confirmed gone: artifact $ARTIFACT_ID"
