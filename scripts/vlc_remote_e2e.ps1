@@ -19,32 +19,32 @@ function Redact-Text([string]$t) {
     return $t
 }
 function Redact-Config([string]$t) { return (Redact-Text $t) }
-# Safe-Body: allowlist projection of an HTTP response body. Only these keys print their value; every other key prints
-# its name and value length. Non-JSON bodies print only their length.
+# Safe-Body: public logs get status-level facts only: the key NAMES, booleans/numbers for a few flags, and the length of
+# every string value. No response string value is ever printed.
 function Safe-Body($body) {
     if ($null -eq $body) { return '<no body>' }
-    # error/detail are source literals in every helper Reply/Movies.Error call; no 'name' (machine/phone label) and no credential-bearing keys.
-    $allow = @('ok','detail','error','code','configured','vlcPending','ask','position','length','atRoot')
     try {
         $j = $body | ConvertFrom-Json -ErrorAction Stop
         if ($j -is [System.Array]) { return "<json array of $($j.Count)>" }
+        $flags = @('ok','configured','vlcPending','atRoot')
+        $nums = @('code','position','length')
         $parts = foreach ($pr in $j.PSObject.Properties) {
-            if ($allow -contains $pr.Name) { "$($pr.Name)=$(Redact-Text ($pr.Value | ConvertTo-Json -Compress -Depth 4))" } else { "$($pr.Name)=<$((("$($pr.Value)").Length)) chars withheld>" }
+            if (($flags -contains $pr.Name) -and ($pr.Value -is [bool])) { "$($pr.Name)=$($pr.Value)" }
+            elseif (($nums -contains $pr.Name) -and ($pr.Value -is [ValueType])) { "$($pr.Name)=$($pr.Value)" }
+            else { "$($pr.Name):$((("$($pr.Value)").Length))ch" }
         }
         return '{' + ($parts -join ', ') + '}'
     } catch {
-        return "<non-JSON body: $(([string]$body).Length) chars withheld>"
+        return "<non-JSON body: $(([string]$body).Length) chars>"
     }
 }
-# Show-Log: helper.log text is NOT printed to the public log. Only the line count and lines that start with a fixed
-# literal message from Program.Log call sites are shown; everything else is counted as withheld.
+# Show-Log: helper.log text is never printed to the public log. Only counts of known literal message categories.
 function Show-Log([string]$path, [int]$tail) {
     if (-not (Test-Path $path)) { return }
     $lines = @(if ($tail -gt 0) { Get-Content $path -Tail $tail } else { Get-Content $path })
-    $known = '^\S*\s*(Started\.|Wrong pairing code entered|Pairing locked|Pairing code created for|[^"]*needs its own firewall setup first)'
-    $shown = 0
-    foreach ($l in $lines) { if ($l -match $known -and $l -notmatch '(?i)token|password|secret|dpapi|bearer|authorization') { Write-Host (Redact-Text $l); $shown++ } }
-    Write-Host "helper.log: $($lines.Count) lines read, $shown known-literal lines shown, $($lines.Count - $shown) withheld from the public log"
+    $cats = [ordered]@{ 'started' = 'Started\.'; 'wrong-code' = 'Wrong pairing code entered'; 'locked' = 'Pairing locked'; 'code-created' = 'Pairing code created for'; 'firewall-preflight' = 'needs its own firewall setup first' }
+    $out = foreach ($k in $cats.Keys) { "$k=$(@($lines | Where-Object { $_ -match $cats[$k] }).Count)" }
+    Write-Host "helper.log: $($lines.Count) lines read; known-message counts: $($out -join ', '); line text withheld from the public log"
 }
 function Invoke-Helper($path, $body, $token) {
     $headers = @{}
@@ -343,7 +343,7 @@ try {
     Assert ($r.code -eq 200) "a retried ack is an idempotent no-op"
     $r = Invoke-Helper '/vlc/adopt' '{"requestId":""}' $token
     Assert ($r.code -eq 400) "an empty request id is rejected"
-    Write-Host "paired with machine: $($paired.name)"
+    Write-Host "paired (machine name of $("$($paired.name)".Length) chars withheld)"
     # Paired phones get stored with a name; a code made outside the window pairs as "Phone N".
     # Nothing was imported from BingeMote, so this first pairing is phone #1.
     $cfg = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote/config.json'
@@ -440,7 +440,7 @@ try {
     $preRestart = ($r.body | ConvertFrom-Json).password
     $cfgText = Get-Content $cfg -Raw
     Assert ($cfgText -match '"adoptRequestId":"req-pre-restart"') "the served marker is persisted at serve time"
-    Assert (-not ($cfgText -match $preRestart)) "the password value is never written to config.json"
+    Assert (-not ($cfgText -match [regex]::Escape($preRestart))) "the password value is never written to config.json"
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart with an unacked adopt"
@@ -501,7 +501,7 @@ try {
         $vlcrc = Join-Path $env:APPDATA 'vlc\vlcrc'
         Assert (Test-Path $vlcrc) "the restarted helper completed the deferred vlcrc write"
         $vlcrcText = Get-Content $vlcrc -Raw
-        Assert ($vlcrcText -match "http-password=$pendingPw") "vlcrc has the pending password"
+        Assert ($vlcrcText -match ("http-password=" + [regex]::Escape($pendingPw))) "vlcrc has the pending password"
         Assert ($vlcrcText -match 'extraintf=http') "vlcrc enables the web interface"
         Assert ($vlcrcText -match 'http-host=0.0.0.0') "vlcrc listens on the LAN"
         Start-Sleep -Seconds 1
@@ -607,8 +607,8 @@ try {
         Get-Process | Where-Object { $_.ProcessName -match 'vlc|Zephyr' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) exited=$($_.HasExited)" }
         $hl = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
         if (Test-Path $hl) { Write-Host "== helper.log tail =="; Show-Log $hl 60 }
-        try { Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -MaxEvents 40 -ErrorAction Stop |
-              Where-Object { $_.Message -match 'vlc' } | ForEach-Object { Write-Host "event $($_.TimeCreated) $($_.ProviderName): $(($_.Message -split "`n")[0..2] -join ' | ')" } } catch { Write-Host "event log read: $($_.Exception.Message)" }
+        try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -MaxEvents 40 -ErrorAction Stop | Where-Object { $_.Message -match 'vlc' })
+              Write-Host "Application events mentioning vlc in the last 3 min: $($ev.Count); providers/ids: $((($ev | ForEach-Object { "$($_.ProviderName)#$($_.Id)" }) | Select-Object -Unique) -join ', '); message text withheld" } catch { Write-Host "event log read failed ($($_.Exception.GetType().Name))" }
         Write-Host "long clip present: $(Test-Path (Join-Path $movies 'long.mkv')) size=$((Get-Item (Join-Path $movies 'long.mkv') -ErrorAction SilentlyContinue).Length)"
     }
     Assert $vlcUp "end-to-end resume: VLC is running the long clip"

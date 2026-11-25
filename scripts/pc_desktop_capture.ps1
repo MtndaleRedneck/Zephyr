@@ -17,7 +17,7 @@ Remove-Item $crashLog -ErrorAction SilentlyContinue
 function DumpCrashLog($why) {
     if (Test-Path $crashLog) {
         Write-Host "::error::app crash log after: $why"
-        Write-Host "app crash log: $((Get-Item $crashLog).Length) bytes; entries (kind, exception type; text withheld from the public log): $((Get-Content $crashLog | Where-Object { $_ -match '^\[[^\]]+\] (\w+): ([\w.]+)' } | ForEach-Object { $Matches[1] + ' ' + $Matches[2] }) -join '; ')"
+        Write-Host "app crash log: $((Get-Item $crashLog).Length) bytes, $(@(Get-Content $crashLog | Where-Object { $_ -match '^\[[^\]]+\] (dispatcher|unhandled|task|tray):' }).Count) entries; text withheld from the public log"
     }
 }
 

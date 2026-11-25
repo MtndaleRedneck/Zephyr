@@ -131,14 +131,14 @@ jobs:
           }
           if (-not $alive) {
             $cl = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
-            if (Test-Path $cl) { Write-Host "app crash log: $((Get-Item $cl).Length) bytes; entries (kind, exception type; text withheld from the public log): $((Get-Content $cl | Where-Object { $_ -match '^\[[^\]]+\] (\w+): ([\w.]+)' } | ForEach-Object { $Matches[1] + ' ' + $Matches[2] }) -join '; ')" }
+            if (Test-Path $cl) { Write-Host "app crash log: $((Get-Item $cl).Length) bytes, $(@(Get-Content $cl | Where-Object { $_ -match '^\[[^\]]+\] (dispatcher|unhandled|task|tray):' }).Count) entries; text withheld from the public log" }
             throw "installed exe never stayed running (startup/update-check crash or auto-launch dead)"
           }
           # Stay alive through the on-open update check window.
           Start-Sleep -Seconds 6
           if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) {
             $cl = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
-            if (Test-Path $cl) { Write-Host "app crash log: $((Get-Item $cl).Length) bytes; entries (kind, exception type; text withheld from the public log): $((Get-Content $cl | Where-Object { $_ -match '^\[[^\]]+\] (\w+): ([\w.]+)' } | ForEach-Object { $Matches[1] + ' ' + $Matches[2] }) -join '; ')" }
+            if (Test-Path $cl) { Write-Host "app crash log: $((Get-Item $cl).Length) bytes, $(@(Get-Content $cl | Where-Object { $_ -match '^\[[^\]]+\] (dispatcher|unhandled|task|tray):' }).Count) entries; text withheld from the public log" }
             throw "installed exe died during the update-check window"
           }
           Write-Output "installed exe alive through launch + on-open update check window"
