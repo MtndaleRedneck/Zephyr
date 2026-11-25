@@ -68,7 +68,9 @@ class ZephyrUpgradeFixtureTest {
         val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         // Plain loop, no Iterable.any (kotlin inline today, but one less stdlib dependency on the shipped app's shrunk classes).
         var alive = false
-        for (p in am.runningAppProcesses) { if (p.processName.equals(ctx.packageName)) alive = true }
+        val procs = am.runningAppProcesses
+        if (procs == null) throw AssertionError("runningAppProcesses returned null")
+        for (p in procs) { if (p.processName.equals(ctx.packageName)) alive = true }
         assertTrue("app process died after cold open", alive)
         // State still intact after the app itself ran against it.
         assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
