@@ -145,6 +145,7 @@ jobs:
       - name: Build the prior release (debug) with the fixture test
         run: |
           cp new/android/src/androidTest/java/com/bingemote/ZephyrUpgradeFixtureTest.kt old/android/src/androidTest/java/com/bingemote/
+          cp new/android/src/androidTest/java/com/bingemote/UpgradeConnectionTest.kt old/android/src/androidTest/java/com/bingemote/
           cd old && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
           mkdir -p /tmp/up
           cp android/build/outputs/apk/debug/app-debug.apk /tmp/up/old-app.apk
