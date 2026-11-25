@@ -19,10 +19,10 @@ on:
 permissions:
   contents: read
 env:
-  OLD_NAME: '1.4.0'
-  OLD_CODE: '25'
-  NEW_NAME: '1.5.0'
-  NEW_CODE: '26'
+  OLD_NAME: '1.5.0'
+  OLD_CODE: '26'
+  NEW_NAME: '1.6.0'
+  NEW_CODE: '27'
 jobs:
   guard:
     runs-on: ubuntu-latest
@@ -193,8 +193,8 @@ jobs:
           H=$(sha256sum new.apk | cut -d' ' -f1)
           echo "rebuilt signed sha256: $H"
           [ "$H" = "$WANT_SIGNED" ] || { echo "ASSERT FAIL: rebuilt signed APK is not the owner's signed file"; exit 1; }
-          curl -sfL -o old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.4.0/Zephyr-Android-1.4.0.apk
-          echo "ae4ea682c878ed8ac6c4760d896ceea7ce7af022bab80f4eb31ad5a87c455ae9  old.apk" | sha256sum -c
+          curl -sfL -o old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.5.0/Zephyr-Android-1.5.0.apk
+          echo "b4230632816f1cb39b669f5d111debfec1c9a4f894b4a709a581225528ebe0aa  old.apk" | sha256sum -c
           WANT_SIGNER="$WANT_SIGNER" bash "$GITHUB_WORKSPACE/scripts/signed-smoke-verify.sh"
       - name: Enable KVM
         run: |
