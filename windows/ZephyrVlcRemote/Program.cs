@@ -216,12 +216,12 @@ internal static class Program
                 Program.PairCode = Program.NewPairCode();
                 shot.RunStatusTickForShot();
             }
-            else if (shotMode == "broken-store")
+            else if (shotMode is "broken-store" or "remove" or "remove-all" or "tray" or "remove-paths")
             {
-                // The fail-closed screen: saved pairings unreadable, no reset advice.
-                Program.StoreBroken = true;
-                Program.StoreBrokenReason = "could not be read";
-                shot.RunStatusTickForShot();
+                // State-asserting captures: the real handlers run, the state is checked, and a
+                // <shot>.state.txt sidecar records what was asserted. Any failed assert throws.
+                Program.RunStateShot(shot, shotMode, shotPath);
+                return 0;
             }
 #endif
             shot.ShowOffscreenAndCapture(shotPath);
@@ -821,6 +821,182 @@ internal static class Program
                 bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
             }
             d.Close();
+        }
+
+        private static string ModalText(Control root)
+        {
+            var sb = new StringBuilder();
+            void Walk(Control c)
+            {
+                foreach (Control k in c.Controls)
+                {
+                    if (k is Label || k is Button) sb.Append(k.Text).Append('|');
+                    Walk(k);
+                }
+            }
+            Walk(root);
+            return sb.ToString();
+        }
+
+        // Runs trigger() (which opens a REAL modal dialog). A timer polls (bounded: 20 x 500 ms) for the
+        // modal, reads its text, optionally captures its pixels, and clicks the button carrying `click`.
+        // Any failure (no modal in time, no matching button, an exception while capturing) sets `failure`,
+        // closes the modal so ShowDialog returns instead of hanging the run, and then THROWS after trigger()
+        // returns. A silent miss can never read as a pass and a failure never leaves a dialog open.
+        private static string DriveModal(Action trigger, string? png, DialogResult click)
+        {
+            var seen = "";
+            string? failure = null;
+            var done = false;
+            var ticks = 0;
+            var stuck = 0;
+            Form? driven = null;
+            using var timer = new System.Windows.Forms.Timer { Interval = 500 };
+            timer.Tick += (_, _) =>
+            {
+                ticks++;
+                Form? modal = null;
+                foreach (Form f in Application.OpenForms) { if (f.Modal && f.Visible) { modal = f; break; } }
+                if (driven != null)
+                {
+                    // Already clicked. The modal must now be gone; if it is still up after ~2 s, fail and force it
+                    // closed so ShowDialog returns instead of hanging the process.
+                    if (modal != null && ++stuck >= 4)
+                    {
+                        failure = "the dialog stayed open after the click";
+                        timer.Stop();
+                        try { modal.DialogResult = DialogResult.Abort; modal.Close(); } catch { }
+                    }
+                    else if (modal == null) timer.Stop();
+                    return;
+                }
+                if (modal == null)
+                {
+                    if (ticks >= 20) { failure = "no modal dialog appeared within 10 s"; timer.Stop(); }
+                    return;
+                }
+                timer.Stop();   // no re-entry while driving (DoEvents below)
+                try
+                {
+                    seen = ModalText(modal);
+                    if (png != null)
+                    {
+                        Application.DoEvents();
+                        using var bmp = new Bitmap(modal.Width, modal.Height);
+                        using (var g = Graphics.FromImage(bmp))
+                        {
+                            var hdc = g.GetHdc();
+                            bool ok = PrintWindowForShot(modal.Handle, hdc, 2);
+                            g.ReleaseHdc(hdc);
+                            if (!ok) { g.Clear(modal.BackColor); modal.DrawToBitmap(bmp, new Rectangle(0, 0, modal.Width, modal.Height)); }
+                        }
+                        bmp.Save(png, System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                    if (ClickDialogButton(modal, click)) { done = true; driven = modal; timer.Start(); }
+                    else failure = "no modal button matched " + click;
+                }
+                catch (Exception ex) { failure = "modal drive failed: " + ex.GetType().Name; }
+                if (failure != null) { timer.Stop(); try { modal.DialogResult = DialogResult.Abort; modal.Close(); } catch { } }
+            };
+            timer.Start();
+            trigger();
+            timer.Stop();
+            if (failure != null) throw new InvalidOperationException("state-shot: " + failure);
+            if (!done) throw new InvalidOperationException("state-shot: the dialog was never driven");
+            return seen;
+        }
+
+        internal static void RunStateShot(HelperWindow shot, string mode, string shotPath)
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "zvr-state-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            RedirectDataDirForTests(dir);
+            StoreBroken = false;
+            lock (PhonesLock) { Phones.Clear(); }
+            var state = new StringBuilder();
+            void Fail(string why) => throw new InvalidOperationException("state-shot " + mode + ": " + why);
+            int Reloaded() { lock (PhonesLock) { Phones.Clear(); } StoreBroken = false; LoadConfig(); return PhonesCount; }
+            PairedPhone First() { lock (PhonesLock) { return Phones[0]; } }
+            shot.StartPosition = FormStartPosition.Manual;
+            shot.Location = new Point(0, 0);
+            shot.ShowInTaskbar = false;
+            shot.Show();
+            Application.DoEvents();
+
+            void RemoveSequence(bool all, string? png)
+            {
+                var tag = all ? "remove_all" : "remove";
+                lock (PhonesLock) { Phones.Clear(); }
+                AddPhoneAndPersist("shot-token-a", "Shot Phone A");
+                AddPhoneAndPersist("shot-token-b", "Shot Phone B");
+                shot.HookRefreshPhones();
+                Action trigger = () => { if (all) shot.HookRemoveAll(); else shot.HookRemovePhone(First()); };
+                var text = DriveModal(trigger, png, DialogResult.Cancel);
+                if (!text.Contains(all ? "Remove all phones?" : "Remove Shot Phone A?")) Fail(tag + " dialog text was not the production text");
+                state.AppendLine(tag + "_dialog_text_ok=1");
+                if (PhonesCount != 2) Fail(tag + " cancel changed the phones in memory");
+                state.AppendLine(tag + "_cancel_kept=" + PhonesCount);
+                if (Reloaded() != 2) Fail(tag + " cancel changed the saved file");
+                state.AppendLine(tag + "_cancel_reload=" + PhonesCount);
+                shot.HookRefreshPhones();
+                DriveModal(trigger, null, DialogResult.OK);
+                var want = all ? 0 : 1;
+                if (PhonesCount != want) Fail(tag + " confirm left " + PhonesCount);
+                state.AppendLine(tag + "_confirm_left=" + PhonesCount);
+                if (Reloaded() != want) Fail(tag + " confirm was not saved to the file");
+                state.AppendLine(tag + "_reload_left=" + PhonesCount);
+                if (!all && First().Name != "Shot Phone B") Fail("the wrong phone was removed");
+            }
+
+            if (mode == "tray")
+            {
+                var items = shot.HookTrayMenuItems();
+                if (items.Length != 2 || items[0] != "Show Zephyr VLC Remote" || items[1] != "Quit Zephyr VLC Remote") Fail("unexpected tray menu items");
+                if (!shot.HookTrayVisible) Fail("tray icon is not visible");
+                shot.HookCaptureTrayMenu(shotPath);
+                state.AppendLine("tray_items=" + string.Join(";", items));
+                state.AppendLine("tray_icon_visible=1");
+            }
+            else if (mode == "broken-store")
+            {
+                File.WriteAllText(ConfigPath, "{ this is not valid json");
+                var before = File.ReadAllBytes(ConfigPath);
+                StoreBroken = false;
+                LoadConfig();
+                if (!StoreBroken) Fail("a damaged config was not detected");
+                state.AppendLine("store_broken=1");
+                state.AppendLine("store_broken_reason=" + StoreBrokenReason);
+                // Two truthful captures: the window while the store is broken (the helper window has no
+                // on-window indicator for this state, so this PNG can equal the plain window), and the
+                // fail-closed note that the real Pair path shows. The state asserts are on the note and the store.
+                shot.HookCaptureWindow(shotPath);
+                var notePath = Path.Combine(Path.GetDirectoryName(shotPath) ?? ".", "dialog-broken-store-note.png");
+                state.AppendLine("window_png=" + Path.GetFileName(shotPath) + " (no on-window broken-store indicator exists in the product)");
+                state.AppendLine("note_png=" + Path.GetFileName(notePath));
+                var text = DriveModal(() => shot.HookStartPairing("Shot Name"), notePath, DialogResult.OK);
+                if (!text.Contains("saved pairing data on this PC")) Fail("pairing note was not the fail-closed text");
+                state.AppendLine("dialog_text_ok=1");
+                state.AppendLine("pair_code_minted=" + (PairCode != null || PendingPhoneName != null ? 1 : 0));
+                if (PairCode != null || PendingPhoneName != null) Fail("a pairing code was minted on a broken store");
+                if (!File.ReadAllBytes(ConfigPath).SequenceEqual(before)) Fail("the damaged file was changed");
+                state.AppendLine("file_unchanged=1");
+                var refused = false;
+                try { AddPhoneAndPersist("shot-token-x", "Shot Phone X"); } catch (InvalidOperationException) { refused = true; }
+                if (!refused) Fail("a save was not refused on a broken store");
+                if (!File.ReadAllBytes(ConfigPath).SequenceEqual(before)) Fail("the damaged file changed after a refused save");
+                state.AppendLine("add_refused=1");
+            }
+            else if (mode == "remove-paths")
+            {
+                RemoveSequence(false, null);
+                RemoveSequence(true, null);
+            }
+            else
+            {
+                RemoveSequence(mode == "remove-all", shotPath);
+            }
+            File.WriteAllText(shotPath + ".state.txt", state.ToString());
+            shot.Close();
         }
 
         // Clicks the dialog button carrying the given DialogResult (the production

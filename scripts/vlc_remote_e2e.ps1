@@ -165,6 +165,7 @@ function Play-Movie([string]$body, $token, [string]$what) {
 Write-Host "== per-user install + clean-build hook proof =="
 $setup = Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe" | Select-Object -First 1
 if (-not $setup) { throw "installer exe missing in helper/Output" }
+& (Join-Path $PSScriptRoot 'assert_installer_sha.ps1') -Path $setup.FullName -Label 'helper-e2e-install' -Kind helper
 & $setup.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "silent install failed with exit $LASTEXITCODE" }
 $installed = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\ZephyrVlcRemote.exe'

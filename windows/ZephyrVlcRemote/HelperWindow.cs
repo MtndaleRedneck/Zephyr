@@ -661,6 +661,46 @@ internal sealed class HelperWindow : Form
 
     internal void RunStatusTickForShot() => TickStatus();
 
+#if PAIR_CODE_HOOK
+    // CI only (compiled out of shipped builds): drive the REAL production handlers so the
+    // evidence step can assert state, not just that a picture exists.
+    internal void HookRefreshPhones() => RefreshPhones();
+    internal void HookRemovePhone(Program.PairedPhone ph) => RemovePhone(ph);
+    internal void HookRemoveAll() => RemoveAllPhones();
+    internal void HookStartPairing(string name) { _nameBox.Text = name; StartPairing(); }
+    internal string[] HookTrayMenuItems() => _menu.Items.Cast<ToolStripItem>().Select(i => i.Text ?? "").ToArray();
+    internal bool HookTrayVisible => _tray.Visible;
+    internal void HookCaptureWindow(string path)
+    {
+        ApplyLayout();
+        Application.DoEvents();
+        using (var bmp = new Bitmap(Width, Height))
+        {
+            using (var g = Graphics.FromImage(bmp))
+            {
+                IntPtr hdc = g.GetHdc();
+                bool captured = PrintWindow(Handle, hdc, 2);
+                g.ReleaseHdc(hdc);
+                if (!captured) { g.Clear(BackColor); DrawToBitmap(bmp, new Rectangle(0, 0, Width, Height)); }
+            }
+            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+    }
+    internal void HookCaptureTrayMenu(string path)
+    {
+        _menu.Show(new Point(60, 60));
+        Application.DoEvents();
+        System.Threading.Thread.Sleep(500);
+        Application.DoEvents();
+        using (var bmp = new Bitmap(_menu.Width, _menu.Height))
+        {
+            _menu.DrawToBitmap(bmp, new Rectangle(0, 0, _menu.Width, _menu.Height));
+            bmp.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+        }
+        _menu.Close();
+    }
+#endif
+
     /// <summary>Show or hide the pairing code block (window-visible work).</summary>
     private void TickStatus()
     {

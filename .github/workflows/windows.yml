@@ -65,8 +65,20 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/helper-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if ((Get-Content "$env:RUNNER_TEMP/helper-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
+          $helperSetup = @(Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe")
+          if ($helperSetup.Count -ne 1) { throw "expected exactly one helper installer, found $($helperSetup.Count)" }
+          (Get-FileHash $helperSetup[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content "$env:RUNNER_TEMP/helper-installer-built-sha256.txt"
+          Write-Host "helper installer built: $($helperSetup[0].Name) sha256 $((Get-Content "$env:RUNNER_TEMP/helper-installer-built-sha256.txt" -Raw).Trim())"
 
+      - name: Prove helper installer bytes unchanged before upload
+        shell: pwsh
+        run: |
+          $f = @(Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe")
+          if ($f.Count -ne 1) { throw "expected one helper installer, found $($f.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $f[0].FullName -Label 'helper-pre-upload' -Kind helper
+          Write-Host "helper installer hash log:"; Get-Content "$env:RUNNER_TEMP/installer-hash-log.txt"
       - name: Upload helper installer artifact
+        id: up_helper
         # The E2E legs install and pair-test this exact installer; keep it as a
         # run artifact so the tested build can be delivered without a rebuild.
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -74,6 +86,23 @@ jobs:
           name: Zephyr-VLC-Remote-installer
           path: windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe
           if-no-files-found: error
+      - name: Round-trip the uploaded helper installer and compare its bytes with the build
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $id = '${{ steps.up_helper.outputs.artifact-id }}'
+          Write-Host "uploaded helper artifact id $id, zip digest ${{ steps.up_helper.outputs.artifact-digest }}"
+          if (-not $id) { throw 'helper upload step returned no artifact id' }
+          $dir = Join-Path $env:RUNNER_TEMP 'helper-roundtrip'
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing
+          if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'helper artifact download failed or is too small' }
+          Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
+          $exe = @(Get-ChildItem "$dir/x" -Filter 'ZephyrVLCRemote-PC-*.exe')
+          if ($exe.Count -ne 1) { throw "expected one helper installer in the artifact, found $($exe.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $exe[0].FullName -Label 'helper-artifact-roundtrip' -Kind helper
 
 
       - name: Render the helper window for layout review (CI only)
@@ -87,7 +116,12 @@ jobs:
             @('remove-all', 'dialog-remove-all.png'),
             @('tray', 'tray-menu.png')
           )
+          # The broken-store note PNG is deleted ONCE, before the loop. Only the broken-store mode writes it,
+          # so no later mode may delete it.
+          Remove-Item windows/ZephyrVlcRemote/dialog-broken-store-note.png -Force -ErrorAction SilentlyContinue
           foreach ($shot in $shots) {
+            # Fresh outputs only: a stale PNG or sidecar from an earlier mode or run must never satisfy a check.
+            Remove-Item "windows/ZephyrVlcRemote/$($shot[1])", "windows/ZephyrVlcRemote/$($shot[1]).state.txt" -Force -ErrorAction SilentlyContinue
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\$($shot[1])"
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = $shot[0]
             # pwsh does NOT wait for a GUI-subsystem exe started with &: the stale
@@ -98,8 +132,37 @@ jobs:
             $pngOk = $false
             foreach ($try in 1..40) { if (Test-Path "windows/ZephyrVlcRemote/$($shot[1])") { $pngOk = $true; break }; Start-Sleep -Milliseconds 250 }
             if (-not $pngOk) { Get-ChildItem windows/ZephyrVlcRemote -Filter *.png | Select-Object Name,Length; throw "helper window-shot $($shot[0]) wrote no PNG" }
+            # State proof, not file existence: the hook asserts state while it runs and records it in a sidecar.
+            $stateExpect = @{
+              'broken-store' = @('store_broken=1','note_png=dialog-broken-store-note.png','dialog_text_ok=1','pair_code_minted=0','file_unchanged=1','add_refused=1')
+              'remove'       = @('remove_dialog_text_ok=1','remove_cancel_kept=2','remove_cancel_reload=2','remove_confirm_left=1','remove_reload_left=1')
+              'remove-all'   = @('remove_all_dialog_text_ok=1','remove_all_cancel_kept=2','remove_all_cancel_reload=2','remove_all_confirm_left=0','remove_all_reload_left=0')
+              'tray'         = @('tray_items=Show Zephyr VLC Remote;Quit Zephyr VLC Remote','tray_icon_visible=1')
+            }
+            if ($stateExpect.ContainsKey($shot[0])) {
+              $sidecar = "windows/ZephyrVlcRemote/$($shot[1]).state.txt"
+              foreach ($try in 1..40) { if (Test-Path $sidecar) { break }; Start-Sleep -Milliseconds 250 }
+              if (-not (Test-Path $sidecar)) { throw "helper state shot $($shot[0]) wrote no state sidecar" }
+              $stateText = Get-Content $sidecar -Raw
+              foreach ($needle in $stateExpect[$shot[0]]) {
+                if ($stateText -cnotmatch ('(?m)^' + [regex]::Escape($needle) + '\r?$')) { throw "helper state shot $($shot[0]): expected state line '$needle' is missing" }
+              }
+              Write-Host "helper state shot $($shot[0]): $($stateExpect[$shot[0]].Count) state lines asserted"
+            }
           }
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT, Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+          # The state shots must be different pictures AND carry asserted state (above).
+          $baseHash = (Get-FileHash windows/ZephyrVlcRemote/window.png -Algorithm SHA256).Hash
+          $seenHashes = @{}
+          # window-broken-store.png is a truthful capture of the window in that state; the helper window has no
+          # on-window broken-store indicator, so it may equal the plain window and is NOT in this distinctness list.
+          foreach ($png in 'dialog-broken-store-note.png','dialog-remove.png','dialog-remove-all.png','tray-menu.png') {
+            $h = (Get-FileHash "windows/ZephyrVlcRemote/$png" -Algorithm SHA256).Hash
+            if ($h -eq $baseHash) { throw "$png is byte-identical to the plain window shot" }
+            if ($seenHashes.ContainsKey($h)) { throw "$png is byte-identical to $($seenHashes[$h])" }
+            $seenHashes[$h] = $png
+          }
+          Write-Host 'helper state shots: 4 state dialogs/menus, all distinct from the plain window and from each other'
 
       # Round-9 missing-captures: the Player permission dialogs with REAL interaction
       # state - hover/pressed from the real cursor parked over the primary button,
@@ -122,11 +185,20 @@ jobs:
       # disposed-Build crash class, not just the capture path.
       - name: Production remove-dialog open/cancel/confirm proof (CI only)
         run: |
+          Remove-Item "$env:RUNNER_TEMP\remove-paths.png.state.txt" -Force -ErrorAction SilentlyContinue
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$env:RUNNER_TEMP\remove-paths.png"
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-paths"
           $rp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP\remove-paths.log"
           Get-Content "$env:RUNNER_TEMP\remove-paths.log" -ErrorAction SilentlyContinue
           if ($rp.ExitCode -ne 0) { throw "remove-dialog production paths exit $($rp.ExitCode)" }
-          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE, Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT
+          $side = "$env:RUNNER_TEMP\remove-paths.png.state.txt"
+          if (-not (Test-Path $side)) { throw 'remove-paths wrote no state sidecar: the production paths did not run' }
+          $st = Get-Content $side -Raw
+          foreach ($needle in 'remove_cancel_kept=2','remove_confirm_left=1','remove_reload_left=1','remove_all_cancel_kept=2','remove_all_confirm_left=0','remove_all_reload_left=0') {
+            if ($st -cnotmatch ('(?m)^' + [regex]::Escape($needle) + '\r?$')) { throw "remove-paths: expected state line '$needle' is missing" }
+          }
+          Write-Host 'remove-paths: cancel kept both phones, confirm removed exactly the chosen phones, and the saved file agrees'
 
       - name: Upload the window shot
         if: always()
@@ -138,6 +210,7 @@ jobs:
             windows/ZephyrVlcRemote/dialog-*.png
             windows/ZephyrVlcRemote/tray-menu.png
             windows/ZephyrVlcRemote/window-diag.txt
+            windows/ZephyrVlcRemote/*.state.txt
             windows/ZephyrPlayer/dialog-*.png
             windows/ZephyrPlayer/dialog-*.diag.txt
           if-no-files-found: warn
@@ -165,7 +238,7 @@ jobs:
           $latin = [Text.Encoding]::GetEncoding(28591)
           $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/proof-clean/ZephyrVlcRemote.exe"))
           $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/proof-hooked/ZephyrVlcRemote.exe"))
-          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
+          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot','state-shot','zvr-state-','Shot Phone A') {
             $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
               $n = $latin.GetString($enc.GetBytes($needle))
@@ -178,7 +251,13 @@ jobs:
             if (-not $hookedHas) { throw "hooked exe is missing '$needle' in any encoding - wrong build published to out/" }
           }
           Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
-
+      - name: Upload helper installer hash log (after the final round trip)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Zephyr-VLC-Remote-installer-hash-log
+          path: ${{ runner.temp }}/installer-hash-log.txt
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
@@ -279,6 +358,8 @@ jobs:
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           if ((Get-Content "$env:RUNNER_TEMP/player-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
+          (Get-FileHash "windows/Output/Zephyr-PC-$v.exe" -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content "$env:RUNNER_TEMP/player-installer-built-sha256.txt"
+          Write-Host "installer built: Zephyr-PC-$v.exe sha256 $((Get-Content "$env:RUNNER_TEMP/player-installer-built-sha256.txt" -Raw).Trim())"
       - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
         if: always()
         timeout-minutes: 8
@@ -322,6 +403,7 @@ jobs:
           $installer = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $installer)) { throw "installer missing: $installer" }
           $installLog = "$env:RUNNER_TEMP/installer-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $installer -Label 'player-smoke-1'
           $ip = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$installLog" -PassThru
           if (-not $ip.WaitForExit(150000)) {
             Get-Content $installLog -Tail 80 -ErrorAction SilentlyContinue
@@ -436,6 +518,7 @@ jobs:
           $beforeSettings = (Get-FileHash $settingsPath).Hash
           $beforePairing = (Get-FileHash $pairingPath).Hash
           $updateLog = "$env:RUNNER_TEMP/installer-update-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $installer -Label 'player-smoke-2'
           $up = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$updateLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $updateLog -Tail 50; throw 'replacement installer timed out' }
           if ($up.ExitCode -ne 0) { throw "replacement installer exit $($up.ExitCode)" }
@@ -534,6 +617,7 @@ jobs:
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $newInstaller)) { throw "new-build installer missing: $newInstaller" }
           $upLog = "$env:RUNNER_TEMP/installer-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-3'
           $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'upgrade installer timed out' }
           if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "upgrade installer exit $($up.ExitCode)" }
@@ -714,6 +798,7 @@ jobs:
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $newInstaller)) { throw "candidate installer missing: $newInstaller" }
           $upLog = "$env:RUNNER_TEMP/installer-140-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-4'
           $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'candidate upgrade installer timed out' }
           if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "candidate upgrade installer exit $($up.ExitCode)" }
@@ -729,6 +814,7 @@ jobs:
           Write-Output "published 1.4.0 -> $v upgrade OK (ProductVersion $pv)"
 
       - name: Published 2.0.2 -> candidate upgrade smoke with seeded settings and history (real published asset)
+        id: pub202_seeded
         if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
         timeout-minutes: 12
         shell: pwsh
@@ -777,6 +863,7 @@ jobs:
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $newInstaller)) { throw "candidate installer missing: $newInstaller" }
           $upLog = "$env:RUNNER_TEMP/installer-202-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-5'
           $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'candidate upgrade installer timed out' }
           if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "candidate upgrade installer exit $($up.ExitCode)" }
@@ -803,6 +890,17 @@ jobs:
             throw "settings choices changed after the upgraded build ran: $($now | ConvertTo-Json -Compress)"
           }
           Write-Output "published 2.0.2 -> $v upgrade OK (ProductVersion $pv, 1 uninstall entry, seeded settings choices intact after run)"
+
+      - name: Published 2.0.2 REAL app-created data -> candidate (production pair, settings and history paths)
+        id: pub202_real
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          ./scripts/pub202_real_data.ps1 -Candidate "windows/Output/Zephyr-PC-$v.exe" -OldSha256 889126cc0bc0ae7105fca2bb635416192566a79ed6dce7e51d6b1886f113c485 -ExpectedVersion $v -ExpectedHead (git rev-parse HEAD).Trim()
 
       - name: Legacy chain + fresh-install uninstall smokes (real artifacts)
         if: always()
@@ -836,6 +934,7 @@ jobs:
             Start-Sleep -Seconds 1
             $link++
             $linkLog = "$env:RUNNER_TEMP/chain-install-$link.log"
+            if ($inst -eq $newInstaller) { & scripts/assert_installer_sha.ps1 -Path $inst -Label 'player-chain-6' }
             $ip = Start-Process $inst -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$linkLog" -PassThru
             if (-not $ip.WaitForExit(150000)) { Get-Content $linkLog -Tail 60 -ErrorAction SilentlyContinue; throw "chain installer timed out: $inst" }
             if ($ip.ExitCode -ne 0) { Get-Content $linkLog -Tail 60 -ErrorAction SilentlyContinue; throw "chain installer exit $($ip.ExitCode): $inst" }
@@ -861,6 +960,7 @@ jobs:
           # must be removed by the ownership-checked cleanup.
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
           netsh http delete urlacl url=http://+:47823/ | Out-Null
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-7'
           $ip = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
           if (-not $ip.WaitForExit(150000)) { throw 'T6 fresh installer timed out' }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -879,6 +979,7 @@ jobs:
           # the uninstall must leave the reservation AND the rules untouched.
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
           netsh http delete urlacl url=http://+:47823/ | Out-Null
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-8'
           $ip = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
           if (-not $ip.WaitForExit(150000)) { throw 'T6b fresh installer timed out' }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -943,6 +1044,7 @@ jobs:
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 1
           # Upgrade; do NOT run setup - the UAC-declined/failed leg.
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-9'
           $i2 = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
           if (-not $i2.WaitForExit(150000)) { throw 'legacy leg: upgrade install timed out' }
           if ($i2.ExitCode -ne 0) { throw "legacy leg: upgrade install exit $($i2.ExitCode)" }
@@ -1017,9 +1119,11 @@ jobs:
             ${{ runner.temp }}/pc-playing-controls-window.png
             ${{ runner.temp }}/pc-playing-controls-fullscreen.png
             ${{ runner.temp }}/pc-smoke-*.png
+            ${{ runner.temp }}/pc-pairing-*.png
             ${{ runner.temp }}/pc-bar-*.png
             ${{ runner.temp }}/pc-desktop-note.txt
             ${{ runner.temp }}/installer-smoke.log
+            ${{ runner.temp }}/pub202-real-data.txt
             ${{ runner.temp }}/installer-update-smoke.log
             ${{ runner.temp }}/installer-old110.log
             ${{ runner.temp }}/installer-old140.log
@@ -1033,13 +1137,47 @@ jobs:
             ${{ runner.temp }}/uninstall-t6a.log
             ${{ runner.temp }}/uninstall-t6b.log
           if-no-files-found: warn
+      - name: Prove installer bytes unchanged from build through the smokes to upload
+        if: always()
+        shell: pwsh
+        run: |
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          & scripts/assert_installer_sha.ps1 -Path "windows/Output/Zephyr-PC-$v.exe" -Label 'player-pre-upload'
       - name: Upload installer artifact
+        id: up_installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: Zephyr-PC-installer
           path: windows/Output/Zephyr-PC-*.exe
           if-no-files-found: warn
+      - name: Round-trip the uploaded artifact and compare its bytes with the installer the smokes installed
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $id = '${{ steps.up_installer.outputs.artifact-id }}'
+          Write-Host "uploaded artifact id $id, zip digest ${{ steps.up_installer.outputs.artifact-digest }}"
+          if (-not $id) { throw 'upload step returned no artifact id' }
+          $dir = Join-Path $env:RUNNER_TEMP 'artifact-roundtrip'
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # Binary-safe download: -OutFile writes the bytes as they are (a pwsh redirect of native output can re-encode them).
+          Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing
+          if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'artifact download failed or is too small' }
+          Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
+          $exe = @(Get-ChildItem "$dir/x" -Filter 'Zephyr-PC-*.exe')
+          if ($exe.Count -ne 1) { throw "expected one installer in the artifact, found $($exe.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $exe[0].FullName -Label 'player-artifact-roundtrip'
+          Write-Host "installer hash log:"; Get-Content "$env:RUNNER_TEMP/installer-hash-log.txt"
+      - name: Upload installer hash log (after the final round trip)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Zephyr-PC-installer-hash-log
+          path: ${{ runner.temp }}/installer-hash-log.txt
+          if-no-files-found: error
       - name: "Gate summary (honest split - tests vs evidence)"
         if: always()
         shell: pwsh
@@ -1047,3 +1185,13 @@ jobs:
           Write-Host "PLAYER TESTS OUTCOME: ${{ steps.tests.outcome }}"
           Write-Host "HELPER TESTS OUTCOME: ${{ steps.zvrtests.outcome }}"
           Write-Host "Evidence steps run unconditionally; a green job requires tests green too."
+          # Migration opt-in gate: when this run asked for the published 2.0.2 migration, both migration steps must
+          # have EXECUTED and succeeded. A skipped step is not green evidence.
+          $migrationRequested = '${{ github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration }}'
+          Write-Host "PUBLISHED 2.0.2 MIGRATION REQUESTED: $migrationRequested"
+          Write-Host "PUBLISHED 2.0.2 SEEDED OUTCOME: ${{ steps.pub202_seeded.outcome }}"
+          Write-Host "PUBLISHED 2.0.2 REAL-DATA OUTCOME: ${{ steps.pub202_real.outcome }}"
+          if ($migrationRequested -eq 'true') {
+            if ('${{ steps.pub202_seeded.outcome }}' -ne 'success') { throw "migration was requested but the seeded 2.0.2 step outcome is '${{ steps.pub202_seeded.outcome }}'" }
+            if ('${{ steps.pub202_real.outcome }}' -ne 'success') { throw "migration was requested but the real-data 2.0.2 step outcome is '${{ steps.pub202_real.outcome }}'" }
+          }

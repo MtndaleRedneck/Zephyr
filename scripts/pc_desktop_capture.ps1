@@ -297,6 +297,14 @@ function ClickAt($xf, $yf) {
     Start-Sleep -Milliseconds 700
 }
 function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
+function Get-Http($method, $path, $token, $body) {
+    # Status code only; an unreachable server is -1, never "fine".
+    try {
+        $h = @{}; if ($token) { $h['Authorization'] = "Bearer $token" }
+        $r = Invoke-WebRequest -Method $method -Uri "http://127.0.0.1:47823$path" -Headers $h -ContentType 'application/json' -Body $body -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 10
+        return [int]$r.StatusCode
+    } catch { return -1 }
+}
 function Close-PairingWindow($proc) {
     # A fresh profile auto-shows the pairing screen over Home; close it so the
     # captures show the grid itself. WM_CLOSE keeps this a real UI close.
@@ -575,6 +583,80 @@ Start-Sleep -Milliseconds 900
 $sz4b = CaptureWindow $pw "$env:RUNNER_TEMP/pc-desktop-pairing.png"
 StopZephyr
 
+# 2b-state) Player pairing STATE proofs (evidence repair c). The state is asserted through UI Automation and
+# the paired.json file, not by the existence of a picture. Fixture tokens are labelled CI fixtures.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function Find-UiaById($rootEl, $id) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    return $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+}
+function Read-PairedEntries($path) {
+    try { return @(Get-Content $path -Raw | ConvertFrom-Json) } catch { return $null }
+}
+function Open-PairingForState() {
+    $p = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-pairing" -PassThru
+    $null = Wait-MainWindow $p 15
+    $w = [System.IntPtr]::Zero
+    for ($i = 0; $i -lt 20 -and $w -eq [System.IntPtr]::Zero; $i++) {
+        $w = [ZWU32]::FindByTitle($p.Id, 'Zephyr Player - Pair your phone')
+        if ($w -eq [System.IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
+    }
+    if ($w -eq [System.IntPtr]::Zero) { throw 'pairing window never appeared' }
+    [ZWU32]::SetForegroundWindow($w) | Out-Null
+    [ZWU32]::SetWindowPos($w, [System.IntPtr]::new(-1), 40, 4, 560, 600, 0) | Out-Null
+    Start-Sleep -Milliseconds 1200
+    return $w
+}
+$pairedStatePath = Join-Path $cfgDir 'paired.json'
+$pairedStateBackup = if (Test-Path $pairedStatePath) { [IO.File]::ReadAllBytes($pairedStatePath) } else { $null }
+$fgVerdict = 'NOT PROVEN'; $brVerdict = 'NOT PROVEN'
+$fgDetail = ''; $brDetail = ''
+try {
+    # Forget: two fixture phones, forget one through the real button, assert UI and file.
+    '[{"token":"ci-forget-token-a","name":"CI phone A"},{"token":"ci-forget-token-b","name":"CI phone B"}]' | Set-Content $pairedStatePath
+    $wF = Open-PairingForState
+    $rootF = [System.Windows.Automation.AutomationElement]::FromHandle($wF)
+    $fa = Find-UiaById $rootF 'Forget:CI phone A'; $fb = Find-UiaById $rootF 'Forget:CI phone B'
+    if (-not $fa -or -not $fb) { throw "forget buttons before: A=$([bool]$fa) B=$([bool]$fb)" }
+    $authA1 = Get-Http 'Get' '/control/status' 'ci-forget-token-a' $null
+    $authB1 = Get-Http 'Get' '/control/status' 'ci-forget-token-b' $null
+    $nBefore = (Read-PairedEntries $pairedStatePath).Count
+    $null = CaptureWindow $wF "$env:RUNNER_TEMP/pc-pairing-two-phones.png"
+    $fa.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 1500
+    $fa2 = Find-UiaById $rootF 'Forget:CI phone A'; $fb2 = Find-UiaById $rootF 'Forget:CI phone B'
+    $authA2 = Get-Http 'Get' '/control/status' 'ci-forget-token-a' $null
+    $authB2 = Get-Http 'Get' '/control/status' 'ci-forget-token-b' $null
+    $after = Read-PairedEntries $pairedStatePath
+    $null = CaptureWindow $wF "$env:RUNNER_TEMP/pc-pairing-after-forget.png"
+    $remainName = if ($after -and $after.Count -ge 1) { "$($after[0].name)" } else { '' }
+    if ($nBefore -eq 2 -and $after -and $after.Count -eq 1 -and -not $fa2 -and $fb2 -and $remainName -eq 'CI phone B' -and $authA1 -eq 200 -and $authB1 -eq 200 -and $authA2 -eq 401 -and $authB2 -eq 200) {
+        $fgVerdict = 'PROVEN'
+    }
+    $fgDetail = "file entries $nBefore -> $(if ($after) { $after.Count } else { 'unreadable' }); A button after=$([bool]$fa2); B button after=$([bool]$fb2); remaining name matches B=$($remainName -eq 'CI phone B'); token A status $authA1 -> $authA2 (want 200 -> 401); token B status $authB1 -> $authB2 (want 200 -> 200)"
+} catch { $fgDetail = "error: $($_.Exception.GetType().Name)" }
+StopZephyr
+try {
+    # Broken store: an unreadable paired.json. Pair is off, the file is untouched, the screen is captured.
+    [IO.File]::WriteAllText($pairedStatePath, '{ not valid json at all')
+    $brBefore = [IO.File]::ReadAllBytes($pairedStatePath)
+    $wB = Open-PairingForState
+    $rootB = [System.Windows.Automation.AutomationElement]::FromHandle($wB)
+    $pairBtn = Find-UiaById $rootB 'PairButton'; $resetBtn = Find-UiaById $rootB 'ResetPairingsButton'
+    $pairEnabled = if ($pairBtn) { "$($pairBtn.Current.IsEnabled)" } else { 'missing' }
+    $resetVisible = [bool]($resetBtn -and -not $resetBtn.Current.IsOffscreen)
+    $codeEl = Find-UiaById $rootB 'PairCodeText'
+    $codeShown = [bool]($codeEl -and $codeEl.Current.Name -match '\d' -and -not $codeEl.Current.IsOffscreen)
+    $pairHttp = Get-Http 'Post' '/pair' $null '{"code":"000000"}'
+    $null = CaptureWindow $wB "$env:RUNNER_TEMP/pc-pairing-broken-store.png"
+    $brUnchanged = (Compare-Object $brBefore ([IO.File]::ReadAllBytes($pairedStatePath)) -SyncWindow 0) -eq $null
+    if ($pairBtn -and $pairEnabled -eq 'False' -and $brUnchanged -and $resetVisible -and -not $codeShown -and $pairHttp -ne 200 -and $pairHttp -ne -1) { $brVerdict = 'PROVEN' }
+    $brDetail = "Pair button enabled=$pairEnabled; reset button visible=$resetVisible; damaged file unchanged while the app ran=$brUnchanged; a pairing code showing=$codeShown; POST /pair status $pairHttp (must refuse)"
+} catch { $brDetail = "error: $($_.Exception.GetType().Name)" }
+StopZephyr
+if ($pairedStateBackup) { [IO.File]::WriteAllBytes($pairedStatePath, $pairedStateBackup) } else { Remove-Item $pairedStatePath -Force -ErrorAction SilentlyContinue }
+
 # 2b+) Tray ICON proof (round-3 P1): the icon must really exist in the
 # notification area, not only its menu. Crop the bottom-right corner of the
 # primary screen (the notification area) while the app runs.
@@ -626,8 +708,8 @@ $hwHome = Wait-MainWindow $pBar 15
 # BOTTOM of the z-order so the player window paints above it in the captures.
 [ZWU32]::SetWindowPos($hwHome, [System.IntPtr]::new(1), 100, 100, 800, 500, 0) | Out-Null
 # The first-run pairing window covers the video: close it like a user would.
-$hwPair = [ZWU32]::FindByTitle($pBar.Id, 'Zephyr Player - Pair your phone')
-if ($hwPair -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($hwPair, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
+# Close whichever first-run surface shows (Settings or the pairing window), same helper the other legs use.
+Close-PairingWindow $pBar
 $hdr = @{ Authorization = "Bearer ci-capture-token" }
 # The control server comes up after the window exists: wait for a real answer
 # instead of POSTing into a closed port and silently capturing the home window.
@@ -844,16 +926,52 @@ Prove-MouseRecovery $hw3 'windowed'
 # seek 0.60,0.807; brackets 0.94,0.90); a missed click shows up as a
 # NOT PROVEN verdict, never a silent pass.
 $fnPauseGlyph = -1; $fnPauseClock = -1; $fnSeek = -1; $fnFs = 0
-ClickAt 0.497 0.90
+# Evidence repair (d): the pause click is aimed at the REAL PlayPauseButton found through UI Automation.
+# The measured-fraction click is only a fallback and does NOT count as a verified click. State is read
+# from the app's own /control/status (state + time), not only from pixels.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function Get-PlayerStatus {
+    try { return Invoke-RestMethod -Uri "http://127.0.0.1:47823/control/status" -Headers $hdr -TimeoutSec 5 } catch { return $null }
+}
+WakeControls
+$ppTarget = $null
+try {
+    $ppCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'PlayPauseButton')
+    $ppEl = [System.Windows.Automation.AutomationElement]::FromHandle($hw3).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $ppCond)
+    if ($ppEl -and -not $ppEl.Current.IsOffscreen) {
+        $r = $ppEl.Current.BoundingRectangle
+        $ppTarget = @((($r.X + $r.Width / 2) / $vs.Width), (($r.Y + $r.Height / 2) / $vs.Height))
+    }
+} catch { }
+$ppUia = [bool]$ppTarget
+$null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-prepause.png"
+$stBeforeObj = Get-PlayerStatus
+$stBefore = if ($stBeforeObj) { "$($stBeforeObj.state)" } else { 'unreachable' }
+if ($ppUia) { ClickAt $ppTarget[0] $ppTarget[1] } else { ClickAt 0.497 0.90 }
+$stAfterObj = Get-PlayerStatus
+$stAfterClick = if ($stAfterObj) { "$($stAfterObj.state)" } else { 'unreachable' }
+$pauseT1 = if ($stAfterObj) { [int]$stAfterObj.time } else { -1 }
 $szPause = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused.png"
 # Keep the bar from auto-hiding between frames (mouse nudge, not a click).
 Start-Sleep -Milliseconds 800
 [ZWU32]::SetCursorPos([int]($vs.Width * 0.497), [int]($vs.Height * 0.88)) | Out-Null
-Start-Sleep -Milliseconds 700
+Start-Sleep -Milliseconds 2200
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused2.png"
-$fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-playing-controls-window.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
+$stLaterObj = Get-PlayerStatus
+$pauseT2 = if ($stLaterObj) { [int]$stLaterObj.time } else { -2 }
+$pauseStalled = ($pauseT1 -ge 0 -and $pauseT2 -eq $pauseT1)
+$fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-smoke-prepause.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
 $fnPauseClock = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-paused2.png" 0.02 0.10 0.82 0.87
-ClickAt 0.497 0.90   # resume
+$pauseStatusTwice = ($stAfterClick -eq 'Paused' -and $stLaterObj -and "$($stLaterObj.state)" -eq 'Paused')
+$pauseGateOk = ($ppUia -and $stBefore -eq 'Playing' -and $pauseStatusTwice -and $pauseStalled -and $fnPauseGlyph -gt 20 -and $fnPauseClock -le 2)
+$fnPauseVerdict = if ($pauseGateOk) { "PROVEN (UIA target; status $stBefore -> $stAfterClick -> $($stLaterObj.state); time $pauseT1 -> $pauseT2 s; glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" }
+    elseif (-not $ppUia) { 'NOT PROVEN (no UI Automation target for PlayPauseButton; the fraction fallback click does not count as verified)' }
+    else { "NOT PROVEN (UIA target used; status $stBefore -> $stAfterClick -> $(if ($stLaterObj) { $stLaterObj.state } else { 'unreachable' }); time $pauseT1 -> $pauseT2 s; glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" }
+if ($ppUia) { ClickAt $ppTarget[0] $ppTarget[1] } else { ClickAt 0.497 0.90 }   # resume
+Start-Sleep -Milliseconds 1200
+$stResumeObj = Get-PlayerStatus
+$stResume = if ($stResumeObj) { "$($stResumeObj.state)" } else { 'unreachable' }
 # Seek by DRAGGING the real thumb. Fraction-guessed coordinates miss the
 # thumb (a track press only steps LargeChange ~1%, invisible at second
 # granularity), so locate the controls through UI Automation: x:Name becomes
@@ -951,7 +1069,10 @@ bar_pixels_windowed: $barWin
 video_pixels_fullscreen: $vidFs
 bar_pixels_fullscreen: $barFs
 controls_over_video_windowed: $(if ($vidWin -gt 500 -and $barWin -gt 60) { 'PROVEN' } else { 'NOT PROVEN - inspect images' })
-functional_pause_toggle: $(if ($fnPauseGlyph -gt 20 -and $fnPauseClock -le 2) { "PROVEN (glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" } else { "NOT PROVEN (glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" })
+functional_pause_toggle: $fnPauseVerdict
+functional_resume_status: $stResume
+player_forget_state: $fgVerdict ($fgDetail)
+player_broken_store_state: $brVerdict ($brDetail)
 functional_seek: $(if ($fnSeek -gt 10) { "PROVEN (time-label diff=$fnSeek)" } else { "NOT PROVEN (time-label diff=$fnSeek)" })
 functional_fullscreen_click: $(if ($fnFs -eq 1) { 'PROVEN (DWM bounds = virtual screen)' } else { 'NOT PROVEN' })
 volume_audio_apply: UNVERIFIED (headless runner has no audio device; UI drag path only)
@@ -971,4 +1092,8 @@ $barGateFailed = $false
 if (-not ($vidOkAuto -and -not $barOnAuto)) { Write-Host "::error::autohide leg failed (video=$vidAutoPx golden=$($mAuto[0]) seekRun=$($mAuto[1])%) - the bar must hide on the idle timer while video keeps playing"; $barGateFailed = $true }
 if (-not $barOnPaused) { Write-Host "::error::paused leg failed (golden=$($mPaused[0]) seekRun=$($mPaused[1])%) - a paused movie must keep the bar"; $barGateFailed = $true }
 if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cursor leg failed (video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])%) - a still cursor over the video must not pin the bar"; $barGateFailed = $true }
+if (-not $pauseGateOk) { Write-Host "::error::functional pause proof failed: $fnPauseVerdict"; $barGateFailed = $true }
+if ($stResume -ne 'Playing') { Write-Host "::error::the second click did not resume playback (status $stResume)"; $barGateFailed = $true }
+if ($fgVerdict -ne 'PROVEN') { Write-Host "::error::Player forget state proof failed ($fgDetail)"; $barGateFailed = $true }
+if ($brVerdict -ne 'PROVEN') { Write-Host "::error::Player broken-store state proof failed ($brDetail)"; $barGateFailed = $true }
 if ($incomplete -or $barGateFailed) { exit 1 }
