@@ -11,6 +11,11 @@ on:
       - 'scripts/range_server.py'
       - '.github/workflows/windows.yml'
   workflow_dispatch:
+    inputs:
+      run_published_202_migration:
+        description: 'Run the published 2.0.2 to candidate migration smoke (needs an explicit go)'
+        type: boolean
+        default: false
 
 # Windows player: build, tests, real-VLC proof, installer, desktop captures.
 # Runs only when Windows-side files change.
@@ -724,7 +729,7 @@ jobs:
           Write-Output "published 1.4.0 -> $v upgrade OK (ProductVersion $pv)"
 
       - name: Published 2.0.2 -> candidate upgrade smoke with seeded settings and history (real published asset)
-        if: always()
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
         timeout-minutes: 12
         shell: pwsh
         env:
