@@ -31,7 +31,13 @@ namespace ZephyrPlayer
             if (saved is not Rect s) return null;
             var visible = Rect.Intersect(s, virtualScreen);
             if (visible.IsEmpty || visible.Width < 160 || visible.Height < 120) return null;
-            return new Rect(s.Left, s.Top, Math.Min(s.Width, virtualScreen.Width), Math.Min(s.Height, virtualScreen.Height));
+            var w = Math.Min(s.Width, virtualScreen.Width);
+            var h = Math.Min(s.Height, virtualScreen.Height);
+            // Clamp the origin AFTER the size clamp so the result always lies inside today's desktop
+            // (a rect saved on a larger or since-removed monitor can start left of or above the current origin).
+            var left = Math.Max(virtualScreen.Left, Math.Min(s.Left, virtualScreen.Right - w));
+            var top = Math.Max(virtualScreen.Top, Math.Min(s.Top, virtualScreen.Bottom - h));
+            return new Rect(left, top, w, h);
         }
 
         internal static void Attach(Window w, PlayerSettings settings)

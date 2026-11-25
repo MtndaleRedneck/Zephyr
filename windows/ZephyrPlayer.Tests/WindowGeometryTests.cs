@@ -30,5 +30,21 @@ namespace ZephyrPlayer.Tests
             Assert.Null(WindowGeometry.ChooseBounds(null, Screen));
             Assert.Equal(1920, WindowGeometry.ChooseBounds(new Rect(0, 0, 4000, 800), Screen)!.Value.Width); // clamped
         }
+
+        [Fact]
+        public void ChooseBounds_ResultAlwaysLiesInsideTheDesktop()
+        {
+            // Removed monitor to the left: saved on a 3840-wide desktop starting at -1920, now only 0..1920.
+            Assert.Equal(new Rect(0, 0, 1920, 1080), WindowGeometry.ChooseBounds(new Rect(-1920, 0, 3840, 1080), Screen));
+            // Negative origin that still overlaps: moves right until fully visible.
+            Assert.Equal(new Rect(0, 50, 1200, 800), WindowGeometry.ChooseBounds(new Rect(-400, 50, 1200, 800), Screen));
+            // Partial overlap past the right and bottom edges: pulled back inside.
+            Assert.Equal(new Rect(720, 280, 1200, 800), WindowGeometry.ChooseBounds(new Rect(1500, 600, 1200, 800), Screen));
+            // A desktop whose origin is negative (monitor on the left): a rect inside it is unchanged.
+            var left = new Rect(-1920, -200, 3840, 1280);
+            Assert.Equal(new Rect(-1800, -100, 1200, 800), WindowGeometry.ChooseBounds(new Rect(-1800, -100, 1200, 800), left));
+            // Fully inside stays exactly as saved.
+            Assert.Equal(new Rect(100, 50, 1200, 800), WindowGeometry.ChooseBounds(new Rect(100, 50, 1200, 800), Screen));
+        }
     }
 }
