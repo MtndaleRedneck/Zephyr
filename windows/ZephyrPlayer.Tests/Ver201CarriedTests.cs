@@ -57,7 +57,7 @@ namespace ZephyrPlayer.Tests
                     {
                         var settings = new PlayerSettings(Path.Combine(dir, "settings.json")) { LibraryFolder = lib };
                         var store = new PairedStore(Path.Combine(dir, "paired.json"));
-                        var w = new HomeWindow(settings, store, _ => { }, () => { }, loadDurations: true);
+                        var w = new HomeWindow(settings, store, _ => { }, () => { }, loadDurations: true, history: new PlaybackHistory(Path.Combine(dir, "history.json"))); // isolated: never the real AppData history
                         var host = w; w.Width = 1280; w.Height = 760; w.Left = -20000; w.Top = -20000; w.ShowInTaskbar = false; w.WindowStartupLocation = WindowStartupLocation.Manual;
                         w.Show();
                         var list = (ListBox)w.FindName("MovieList")!;
@@ -83,6 +83,10 @@ namespace ZephyrPlayer.Tests
                         // One phone pill, no duplicate "Pair phones".
                         Assert.Null(w.FindName("PairButton"));
                         Assert.NotNull(w.FindName("PhoneCard"));
+                        // Count and sort labels (2.0.2 render 01 wording, singular where it reads better).
+                        Assert.Equal("1 folder · 2 videos", ((TextBlock)w.FindName("CountText")!).Text);
+                        Assert.Equal("Sort: Name", ((Button)w.FindName("SortButton")!).Content);
+                        Assert.Equal("1 folder · 1 video", HomeWindow.Plural(1, "folder") + " · " + HomeWindow.Plural(1, "video"));
                         Pump(300);
                         foreach (var dpi in new[] { 96, 144, 192 }) Save((FrameworkElement)w.Content, 1280, 760, dpi, "home");
                         Assert.True(w.DurationWork.Wait(15000), "duration worker did not finish");
