@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verifies the rebuilt signed APK and the published 1.5.0 APK. Fails on any mismatch.
+# Verifies the rebuilt signed APK and the published 1.6.0 APK. Fails on any mismatch.
 set -euo pipefail
 cd /tmp/zs
 BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)

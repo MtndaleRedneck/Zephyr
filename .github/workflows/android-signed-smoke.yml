@@ -4,7 +4,7 @@ name: android-signed-smoke
 #         The owner's runner downloads it, deletes the artifact, and signs it locally from the vault.
 #  smoke: (after resolve validates the producer run) the owner passes only the APK Signing Block (public certificate + signature, about 5 KB, no secret)
 #         as base64. This job takes the unsigned APK from the build run, inserts the block (scripts/sigblock.py),
-#         requires the result to hash to the exact signed file the owner holds, then installs the published 1.5.0
+#         requires the result to hash to the exact signed file the owner holds, then installs the published 1.6.0
 #         and the signed file over it on an emulator and checks the resumed app UI.
 #         The signed APK exists only on this runner. A final always() job deletes the unsigned artifact.
 # Nothing here publishes a release.
@@ -19,10 +19,10 @@ on:
 permissions:
   contents: read
 env:
-  OLD_NAME: '1.5.0'
-  OLD_CODE: '26'
-  NEW_NAME: '1.6.0'
-  NEW_CODE: '27'
+  OLD_NAME: '1.6.0'
+  OLD_CODE: '27'
+  NEW_NAME: '1.7.0'
+  NEW_CODE: '28'
 jobs:
   guard:
     runs-on: ubuntu-latest
@@ -193,15 +193,15 @@ jobs:
           H=$(sha256sum new.apk | cut -d' ' -f1)
           echo "rebuilt signed sha256: $H"
           [ "$H" = "$WANT_SIGNED" ] || { echo "ASSERT FAIL: rebuilt signed APK is not the owner's signed file"; exit 1; }
-          curl -sfL -o old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.5.0/Zephyr-Android-1.5.0.apk
-          echo "b4230632816f1cb39b669f5d111debfec1c9a4f894b4a709a581225528ebe0aa  old.apk" | sha256sum -c
+          curl -sfL -o old.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.6.0/Zephyr-Android-1.6.0.apk
+          echo "7c5fe12c132a7562642c0c3e86ac19d30cc7d6f508a22960d4a25e8dd7e305f0  old.apk" | sha256sum -c
           WANT_SIGNER="$WANT_SIGNER" bash "$GITHUB_WORKSPACE/scripts/signed-smoke-verify.sh"
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Upgrade the published 1.5.0 to the exact signed build on an emulator
+      - name: Upgrade the published 1.6.0 to the exact signed build on an emulator
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
         with:
           api-level: 34
