@@ -67,11 +67,11 @@ namespace ZephyrPlayer
             ControlBar.Width = BarWidth(sizeInfo.NewSize.Width);
         }
 
-        /// <summary>One centered pill in both windowed and fullscreen: the window width minus
-        /// side margins, capped at 780 (room for the enlarged skip cluster) and never wider
-        /// than the window minus those margins.</summary>
+        /// <summary>One centered pill in both windowed and fullscreen: the window width minus the
+        /// carried 24px side margins, capped at 780 (room for the enlarged skip cluster) and never
+        /// wider than the window minus those margins.</summary>
         internal static double BarWidth(double available) =>
-            Math.Max(0, Math.Min(780, available - 40));
+            Math.Max(0, Math.Min(780, available - 48));
 
         private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
 

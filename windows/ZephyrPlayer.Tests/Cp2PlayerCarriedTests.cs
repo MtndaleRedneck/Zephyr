@@ -323,8 +323,10 @@ namespace ZephyrPlayer.Tests
                 var normal = (Button)chips.Children[2];
                 normal.RaiseEvent(new RoutedEventArgs(Button.ClickEvent, normal));
                 Assert.Equal(1.0, view.CurrentRate);
-                Assert.Equal(Visibility.Collapsed, El<TextBlock>(view, "SpeedLabel").Visibility);
-                Note("speed", $"chip 1.25 -> {view.CurrentRate}; slider 1.37 -> 1.35; normal -> badge hidden; libVLC rate {player.Rate}");
+                // Midnight Slate: at normal the badge stays, muted, reading 1x.
+                Assert.Equal("1×", El<TextBlock>(view, "SpeedLabel").Text);
+                Assert.Equal(Visibility.Visible, El<TextBlock>(view, "SpeedLabel").Visibility);
+                Note("speed", $"chip 1.25 -> {view.CurrentRate}; slider 1.37 -> 1.35; normal -> muted 1x badge; libVLC rate {player.Rate}");
             });
         }
 

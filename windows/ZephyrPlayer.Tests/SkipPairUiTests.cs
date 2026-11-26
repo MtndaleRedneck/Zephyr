@@ -110,6 +110,10 @@ namespace ZephyrPlayer.Tests
             Sta(path => {
                 NativeVlc.Init(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
                 var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
+                // The pill width only updates through the window's real resize path, so the window
+                // must actually be shown (offscreen) - an unshown window keeps the XAML default.
+                window.Left = -20000; window.Top = -20000; window.Width = 1600; window.Height = 900;
+                window.Show(); window.UpdateLayout();
                 var pause = (Grid)window.FindName("PauseGlyph")!;
                 pause.Visibility = Visibility.Visible;
                 pause.Measure(new Size(24,24)); pause.Arrange(new Rect(0,0,24,24)); pause.UpdateLayout();
@@ -126,13 +130,17 @@ namespace ZephyrPlayer.Tests
                 var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
                 window.SetMuteTied(false);
                 Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
-                // Midnight Slate: one centered fixed-width pill in both modes.
-                Assert.Equal(MainWindow.BarWidth(window.ActualWidth > 0 ? window.ActualWidth : System.Windows.SystemParameters.PrimaryScreenWidth), window.ControlBar.Width);
+                // Midnight Slate: one centered fixed-width pill in both modes, width from the real
+                // resize path (fullscreen here maximizes onto the runner's primary screen).
+                Assert.Equal(MainWindow.BarWidth(window.ActualWidth), window.ControlBar.Width);
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;
                 ((FrameworkElement)window.FindName("PlayGlyph")!).Visibility = Visibility.Collapsed; // fixture: show only the pause state, not both glyphs stacked
                 Capture(window.ControlBar,(int)window.ControlBar.Width,"pc-redesign-fullscreen-pill.png");
                 window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
+                // Below the cap: a real window resize narrows the pill (700 -> 652 with 24px margins).
+                window.Width = 700; window.UpdateLayout();
+                Assert.Equal(MainWindow.BarWidth(700), window.ControlBar.Width);
                 window.Close();
             });
         }

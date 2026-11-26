@@ -600,7 +600,7 @@ namespace ZephyrPlayer
 
         private static Window DarkDialog(string text, string confirmLabel, string? cancelLabel, Action onConfirm)
         {
-            // CP4 item 84: the 2.0 theme (Settings surface #0E0E11, #F5F5F7 text, the .btn /
+            // Midnight Slate dialogs: surface #0B0D10, #F0F2F5 text, flat #F97C02 accent (was
             // .btn.or buttons with the shared hover/pressed layers). Behaviour is unchanged.
             var bg = Frozen(new SolidColorBrush(Color.FromRgb(0x0B, 0x0D, 0x10)));
             var fg = Frozen(new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5)));

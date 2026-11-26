@@ -54,7 +54,7 @@ namespace ZephyrPlayer.Tests
                 var dlg = FirewallSetup.NoteWindow("Theme check.", "Zephyr Player");
                 dlg.ShowInTaskbar = false;
                 dlg.Show(); dlg.UpdateLayout();
-                Assert.Equal(Color.FromRgb(0x0E, 0x0E, 0x11), ((SolidColorBrush)dlg.Background).Color);
+                Assert.Equal(Color.FromRgb(0x0B, 0x0D, 0x10), ((SolidColorBrush)dlg.Background).Color); // Midnight Slate surface
                 var ok = Find<Button>(dlg, _ => true)!;
                 Assert.NotNull(ok);
                 ok.ApplyTemplate();
@@ -63,7 +63,8 @@ namespace ZephyrPlayer.Tests
                 Assert.NotNull(hl); Assert.NotNull(pr);
                 Assert.Equal(0.0, hl.Opacity); Assert.Equal(0.0, pr.Opacity);
                 Assert.Equal(Colors.White, ((SolidColorBrush)hl.Background).Color);
-                Assert.IsType<LinearGradientBrush>(ok.Background);   // .btn.or accent
+                var okBg = Assert.IsType<SolidColorBrush>(ok.Background);          // Midnight Slate: flat accent
+                Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), okBg.Color);
                 Save(dlg, (int)dlg.ActualWidth, (int)dlg.ActualHeight, "cp4-dark-dialog-render.png");
                 dlg.Close();
             });
@@ -107,7 +108,7 @@ namespace ZephyrPlayer.Tests
                 }
                 finally { MainWindow.SettingsWarningShown -= h; }
                 Assert.NotNull(shown);
-                Assert.Equal(Color.FromRgb(0x0E, 0x0E, 0x11), ((SolidColorBrush)shown!.Background).Color);
+                Assert.Equal(Color.FromRgb(0x0B, 0x0D, 0x10), ((SolidColorBrush)shown!.Background).Color); // Midnight Slate surface
                 Assert.Equal("Settings could not be saved", shown.Title);
                 Assert.Equal("{ not json", File.ReadAllText(path));   // original preserved
                 view.ReleasePlayback();

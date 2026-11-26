@@ -101,8 +101,9 @@ public class PopupTests
             Assert.Equal(1.5, w.CurrentRate, 3);
             Assert.Equal("1.5x", ((TextBlock)w.FindName("SpeedLabel")!).Text.Replace("×", "x"));
             w.SetRate(1.0);
-            Assert.Equal("", ((TextBlock)w.FindName("SpeedLabel")!).Text);
-            Assert.Equal(Visibility.Collapsed, ((TextBlock)w.FindName("SpeedLabel")!).Visibility);
+            // Midnight Slate: the speed value is always on the bar, muted at normal.
+            Assert.Equal("1×", ((TextBlock)w.FindName("SpeedLabel")!).Text);
+            Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("SpeedLabel")!).Visibility);
         });
     }
 

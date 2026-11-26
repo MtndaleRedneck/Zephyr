@@ -8,9 +8,9 @@ namespace ZephyrPlayer.Tests
         [InlineData(1920, 780)]
         [InlineData(3840, 780)]
         [InlineData(1400, 780)]
-        [InlineData(800, 760)]
-        [InlineData(700, 660)]
-        [InlineData(400, 360)]
+        [InlineData(800, 752)]
+        [InlineData(700, 652)]
+        [InlineData(400, 352)]
         public void Width_IsCappedAt780_ButNeverWiderThanAvailableMinusMargins(double available, double expected)
             => Assert.Equal(expected, MainWindow.BarWidth(available), 3);
 

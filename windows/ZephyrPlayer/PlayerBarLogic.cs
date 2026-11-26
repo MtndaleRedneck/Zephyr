@@ -38,7 +38,7 @@ namespace ZephyrPlayer
 
         /// <summary>The pill: at most 780 px wide, 28 px above the bottom, never wider than the
         /// window minus a 20 px gap each side. Laid out and drawn at 1:1 in both modes.</summary>
-        public const double PillScale = 1.0, PillLayoutMax = 780, PillSideGap = 20, PillBottom = 28;
+        public const double PillScale = 1.0, PillLayoutMax = 780, PillSideGap = 24, PillBottom = 28;
         public static double PillDrawnWidth(double viewport) => Math.Max(0, Math.Min(PillLayoutMax * PillScale, viewport - 2 * PillSideGap));
         public static double PillLayoutWidth(double viewport) => PillDrawnWidth(viewport) / PillScale;
 
