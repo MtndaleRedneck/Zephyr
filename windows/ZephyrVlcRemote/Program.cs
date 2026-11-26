@@ -999,10 +999,16 @@ internal static class Program
                 var want = all ? 0 : 1;
                 // The handler completes the removal OFF the UI thread by design (Task.Run, so the
                 // confirm never freezes the window while the transaction waits on LaunchWriteMutex):
-                // a returned DriveModal no longer means the removal finished. Pump the loop until it
-                // settles. A settle that never comes is the assert failure below, never a hang.
+                // a returned DriveModal no longer means the removal finished. The in-memory count is
+                // no completion signal either - inside the transaction memory flips BEFORE the save,
+                // and polling Reloaded() mid-transaction would repopulate the list the in-flight save
+                // is about to serialize (corrupting the removal it observes). The durable postcondition
+                // is the operation's completion: _removing released in the handler's finally, after the
+                // continuation ran. Then memory AND the saved file hold the outcome and the asserts
+                // below read a stable state. Bounded: an operation that never settles fails, never hangs.
                 var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-                while (PhonesCount != want && DateTime.UtcNow < deadline) { Application.DoEvents(); System.Threading.Thread.Sleep(20); }
+                while (shot.HookRemoving && DateTime.UtcNow < deadline) { Application.DoEvents(); System.Threading.Thread.Sleep(20); }
+                if (shot.HookRemoving) Fail(tag + " did not settle after the confirm");
                 if (PhonesCount != want) Fail(tag + " confirm left " + PhonesCount);
                 state.AppendLine(tag + "_confirm_left=" + PhonesCount);
                 if (Reloaded() != want) Fail(tag + " confirm was not saved to the file");

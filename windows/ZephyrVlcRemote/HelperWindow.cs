@@ -681,6 +681,7 @@ internal sealed class HelperWindow : Form
     internal void HookRefreshPhones() => RefreshPhones();
     internal void HookRemovePhone(Program.PairedPhone ph) => RemovePhone(ph);
     internal void HookRemoveAll() => RemoveAllPhones();
+    internal bool HookRemoving => _removing; // state-shot: the async removal's true completion signal (memory flips before the save inside the transaction)
     internal void HookStartPairing(string name) { _nameBox.Text = name; StartPairing(); }
     internal string[] HookTrayMenuItems() => _menu.Items.Cast<ToolStripItem>().Select(i => i.Text ?? "").ToArray();
     internal bool HookTrayVisible => _tray.Visible;
