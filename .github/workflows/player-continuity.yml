@@ -2,8 +2,10 @@ name: Player continuity (published baseline)
 
 # Private evidence only: installs the PUBLISHED baseline player release, lets that real app create its own
 # pairing, settings and history, then runs THIS candidate's installer (taken from an existing Windows run's
-# artifact, no rebuild) over the data and proves the data survives. Dispatch only. No release, no tag, no main.
+# artifact, no rebuild) over the data and proves the data survives. Dispatch, or a push to this branch (defaults = the Player 3.1.0 candidate run/head). No release, no tag, no main.
 on:
+  push:
+    branches: [player-continuity-1125]
   workflow_dispatch:
     inputs:
       candidate_run_id:
@@ -47,7 +49,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || '45756793630' }}
         run: |
           New-Item -ItemType Directory -Force windows/Output | Out-Null
           gh run download $env:CANDIDATE_RUN_ID -n Zephyr-PC-installer --dir windows/Output
@@ -64,11 +66,11 @@ jobs:
         timeout-minutes: 15
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OLD_TAG: ${{ inputs.old_tag }}
-          OLD_ASSET: ${{ inputs.old_asset }}
-          OLD_VERSION: ${{ inputs.old_version }}
-          OLD_SHA256: ${{ inputs.old_sha256 }}
-          CANDIDATE_HEAD: ${{ inputs.candidate_head }}
+          OLD_TAG: ${{ inputs.old_tag || 'player-v3.0.0' }}
+          OLD_ASSET: ${{ inputs.old_asset || 'Zephyr-PC-3.0.0.exe' }}
+          OLD_VERSION: ${{ inputs.old_version || '3.0.0' }}
+          OLD_SHA256: ${{ inputs.old_sha256 || '18e715d9f8235bca82de2183c6f62dd6707409451561da92817bcefbf47e6822' }}
+          CANDIDATE_HEAD: ${{ inputs.candidate_head || '55b935ba9ba622037c5fd12085df928171fa9d1a' }}
         run: |
           $f = @(Get-ChildItem windows/Output -Filter 'Zephyr-PC-*.exe')[0]
           $v = $f.BaseName -replace '^Zephyr-PC-',''
