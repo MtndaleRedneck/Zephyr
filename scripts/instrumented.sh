@@ -136,6 +136,20 @@ for cls in $CLASSES; do
     if [ -z "$dumps" ]; then echo "PULL DIAG: no FailureDumpRule/test-failure evidence files listed for $cls"; fi
     for dump in $dumps; do pull_device_file "$dump" "$(basename $cls)"; done
     adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*" 2>/dev/null || true
+    # First-failure capture, taken right after the session (diagnostic only; never changes the verdict, never reruns):
+    # screen, focus, hierarchy, the class's raw log (logcat was cleared before this class) and the log lines that name an ANR,
+    # crash, focus change, launch or slow main thread. Kept under the class name so the FIRST failure is never overwritten.
+    base="instrument-results/$(basename $cls).FAIL"
+    adb exec-out screencap -p > "$base-screen.png" 2>/dev/null || echo "FAIL CAPTURE: screencap failed for $cls"
+    adb shell dumpsys window 2>/dev/null | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing" > "$base-focus.txt" || true
+    adb shell uiautomator dump /sdcard/failcap.xml >/dev/null 2>&1 && adb pull /sdcard/failcap.xml "$base-ui.xml" >/dev/null 2>&1 || echo "FAIL CAPTURE: uiautomator dump unavailable for $cls"
+    if adb logcat -d -b all > "$base-rawlog.txt" 2>"$base-rawlog.err" && [ -s "$base-rawlog.txt" ]; then
+      grep -E "ANR in |Not Responding|am_anr|am_crash|FATAL EXCEPTION|input_focus|Displayed |Davey|Skipped [0-9]+ frames|am_proc_start|am_kill|Input dispatching" "$base-rawlog.txt" | cut -c1-260 | tail -80 > "$base-keylines.txt" || true
+      echo "FAIL CAPTURE: $cls raw log $(wc -l < "$base-rawlog.txt") lines, key lines $(wc -l < "$base-keylines.txt")"; tail -40 "$base-keylines.txt"
+    else
+      echo "FAIL CAPTURE: no usable log for $cls (see $base-rawlog.err)"
+    fi
+    cp "instrument-results/$(basename $cls).txt" "$base-result.txt" 2>/dev/null || true
     echo "SUITE FAIL: $cls"
     FAIL=1
   fi
