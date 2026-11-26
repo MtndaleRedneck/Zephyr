@@ -47,6 +47,7 @@ fun ZephyrSetupScreen(
     var discoveryMessage by remember { mutableStateOf<String?>(null) }
     var found by remember { mutableStateOf<List<DiscoveredHelper>>(emptyList()) }
     var checkState by remember { mutableStateOf(PairCheck.None) } // post-pair status check; read-only, never touches the store
+    var checkGen by remember { mutableStateOf(0) }
     var pairedName by remember { mutableStateOf<String?>(null) } // set after a pair on this screen: confirmation shows under the form
 
     fun scan() {
@@ -64,15 +65,18 @@ fun ZephyrSetupScreen(
 
     // One read-only GET /control/status right after a fresh pair. Calls ZephyrClient directly (never
     // RemoteState.pollZephyr, which writes unpaired flags). No store write and no refreshPairing on any outcome.
+    // checkGen: each check (and each new pair attempt) bumps it, so a late result from an earlier
+    // pair or an earlier Try again is dropped and cannot overwrite the current state.
     fun checkAfterPair(h: String, port: Int, token: String) {
+        val gen = ++checkGen
         checkState = PairCheck.Checking
         scope.launch(Dispatchers.IO) {
             val result = try {
                 ZephyrClient.controlStatus(h, port, token); PairCheck.Ok
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: ZephyrClient.BadToken) { PairCheck.BadToken
-            } catch (e: java.io.IOException) { PairCheck.CouldntCheck
             } catch (e: Exception) { PairCheck.CouldntCheck }
-            withContext(Dispatchers.Main) { checkState = result }
+            withContext(Dispatchers.Main) { if (gen == checkGen) checkState = result }
         }
     }
 
@@ -84,6 +88,7 @@ fun ZephyrSetupScreen(
         busy = true
         error = null
         pairedName = null // a new attempt clears any earlier success card
+        checkGen++; checkState = PairCheck.None // ...and invalidates any earlier check
         val h = target.host
         scope.launch(Dispatchers.IO) {
             try {
