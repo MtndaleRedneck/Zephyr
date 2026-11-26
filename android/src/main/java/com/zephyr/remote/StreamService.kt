@@ -85,7 +85,7 @@ class StreamService : Service() {
         // (hooked up when the Movies screen wiring lands); subtitles get /sub/<n> URLs.
         StreamCoordinator.servedReceivers.clear()
         StreamCoordinator.servedTarget = null
-        srv.start()
+        try { srv.start() } catch (e: Exception) { runCatching { srv.stop() }; stopSelf(); return START_NOT_STICKY }
         server = srv
 
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
@@ -97,7 +97,7 @@ class StreamService : Service() {
         wifiLock?.acquire()
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zephyr:stream")
-            .also { it.acquire() }
+            .also { it.acquire(6 * 60 * 60 * 1000L) } // safety net; stop paths release it sooner
         startWatchdog(srv)
         return START_NOT_STICKY
     }

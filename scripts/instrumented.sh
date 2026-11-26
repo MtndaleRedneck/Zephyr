@@ -45,6 +45,8 @@ com.bingemote.MouseCadenceTest
 com.bingemote.InputRoutingTest
 com.zephyr.remote.PhonePickerGrantTest
 com.zephyr.remote.PhoneMoviesAndroidTest
+com.zephyr.remote.StreamServiceLifecycleTest
+com.zephyr.remote.StreamServiceNoWifiTest
 com.zephyr.remote.ZephyrWireTest
 com.zephyr.remote.ZephyrDiscoveryTest
 com.bingemote.StreamTargetTest
