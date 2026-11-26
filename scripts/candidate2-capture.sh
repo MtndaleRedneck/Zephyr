@@ -45,9 +45,10 @@ shoot pair2-find pairdemo-found
 shoot pair3-chosen pairdemo-chosen
 shoot pair3b-code pairdemo-code
 shoot pair3c-error pairdemo-error
-shoot pair4-result-ok pairdemo-success-ok
-shoot pair4-result-bad pairdemo-success-bad
-shoot pair4-result-cant pairdemo-success-cant
-shoot pair4-result-checking pairdemo-success-checking
+for ST in ok bad cant; do
+  shoot pair4-result-$ST-top pairdemo-success-$ST-top
+  shoot pair4-result-$ST-bottom pairdemo-success-$ST
+done
+shoot pair4-result-checking-bottom pairdemo-success-checking
 adb shell wm size reset; adb shell wm density reset
 adb logcat -d -s AndroidRuntime:E > $OUT/crashes2.txt || true

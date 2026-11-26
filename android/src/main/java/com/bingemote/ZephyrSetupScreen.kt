@@ -29,6 +29,7 @@ fun ZephyrSetupScreen(
     onDone: () -> Unit,
     onCancel: () -> Unit,
     initialStep: Int = 0,
+    demoTop: Boolean = false, // debug capture only: do not scroll to the end
     demo: String = "", // debug capture only (MainActivity, BuildConfig.DEBUG): preset UI state, no network, no store write
 ) {
     val store = remote.store
@@ -136,7 +137,7 @@ fun ZephyrSetupScreen(
 
     // Debug capture only: demo states that show the lower cards scroll to the end so the frame contains them.
     val demoScroll = rememberScrollState()
-    LaunchedEffect(demo) { if (BuildConfig.DEBUG && demo.isNotEmpty() && demo != "chosen" && demo != "found") { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
+    LaunchedEffect(demo) { if (BuildConfig.DEBUG && demo.isNotEmpty() && demo != "chosen" && demo != "found" && !demoTop) { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
     // BingeMote's rule: re-entry from Settings (setup finished) leaves on Back; first run walks pair -> install.
     val reentry = store.setupDone
     BackHandler { if (step > 1 && !reentry) { step -= 1; error = null } else onCancel() }
