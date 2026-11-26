@@ -62,6 +62,16 @@ internal static class VlcRotation
     /// failed save then rolls back - and "still paired, nothing changed" would be a lie on disk.</summary>
     internal static (string? t, bool landed, int gen) SnapshotCommitted() { lock (Program.ConfigSaveLock) return Snapshot(); }
 
+    /// <summary>For the removal-outcome UI: this removal's generation is complete once its pass
+    /// landed - OR once the verify pass already cleared the target. The clear does NOT bump the
+    /// generation, so a fully successful rotation can read back as (no target, unlanded, same
+    /// generation); reading only `landed` there would falsely report "not changed yet".</summary>
+    internal static bool RotationOutcomeComplete(int removalGen)
+    {
+        var (t, landed, g) = Snapshot();
+        return g == removalGen && (landed || t == null);
+    }
+
     /// <summary>Startup restore (including the legacy-pending migration). The in-memory marker stays null.</summary>
     internal static void LoadPersisted(string? target, bool landed, int gen) { lock (Gate) { _target = target; _landed = landed; _generation = gen; } }
     internal static void ResetForTests()

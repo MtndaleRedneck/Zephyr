@@ -882,15 +882,15 @@ internal sealed class HelperWindow : Form
     {
         VlcRotation.Kick();
         await VlcRotation.AwaitNextPassCompletion(TimeSpan.FromSeconds(2));
-        var (_, landed, g) = VlcRotation.Snapshot();
+        var done = VlcRotation.RotationOutcomeComplete(gen); // landed OR already verified+cleared: both are done
         var vlcOpen = await Task.Run(() => VlcSetup.VlcRunning());
         string msg;
         if (vlcOpen)
             // An open VLC keeps the password it started with, landed or not: never say done here.
-            msg = (g == gen && landed)
+            msg = done
                 ? label + " The saved VLC password has changed - but VLC is open, and a VLC that was already open keeps the old password until it's closed. Close every VLC window that was open to finish."
                 : label + " VLC is open, so it can still control VLC until every VLC running with the old password is closed.";
-        else if (g == gen && landed)
+        else if (done)
             msg = allRemoved
                 ? label + " The saved VLC password has changed."
                 : label + " Its saved VLC password has changed. Your other phones keep working.";

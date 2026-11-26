@@ -337,6 +337,24 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void OutcomeCompletenessDistinguishesPendingLandedAndCleared()
+    {
+        // The verify pass clears the target WITHOUT a generation bump: a snapshot taken after a
+        // fully successful rotation reads (no target, unlanded, same generation), and the removal
+        // UI must still read that as complete, never as "not changed yet".
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all, "new-pass-123456");
+        Assert.True(ok);
+        Assert.False(VlcRotation.RotationOutcomeComplete(gen));   // staged, not landed
+        VlcRotation.PassOnce();                                    // lands
+        Assert.True(VlcRotation.RotationOutcomeComplete(gen));     // landed
+        VlcRotation.PassOnce();                                    // verify clears the target, gen unchanged
+        Assert.Null(VlcRotation.TargetValue);
+        Assert.True(VlcRotation.RotationOutcomeComplete(gen));     // cleared-after-success is still complete
+        Assert.False(VlcRotation.RotationOutcomeComplete(gen + 1));// a newer removal's generation is not
+    }
+
+    [Fact]
     public void CrashAfterWriteBeforePersist_RestartPassCountsTheFreshUnlandedObservationAsLanding()
     {
         // I2: the pass writes vlcrc NEW and dies before the landing persist. On restart the
