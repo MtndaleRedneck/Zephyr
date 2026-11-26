@@ -92,9 +92,10 @@ jobs:
           OLD_VERSION: ${{ inputs.old_version || '3.0.0' }}
           OLD_SHA256: ${{ inputs.old_sha256 || '18e715d9f8235bca82de2183c6f62dd6707409451561da92817bcefbf47e6822' }}
         run: |
+          $eh = (Get-Content "$env:RUNNER_TEMP/candidate-head.txt" -Raw).Trim()
           $f = @(Get-ChildItem windows/Output -Filter 'Zephyr-PC-*.exe')[0]
           $v = $f.BaseName -replace '^Zephyr-PC-',''
-          ./scripts/pubbase_real_data.ps1 -OldTag $env:OLD_TAG -OldAsset $env:OLD_ASSET -OldVersion $env:OLD_VERSION -Candidate $f.FullName -OldSha256 $env:OLD_SHA256 -ExpectedVersion $v -ExpectedHead (Get-Content "$env:RUNNER_TEMP/candidate-head.txt" -Raw).Trim()
+          ./scripts/pubbase_real_data.ps1 -OldTag $env:OLD_TAG -OldAsset $env:OLD_ASSET -OldVersion $env:OLD_VERSION -Candidate $f.FullName -OldSha256 $env:OLD_SHA256 -ExpectedVersion $v -ExpectedHead $eh
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
