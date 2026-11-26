@@ -240,7 +240,7 @@ fun ZephyrSetupScreen(
                     Text(if (checkState == PairCheck.BadToken) "Couldn't confirm pairing with $pairedName" else "\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     when (checkState) {
                         PairCheck.Checking -> { Spacer(Modifier.height(6.dp)); Text("Checking with your PC\u2026", color = Muted, fontSize = 13.sp) }
-                        PairCheck.BadToken -> { Spacer(Modifier.height(6.dp)); Text("Your PC didn't accept this pairing. Pair again with a new code.", color = ErrorRed, fontSize = 13.sp) }
+                        PairCheck.BadToken -> { Spacer(Modifier.height(6.dp)); Text("Your PC didn't accept this pairing. Pair again with a new code.", color = ErrorText, fontSize = 13.sp) }
                         PairCheck.CouldntCheck -> {
                             Spacer(Modifier.height(6.dp))
                             Text("Couldn't check with your PC.", color = Muted, fontSize = 13.sp)

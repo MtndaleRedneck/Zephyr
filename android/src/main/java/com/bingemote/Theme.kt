@@ -19,6 +19,8 @@ const val ORANGE_ARGB: Long = 0xFFF97C02
 val Orange: Color get() = AccentPrefs.accent
 val OrangeLight: Color get() = if (AccentPrefs.accent.toArgb() == ORANGE_ARGB.toInt()) Color(0xFFFB9E2E) else lightenAccent(AccentPrefs.accent, 0.20f)
 val ErrorRed = Color(0xFFE5484D)
+/** Error words on cards: ErrorRed is 3.84:1 on Card; this lighter red is 6.6:1 on Card and 5.9:1 on Card2. */
+val ErrorText = Color(0xFFFF8A8E)
 val TrackGray = Color(0xFF4A4A52)
 
 val OrangeGradient: Brush get() = Brush.verticalGradient(listOf(OrangeLight, Orange))

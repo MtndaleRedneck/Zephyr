@@ -399,7 +399,7 @@ internal fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
 internal fun SetupMessage(message: String?, isError: Boolean) {
     if (message.isNullOrBlank()) return
     Spacer(Modifier.height(10.dp))
-    Text(message, color = if (isError) ErrorRed else Orange, fontSize = 13.sp, lineHeight = 18.sp)
+    Text(message, color = if (isError) ErrorText else Orange, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
 @Composable
