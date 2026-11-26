@@ -147,6 +147,39 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void ExitRewriteBetweenObserveAndVerifyNeverClearsTheTarget()
+    {
+        // The verify-clear race, exercised at its real window: a landed rotation's pass reads
+        // vlcrc healthy (old VLC still open), blocks on the LaunchWriteMutex (held by the test),
+        // and the old VLC's exit rewrite lands BEFORE the pass resumes. The pass must decide from
+        // a fresh in-mutex read: re-open + repair, NEVER clear the target over an old-password disk.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-9");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                                  // lands NEW; rotation is landed
+        Assert.True(VlcRotation.Landed);
+        var atMutex = new ManualResetEventSlim();
+        VlcRotation.BeforeMutexForTests = () => atMutex.Set();
+        Thread passThread;
+        lock (VlcRotation.LaunchWriteMutex)
+        {
+            passThread = new Thread(() => VlcRotation.PassOnce());
+            passThread.Start();
+            Assert.True(atMutex.Wait(TimeSpan.FromSeconds(10)), "the pass never reached the mutex");
+            // Its obs read (healthy) already happened. The exit rewrite lands now, in the window:
+            WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        }
+        Assert.True(passThread.Join(TimeSpan.FromSeconds(10)), "the pass never finished");
+        Assert.True(VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5)));
+        Assert.True(VlcRotation.Landed);                         // re-opened and re-landed, NEVER cleared
+        Assert.True(VlcSetup.Pending == false);
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-9")); // repaired, not the old password
+        VlcRotation.PassOnce();                                  // NOW a quiet verify sees healthy and clears
+        Assert.Null(VlcRotation.TargetValue);
+    }
+
+    [Fact]
     public void StalePassNeverWritesASupersededTarget()
     {
         // The atomic staging/write ordering, exercised as the real race: a pass snapshots T1 and

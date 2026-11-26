@@ -38,6 +38,11 @@ internal static class VlcRotation
     /// says nothing about the kicked work.</summary>
     internal static long PassStartCount => Interlocked.Read(ref _passStarts);
 
+    /// <summary>Test seam: fires right before PassCore takes the LaunchWriteMutex, after its
+    /// obs read - so a fixture can land an old-VLC exit rewrite in the exact window between the
+    /// pre-mutex observation and the in-mutex verify/apply decisions. Null in production.</summary>
+    internal static Action? BeforeMutexForTests;
+
     /// <summary>Test seam: fires right after PassCore's snapshot, so a fixture can hold the
     /// LaunchWriteMutex and stage a NEWER target between a pass's snapshot and its write - the
     /// exact stale-snapshot race the in-mutex recheck closes. Null in production.</summary>
@@ -94,6 +99,7 @@ internal static class VlcRotation
         Interlocked.Exchange(ref _applyBusy, 0);
         Interlocked.Exchange(ref _rerunRequested, 0);
         AfterSnapshotForTests = null;
+        BeforeMutexForTests = null;
     }
 
     // Target mutation: only ever inside a ConfigSaveLock persist (the single-writer invariant).
@@ -184,19 +190,26 @@ internal static class VlcRotation
         // VLC start would leave the marker at t and the later repair pass would see no edge - and a
         // kept phone that spent its grant on OLD would never re-arm.
         if (!obs.HealthyFor(t)) RecordDivergence(obs.Password);
+        BeforeMutexForTests?.Invoke();
         lock (LaunchWriteMutex)
         {
             VlcSetup.SweepTemp(); // under the mutex AND skipping fresh temps: never deletes Play's in-flight temp
-            if (landed && obs.HealthyFor(t))
+            // obs predates the mutex: an old-password VLC can have EXITED and rewritten vlcrc in
+            // between. Decide from a FRESH read inside the mutex - above all the verify-clear
+            // below, which must never clear the target while disk carries the old password.
+            var fresh = VlcSetup.ReadHealthy();
+            if (!fresh.ReadOk) return; // a read glitch is not divergence: keep the marker, retry next pass
+            if (!fresh.HealthyFor(t)) RecordDivergence(fresh.Password); // the exit-rewrite edge the pre-mutex read missed
+            if (landed && fresh.HealthyFor(t))
             {
-                if (VlcSetup.VlcRunning()) return; // verify waits for quiet
+                if (VlcSetup.VlcRunning()) return; // verify waits for quiet (checked inside the mutex)
                 if (PersistFromPass(t, true, gen, setLanded: false, clearTarget: true, t))
                     Program.Log("VLC password change verified; the rotation is complete.");
                 return;
             }
             // Unlanded, or landed-but-divergent: ApplyTargetUnderMutex re-opens a diverged landed
             // rotation (persisted) before repairing - the same rule for every caller.
-            if (ApplyTargetUnderMutex(t, landed, gen, obs) == ApplyOutcome.Landed && landed)
+            if (ApplyTargetUnderMutex(t, landed, gen, fresh) == ApplyOutcome.Landed && landed)
                 Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
         }
     }

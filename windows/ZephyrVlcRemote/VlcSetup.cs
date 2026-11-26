@@ -240,10 +240,21 @@ internal static class VlcSetup
             return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
         VlcRotation.Kick();
         var outcome = VlcRotation.TryInlinePass();
-        if (outcome == VlcRotation.ApplyOutcome.Landed || ReadHealthy().HealthyFor(password))
+        // Final-ok consistency: vlcrc carrying the phone's value is only "done" while the
+        // COMMITTED target is this value or already cleared. A removal that staged a newer
+        // target mid-request (the inline attempt's moved-on WriteFailed, or a kicked pass that
+        // landed this value before the newer stage) makes ok:true a lie about what is current.
+        var finalTarget = VlcRotation.TargetValue;
+        if ((outcome == VlcRotation.ApplyOutcome.Landed || ReadHealthy().HealthyFor(password))
+            && (finalTarget == null || finalTarget == password))
         {
             Program.Log("VLC web remote written into vlcrc.");
             return JsonSerializer.Serialize(new { ok = true });
+        }
+        if (finalTarget != null && finalTarget != password)
+        {
+            Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
+            return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
         }
         if (outcome == VlcRotation.ApplyOutcome.Deferred)
         {
