@@ -308,7 +308,14 @@ try {
     Note 'paired_after_candidate_ran' 'PROVEN (same entry name, still DPAPI-protected, plain token absent, real token authenticated with 200)'
     $s1 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
     if ($s1.ShowSpeed -ne $speedAfter -or $s1.LibraryFolder -ne $lib) { throw "settings changed after the candidate ran (ShowSpeed $($s1.ShowSpeed) want $speedAfter)" }
-    foreach ($prop in $s0.PSObject.Properties) { if ("$($s1.($prop.Name))" -ne "$($prop.Value)") { throw "settings value $($prop.Name) changed after the candidate ran" } }
+    # Diagnostic only (assert unchanged): list EVERY differing property by NAME, but print before/after VALUES only for the
+    # allowlisted window-geometry property ShellBounds (never any other settings value), then fail exactly as before.
+    $diffNames = @(foreach ($prop in $s0.PSObject.Properties) { if ("$($s1.($prop.Name))" -ne "$($prop.Value)") { $prop.Name } })
+    if ($diffNames.Count -gt 0) {
+        Write-Host "settings_diff_names: $($diffNames -join ', ')"
+        if ($diffNames -contains 'ShellBounds') { Write-Host "settings_diff_ShellBounds: before='$($s0.ShellBounds)' after='$($s1.ShellBounds)'" }
+        throw "settings value $($diffNames[0]) changed after the candidate ran"
+    }
     Note 'settings_after_candidate_ran' "PROVEN (ShowSpeed $speedAfter, LibraryFolder and all $($s0.PSObject.Properties.Count) values unchanged)"
     $item1 = (Get-Content $histPath -Raw | ConvertFrom-Json).$key
     if (-not $item1) { throw 'the history entry is gone after the candidate ran' }
