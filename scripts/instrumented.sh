@@ -106,7 +106,7 @@ for cls in $CLASSES; do
   adb shell am instrument -w -e class "$cls" -e wire_port "$WIRE_PORT" -e pair_code "$PAIR_CODE" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/$(basename $cls).txt"
   adb logcat -d -s SAFTest:I SAFTest:W >> "instrument-results/$(basename $cls).txt" 2>/dev/null || true
   sleep 2
-  for f in $(adb shell ls /sdcard/zephyr-picker-*.png /sdcard/zephyr-picker-*.xml /sdcard/zephyr-autopair-*.png 2>/dev/null); do
+  for f in $(adb shell ls /sdcard/zephyr-picker-*.png /sdcard/zephyr-picker-*.xml /sdcard/zephyr-autopair-*.png /sdcard/parity-saf-grant-*.png /sdcard/parity-storage-picker-*.png 2>/dev/null); do
     adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true
     adb shell rm -f "$f"
   done
@@ -155,5 +155,12 @@ for cls in $CLASSES; do
     FAIL=1
   fi
 done
+# Named results for the real-picker SAF tests: a JUnit Assume skip is status -4 and prints OK, so require final status 0 by name.
+# No skip is accepted for these classes and a dropped class fails.
+awk '/INSTRUMENTATION_STATUS: class=/{c=$0; sub(/.*class=/,"",c)} /INSTRUMENTATION_STATUS: test=/{t=$0; sub(/.*test=/,"",t)} /INSTRUMENTATION_STATUS_CODE: /{k=$0; sub(/.*CODE: /,"",k); print c "#" t " " k}' instrument-results/*.txt > instrument-results/test-results.txt || true
+for req in com.zephyr.remote.PhonePickerGrantTest#pickerGrantListsMoviesAsApp com.zephyr.remote.PhoneMoviesAndroidTest#listsFoldersThenMoviesWithSidecars com.zephyr.remote.PhoneMoviesAndroidTest#subfolderIsNotRoot com.zephyr.remote.PhonePickerStorageTest#realPickerGrantsSharedStorageFolderAndListsIt; do
+  if grep -qx "$req 0" instrument-results/test-results.txt; then echo "REQUIRED PASSED: $req"; else echo "REQUIRED NOT PASSED: $req"; FAIL=1; fi
+done
+if grep -E "^com\.zephyr\.remote\.(PhonePicker|PhoneMovies)[A-Za-z]*#[A-Za-z]+ -4$" instrument-results/test-results.txt; then echo "SAF test skipped (Assume): not accepted"; FAIL=1; fi
 adb shell wm size reset; adb shell wm density reset
 exit $FAIL
