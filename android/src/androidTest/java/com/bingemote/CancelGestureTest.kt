@@ -10,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import kotlin.concurrent.thread
 
@@ -33,6 +34,7 @@ import kotlin.concurrent.thread
  * interruption test takes focus away with a real activity switch instead.
  */
 class CancelGestureTest {
+    @get:Rule val failureDump = FailureDumpRule()
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val device = UiDevice.getInstance(instrumentation)
     private var lastLaunch: String? = null
