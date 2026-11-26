@@ -885,14 +885,19 @@ internal sealed class HelperWindow : Form
         var (_, landed, g) = VlcRotation.Snapshot();
         var vlcOpen = await Task.Run(() => VlcSetup.VlcRunning());
         string msg;
-        if (g == gen && landed)
+        if (vlcOpen)
+            // An open VLC keeps the password it started with, landed or not: never say done here.
+            msg = (g == gen && landed)
+                ? label + " The saved VLC password has changed - but VLC is open, and a VLC that was already open keeps the old password until it's closed. Close every VLC window that was open to finish."
+                : label + " VLC is open, so it can still control VLC until every VLC running with the old password is closed.";
+        else if (g == gen && landed)
             msg = allRemoved
                 ? label + " The saved VLC password has changed."
                 : label + " Its saved VLC password has changed. Your other phones keep working.";
-        else if (g == gen && vlcOpen)
-            msg = label + " VLC is open, so it can still control VLC until every VLC running with the old password is closed.";
         else
-            msg = label + " It can't control this PC anymore. The VLC password change completes when VLC is closed or on the next automatic retry - the window shows its state.";
+            // No cutoff claim before the landing: the helper token is gone, but OLD is still the
+            // VLC password until the retry lands, and VLC's own remote answers it whenever VLC runs.
+            msg = label + " It can no longer control this PC through Zephyr VLC Remote, but the VLC password hasn't changed yet - it changes on the next automatic retry, and the window shows its state. Until then it could still reach VLC's own remote (port 8080) whenever VLC is open.";
         NoteDialog.Show(this, msg);
     }
 
