@@ -427,9 +427,19 @@ namespace ZephyrPlayer
             SeekToPointer(e, fromMove: true);
         }
 
-        /// <summary>Capture can be lost without a mouse-up (focus change, system cancel): the scrub
-        /// ends there instead of sticking the timeline to a mouse that is no longer held.</summary>
-        private void OnSeekLostCapture(object sender, MouseEventArgs e) => _seeking = false;
+        /// <summary>Capture can be lost without a mouse-up (focus change, system cancel): commit the
+        /// spot the thumb was left at, then end the scrub instead of sticking the timeline to a mouse
+        /// that is no longer held.</summary>
+        private void OnSeekLostCapture(object sender, MouseEventArgs e)
+        {
+            if (_seeking && !_opening && _player.Length > 0)
+            {
+                SeekCommitCount++;
+                LastSeekFraction = SeekBar.Value / 1000.0;
+                _player.Position = (float)LastSeekFraction;
+            }
+            _seeking = false;
+        }
 
         private DateTime _lastSeekCommitUtc = DateTime.MinValue;
         internal int SeekCommitCount { get; private set; }
@@ -459,6 +469,7 @@ namespace ZephyrPlayer
 
         private void OnSeekUp(object sender, MouseButtonEventArgs e)
         {
+            if (e.ChangedButton != MouseButton.Left) return;
             if (SeekBar.IsMouseCaptured) SeekBar.ReleaseMouseCapture();
             _seeking = false;
             if (!_opening && _player.Length > 0)

@@ -214,6 +214,7 @@ namespace ZephyrPlayer.Tests
         }
 
         [Theory]
+        [InlineData(700)]   // below the 780 cap: compact level, then uniform scale - still nothing hides
         [InlineData(1024)]
         [InlineData(1920)]
         public void WorstCase_Controls_Visible_Ordered_NoOverlap(int width)
@@ -227,13 +228,13 @@ namespace ZephyrPlayer.Tests
                 var w = new MainWindow(libvlc, player, settings, new VolumeService());
                 try
                 {
-                    w.SetRate(1.25);        // widest speed readout ("1.25x")
+                    w.SetFullscreen(true);  // More button joins the right group FIRST
+                    w.SetRate(1.25);        // then dynamic labels widen with no resize
                     w.SetSleep(45);         // active countdown badge
-                    w.SetFullscreen(true);  // More button joins the right group
                     var bar = w.ControlBar;
                     bar.Opacity = 1;
                     Capture(bar, width - 48, $"pc-skip-controlbar-worst-{width}.png");
-                    var names = new[] { "VolumeButton", "VolumeSlider",
+                    var names = new[] { "VolumeButton", "VolumeSlider", "VolumeLabel",
                                         "SecondarySkipBackButton", "SkipBackButton", "PlayPauseButton", "SkipForwardButton", "SecondarySkipForwardButton",
                                         "CaptionsButton", "SpeedButton", "SleepButton", "MoreButton", "FullscreenButton" };
                     Rect? previous = null;

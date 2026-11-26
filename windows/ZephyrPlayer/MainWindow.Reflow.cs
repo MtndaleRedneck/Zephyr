@@ -25,12 +25,16 @@ namespace ZephyrPlayer
             PlayPauseButton.Margin = new Thickness(level >= 1 ? 4 : 10, 0, level >= 1 ? 4 : 10, 0);
         }
 
+        /// <summary>The play cluster is centered, so each side group gets (inner - center)/2. The row
+        /// fits when the WIDER side group fits its half: 2*max(left, right) + center &lt;= inner. Summing
+        /// all three under-measures and would let the wide side overlap the cluster.</summary>
         private double MeasureRow()
         {
             LeftGroup.Measure(Unbounded);
             CenterPlaybackControls.Measure(Unbounded);
             RightGroup.Measure(Unbounded);
-            return LeftGroup.DesiredSize.Width + CenterPlaybackControls.DesiredSize.Width + RightGroup.DesiredSize.Width;
+            var side = Math.Max(LeftGroup.DesiredSize.Width, RightGroup.DesiredSize.Width);
+            return 2 * side + CenterPlaybackControls.DesiredSize.Width;
         }
 
         internal void Reflow()

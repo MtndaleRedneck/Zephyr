@@ -40,8 +40,10 @@ namespace ZephyrPlayer.Tests
                     w.Left = -20000; w.Top = -20000;
                     w.Show();
                     w.UpdateLayout();
+                    // XAML wires the generic PreviewMouseDown; raising the Left-specific event would
+                    // not reach that handler.
                     w.SeekBar.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
-                        { RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent, Source = w.SeekBar });
+                        { RoutedEvent = UIElement.PreviewMouseDownEvent, Source = w.SeekBar });
                     Assert.True(w.SeekingNow, "press starts the scrub");
                     w.SeekBar.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
                         { RoutedEvent = UIElement.LostMouseCaptureEvent, Source = w.SeekBar });
