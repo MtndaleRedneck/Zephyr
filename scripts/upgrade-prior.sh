@@ -118,9 +118,17 @@ focused_dialog_logged_in_job() {
 }
 # Run-log branch: an allowlisted ANR is in this run's log, so the dialog in focus must still be exactly ONE allowlisted dialog;
 # bind that pair now (ACCEPTED_DIALOG) so dismiss taps only this identity. Nothing to bind = no retry.
-accept_focused_dialog() {
-  ACCEPTED_DIALOG=$(single_allowed_dialog "$(adb shell dumpsys window | grep "mCurrentFocus")") || { ACCEPTED_DIALOG=""; return 1; }
-  echo "NOTE: allowlisted ANR in this run's log and exactly one allowlisted dialog in focus: $ACCEPTED_DIALOG"
+accept_focused_dialog() { # $1 = result name; the logged ANR package must be the SAME package as the focused dialog
+  local pp pkg line lp found=0 f="instrument-results/$1-syslog.txt"
+  pp=$(single_allowed_dialog "$(adb shell dumpsys window | grep "mCurrentFocus")") || { ACCEPTED_DIALOG=""; return 1; }
+  pkg=${pp% *}
+  while IFS= read -r line || [ -n "$line" ]; do
+    lp=$(anr_pkg "$line"); if [ -n "$lp" ] && [ "$lp" = "$pkg" ]; then found=1; fi
+  done < "$f"
+  [ -r "$f" ] || { ACCEPTED_DIALOG=""; return 1; }
+  [ "$found" = 1 ] || { echo "NOTE: no ANR line for the focused package $pkg in this run's log: no run-log acceptance"; ACCEPTED_DIALOG=""; return 1; }
+  ACCEPTED_DIALOG="$pp"
+  echo "NOTE: ANR for $pkg is in this run's log and that same package is the one dialog in focus: $ACCEPTED_DIALOG"
 }
 # A green instrument result is only trusted when its own log is clean: no app or unknown ANR/crash, usable capture.
 green_must_be_clean() { # $1 = result name, $2 = label
@@ -172,7 +180,7 @@ retry_window_only() { # $1 class#method, $2 result name
   window_fail_diag "$2"
   # Gate on this run's own log first: any app-owned ANR/crash evidence, or an ANR line naming no allowlisted package, is final.
   if app_failure_in_log "$2"; then echo "NOTE: $2 saved log shows an app-owned or unknown ANR/crash: no retry (see $2-syslog.txt)"; return 0; fi
-  { foreign_anr_in_log "$2" && accept_focused_dialog; } || focused_dialog_logged_in_job || { echo "NOTE: $2 saved log has no allowlisted ANR evidence: no retry"; return 0; }
+  { foreign_anr_in_log "$2" && accept_focused_dialog "$2"; } || focused_dialog_logged_in_job || { echo "NOTE: $2 saved log has no allowlisted ANR evidence: no retry"; return 0; }
   dismiss_foreign_anr "$2" || return 0
   echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
   cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
