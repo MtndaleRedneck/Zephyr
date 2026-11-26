@@ -1,3 +1,7 @@
+## Zephyr 1.7.0
+
+Pairing now shows a clear message if the connection can't be saved. The top bar now matches on Home, Movies and Settings, and switching from Phone to PC no longer leaves the phone's list on screen.
+
 ## Zephyr 1.5.0
 
 Zephyr now has the same updated foundations as BingeMote 1.14: the same screens, controls and playback, with Zephyr's own icon, name and PC connection.
