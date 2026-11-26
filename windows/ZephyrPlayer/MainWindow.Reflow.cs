@@ -47,6 +47,9 @@ namespace ZephyrPlayer
                 ApplyReflowLevel(0);
                 var needed = MeasureRow();
                 var level = PlayerBarLogic.ReflowLevel(inner, needed);
+                // Hysteresis: a ticking sleep badge changes the right group by a few px; without
+                // slack the level would flip-flop once a minute when parked exactly at the boundary.
+                if (_reflowLevel == 1 && level == 0 && needed > inner - 4) level = 1;
                 if (level != 0)
                 {
                     ApplyReflowLevel(level);

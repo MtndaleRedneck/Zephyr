@@ -470,8 +470,8 @@ namespace ZephyrPlayer
         private void OnSeekUp(object sender, MouseButtonEventArgs e)
         {
             if (e.ChangedButton != MouseButton.Left) return;
+            _seeking = false;   // before ReleaseMouseCapture: LostMouseCapture must not commit a second time
             if (SeekBar.IsMouseCaptured) SeekBar.ReleaseMouseCapture();
-            _seeking = false;
             if (!_opening && _player.Length > 0)
             {
                 SeekCommitCount++;

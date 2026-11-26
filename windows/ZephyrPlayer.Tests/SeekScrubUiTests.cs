@@ -48,6 +48,19 @@ namespace ZephyrPlayer.Tests
                     w.SeekBar.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
                         { RoutedEvent = UIElement.LostMouseCaptureEvent, Source = w.SeekBar });
                     Assert.False(w.SeekingNow, "losing capture ends the scrub");
+
+                    // Full gesture ordering: mouse-up ends the scrub BEFORE capture release, so the
+                    // resulting LostMouseCapture is a no-op (single commit, no double seek).
+                    w.SeekBar.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                        { RoutedEvent = UIElement.PreviewMouseDownEvent, Source = w.SeekBar });
+                    Assert.True(w.SeekingNow, "second press starts the scrub again");
+                    w.SeekBar.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, Environment.TickCount, MouseButton.Left)
+                        { RoutedEvent = UIElement.PreviewMouseUpEvent, Source = w.SeekBar });
+                    Assert.False(w.SeekingNow, "mouse-up ends the scrub");
+                    w.SeekBar.RaiseEvent(new MouseEventArgs(Mouse.PrimaryDevice, Environment.TickCount)
+                        { RoutedEvent = UIElement.LostMouseCaptureEvent, Source = w.SeekBar });
+                    Assert.False(w.SeekingNow, "capture loss after mouse-up changes nothing");
+                    Assert.Equal(0, w.SeekCommitCount); // no media loaded in this test: nothing may commit
                     w.Close();
                 }
                 catch (Exception ex) { error = ex; }

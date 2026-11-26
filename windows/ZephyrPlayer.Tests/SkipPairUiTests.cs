@@ -179,7 +179,11 @@ namespace ZephyrPlayer.Tests
                 {
                     var bar = w.ControlBar;
                     bar.Opacity = 1;
-                    Capture(bar, width - 48, $"pc-skip-controlbar-{width}-{extras}.png");
+                    // ControlBar carries an explicit Width (XAML default, then window resize), which
+                    // overrides any measure constraint - set the real width for this window size or
+                    // the narrow path never runs.
+                    bar.Width = MainWindow.BarWidth(width);
+                    Capture(bar, (int)System.Math.Ceiling(MainWindow.BarWidth(width)), $"pc-skip-controlbar-{width}-{extras}.png");
                     var names = new[] { "VolumeButton", "VolumeSlider", "SecondarySkipBackButton", "SkipBackButton", "PlayPauseButton", "SkipForwardButton", "SecondarySkipForwardButton", "CaptionsButton", "FullscreenButton" };
                     Rect? previous = null;
                     var center = (FrameworkElement)w.FindName("CenterPlaybackControls")!;
@@ -233,7 +237,8 @@ namespace ZephyrPlayer.Tests
                     w.SetSleep(45);         // active countdown badge
                     var bar = w.ControlBar;
                     bar.Opacity = 1;
-                    Capture(bar, width - 48, $"pc-skip-controlbar-worst-{width}.png");
+                    bar.Width = MainWindow.BarWidth(width);   // explicit Width overrides the measure constraint
+                    Capture(bar, (int)System.Math.Ceiling(MainWindow.BarWidth(width)), $"pc-skip-controlbar-worst-{width}.png");
                     var names = new[] { "VolumeButton", "VolumeSlider", "VolumeLabel",
                                         "SecondarySkipBackButton", "SkipBackButton", "PlayPauseButton", "SkipForwardButton", "SecondarySkipForwardButton",
                                         "CaptionsButton", "SpeedButton", "SleepButton", "MoreButton", "FullscreenButton" };
