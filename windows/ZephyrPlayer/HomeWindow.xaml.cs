@@ -197,6 +197,9 @@ namespace ZephyrPlayer
             VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0),
         };
 
+        // One folder name can be arbitrarily long (a temp-dir GUID proved it): no segment may
+        // push the command row - and with it the header's right-hand controls - off the window.
+        private const double CrumbMaxWidth = 220;
         private readonly List<FrameworkElement> _crumbParts = new();
         private string _crumbFolder = "";
 
@@ -218,11 +221,20 @@ namespace ZephyrPlayer
                 {
                     Text = prefix, Foreground = (Brush)FindResource("MutedBrush"), FontSize = 13,
                     VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0),
+                    MaxWidth = CrumbMaxWidth, TextTrimming = TextTrimming.CharacterEllipsis,
                 });
             for (var i = 0; i < crumbs.Count; i++)
             {
                 var crumb = crumbs[i];
-                var b = new System.Windows.Controls.Button { Content = crumb.Label, Style = (Style)FindResource("CrumbButton") };
+                var b = new System.Windows.Controls.Button
+                {
+                    Content = new System.Windows.Controls.TextBlock
+                    {
+                        Text = crumb.Label, MaxWidth = CrumbMaxWidth,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                    },
+                    Style = (Style)FindResource("CrumbButton"),
+                };
                 b.Click += (_, __) => NavigateTo(crumb.Rel, pushHistory: true);
                 _crumbParts.Add(b);
             }

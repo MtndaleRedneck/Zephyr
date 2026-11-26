@@ -96,6 +96,15 @@ namespace ZephyrPlayer.Tests
                     var bgAt = (600 * 940 + 600) * 4; // B,G,R,A: exactly the intended AppBgBrush #0B0D10, opaque (not transparent/black by accident)
                     Assert.True(px[bgAt] == 0x10 && px[bgAt + 1] == 0x0D && px[bgAt + 2] == 0x0B && px[bgAt + 3] == 0xFF, $"window fill is {px[bgAt + 2]:X2}{px[bgAt + 1]:X2}{px[bgAt]:X2}/{px[bgAt + 3]:X2}, expected 0B0D10 opaque");
                     Assert.True(lit > 4000, $"lit pixels {lit} - home grid not rendered");
+                    // No horizontal overflow: a single long folder name (this fixture's 36-char
+                    // temp-dir segment) must ellipsize, never push the row's right-hand controls
+                    // past the window edge. Grounded in the 940px render that cut them off.
+                    foreach (var name in new[] { "CommandRight", "PhoneCard" })
+                    {
+                        var el = (FrameworkElement)w.FindName(name)!;
+                        var r = el.TransformToAncestor(root).TransformBounds(new Rect(0, 0, el.ActualWidth, el.ActualHeight));
+                        Assert.True(r.Right <= root.ActualWidth + 0.5, name + $" overflows the window: right edge {r.Right:F1} > {root.ActualWidth:F1}");
+                    }
                     // Finish native metadata work before tearing down its owning STA.
                     Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
                     w.Close();
