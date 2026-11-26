@@ -65,6 +65,8 @@ class MainActivity : ComponentActivity() {
         // Activity in the same process (interrupted test, config change).
         if (BuildConfig.DEBUG) previewLostRigArmed = false
         AccentPrefs.init(this)
+        // Debug capture only: pick a swatch by index so a render can show it.
+        if (BuildConfig.DEBUG) intent.getIntExtra("accent", -1).let { if (it in AccentSwatches.indices) AccentPrefs.choose(AccentSwatches[it]) }
         store = Store(this)
         // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
         // Remote (port 8492) and flag the one-time "what changed" notice.

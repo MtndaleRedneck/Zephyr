@@ -68,3 +68,14 @@ runlane g2340-440-f1.0 1080x2340 440 1.0
 runlane g2340-440-f1.3 1080x2340 440 1.3
 adb shell wm size reset; adb shell wm density reset; adb shell settings put system font_scale 1.0
 adb logcat -d -s HeaderGeom:I > $OUT/headergeom-log.txt || true
+
+# Accent captures (440 f1.0): Home and the scrolled Settings picker for orange (0), burnt orange (2), dusty blue (3), terracotta (5).
+adb shell wm size 1080x2340; adb shell wm density 440; adb shell settings put system font_scale 1.0; sleep 3
+for A in 0 2 3 5; do
+  shoot accent$A home main --ei accent $A
+  shoot accent$A settings-top settings --ei accent $A
+  adb shell input swipe 540 1900 540 500 400; sleep 1; adb shell input swipe 540 1900 540 500 400; sleep 1; adb shell input swipe 540 1900 540 500 400; sleep 2
+  adb exec-out screencap -p > "$OUT/accent$A-settings-picker.png"
+done
+shoot accent0 reset main --ei accent 0
+adb shell wm size reset; adb shell wm density reset
