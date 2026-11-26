@@ -14,6 +14,17 @@ import java.util.concurrent.TimeUnit
 /** Drive the real Compose code field, actual HTTP pairing and secure persistence.
  * A green protocol test alone does not prove sixth-digit submission. */
 class ZephyrAutoPairTest {
+    /** The pairing screen is a scrolling column: a node can exist below the fold. Wait, then scroll up to 4 times, waiting after each. */
+    private fun findScrolling(device: UiDevice, sel: androidx.test.uiautomator.BySelector, firstWaitMs: Long): androidx.test.uiautomator.UiObject2? {
+        var node = device.wait(Until.findObject(sel), firstWaitMs)
+        var swipes = 0
+        while (node == null && swipes++ < 4) {
+            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 4, 20)
+            node = device.wait(Until.findObject(sel), 1500)
+        }
+        return node
+    }
+
     @Test fun sixthDigitPairsExactlyOnceWithoutButtonTap() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -38,7 +49,7 @@ class ZephyrAutoPairTest {
             val use = device.wait(Until.findObject(By.text("Use this address")), 5000)
             assertNotNull("Use this address missing", use)
             use!!.click()
-            assertNotNull("code field absent", device.wait(Until.findObject(By.text("Code from your PC")), 8000))
+            assertNotNull("code field absent", findScrolling(device, By.text("Code from your PC"), 8000))
             val fields = device.findObjects(By.clazz("android.widget.EditText"))
             assertEquals("address and code fields expected", 2, fields.size)
             fields[1].text = "12345"
@@ -62,7 +73,7 @@ class ZephyrAutoPairTest {
                 card = device.wait(Until.findObject(By.textContains("Paired with")), 1500)
             }
             assertNotNull("success card did not appear", card)
-            val cont = device.wait(Until.findObject(By.text("Continue")), 3000)
+            val cont = findScrolling(device, By.text("Continue"), 3000)
             assertNotNull("Continue button missing", cont)
             cont!!.click()
             assertNotNull("Continue did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
