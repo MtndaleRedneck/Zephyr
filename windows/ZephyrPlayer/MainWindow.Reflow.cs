@@ -3,10 +3,12 @@ using System.Windows;
 
 namespace ZephyrPlayer
 {
-    /// <summary>Midnight Slate reflow: the bar is one fixed-width pill, so the only squeeze is a
-    /// narrow window. Two levels, and no control ever hides: 0 = full volume group and spacing,
-    /// 1 = compact (shorter volume track, no % label, tighter play margins) below the compact
-    /// threshold. Speed/sleep state readouts are owned by RefreshSpeedUi/RefreshSleepUi.</summary>
+    /// <summary>Midnight Slate reflow, measured against the real content: level 0 (full volume track and
+    /// spacing) is kept only while the three groups actually fit side by side; level 1 (compact: shorter
+    /// volume track, tighter play margins) is measured the same way. Below compact fit the row's DownOnly
+    /// viewbox scales it uniformly. Every control and readout stays visible at every width. The play
+    /// cluster stays exactly centered: the side groups are overlay-aligned to the bar's edges, not
+    /// column-bound.</summary>
     public partial class MainWindow
     {
         private int _reflowLevel;
@@ -15,12 +17,20 @@ namespace ZephyrPlayer
 
         private void OnBarSizeChanged(object sender, SizeChangedEventArgs e) => Reflow();
 
+        private static readonly Size Unbounded = new(double.PositiveInfinity, double.PositiveInfinity);
+
         private void ApplyReflowLevel(int level)
         {
-            var compact = level >= 1;
-            VolumeLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-            VolumeSlider.Width = compact ? 56 : 110;
-            PlayPauseButton.Margin = new Thickness(compact ? 4 : 10, 0, compact ? 4 : 10, 0);
+            VolumeSlider.Width = level >= 1 ? 56 : 92;
+            PlayPauseButton.Margin = new Thickness(level >= 1 ? 4 : 10, 0, level >= 1 ? 4 : 10, 0);
+        }
+
+        private double MeasureRow()
+        {
+            LeftGroup.Measure(Unbounded);
+            CenterPlaybackControls.Measure(Unbounded);
+            RightGroup.Measure(Unbounded);
+            return LeftGroup.DesiredSize.Width + CenterPlaybackControls.DesiredSize.Width + RightGroup.DesiredSize.Width;
         }
 
         internal void Reflow()
@@ -30,9 +40,18 @@ namespace ZephyrPlayer
             try
             {
                 var inner = ControlBar.ActualWidth - ControlBar.Padding.Left - ControlBar.Padding.Right - 2;
-                var chosen = PlayerBarLogic.ReflowLevel(inner);
-                ApplyReflowLevel(chosen);
-                _reflowLevel = chosen;
+                ApplyReflowLevel(0);
+                var needed = MeasureRow();
+                var level = PlayerBarLogic.ReflowLevel(inner, needed);
+                if (level != 0)
+                {
+                    ApplyReflowLevel(level);
+                    needed = MeasureRow();
+                }
+                _reflowLevel = level;
+                // Wider than the content: the groups sit flush and the cluster centers. Narrower
+                // window than the content: the viewbox scales the whole row down as one.
+                ControlsRow.Width = Math.Max(inner, needed);
             }
             finally { _reflowing = false; }
         }

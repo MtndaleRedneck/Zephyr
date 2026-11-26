@@ -460,11 +460,12 @@ namespace ZephyrPlayer.Tests
         [Fact]
         public void Bar_Reflows_InSteps_AtNarrowWidths()
         {
-            // Midnight Slate: two levels, nothing hides. Full layout at 700+ inner, compact below.
-            Assert.Equal(0, PlayerBarLogic.ReflowLevel(714));
-            Assert.Equal(0, PlayerBarLogic.ReflowLevel(PlayerBarLogic.CompactInnerWidth));
-            Assert.Equal(1, PlayerBarLogic.ReflowLevel(PlayerBarLogic.CompactInnerWidth - 1));
-            Assert.Equal(1, PlayerBarLogic.ReflowLevel(400));
+            // Midnight Slate: two levels, nothing hides. Compact only when the measured row
+            // does not fit; below compact fit the row scales as one, still nothing hides.
+            Assert.Equal(0, PlayerBarLogic.ReflowLevel(714, 700));
+            Assert.Equal(0, PlayerBarLogic.ReflowLevel(714, 714));
+            Assert.Equal(1, PlayerBarLogic.ReflowLevel(714, 715));
+            Assert.Equal(1, PlayerBarLogic.ReflowLevel(400, 500));
         }
 
         // 2.0.2 Cp2PlayerTests.FullscreenPill_780IsAMax_ClampedToTheScreen, original assertions on the

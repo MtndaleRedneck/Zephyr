@@ -5,13 +5,13 @@ namespace ZephyrPlayer.Tests
     public class FullscreenBarWidthTests
     {
         [Theory]
-        [InlineData(1920, 760)]
-        [InlineData(3840, 760)]
-        [InlineData(1400, 760)]
+        [InlineData(1920, 780)]
+        [InlineData(3840, 780)]
+        [InlineData(1400, 780)]
         [InlineData(800, 760)]
         [InlineData(700, 660)]
         [InlineData(400, 360)]
-        public void Width_IsCappedAt760_ButNeverWiderThanAvailableMinusMargins(double available, double expected)
+        public void Width_IsCappedAt780_ButNeverWiderThanAvailableMinusMargins(double available, double expected)
             => Assert.Equal(expected, MainWindow.BarWidth(available), 3);
 
         [Fact]

@@ -212,5 +212,51 @@ namespace ZephyrPlayer.Tests
                 finally { w.Close(); }
             });
         }
+
+        [Theory]
+        [InlineData(1024)]
+        [InlineData(1920)]
+        public void WorstCase_Controls_Visible_Ordered_NoOverlap(int width)
+        {
+            Sta(path =>
+            {
+                NativeVlc.Init();
+                using var libvlc = new LibVLC();
+                using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
+                var settings = new PlayerSettings(path) { ShowSpeed = true, ShowSleepTimer = true };
+                var w = new MainWindow(libvlc, player, settings, new VolumeService());
+                try
+                {
+                    w.SetRate(1.25);        // widest speed readout ("1.25x")
+                    w.SetSleep(45);         // active countdown badge
+                    w.SetFullscreen(true);  // More button joins the right group
+                    var bar = w.ControlBar;
+                    bar.Opacity = 1;
+                    Capture(bar, width - 48, $"pc-skip-controlbar-worst-{width}.png");
+                    var names = new[] { "VolumeButton", "VolumeSlider",
+                                        "SecondarySkipBackButton", "SkipBackButton", "PlayPauseButton", "SkipForwardButton", "SecondarySkipForwardButton",
+                                        "CaptionsButton", "SpeedButton", "SleepButton", "MoreButton", "FullscreenButton" };
+                    Rect? previous = null;
+                    var center = (FrameworkElement)w.FindName("CenterPlaybackControls")!;
+                    var centerRect = center.TransformToAncestor(bar).TransformBounds(new Rect(0, 0, center.ActualWidth, center.ActualHeight));
+                    Assert.True(Math.Abs((centerRect.Left + centerRect.Right) / 2 - bar.ActualWidth / 2) <= 1, "Playback controls are not centered");
+                    foreach (var name in names)
+                    {
+                        var element = (FrameworkElement)w.FindName(name)!;
+                        Assert.Equal(Visibility.Visible, element.Visibility);
+                        var rect = element.TransformToAncestor(bar).TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+                        Assert.True(rect.Width > 0 && rect.Height > 0, name + " has no usable size");
+                        Assert.True(rect.Left >= -0.5 && rect.Right <= bar.ActualWidth + 0.5, name + " is clipped");
+                        if (previous.HasValue) Assert.True(previous.Value.Right <= rect.Left + 0.5, name + " overlaps its left neighbor");
+                        previous = rect;
+                    }
+                    // State readouts never reflow away.
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("SpeedLabel")!).Visibility);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("SleepLabel")!).Visibility);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("TotalText")!).Visibility);
+                }
+                finally { w.Close(); }
+            });
+        }
     }
 }

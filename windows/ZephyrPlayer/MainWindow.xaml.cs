@@ -68,9 +68,10 @@ namespace ZephyrPlayer
         }
 
         /// <summary>One centered pill in both windowed and fullscreen: the window width minus
-        /// side margins, capped at 760 and never wider than the window minus those margins.</summary>
+        /// side margins, capped at 780 (room for the enlarged skip cluster) and never wider
+        /// than the window minus those margins.</summary>
         internal static double BarWidth(double available) =>
-            Math.Max(0, Math.Min(760, available - 40));
+            Math.Max(0, Math.Min(780, available - 40));
 
         private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
 
@@ -415,7 +416,7 @@ namespace ZephyrPlayer
             if (_opening) { _seeking = false; return; } // Opening: no seek reaches the old movie (2.0.2)
             if (e.ChangedButton != MouseButton.Left) return;
             _seeking = true;
-            SeekToPointer(e);
+            SeekToPointer(e, fromMove: false);
             SeekBar.CaptureMouse();
             e.Handled = true; // the template's repeat buttons must not apply their page step
         }
@@ -423,20 +424,29 @@ namespace ZephyrPlayer
         private void OnSeekMove(object sender, MouseEventArgs e)
         {
             if (!_seeking || !SeekBar.IsMouseCaptured) return;
-            SeekToPointer(e);
+            SeekToPointer(e, fromMove: true);
         }
 
-        private void SeekToPointer(MouseEventArgs e)
+        /// <summary>Capture can be lost without a mouse-up (focus change, system cancel): the scrub
+        /// ends there instead of sticking the timeline to a mouse that is no longer held.</summary>
+        private void OnSeekLostCapture(object sender, MouseEventArgs e) => _seeking = false;
+
+        private DateTime _lastSeekCommitUtc = DateTime.MinValue;
+        internal int SeekCommitCount { get; private set; }
+        internal bool SeekingNow => _seeking;
+
+        private void SeekToPointer(MouseEventArgs e, bool fromMove)
         {
             var width = SeekBar.ActualWidth;
             if (width <= 0) return;
             var frac = Math.Clamp(e.GetPosition(SeekBar).X / width, 0, 1);
-            SeekBar.Value = frac * 1000.0;
-            if (!_opening && _player.Length > 0)
-            {
-                LastSeekFraction = frac;
-                _player.Position = (float)frac;
-            }
+            SeekBar.Value = frac * 1000.0;   // thumb + elapsed preview stay continuous
+            if (_opening || _player.Length <= 0) return;
+            if (fromMove && !PlayerBarLogic.SeekCommitDue(_lastSeekCommitUtc, DateTime.UtcNow)) return;
+            _lastSeekCommitUtc = DateTime.UtcNow;
+            SeekCommitCount++;
+            LastSeekFraction = frac;
+            _player.Position = (float)frac;
         }
 
         /// <summary>While the thumb is held the elapsed label previews where it will land; during Opening the new start's timeline stays at zero (2.0.2).</summary>
@@ -453,6 +463,7 @@ namespace ZephyrPlayer
             _seeking = false;
             if (!_opening && _player.Length > 0)
             {
+                SeekCommitCount++;
                 LastSeekFraction = SeekBar.Value / 1000.0;
                 _player.Position = (float)LastSeekFraction;
             }
@@ -704,6 +715,7 @@ namespace ZephyrPlayer
             FullscreenGlyph.Data = Geometry.Parse(on ? "M10,4 V10 H4 M18,4 V10 H24 M24,18 H18 V24 M4,18 H10 V24" : "M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8");
             MoreButton.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
             FullscreenButton.ToolTip = on ? "Exit full screen (Esc)" : "Full screen (F)";
+            Reflow();
             ShowBarOnce();
         }
 
@@ -781,6 +793,7 @@ namespace ZephyrPlayer
             SleepButton.Visibility = _settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
             RefreshSpeedUi();       // a non-normal speed or a running timer keeps its orange icon
             RefreshSleepUi();
+            Reflow();               // group widths changed; re-measure the row
         }
     }
 }

@@ -36,20 +36,24 @@ namespace ZephyrPlayer
 
         // ---------- fullscreen pill (render 03, Instinct U2) ----------
 
-        /// <summary>The pill: at most 760 px wide, 28 px above the bottom, never wider than the
+        /// <summary>The pill: at most 780 px wide, 28 px above the bottom, never wider than the
         /// window minus a 20 px gap each side. Laid out and drawn at 1:1 in both modes.</summary>
-        public const double PillScale = 1.0, PillLayoutMax = 760, PillSideGap = 20, PillBottom = 28;
+        public const double PillScale = 1.0, PillLayoutMax = 780, PillSideGap = 20, PillBottom = 28;
         public static double PillDrawnWidth(double viewport) => Math.Max(0, Math.Min(PillLayoutMax * PillScale, viewport - 2 * PillSideGap));
         public static double PillLayoutWidth(double viewport) => PillDrawnWidth(viewport) / PillScale;
 
         // ---------- bar reflow at narrow widths ----------
 
-        /// <summary>Below this inner width the bar switches to its compact layout: shorter volume
-        /// track, no % label, tighter play margins. No control ever hides (Midnight Slate).</summary>
-        public const double CompactInnerWidth = 700;
+        /// <summary>0 = full layout, 1 = compact (shorter volume track, tighter play margins).
+        /// Chosen by measuring the real groups: compact only when the full row does not fit.
+        /// Below compact fit the row scales uniformly; every control stays visible.</summary>
+        public static int ReflowLevel(double inner, double needed) => needed <= inner + 0.5 ? 0 : 1;
 
-        /// <summary>0 = full layout, 1 = compact. The fixed-width pill leaves nothing else to give.</summary>
-        public static int ReflowLevel(double inner) => inner < CompactInnerWidth ? 1 : 0;
+        /// <summary>Live scrub commits are throttled so mousemove rate cannot hammer libVLC; the
+        /// visual thumb/elapsed preview stays continuous and the release commits the final spot.</summary>
+        public const double SeekCommitThrottleMs = 75;
+        public static bool SeekCommitDue(DateTime lastCommitUtc, DateTime nowUtc) =>
+            (nowUtc - lastCommitUtc).TotalMilliseconds >= SeekCommitThrottleMs;
 
         // ---------- top overlay meta (render 02: "2012 · 1h 42m") ----------
 
