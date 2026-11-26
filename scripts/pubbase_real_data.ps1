@@ -276,6 +276,12 @@ try {
     if ([long]$item0.DurationMs -le 0 -or [long]$item0.PositionMs -lt 100000) { throw "history values are not the played ones (position $($item0.PositionMs) ms, duration $($item0.DurationMs) ms)" }
     Note 'history_created_by_real_baseline' "PROVEN (playback-history.json written by the published app: PositionMs $($item0.PositionMs), DurationMs $($item0.DurationMs))"
     Stop-Player
+    # Re-snapshot settings AFTER the baseline app has closed: the published app persists its window geometry (ShellBounds) on
+    # close, so the earlier $s0 (read while it was still running) predates its own close write. Same checks as before, and
+    # the baseline's post-close ShellBounds is logged (geometry only, no other settings value) so a candidate-written value is distinguishable.
+    $s0 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
+    if ($s0.ShowSpeed -ne $speedAfter -or $s0.LibraryFolder -ne $lib) { throw "settings.json lost the app-made values after the baseline closed (ShowSpeed $($s0.ShowSpeed) want $speedAfter)" }
+    Note 'settings_post_baseline_close' "baseline ShellBounds after its own close: '$($s0.ShellBounds)'"
 
     # --- upgrade to the candidate and prove what carried over ---
     $files = @('paired.json', 'settings.json', 'playback-history.json')
