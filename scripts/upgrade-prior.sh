@@ -217,7 +217,6 @@ settle_environment() {
   adb wait-for-device
   until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || [ "$i" -ge 60 ]; do sleep 2; i=$((i+1)); done
   [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || { snap settle-fail; echo "SETTLE FAIL: sys.boot_completed never became 1 (harness environment, nothing installed)"; exit 1; }
-  adb shell pm path "$PKG" >/dev/null 2>&1 && { echo "SETTLE FAIL: $PKG is already installed; the settle step only runs before any app install"; exit 1; }
   adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard
   snap preinstall-start
   while [ $((SECONDS - t0)) -lt 120 ]; do
@@ -229,20 +228,30 @@ settle_environment() {
         adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml instrument-results/settle-ui-$taps.xml >/dev/null 2>&1
         B=$(grep -o 'text="Wait"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' instrument-results/settle-ui-$taps.xml | grep -o "\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]")
         [ -n "$B" ] && [ "$(printf '%s\n' "$B" | wc -l)" = 1 ] || { snap settle-fail; echo "SETTLE FAIL: need exactly one Wait button on the dialog, found $(printf '%s' "$B" | grep -c .)"; exit 1; }
+        adb shell pm path "$PKG" >/dev/null 2>&1 && { snap settle-fail; echo "SETTLE FAIL: $PKG is installed; a dialog may only be tapped before the app under test exists"; exit 1; }
         [ "$taps" -lt 3 ] || { snap settle-fail; echo "SETTLE FAIL: an ANR dialog keeps coming back after $taps taps (pre-install)"; exit 1; }
         X1=$(echo $B | cut -d'[' -f2 | cut -d',' -f1); Y1=$(echo $B | cut -d'[' -f2 | cut -d',' -f2 | cut -d']' -f1)
         X2=$(echo $B | cut -d'[' -f3 | cut -d',' -f1); Y2=$(echo $B | cut -d'[' -f3 | cut -d',' -f2 | cut -d']' -f1)
         echo "SETTLE NOTE: pre-install allowlisted ANR dialog ($pp) in focus at +$((SECONDS - t0))s; tapping Wait (tap $((taps+1)))"
         adb shell input tap $(( (X1+X2)/2 )) $(( (Y1+Y2)/2 )); taps=$((taps+1)); sleep 3;;
-      *) clean=$((clean+1)); [ "$clean" -ge 4 ] && break; sleep 3;;
+      *)
+        # Fail closed: an empty or failed focus read, a shown keyguard or a non-awake screen is NOT clean.
+        if [ -n "$focus" ] && [ "$(adb shell dumpsys window | grep -o 'isKeyguardShowing=[a-z]*' | head -1)" = "isKeyguardShowing=false" ] \
+           && [ "$(adb shell dumpsys power | grep -o 'mWakefulness=[A-Za-z]*' | head -1)" = "mWakefulness=Awake" ]; then
+          clean=$((clean+1)); [ "$clean" -ge 4 ] && break
+        else
+          clean=0; adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard
+        fi
+        sleep 3;;
     esac
   done
   focus=$(adb shell dumpsys window | grep "mCurrentFocus")
   case "$focus" in *"Application Not Responding"*) snap settle-fail; echo "SETTLE FAIL: an ANR dialog is still in focus after the bounded settle: $focus"; exit 1;; esac
-  [ "$clean" -ge 4 ] || { snap settle-fail; echo "SETTLE FAIL: focus never settled without an ANR dialog within 120s"; exit 1; }
+  [ "$clean" -ge 4 ] || { snap settle-fail; echo "SETTLE FAIL: focus, keyguard and wakefulness never read clean (non-empty focus, no ANR dialog, keyguard false, Awake) within 120s"; exit 1; }
   snap preinstall-settled
   echo "SETTLE OK: boot completed, no ANR dialog in focus (4 consecutive reads), $taps dialog taps, $((SECONDS - t0))s"
 }
+cp /tmp/up/new-app.sha256 instrument-results/tested-apk.sha256 2>/dev/null || echo "NOTE: no /tmp/up/new-app.sha256 to record"
 settle_environment
 adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: old install"; exit 1; }
