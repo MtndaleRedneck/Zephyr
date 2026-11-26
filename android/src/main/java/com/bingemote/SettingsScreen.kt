@@ -139,7 +139,7 @@ fun SettingsScreen(
                 )
             }
         }
-        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 6.dp))
+        if (store.secureStoreBroken) Spacer(Modifier.height(18.dp)) // first card sits flush under the header, like Home
         BackHandler { onBack() }
 
         // "Connected Sources" card: the orange source labels ARE the
