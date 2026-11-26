@@ -5,9 +5,11 @@ on:
 jobs:
   probe:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
-      - name: Probe Unified Remote server firewall, profile and listening behavior (disposable runner, evidence only)
+      - name: 1 baseline and installer download
+        if: always()
+        timeout-minutes: 6
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
@@ -22,35 +24,79 @@ jobs:
             $rows | Where-Object { ($_.Display + $_.Program + $_.Name) -match 'unified|remoteserver|urserver|9512|9511' } | Format-List | Out-String | Tee-Object "out/ur-rules-$tag.txt"
             "inbound rule count ($tag): $($rows.Count)"
           }
-          "== runner: $((Get-CimInstance Win32_OperatingSystem).Caption) $((Get-CimInstance Win32_OperatingSystem).Version)" | Tee-Object out/00-env.txt -Append
-          Get-NetConnectionProfile | Format-List Name,InterfaceAlias,NetworkCategory,IPv4Connectivity | Out-String | Tee-Object out/00-env.txt -Append
-          Get-NetFirewallProfile | Format-Table Name,Enabled,DefaultInboundAction,DefaultOutboundAction,NotifyOnListen | Out-String | Tee-Object out/00-env.txt -Append
+          Get-NetConnectionProfile | Format-List Name,InterfaceAlias,NetworkCategory | Out-String | Tee-Object out/00-env.txt -Append
           Rules 'before'
           Invoke-WebRequest -Uri 'https://www.unifiedremote.com/download/windows-setup' -OutFile out/ur-setup.exe -MaximumRedirection 5 -UseBasicParsing
           (Get-FileHash out/ur-setup.exe -Algorithm SHA256).Hash | Tee-Object out/01-installer.txt -Append
-          (Get-Item out/ur-setup.exe).VersionInfo | Format-List FileVersion,ProductVersion,CompanyName | Out-String | Tee-Object out/01-installer.txt -Append
           $sig = Get-AuthenticodeSignature out/ur-setup.exe; "signature: $($sig.Status) $($sig.SignerCertificate.Subject)" | Tee-Object out/01-installer.txt -Append
-          $txt = [Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes((Resolve-Path out/ur-setup.exe)))
-          "installer type hints: inno=$($txt.Contains('Inno Setup')) nsis=$($txt.Contains('Nullsoft')) wix=$($txt.Contains('WiX'))" | Tee-Object out/01-installer.txt -Append
-          $p = Start-Process out/ur-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru -Wait; "inno-switch exit: $($p.ExitCode)" | Tee-Object out/02-install.txt -Append
-          if (-not (Test-Path "${env:ProgramFiles(x86)}\Unified Remote 3") -and -not (Test-Path "$env:ProgramFiles\Unified Remote 3")) {
-            $p = Start-Process out/ur-setup.exe -ArgumentList '/S' -PassThru -Wait; "nsis-switch exit: $($p.ExitCode)" | Tee-Object out/02-install.txt -Append }
-          Start-Sleep 10
+      - name: 2 silent install (bounded; the installer may launch the server at its end, so no -Wait on the process tree)
+        if: always()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          function Rules($tag) {
+            $rows = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object {
+              $a = $_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+              $p = $_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+              [pscustomobject]@{ Name=$_.Name; Display=$_.DisplayName; Enabled=$_.Enabled; Profile=$_.Profile; Action=$_.Action; Program=$a.Program; Proto=$p.Protocol; LocalPort=($p.LocalPort -join ','); Group=$_.Group }
+            }
+            $rows | Export-Csv "out/rules-$tag.csv" -NoTypeInformation
+            $rows | Where-Object { ($_.Display + $_.Program + $_.Name) -match 'unified|remoteserver|urserver|9512|9511' } | Format-List | Out-String | Tee-Object "out/ur-rules-$tag.txt"
+            "inbound rule count ($tag): $($rows.Count)"
+          }
+          $p = Start-Process out/ur-setup.exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+          $done = $p.WaitForExit(240000); "installer exited within 240s: $done exit=$(if($done){$p.ExitCode})" | Tee-Object out/02-install.txt -Append
+          Start-Sleep 20
+          Get-Process | Where-Object { $_.Name -match 'RemoteServer|Unified|urserver|ServerSetup|ur-setup' } | Format-Table Name,Id,Path | Out-String -Width 200 | Tee-Object out/02-install.txt -Append
           Get-ChildItem "${env:ProgramFiles(x86)}\Unified Remote 3","$env:ProgramFiles\Unified Remote 3" -ErrorAction SilentlyContinue | Select-Object FullName,Length | Format-Table -AutoSize | Out-String -Width 200 | Tee-Object out/02-install.txt -Append
-          Get-Service | Where-Object { $_.Name -match 'unified' -or $_.DisplayName -match 'unified' } | Format-Table Name,Status,StartType | Out-String | Tee-Object out/02-install.txt -Append
-          Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match 'unified' } | Format-Table TaskName,State | Out-String | Tee-Object out/02-install.txt -Append
-          Rules 'after-install'
+      - name: 3 services, tasks, startup entries and rules after install and launch
+        if: always()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          function Rules($tag) {
+            $rows = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object {
+              $a = $_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+              $p = $_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+              [pscustomobject]@{ Name=$_.Name; Display=$_.DisplayName; Enabled=$_.Enabled; Profile=$_.Profile; Action=$_.Action; Program=$a.Program; Proto=$p.Protocol; LocalPort=($p.LocalPort -join ','); Group=$_.Group }
+            }
+            $rows | Export-Csv "out/rules-$tag.csv" -NoTypeInformation
+            $rows | Where-Object { ($_.Display + $_.Program + $_.Name) -match 'unified|remoteserver|urserver|9512|9511' } | Format-List | Out-String | Tee-Object "out/ur-rules-$tag.txt"
+            "inbound rule count ($tag): $($rows.Count)"
+          }
+          Get-Service | Where-Object { $_.Name -match 'unified' -or $_.DisplayName -match 'unified' } | Format-Table Name,Status,StartType | Out-String | Tee-Object out/03-run.txt -Append
+          Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -match 'unified' } | Format-Table TaskName,State | Out-String | Tee-Object out/03-run.txt -Append
+          foreach ($k in 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run','HKCU:\Software\Microsoft\Windows\CurrentVersion\Run') { (Get-ItemProperty $k -ErrorAction SilentlyContinue).PSObject.Properties | Where-Object { $_.Value -match 'Unified' } | ForEach-Object { "startup: $($_.Name) = $($_.Value)" } | Tee-Object out/03-run.txt -Append }
           $exe = Get-ChildItem "${env:ProgramFiles(x86)}\Unified Remote 3","$env:ProgramFiles\Unified Remote 3" -Filter RemoteServerWin.exe -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($exe) {
-            Start-Process $exe.FullName
-            Start-Sleep 45
-            Get-Process | Where-Object { $_.Name -match 'RemoteServer|urserver|Unified' } | Format-Table Name,Id,SessionId,Path | Out-String -Width 200 | Tee-Object out/03-run.txt -Append
-            $ids = (Get-Process | Where-Object { $_.Name -match 'RemoteServer|urserver|Unified' }).Id
-            Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Format-Table LocalAddress,LocalPort,OwningProcess | Out-String | Tee-Object out/03-run.txt -Append
-            Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Format-Table LocalAddress,LocalPort,OwningProcess | Out-String | Tee-Object out/03-run.txt -Append
-            Rules 'after-run'
-          } else { "RemoteServerWin.exe not found after install" | Tee-Object out/03-run.txt -Append }
-          foreach ($d in "$env:ProgramData\Unified Remote","$env:APPDATA\Unified Remote") {
+          if ($exe -and -not (Get-Process RemoteServerWin -ErrorAction SilentlyContinue)) { Start-Process $exe.FullName; "started server manually (installer had not launched it)" | Tee-Object out/03-run.txt -Append }
+          Start-Sleep 40
+          $ids = (Get-Process | Where-Object { $_.Name -match 'RemoteServer|urserver|Unified' }).Id
+          Get-Process | Where-Object { $ids -contains $_.Id } | Format-Table Name,Id,SessionId,Path | Out-String -Width 200 | Tee-Object out/03-run.txt -Append
+          Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Format-Table LocalAddress,LocalPort,OwningProcess | Out-String | Tee-Object out/03-run.txt -Append
+          Get-NetUDPEndpoint -ErrorAction SilentlyContinue | Where-Object { $ids -contains $_.OwningProcess } | Format-Table LocalAddress,LocalPort,OwningProcess | Out-String | Tee-Object out/03-run.txt -Append
+          Rules 'after-run'
+      - name: 4 settings keys (auth, encryption, bind), values redacted for secrets
+        if: always()
+        timeout-minutes: 4
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          function Rules($tag) {
+            $rows = Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Direction -eq 'Inbound' } | ForEach-Object {
+              $a = $_ | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue
+              $p = $_ | Get-NetFirewallPortFilter -ErrorAction SilentlyContinue
+              [pscustomobject]@{ Name=$_.Name; Display=$_.DisplayName; Enabled=$_.Enabled; Profile=$_.Profile; Action=$_.Action; Program=$a.Program; Proto=$p.Protocol; LocalPort=($p.LocalPort -join ','); Group=$_.Group }
+            }
+            $rows | Export-Csv "out/rules-$tag.csv" -NoTypeInformation
+            $rows | Where-Object { ($_.Display + $_.Program + $_.Name) -match 'unified|remoteserver|urserver|9512|9511' } | Format-List | Out-String | Tee-Object "out/ur-rules-$tag.txt"
+            "inbound rule count ($tag): $($rows.Count)"
+          }
+          foreach ($d in "$env:ProgramData\Unified Remote","$env:APPDATA\Unified Remote","$env:LOCALAPPDATA\Unified Remote") {
             if (Test-Path $d) {
               "-- $d" | Tee-Object out/04-config.txt -Append
               Get-ChildItem $d -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 200000 -and $_.Extension -match '\.(json|xml|ini|cfg|conf|txt)$' -and $_.FullName -notmatch '\\Remotes\\' } | Select-Object -First 30 | ForEach-Object {
@@ -59,15 +105,10 @@ jobs:
               }
             }
           }
-          foreach ($pair in @(@('before','after-install'),@('after-install','after-run'))) {
-            $a = Import-Csv "out/rules-$($pair[0]).csv"
-            if (Test-Path "out/rules-$($pair[1]).csv") {
-              $b = Import-Csv "out/rules-$($pair[1]).csv"
-              $new = $b | Where-Object { $n = $_.Name; -not ($a | Where-Object Name -eq $n) }
-              "-- new inbound rules $($pair[0]) -> $($pair[1]): $(@($new).Count)" | Tee-Object out/05-diff.txt -Append
-              $new | Format-List Display,Enabled,Profile,Action,Program,Proto,LocalPort | Out-String | Tee-Object out/05-diff.txt -Append
-            }
-          }
+          $a = Import-Csv out/rules-before.csv; $b = Import-Csv out/rules-after-run.csv
+          $new = $b | Where-Object { $n = $_.Name; -not ($a | Where-Object Name -eq $n) }
+          "-- new inbound rules before -> after-run: $(@($new).Count)" | Tee-Object out/05-diff.txt -Append
+          $new | Format-List Display,Enabled,Profile,Action,Program,Proto,LocalPort | Out-String | Tee-Object out/05-diff.txt -Append
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
