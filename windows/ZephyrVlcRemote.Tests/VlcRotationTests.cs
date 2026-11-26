@@ -138,10 +138,35 @@ public class VlcRotationTests : IDisposable
         VlcSetup.VlcRunningOverride = () => false;
         VlcRotation.PassOnce();                              // repairs and re-lands (the landing edge re-arms)
         Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
-        Assert.False(kept.AdoptSpent);
+        Assert.False(kept.AdoptSpent);                       // re-armed exactly at the re-landing
         Assert.True(VlcRotation.RotationOutcomeComplete(gen));
-        VlcRotation.PassOnce();                              // quiet verify clears
+        kept.AdoptSpent = true;                              // fetched NEW again and spent
+        VlcRotation.PassOnce();                              // quiet verify clears - and must NOT re-arm again
         Assert.Null(VlcRotation.TargetValue);
+        Assert.True(kept.AdoptSpent);                        // exactly one re-arm for the whole clobber cycle
+    }
+
+    [Fact]
+    public void ReOpenPersistFailureAbortsTheRepairAndKeepsStateConsistent()
+    {
+        // If the re-open persist is refused, the rollback restores landed and the repair must
+        // NOT run: a vlcrc write whose own persist abandons would leave disk NEW with spent OLD
+        // grants. State stays consistent and the next pass retries the re-open.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-22");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                              // lands NEW
+        Assert.True(VlcRotation.Landed);
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1"); // the clobber
+        Program.StoreBroken = true;
+        VlcRotation.PassOnce();                              // re-open persist refused: rollback, NO repair write
+        Assert.True(VlcRotation.Landed);                     // not half-re-opened
+        Assert.Equal("old-password-1", VlcSetup.ReadVlcrcValue("http-password")); // no write was attempted
+        Program.StoreBroken = false;
+        VlcRotation.PassOnce();                              // retries: re-opens, repairs, re-lands
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
+        Assert.True(VlcRotation.Landed);
     }
 
     [Fact]

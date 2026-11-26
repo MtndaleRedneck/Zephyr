@@ -163,13 +163,14 @@ internal static class VlcSetup
             Program.Log("vlcrc already has the web remote set up - nothing to write.");
             return JsonSerializer.Serialize(new { ok = true });
         }
-        var prior = VlcRotation.BackupTarget();
         // Stale-value guard: never stage over a NEWER truth. A live rotation target of a
         // different value belongs to a newer writer (a removal rotation); a vlcrc carrying a
         // different password is the applied credential. Either means THIS phone's value is
         // stale (a late Finish with the old password): refuse, so the phone re-fetches the
         // current one through adopt instead of reverting the PC to the old password. An
-        // UNREADABLE vlcrc is unknown, not empty: refuse a fresh stage then as well.
+        // UNREADABLE vlcrc is unknown, not empty: refuse a fresh stage then as well. The outer
+        // checks are the fast path; the SAME checks rerun INSIDE the transaction, because a
+        // removal can stage (and a pass can land) between them and the persist.
         var liveTarget = VlcRotation.TargetValue;
         string? applied;
         try { applied = ReadVlcrcPasswordStrict(); }
@@ -188,8 +189,31 @@ internal static class VlcSetup
             Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
             return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
         }
-        if (!Program.MutateAndPersist(() => VlcRotation.SetTargetUnderConfigSaveLock(password),
-                () => VlcRotation.RestoreTargetUnderConfigSaveLock(prior), "the VLC setup"))
+        var refused = false;
+        var staged = false;
+        (string? t2, bool l2, int g2) backup = default;
+        var okPersist = Program.MutateAndPersist(() =>
+            {
+                // Authoritative recheck under ConfigSaveLock: every rotation's target persists
+                // BEFORE its vlcrc write can land, and vlcrc itself is re-read here, so no
+                // interleaved rotation can be overwritten by this stage.
+                var targetNow = VlcRotation.TargetValue;
+                if (targetNow != null && targetNow != password) { refused = true; return; }
+                string? appliedNow;
+                try { appliedNow = ReadVlcrcPasswordStrict(); }
+                catch (VlcrcUnreadableException) { appliedNow = null; } // the write attempt below decides
+                if (!string.IsNullOrEmpty(appliedNow) && appliedNow != password) { refused = true; return; }
+                backup = VlcRotation.BackupTarget(); // inside the transaction: the rollback restores THIS state
+                VlcRotation.SetTargetUnderConfigSaveLock(password);
+                staged = true;
+            },
+            () => { if (staged) VlcRotation.RestoreTargetUnderConfigSaveLock(backup); }, "the VLC setup");
+        if (refused)
+        {
+            Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
+            return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
+        }
+        if (!okPersist)
             return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
         VlcRotation.Kick();
         var outcome = VlcRotation.TryInlinePass();

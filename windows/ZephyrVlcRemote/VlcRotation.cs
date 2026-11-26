@@ -178,14 +178,20 @@ internal static class VlcRotation
                 // repairs and re-lands (its persist re-arms the grants on the landing edge).
                 (string? t2, bool l2, int g2) backup = default;
                 var marked = false;
-                Program.MutateAndPersist(() =>
+                var reopened = Program.MutateAndPersist(() =>
                     {
                         backup = BackupTarget(); // inside the transaction
                         marked = MarkUnlandedUnderConfigSaveLock(t, gen);
                     },
                     () => { if (marked) RestoreTargetUnderConfigSaveLock(backup); },
                     "the VLC password re-open");
-                if (!marked) return; // a newer writer moved the state on, or it is already re-opened
+                // !marked: a newer writer moved the state on, or it is already re-opened.
+                // !reopened: the persist FAILED and rolled back (landed restored, disk OLD) -
+                // stop here: a repair write now would land vlcrc NEW on disk while its persist
+                // abandons, and the grant re-arm would roll back - the verify pass would then
+                // clear the target with spent OLD grants and lock the kept phones out. The next
+                // pass retries the re-open.
+                if (!marked || !reopened) return;
                 if (ApplyTargetUnderMutex(t, false, gen, obs) == ApplyOutcome.Landed) // defers on a running VLC itself
                     Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
             }
