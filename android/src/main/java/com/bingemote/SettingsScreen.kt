@@ -134,7 +134,7 @@ fun SettingsScreen(
         Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
     ) {
         // Same bar as Home and Movies: 12dp above, 44dp row, 12dp below (68dp).
-        ScreenHeader("Settings", hapticsOn = haptics, edge = 0.dp, matchHomeRow = true, onBack = onBack)
+        ScreenHeader("Settings", hapticsOn = haptics, edge = 0.dp, onBack = onBack)
         if (store.secureStoreBroken) {
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
@@ -143,7 +143,7 @@ fun SettingsScreen(
                 )
             }
         }
-        if (store.secureStoreBroken) Spacer(Modifier.height(18.dp)) // first card sits flush under the header, like Home
+        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 6.dp))
         BackHandler { onBack() }
 
         // "Connected Sources" card: the orange source labels ARE the
