@@ -211,11 +211,12 @@ snap() { # $1 = label: focus, processes and timing evidence (diagnostic only)
     # Passive resource and ANR evidence (diagnostic only; read-only commands, no gate or assertion reads these).
     echo "-- runner: nproc=$(nproc) loadavg=$(cut -d' ' -f1-3 /proc/loadavg) $(grep -E 'MemTotal|MemAvailable' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
     echo "-- avd config: $(grep -hE '^hw.ramSize|^hw.cpu.ncore|^vm.heapSize' "$HOME"/.android/avd/*.avd/config.ini 2>/dev/null | tr '\n' ' ')"
-    echo "-- guest: loadavg=$(adb shell cat /proc/loadavg | tr -d '\r') $(adb shell grep -E 'MemTotal|MemAvailable' /proc/meminfo | tr -s ' ' | tr '\r\n' '  ')"
-    echo "-- guest top:"; adb shell top -b -n 1 -m 8 2>&1 | head -14 || true
-    echo "-- guest anr dir (may be unreadable without root):"; adb shell ls /data/anr 2>&1 | head -5 || true
-    echo "-- guest logcat ANR/slow-launcher lines (cap 25):"
-    adb logcat -b all -d -v threadtime 2>&1 | grep -E "ANR in|am_anr|Input dispatching timed out|Slow (operation|Looper)|nexuslauncher.*(Skipped [0-9]+ frames|Davey)" | tail -25 || true
+    echo "-- guest: loadavg=$(timeout 15 adb shell cat /proc/loadavg | tr -d '\r') $(timeout 15 adb shell "grep -E 'MemTotal|MemAvailable' /proc/meminfo" | tr -s ' ' | tr '\r\n' '  ')"
+    echo "-- guest top:"; timeout 15 adb shell top -b -n 1 -m 8 2>&1 | head -14 || true
+    echo "-- guest anr dir (may be unreadable without root):"; timeout 15 adb shell ls -l /data/anr 2>&1 | head -5 || true
+    echo "-- guest logcat ANR/slow-launcher lines (default buffers, last 3000 lines, 20 s cap, 25 lines max):"
+    timeout 20 adb logcat -d -t 3000 -v threadtime 2>&1 | grep -E "ANR in|am_anr|Input dispatching timed out|Slow (operation|Looper)|nexuslauncher.*(Skipped [0-9]+ frames|Davey)" | tail -25 || true
+    echo "-- end of resource block"
   } > "$f" 2>&1
   cat "$f"
 }

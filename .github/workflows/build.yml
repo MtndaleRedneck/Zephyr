@@ -292,6 +292,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        timeout-minutes: 15
         with:
           api-level: 34
           arch: x86_64
@@ -310,6 +311,7 @@ jobs:
           cp /tmp/up/old16-test.apk /tmp/up/old-test.apk
           (cd /tmp/up && sha256sum -c new-app.sha256)
       - uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        timeout-minutes: 15
         with:
           api-level: 34
           arch: x86_64
