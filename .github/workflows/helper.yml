@@ -1,0 +1,78 @@
+name: Helper
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, vlc-remote-120-1125]
+    paths:
+      - 'windows/ZephyrVlcRemote/**'
+      - 'windows/ZephyrVlcRemote.Tests/**'
+      - '.github/workflows/helper.yml'
+
+# Zephyr VLC Remote (Windows helper): tests, publish and installer build.
+# Only a 1-day review artifact (installer + sha256) and window shots are uploaded; nothing is
+# published from here. Release assets are created separately, never by this workflow.
+
+permissions:
+  contents: read
+
+jobs:
+  helper:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.x
+      - name: Helper unit tests
+        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --filter 'FullyQualifiedName!~RealVlc'
+      - name: Publish helper exe
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
+      - name: Report size and runtime
+        shell: pwsh
+        run: |
+          $f = Get-Item windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe
+          "exe bytes: $($f.Length)"
+          dotnet --version
+          Get-ChildItem "$env:ProgramFiles\dotnet\shared\Microsoft.NETCore.App" | Select-Object -ExpandProperty Name
+      - name: Build the installer
+        run: |
+          choco install innosetup --no-progress -y
+          $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/ZephyrVlcRemote/installer.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          Get-ChildItem windows/ZephyrVlcRemote/Output | Select-Object Name, Length
+          $setup = @(Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe")
+          if ($setup.Count -ne 1) { throw "expected exactly one installer, found $($setup.Count)" }
+          $hash = (Get-FileHash $setup[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($setup[0].Name)" | Set-Content -Encoding ascii "windows/ZephyrVlcRemote/Output/$($setup[0].Name).sha256"
+          "installer $($setup[0].Name) csproj-version $v sha256 $hash"
+          $pe = (Get-Item "windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe").VersionInfo
+          "published exe FileVersion=$($pe.FileVersion) ProductVersion=$($pe.ProductVersion)"
+      - name: Upload installer and sha256 for review (1 day)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: helper-installer-review
+          path: |
+            windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe
+            windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.sha256
+          if-no-files-found: error
+          retention-days: 1
+      - name: Render pairing and Wi-Fi states (CI-hook build, not shipped)
+        shell: pwsh
+        run: |
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
+          foreach ($m in @('default','pairing','broken-store')) {
+            $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\shot-$m.png"
+            $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = $m
+            $p = Start-Process -FilePath windows/ZephyrVlcRemote/shot/ZephyrVlcRemote.exe -ArgumentList '--window-shot' -PassThru
+            if (-not $p.WaitForExit(60000)) { $p.Kill(); throw "compressed exe did not finish the $m render in 60s" }
+            if (-not (Test-Path "shot-$m.png")) { throw "no $m render produced" }
+          }
+          Get-ChildItem shot-*.png | Select-Object Name, Length
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: helper-window-shots
+          path: shot-*.png
+          retention-days: 1

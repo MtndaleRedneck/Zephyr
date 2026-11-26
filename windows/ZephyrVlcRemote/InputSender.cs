@@ -43,7 +43,33 @@ internal static class InputSender
     // Two phones can tap at the same instant; keep one gesture's SendInput calls together.
     private static readonly object Gate = new();
 
-    private static void Send(params INPUT[] inputs) => SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    // SendInput returns how many inputs it actually played; a short count means Windows
+    // did not play the batch. Surface that once per episode instead of freezing silently:
+    // true = not played, false = played again. The count is all we know - no cause claimed.
+    public static event Action<bool>? BlockedStateChanged;
+    private static bool _blocked;
+    /// <summary>Current blocked state, so a late-created window can replay the notice.</summary>
+    public static bool IsBlocked => _blocked;
+
+    private static void Send(params INPUT[] inputs)
+    {
+        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        var blocked = sent < inputs.Length;
+#if BLOCK_NOTICE_HOOK
+        // CI-only: pretend Windows rejected the whole batch (sent=0 keeps the log's
+        // counts exact) so the notice path can be tested.
+        if (File.Exists(Path.Combine(Program.DataDir, "fake-block"))) { sent = 0; blocked = true; }
+#endif
+        if (blocked != _blocked)
+        {
+            _blocked = blocked;
+            // Observed fact only: how many inputs Windows accepted. No cause is claimed.
+            Program.Log(blocked
+                ? $"Input could not be sent: SendInput played {sent} of {inputs.Length} inputs."
+                : "Input is being sent again.");
+            BlockedStateChanged?.Invoke(blocked);
+        }
+    }
 
     private static INPUT Mouse(uint flags, int dx = 0, int dy = 0, uint data = 0) =>
         new() { type = INPUT_MOUSE, U = new INPUTUNION { mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = flags, mouseData = data } } };
@@ -70,8 +96,12 @@ internal static class InputSender
         }
     }
 
+    /// <summary>Test seam only: when set, button events go here instead of the real mouse. Null in production.</summary>
+    internal static Action<string, bool>? ButtonSink;
+
     public static void Button(string button, bool down)
     {
+        if (ButtonSink is { } sink) { sink(button, down); return; }
         var flags = button == "right"
             ? (down ? MOUSEEVENTF_RIGHTDOWN : MOUSEEVENTF_RIGHTUP)
             : (down ? MOUSEEVENTF_LEFTDOWN : MOUSEEVENTF_LEFTUP);

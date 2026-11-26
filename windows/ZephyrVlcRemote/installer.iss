@@ -7,7 +7,7 @@
 ; MySourceDir selects which published exe is packaged: "out" is the CI test build
 ; (PAIR_CODE_HOOK compiled in, never shipped); "release-out" is the clean shipped build.
 #ifndef MyAppVersion
-  #define MyAppVersion "1.0.1"
+  #define MyAppVersion "1.2.0"
 #endif
 #ifndef MySourceDir
   #define MySourceDir "release-out"
@@ -36,7 +36,7 @@ Source: "{#MySourceDir}\ZephyrVlcRemote.exe"; DestDir: "{app}"; Flags: ignorever
 Source: "..\..\THIRD-PARTY-NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 ; The app's own license (GPLv3).
 Source: "..\..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
-; License and third-party notices of the bundled .NET 8.0.32 runtime (see SOURCES.txt there).
+; License and third-party notices of the bundled .NET 10 runtime (see SOURCES.txt there).
 Source: "runtime-notices\*"; DestDir: "{app}\dotnet-runtime-notices"; Flags: ignoreversion
 
 [Registry]

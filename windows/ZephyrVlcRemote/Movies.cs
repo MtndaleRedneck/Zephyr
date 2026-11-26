@@ -94,8 +94,10 @@ internal static class Movies
         catch (Exception) { return Error(404, "not found", "That folder does not exist on the PC."); }
     }
 
-    /// <summary>Start VLC with the chosen file and the web interface the app expects.</summary>
-    public static string Play(string root, string rel, int httpPort, string httpPassword, bool fullscreen, IPAddress bindTo, bool? resume)
+    /// <summary>Start VLC with the chosen file and the web interface the app expects. The body
+    /// password is a FALLBACK only: the helper uses vlcrc's effective password whenever one is
+    /// configured.</summary>
+    public static string Play(string root, string rel, int httpPort, string? fallbackPassword, bool fullscreen, IPAddress bindTo, bool? resume)
     {
         var file = Jail(root, rel);
         if (file == null || !File.Exists(file)) return Error(404, "not found", "That file does not exist on the PC.");
@@ -110,37 +112,61 @@ internal static class Movies
                 return JsonSerializer.Serialize(new { ask = new { position = ask.Value.position, length = ask.Value.length } });
         }
         if (resume == false) ResumeTracker.Clear(file);
-        // ArgumentList, never string concatenation: a quote in the VLC password must not
-        // become extra VLC options.
-        var psi = new ProcessStartInfo { FileName = vlc, UseShellExecute = false };
-        psi.ArgumentList.Add(file);
-        psi.ArgumentList.Add("--extraintf=http");
-        psi.ArgumentList.Add("--http-host=" + BindAddress(bindTo));
-        psi.ArgumentList.Add("--http-port=" + httpPort);
-        psi.ArgumentList.Add("--http-password=" + httpPassword);
-        // A second tap hands the file to the running VLC instead of opening another one.
-        psi.ArgumentList.Add("--one-instance");
-        if (fullscreen) psi.ArgumentList.Add("--fullscreen");
-        // Phone-launched plays never get VLC's own "continue from last time?" prompt;
-        // the phone's Resume / Start over dialog is the one place that is decided.
-        psi.ArgumentList.Add("--qt-continue=0");
-        if (resume == true)
+        // One launch/write exclusion with the rotation pass (lock order: LaunchWriteMutex >
+        // ConfigSaveLock; a lock{} block compiles to try/finally, so the mutex always releases).
+        // With a target outstanding, one inline apply attempt runs here so the launched VLC and
+        // vlcrc agree; a failed attempt never blocks the play - VLC launches with the effective
+        // password and the timed pass keeps converging.
+        string httpPassword;
+        lock (VlcRotation.LaunchWriteMutex)
         {
-            var ask = ResumeTracker.Ask(file);
-            if (ask != null) psi.ArgumentList.Add("--start-time=" + (int)ask.Value.position);
+            try
+            {
+                var (t, landed, gen) = VlcRotation.SnapshotCommitted();
+                if (t != null)
+                {
+                    var obs = VlcSetup.ReadHealthy();
+                    if (obs.ReadOk && !obs.HealthyFor(t)) VlcRotation.RecordDivergence(obs.Password); // a failed read is unknown, not divergence
+                    VlcRotation.ApplyTargetUnderMutex(t, landed, gen, obs);
+                }
+            }
+            catch (Exception ex)
+            {
+                Program.Log("VLC password-change inline attempt failed (" + ex.GetType().Name + ").");
+            }
+            httpPassword = VlcSetup.EffectivePassword() ?? fallbackPassword ?? "";
+            // ArgumentList, never string concatenation: a quote in the VLC password must not
+            // become extra VLC options.
+            var psi = new ProcessStartInfo { FileName = vlc, UseShellExecute = false };
+            psi.ArgumentList.Add(file);
+            psi.ArgumentList.Add("--extraintf=http");
+            psi.ArgumentList.Add("--http-host=" + BindAddress(bindTo));
+            psi.ArgumentList.Add("--http-port=" + httpPort);
+            psi.ArgumentList.Add("--http-password=" + httpPassword);
+            // A second tap hands the file to the running VLC instead of opening another one.
+            psi.ArgumentList.Add("--one-instance");
+            if (fullscreen) psi.ArgumentList.Add("--fullscreen");
+            // Phone-launched plays never get VLC's own "continue from last time?" prompt;
+            // the phone's Resume / Start over dialog is the one place that is decided.
+            psi.ArgumentList.Add("--qt-continue=0");
+            if (resume == true)
+            {
+                var ask = ResumeTracker.Ask(file);
+                if (ask != null) psi.ArgumentList.Add("--start-time=" + (int)ask.Value.position);
+            }
+            try
+            {
+                Process.Start(psi);
+            }
+            catch (Exception ex)
+            {
+                // The detail is UI on the phone: plain words, never a raw exception message.
+                Program.Log("VLC could not be started: " + ex.Message);
+                return Error(500, "launch failed", "VLC could not be started on this PC.");
+            }
+            ResumeTracker.NoteLaunch(httpPort, httpPassword);
+            Program.Log("Started VLC with: " + file);
         }
-        try
-        {
-            Process.Start(psi);
-        }
-        catch (Exception ex)
-        {
-            // The detail is UI on the phone: plain words, never a raw exception message.
-            Program.Log("VLC could not be started: " + ex.Message);
-            return Error(500, "launch failed", "VLC could not be started on this PC.");
-        }
-        ResumeTracker.NoteLaunch(httpPort, httpPassword);
-        Program.Log("Started VLC with: " + file);
         return JsonSerializer.Serialize(new { ok = true });
     }
 

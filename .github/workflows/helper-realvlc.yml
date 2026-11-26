@@ -1,0 +1,40 @@
+name: Helper RealVLC
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, vlc-remote-120-1125]
+    paths:
+      - 'windows/ZephyrVlcRemote/**'
+      - 'windows/ZephyrVlcRemote.Tests/**'
+      - '.github/workflows/helper-realvlc.yml'
+
+# Narrow lane for the REAL-VLC rotation tests only (RealVlcRotationTests). Manual dispatch is
+# only registered once a workflow exists on the default branch, so while the rotation lives on
+# an isolated integration branch the lane also runs on pushes to that branch (helper-code paths
+# only). It launches real VLC processes against the helper's rotation state and is NOT part of
+# the ordinary helper lane (helper.yml runs everything except ~RealVlc).
+
+permissions:
+  contents: read
+
+jobs:
+  helper-realvlc:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Install VLC and ffmpeg
+        run: choco install vlc ffmpeg --no-progress -y
+      - name: Build the fixture video
+        shell: pwsh
+        run: |
+          ffmpeg -y -f lavfi -i testsrc=duration=30:size=640x360:rate=24 -f lavfi -i sine=frequency=440:duration=30 -shortest "$env:RUNNER_TEMP\realvlc-fixture.mp4"
+          "fixture: $env:RUNNER_TEMP\realvlc-fixture.mp4"
+      - name: Real VLC rotation tests
+        env:
+          BINGEMOTE_SUBTITLE_VIDEO: ${{ runner.temp }}\realvlc-fixture.mp4
+        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --filter 'FullyQualifiedName~RealVlcRotation' --logger 'console;verbosity=detailed'
