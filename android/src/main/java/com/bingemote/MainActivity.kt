@@ -222,16 +222,16 @@ class MainActivity : ComponentActivity() {
                             } else if (pairFromHome) { pairFromHome = false; current.value = "main" }
                             else current.value = "settings"
                         },
-                        onCancel = {
-                            // Done now needs a good status check, so a Player-only user whose check could not finish can still leave:
-                            // a saved Player pairing must not leave first-run (and polling) frozen behind the Done button.
-                            if (!store.setupDone && store.zephyrToken.isNotBlank()) {
+                        onCancel = { if (pairFromHome) { pairFromHome = false; current.value = "main" } else current.value = "settings" },
+                        // Leaving after a fresh Player pairing this screen saved and the PC did not reject (Done needs a good
+                        // check, so Cancel/Back must not leave first run frozen). The screen already ruled out a rejected token and a
+                        // VLC pairing in progress; this only finishes the Player-only first run, like onDone.
+                        onLeavePaired = {
+                            if (!store.setupDone) {
                                 store.setupDone = true
                                 store.selectedSource = Source.ZEPHYR
                                 remote.start()
-                                pairFromHome = false
-                                current.value = "main"
-                            } else if (pairFromHome) { pairFromHome = false; current.value = "main" } else current.value = "settings"
+                            }
                         },
                     )
                     // CI screenshot state (debug builds only): the Zephyr setup screen,

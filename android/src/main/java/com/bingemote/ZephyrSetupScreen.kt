@@ -20,6 +20,13 @@ import kotlinx.coroutines.withContext
 
 private enum class PairCheck { None, Checking, Ok, BadToken, CouldntCheck }
 
+/** Leaving (Cancel or Back) finishes the Player-only first run only when ALL hold: setup is not finished, no VLC pairing is in
+ *  progress (a saved VLC helper token means the user is mid VLC setup: keep it and the source), this screen saved a Player
+ *  pairing this session, and the PC did not reject it (check finished Ok or Couldn't-check; never BadToken or still Checking). */
+internal fun shouldFinishPlayerFirstRunOnLeave(setupDone: Boolean, vlcHelperToken: String, playerToken: String,
+                                               savedThisSession: Boolean, checkOkOrCouldnt: Boolean): Boolean =
+    !setupDone && vlcHelperToken.isBlank() && playerToken.isNotBlank() && savedThisSession && checkOkOrCouldnt
+
 /** Pairing with the Zephyr Player: the same screen and steps as the BingeMote setup (instructions step, then find or type the PC,
  *  code, Pair, and a result card with a read-only check). Only the app name, the Player's own error wording and the connection
  *  check differ. Back and Cancel follow the BingeMote rule: first run walks back one step, re-entry leaves. */
@@ -28,6 +35,7 @@ fun ZephyrSetupScreen(
     remote: RemoteState,
     onDone: () -> Unit,
     onCancel: () -> Unit,
+    onLeavePaired: () -> Unit = {},
     initialStep: Int = 0,
     demoTop: Boolean = false, // debug capture only: do not scroll to the end
     demo: String = "", // debug capture only (MainActivity, BuildConfig.DEBUG): preset UI state, no network, no store write
@@ -135,9 +143,14 @@ fun ZephyrSetupScreen(
     // Debug capture only: demo states that show the lower cards scroll to the end so the frame contains them.
     val demoScroll = rememberScrollState()
     LaunchedEffect(demo) { if (BuildConfig.DEBUG && demo.isNotEmpty() && demo != "chosen" && demo != "found" && !demoTop) { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
+    fun leave() {
+        val ok = checkState == PairCheck.Ok || checkState == PairCheck.CouldntCheck
+        if (shouldFinishPlayerFirstRunOnLeave(store.setupDone, store.helperToken, store.zephyrToken, pairedName != null, ok)) onLeavePaired()
+        onCancel()
+    }
     // Player-only rule (no VLC flag): opened with no saved Player pairing = first run, Back walks pair -> install;
     // opened with a saved pairing (re-entry) Back leaves.
-    BackHandler { if (step > 1 && entryStep == 1) { step -= 1; error = null } else onCancel() }
+    BackHandler { if (step > 1 && entryStep == 1) { step -= 1; error = null } else leave() }
 
     Column(
         Modifier.fillMaxSize().background(Bg).verticalScroll(demoScroll).padding(16.dp), // 16dp like BingeMote's setup
@@ -146,7 +159,7 @@ fun ZephyrSetupScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Set up Zephyr Player", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
-            androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = AccentText) }
+            androidx.compose.material3.TextButton(onClick = { leave() }) { Text("Cancel", color = AccentText) }
         }
         Spacer(Modifier.height(18.dp))
 
