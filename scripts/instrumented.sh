@@ -40,6 +40,8 @@ com.bingemote.AutoSetupCheckTest
 com.bingemote.StoreMigrationTest
 com.bingemote.NoticeTokenResetTest
 com.zephyr.remote.StreamServerAndroidTest
+com.zephyr.remote.StreamServiceRefusalAndroidTest
+com.bingemote.MoviesStaleLoadTest
 com.bingemote.SeekGestureTest
 com.bingemote.CancelGestureTest
 com.bingemote.MouseCadenceTest
