@@ -833,7 +833,10 @@ internal sealed class HelperWindow : Form
         // Generated BEFORE the lock; the removal and the rotation persist as ONE transaction:
         // a refused save rolls both back and nothing changed.
         var newPassword = VlcSetup.GeneratePassword();
-        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray(), newPassword);
+        // Off the UI thread: the transaction can wait on LaunchWriteMutex for the duration of a
+        // Play inline launch. The transaction itself touches no UI; everything below continues
+        // on the UI thread after the await.
+        var (ok, gen) = await Task.Run(() => Program.RemovePhonesAndRotatePersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray(), newPassword));
         if (!ok)
         {
             NoteDialog.Show(this, "Couldn't save the removal, so " + ph.Name + " is still paired. Nothing changed. Try again.");
@@ -858,7 +861,7 @@ internal sealed class HelperWindow : Form
                 "Pair them again with new codes.",
                 "Remove all")) return;
         var newPassword = VlcSetup.GeneratePassword();
-        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all, newPassword);
+        var (ok, gen) = await Task.Run(() => Program.RemovePhonesAndRotatePersist(all => all, newPassword));
         if (!ok)
         {
             NoteDialog.Show(this, "Couldn't save the removal, so every phone is still paired. Nothing changed. Try again.");
