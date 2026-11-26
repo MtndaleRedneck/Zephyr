@@ -222,7 +222,17 @@ class MainActivity : ComponentActivity() {
                             } else if (pairFromHome) { pairFromHome = false; current.value = "main" }
                             else current.value = "settings"
                         },
-                        onCancel = { if (pairFromHome) { pairFromHome = false; current.value = "main" } else current.value = "settings" },
+                        onCancel = {
+                            // Done now needs a good status check, so a Player-only user whose check could not finish can still leave:
+                            // a saved Player pairing must not leave first-run (and polling) frozen behind the Done button.
+                            if (!store.setupDone && store.zephyrToken.isNotBlank()) {
+                                store.setupDone = true
+                                store.selectedSource = Source.ZEPHYR
+                                remote.start()
+                                pairFromHome = false
+                                current.value = "main"
+                            } else if (pairFromHome) { pairFromHome = false; current.value = "main" } else current.value = "settings"
+                        },
                     )
                     // CI screenshot state (debug builds only): the Zephyr setup screen,
                     // captured under the historical "settings-pair" shot name.
