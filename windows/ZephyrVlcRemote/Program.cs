@@ -799,6 +799,7 @@ internal static class Program
     {
         PairedPhone[] before = Array.Empty<PairedPhone>();
         (string? t, bool landed, int gen) backup = default;
+        var stagedGen = 0; // captured INSIDE the transaction: a read after the locks could return a NEWER rotation's generation and misattribute this removal's outcome
         bool ok;
         // Staging is serialized under LaunchWriteMutex (the lock ORDER: LaunchWriteMutex >
         // ConfigSaveLock > PhonesLock/Gate): a pass that snapshotted the previous target and is
@@ -813,6 +814,7 @@ internal static class Program
                     lock (PhonesLock) { before = Phones.ToArray(); foreach (var r in pick(before)) Phones.Remove(r); }
                     backup = VlcRotation.BackupTarget();
                     VlcRotation.SetTargetUnderConfigSaveLock(newVlcPassword);
+                    stagedGen = VlcRotation.Generation; // exactly this stage's committed generation
                 },
                 () =>
                 {
@@ -821,7 +823,7 @@ internal static class Program
                 },
                 "the phone removal");
         }
-        return (ok, VlcRotation.Generation);
+        return (ok, stagedGen);
     }
 
     /// <summary>Transactional pairing (round-5 B3): the phone exists in memory only
