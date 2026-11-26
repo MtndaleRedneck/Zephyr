@@ -1,0 +1,33 @@
+name: ur-probe4
+on:
+  push:
+    branches: [tmp/ur-probe4]
+jobs:
+  parse:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: parse script with the PowerShell parser (nothing is executed)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/ur-probe4.ps1).Path, [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs.Count -gt 0) { $errs | ForEach-Object { $_.ToString() }; exit 1 }
+          'parse clean'
+  probe:
+    needs: parse
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: run probe
+        timeout-minutes: 8
+        shell: pwsh
+        run: ./scripts/ur-probe4.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: ur-probe4
+          path: out/*.txt
