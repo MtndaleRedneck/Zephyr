@@ -81,7 +81,14 @@ class ZephyrAutoPairTest {
             assertNotNull("Done did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
             device.executeShellCommand("screencap -p /sdcard/zephyr-autopair-success.png")
             Thread.sleep(700)
-            assertEquals("one entry must create exactly one pairing request and one status check", 2, server.requestCount)
+            // Exactly one pairing POST (already taken above) and exactly one read-only status GET with the new token, nothing else.
+            val status = server.takeRequest(3, TimeUnit.SECONDS)
+            assertNotNull("post-pair status check did not happen", status)
+            assertEquals("GET", status!!.method)
+            assertEquals("/control/status", status.path)
+            assertEquals("Bearer autopair-test-token", status.getHeader("Authorization"))
+            assertEquals("POST", request.method)
+            assertEquals("one pairing POST plus one status GET, no duplicates", 2, server.requestCount)
         } finally {
             store.zephyrToken = ""
             server.shutdown()
