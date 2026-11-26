@@ -109,6 +109,38 @@ jobs:
           $new = $b | Where-Object { $n = $_.Name; -not ($a | Where-Object Name -eq $n) }
           "-- new inbound rules before -> after-run: $(@($new).Count)" | Tee-Object out/05-diff.txt -Append
           $new | Format-List Display,Enabled,Profile,Action,Program,Proto,LocalPort | Out-String | Tee-Object out/05-diff.txt -Append
+      - name: 5 where settings live, registry keys, and what the listening ports answer (loopback only, passive)
+        if: always()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          "== all files under its data and install folders (name, size)" | Tee-Object out/06-files.txt -Append
+          foreach ($d in "$env:ProgramData\Unified Remote","$env:APPDATA\Unified Remote","$env:LOCALAPPDATA\Unified Remote","${env:ProgramFiles(x86)}\Unified Remote 3") {
+            if (Test-Path $d) { "-- $d" | Tee-Object out/06-files.txt -Append
+              Get-ChildItem $d -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notmatch '\\Remotes\\' -and $_.Extension -notmatch '\.(dll|png|ico|exe|msg|dat)$' } | Select-Object -First 80 | ForEach-Object { "$($_.FullName.Replace($d,'.'))  $($_.Length)" } | Tee-Object out/06-files.txt -Append } }
+          "== registry under Unified keys (secret-like values redacted)" | Tee-Object out/07-registry.txt -Append
+          foreach ($k in 'HKCU:\Software\Unified Intents','HKCU:\Software\Unified Remote','HKLM:\SOFTWARE\Unified Intents','HKLM:\SOFTWARE\WOW6432Node\Unified Intents','HKLM:\SOFTWARE\WOW6432Node\Unified Remote') {
+            if (Test-Path $k) { "-- $k" | Tee-Object out/07-registry.txt -Append
+              Get-ChildItem $k -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $key = $_; "[$($key.Name)]"; $key.GetValueNames() | ForEach-Object { $v = $key.GetValue($_); if ($_ -match 'pass|secret|token|key') { $v = '<redacted>' }; "  $_ = $v" } } | Select-Object -First 80 | Tee-Object out/07-registry.txt -Append } }
+          "== text-like settings anywhere in its folders (auth words only, values redacted)" | Tee-Object out/08-settings.txt -Append
+          foreach ($d in "$env:ProgramData\Unified Remote","$env:APPDATA\Unified Remote","$env:LOCALAPPDATA\Unified Remote") {
+            Get-ChildItem $d -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Length -lt 100000 -and $_.FullName -notmatch '\\Remotes\\' } | Select-Object -First 40 | ForEach-Object {
+              $txt = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($_.FullName))
+              $m = [regex]::Matches($txt, '(?i)[\w\-]{0,30}(password|passwd|auth|encrypt|require|bind|discover|public|private)[\w\-]{0,30}\W{1,4}[^\n,}]{0,40}') | Select-Object -First 15
+              if ($m) { "file: $($_.Name)"; $m | ForEach-Object { ($_.Value -replace '(?i)((password|passwd|secret|token)\W{1,4}).*', '$1<redacted>') } } } | Tee-Object out/08-settings.txt -Append }
+          "== binary strings in RemoteServerWin.exe that look like setting names (cap 60)" | Tee-Object out/09-strings.txt -Append
+          $exe = "${env:ProgramFiles(x86)}\Unified Remote 3\RemoteServerWin.exe"
+          $b = [IO.File]::ReadAllBytes($exe); $t = [Text.Encoding]::ASCII.GetString($b)
+          [regex]::Matches($t, '(?i)[ -~]{3,60}') | Where-Object { $_.Value -match '(?i)(password|require.?auth|authentication|encrypt|allow.?(remote|wan|public)|bind|discover)' } | Select-Object -Unique -First 60 -ExpandProperty Value | Tee-Object out/09-strings.txt -Append
+          "== loopback answers (nothing sent, then a plain HTTP GET)" | Tee-Object out/10-ports.txt -Append
+          foreach ($port in 9512, 9510) {
+            try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', $port); $s = $c.GetStream(); $s.ReadTimeout = 3000; $buf = New-Object byte[] 256
+              try { $n = $s.Read($buf, 0, 256); "port $port speaks first: $n bytes: $([BitConverter]::ToString($buf,0,[Math]::Min($n,48)))" } catch { "port $port: server sends nothing unprompted (3 s)" }
+              $req = [Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.0`r`n`r`n"); $s.Write($req,0,$req.Length); $s.ReadTimeout = 3000
+              try { $n = $s.Read($buf, 0, 256); "port $port after GET: $n bytes: $([Text.Encoding]::ASCII.GetString($buf,0,[Math]::Min($n,120)) -replace '[^ -~]','.')" } catch { "port $port after GET: no answer (3 s)" }
+              $c.Close() } catch { "port $port connect failed: $($_.Exception.Message)" } } | Tee-Object out/10-ports.txt -Append
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
