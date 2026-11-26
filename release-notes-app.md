@@ -1,3 +1,10 @@
+## Zephyr 1.8.1
+
+The Accent color card now has eight colors. Burnt orange and teal are gone, and if you had picked one, the app goes back to orange.
+
+**Fixed**
+- The Home play and pause buttons use your accent color again.
+
 ## Zephyr 1.8.0
 
 Pick your accent color. Settings has a new Accent color card with orange as the default and nine more to choose from.
