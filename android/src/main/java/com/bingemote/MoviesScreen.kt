@@ -583,7 +583,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     }
     val insideFolder = origin == Origin.PC && if (viaZephyr) !zephyrAtRoot else root.isNotEmpty() && !atRoot(path)
     BackHandler(enabled = insideFolder) { upOne() }
-    BackHandler(enabled = !insideFolder) { onBack() }
+    BackHandler(enabled = !insideFolder && !insidePhoneFolder) { onBack() }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         ScreenHeader("Movies", hapticsOn = remote.store.haptics, onBack = onBack)
@@ -662,7 +662,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 // no error card, no wrong "No videos" - just the last list if there is one.
                 origin == Origin.PC && lost && items.isEmpty() && !loading -> item { Spacer(Modifier.height(1.dp)) }
                 loading && (!lost || origin == Origin.PHONE) -> item { ListMessage("Loading\u2026", loading = true) }
-                error != null && !lost -> item {
+                error != null && (!lost || origin == Origin.PHONE) -> item {
                     if (origin == Origin.PHONE && phoneTree() == null)
                         ListMessage(error!!, isError = true, actionLabel = "Pick folder", onAction = { pickTree.launch(DebugRig.pickerInitialUri) })
                     else
@@ -672,7 +672,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 else -> items(items.size, key = { items[it].path }, contentType = { items[it].isDir }) { i ->
                     val item = items[i]
                     PressTile(
-                        onTap = { if (remote.pcReachable) open(item) },
+                        onTap = { if (remote.pcReachable || origin == Origin.PHONE) open(item) },
                         // Reuse the existing Store rather than constructing encrypted
                         // preferences for each row during composition and scrolling.
                         hapticsOn = remote.store.haptics,
