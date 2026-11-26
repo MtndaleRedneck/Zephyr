@@ -140,6 +140,7 @@ for cls in $CLASSES; do
     # screen, focus, hierarchy, the class's raw log (logcat was cleared before this class) and the log lines that name an ANR,
     # crash, focus change, launch or slow main thread. Kept under the class name so the FIRST failure is never overwritten.
     base="instrument-results/$(basename $cls).FAIL"
+    echo "FAIL CAPTURE NOTE: screen/ui dump below are POST-SESSION state (after the instrumentation process exited), not the failing assert moment; artifacts may hold pairing code/token and stay private in CI"
     adb exec-out screencap -p > "$base-screen.png" 2>/dev/null || echo "FAIL CAPTURE: screencap failed for $cls"
     adb shell dumpsys window 2>/dev/null | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing" > "$base-focus.txt" || true
     adb shell uiautomator dump /sdcard/failcap.xml >/dev/null 2>&1 && adb pull /sdcard/failcap.xml "$base-ui.xml" >/dev/null 2>&1 || echo "FAIL CAPTURE: uiautomator dump unavailable for $cls"

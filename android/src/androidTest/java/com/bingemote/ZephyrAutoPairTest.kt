@@ -19,7 +19,7 @@ class ZephyrAutoPairTest {
         var node = device.wait(Until.findObject(sel), firstWaitMs)
         var swipes = 0
         while (node == null && swipes++ < 4) {
-            device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 4, 20)
+            device.swipe(device.displayWidth * 19 / 20, device.displayHeight * 3 / 4, device.displayWidth * 19 / 20, device.displayHeight / 4, 20)
             node = device.wait(Until.findObject(sel), 1500)
         }
         return node
@@ -69,7 +69,7 @@ class ZephyrAutoPairTest {
             var card = device.wait(Until.findObject(By.textContains("Paired with")), 3000)
             var swipes = 0
             while (card == null && swipes++ < 4) {
-                device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 4, 20)
+                device.swipe(device.displayWidth * 19 / 20, device.displayHeight * 3 / 4, device.displayWidth * 19 / 20, device.displayHeight / 4, 20)
                 card = device.wait(Until.findObject(By.textContains("Paired with")), 1500)
             }
             assertNotNull("success card did not appear", card)
