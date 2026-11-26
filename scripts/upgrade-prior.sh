@@ -195,6 +195,55 @@ prefs_diag() { # $1 = label
   adb shell run-as $PKG cat shared_prefs/settings.xml 2>&1 | grep -E 'name="(zephyrHost|zephyrPort|zephyrPcName|selectedSource|skipMainSec|skipSecondarySec|haptics)"' | sed 's/^/  /' | head -10 || true
   echo "  (end $1)"
 }
+# Environment settle (harness only, runs BEFORE any app install or run, identical for baseline and candidate). The emulator
+# runner can hand over while the image is still processing boot-completed work, and a launcher ANR dialog (nexuslauncher
+# "Input dispatching timed out ... no focused window") can already own focus before any app under test exists. That dialog
+# then fails the window assertion of every later run. Here: wait for sys.boot_completed, then (bounded) require focus without
+# an ANR dialog. A dialog may be tapped (Wait) ONLY when it is exactly one allowlisted-package dialog, no app window of $PKG is in
+# focus, and the app under test is not installed yet. Anything else, or a dialog still there at the end, is an explicit
+# failure with the evidence saved. Nothing here changes a gate, an allowlist, a retry rule or any app/state assertion.
+snap() { # $1 = label: focus, processes and timing evidence (diagnostic only)
+  local f="instrument-results/snap-$1.txt"
+  { echo "== $1 $(date -u +%H:%M:%S) uptime: $(adb shell cat /proc/uptime | tr -d '\r')"
+    echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r') bootanim=$(adb shell getprop init.svc.bootanim | tr -d '\r')"
+    adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing" | head -6
+    adb shell ps -A 2>/dev/null | grep -E "nexuslauncher|com.android.systemui|$PKG" | head -8
+  } > "$f" 2>&1
+  cat "$f"
+}
+settle_environment() {
+  mkdir -p instrument-results
+  local i=0 focus pp pkg B X1 Y1 X2 Y2 clean=0 taps=0 t0=$SECONDS
+  adb wait-for-device
+  until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || [ "$i" -ge 60 ]; do sleep 2; i=$((i+1)); done
+  [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || { snap settle-fail; echo "SETTLE FAIL: sys.boot_completed never became 1 (harness environment, nothing installed)"; exit 1; }
+  adb shell pm path "$PKG" >/dev/null 2>&1 && { echo "SETTLE FAIL: $PKG is already installed; the settle step only runs before any app install"; exit 1; }
+  adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard
+  snap preinstall-start
+  while [ $((SECONDS - t0)) -lt 120 ]; do
+    focus=$(adb shell dumpsys window | grep "mCurrentFocus")
+    case "$focus" in
+      *"Application Not Responding"*)
+        clean=0
+        pp=$(single_allowed_dialog "$focus") || { printf '%s\n' "$focus" > instrument-results/settle-focus-fail.txt; snap settle-fail; echo "SETTLE FAIL: focus holds an ANR dialog that is not exactly one allowlisted-package dialog: $focus"; exit 1; }
+        adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml instrument-results/settle-ui-$taps.xml >/dev/null 2>&1
+        B=$(grep -o 'text="Wait"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' instrument-results/settle-ui-$taps.xml | grep -o "\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]")
+        [ -n "$B" ] && [ "$(printf '%s\n' "$B" | wc -l)" = 1 ] || { snap settle-fail; echo "SETTLE FAIL: need exactly one Wait button on the dialog, found $(printf '%s' "$B" | grep -c .)"; exit 1; }
+        [ "$taps" -lt 3 ] || { snap settle-fail; echo "SETTLE FAIL: an ANR dialog keeps coming back after $taps taps (pre-install)"; exit 1; }
+        X1=$(echo $B | cut -d'[' -f2 | cut -d',' -f1); Y1=$(echo $B | cut -d'[' -f2 | cut -d',' -f2 | cut -d']' -f1)
+        X2=$(echo $B | cut -d'[' -f3 | cut -d',' -f1); Y2=$(echo $B | cut -d'[' -f3 | cut -d',' -f2 | cut -d']' -f1)
+        echo "SETTLE NOTE: pre-install allowlisted ANR dialog ($pp) in focus at +$((SECONDS - t0))s; tapping Wait (tap $((taps+1)))"
+        adb shell input tap $(( (X1+X2)/2 )) $(( (Y1+Y2)/2 )); taps=$((taps+1)); sleep 3;;
+      *) clean=$((clean+1)); [ "$clean" -ge 4 ] && break; sleep 3;;
+    esac
+  done
+  focus=$(adb shell dumpsys window | grep "mCurrentFocus")
+  case "$focus" in *"Application Not Responding"*) snap settle-fail; echo "SETTLE FAIL: an ANR dialog is still in focus after the bounded settle: $focus"; exit 1;; esac
+  [ "$clean" -ge 4 ] || { snap settle-fail; echo "SETTLE FAIL: focus never settled without an ANR dialog within 120s"; exit 1; }
+  snap preinstall-settled
+  echo "SETTLE OK: boot completed, no ANR dialog in focus (4 consecutive reads), $taps dialog taps, $((SECONDS - t0))s"
+}
+settle_environment
 adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: old install"; exit 1; }
 adb install -r /tmp/up/old-test.apk || { echo "UPGRADE FAIL: old test install"; exit 1; }
@@ -206,6 +255,7 @@ grep -q "^OK (1 test)" instrument-results/seed.txt || { echo "UPGRADE FAIL: seed
 # Make sure the seeded prefs are on disk before the install replaces the app.
 adb shell sync; sleep 3
 prefs_diag "pass 1 after seed, before the new build is installed"
+snap post-seed
 # New build over the old one, NO uninstall (this is the user's update path).
 adb install -r /tmp/up/new-app.apk || { echo "UPGRADE FAIL: new build does not install over the old one"; exit 1; }
 adb install -r /tmp/up/new-test.apk || { echo "UPGRADE FAIL: new test install"; exit 1; }
@@ -215,6 +265,7 @@ need_upgrade "$OLD_VC" "$NEW_VC" "pass 1"
 # A fresh headless emulator can still be on the lock screen; wake and dismiss it so a window check is about the app.
 adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard; sleep 2
 prefs_diag "pass 1 after install -r, before verify"
+snap pre-verify
 run com.bingemote.ZephyrUpgradeFixtureTest#verify verify
 retry_window_only com.bingemote.ZephyrUpgradeFixtureTest#verify verify
 green_must_be_clean verify "pass 1 verify"

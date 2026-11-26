@@ -19,6 +19,10 @@ on:
         description: 'Also run the signed-upgrade job (real signed 1.5.0 and live 1.7.0 releases -> the one signed build of this ref)'
         type: boolean
         default: false
+      signed_upgrade_only:
+        description: 'Skip every job except signed-upgrade (CI-only; no app change)'
+        type: boolean
+        default: false
 
 # Zephyr CI (public repo): unit tests, instrumented suites, screenshot rig.
 # No release/publish job: nothing here creates a release or tag. The only signed file ever uploaded is the
@@ -34,6 +38,7 @@ permissions:
 
 jobs:
   android:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.signed_upgrade_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -53,6 +58,7 @@ jobs:
           path: android/build/outputs/apk/debug/*.apk
 
   screenshots:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.signed_upgrade_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -83,6 +89,7 @@ jobs:
           path: screenshots/*
 
   instrumented:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.signed_upgrade_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -133,6 +140,7 @@ jobs:
   # Zephyr state, then this build is installed OVER it (no uninstall) and the state and a cold open are verified.
   # Debug builds of both (same debug key); the signed-release upgrade is the separate dispatch-only signed-upgrade job below.
   upgrade-prior:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.signed_upgrade_only) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -310,6 +318,16 @@ jobs:
             new/instrument-results/*
             new/instrument-results-from-1.5.0/*
           retention-days: 2
+      # Diagnosis/identity evidence when the emulator proof fails: the exact bytes the proof installed, 1 day, never a release.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: signed-upgrade-tested-apk-unverified
+          path: |
+            /tmp/up/new-app.apk
+            /tmp/up/new-app.sha256
+          retention-days: 1
+          if-no-files-found: warn
       # Release candidate: ONLY the exact signed APK that just passed pass 1 and pass 2 above, plus a public provenance log.
       # No keystore, password, test APK or intermediate is copied or uploaded (the keystore file was already removed by the build
       # step's EXIT trap). Runs only when every earlier step (including the emulator upgrade proof) succeeded. 1-day retention;
