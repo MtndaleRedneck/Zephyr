@@ -144,6 +144,8 @@ class MainActivity : ComponentActivity() {
             val navigationScope = rememberCoroutineScope()
             // Pairing opened from the Home "not paired" card returns to Home, not to Settings.
             var pairFromHome by remember { mutableStateOf(false) }
+            // Any way back to Home or Settings (system Back included) clears the pairing-origin flag.
+            LaunchedEffect(current.value) { if (current.value == "main" || current.value == "settings") pairFromHome = false }
             fun openSettings(resetScroll: Boolean = false) {
                 navigationScope.launch {
                     if (resetScroll) settingsScroll.scrollTo(0)
