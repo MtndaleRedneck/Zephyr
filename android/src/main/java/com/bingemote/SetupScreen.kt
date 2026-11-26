@@ -1,14 +1,14 @@
 package com.bingemote
 
-import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -23,63 +23,66 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * First-run setup as a real wizard, one step on screen at a time:
- * 1) install the helper on the PC, 2) find the PC and pair with its 6-digit code,
- * 3) VLC password + movies folder. Back always works, and a saved pairing can be
- * continued or discarded - nobody gets stuck between steps.
+ * First-run setup: 1) install the helper on the PC, 2) one pair screen - find the PC,
+ * enter its one-time code, and the success confirmation appears right below the form,
+ * with the VLC hand-off under it. No separate finish screen. Back
+ * always works, and a saved pairing can be continued or replaced by a fresh code.
  */
 @Composable
 fun SetupScreen(
     remote: RemoteState,
     scrollState: androidx.compose.foundation.ScrollState,
     onDone: () -> Unit,
-    onCancel: () -> Unit,
+    onCancel: (() -> Unit)? = null,
     demoVlcPending: Boolean = false,
+    demoPair: Boolean = false,
+    demoPreselect: Boolean = false, // screenshot rig only: open with the demo PC already chosen
 ) {
     val store = remote.store
     val scope = rememberCoroutineScope()
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    val demo = BuildConfig.DEBUG
 
-    // Re-entering setup with a saved pairing opens on the pair step, which offers to continue with it.
-    var step by remember {
-        mutableStateOf(
-            // CI screenshot state (debug builds only): straight to the finish step.
-            if (demoVlcPending && BuildConfig.DEBUG) 3 else if (store.helperToken.isBlank()) 1 else 2,
-        )
-    }
+    // Re-entering setup with a saved pairing opens on the pair screen. The pair-screen
+    // demos open there directly even with no saved pairing.
+    var step by remember { mutableStateOf(if ((demoPair || demoVlcPending) && demo) 2 else if (store.helperToken.isBlank()) 1 else 2) }
     var scanning by remember { mutableStateOf(false) }
-    var found by remember { mutableStateOf<List<DiscoveredHelper>>(emptyList()) }
-    var chosen by remember { mutableStateOf<DiscoveredHelper?>(null) }
+    var found by remember {
+        mutableStateOf(if (demoPair && demo) listOf(DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC")) else emptyList())
+    }
+    var chosen by remember { mutableStateOf<DiscoveredHelper?>(if (demoPair && demoPreselect && demo) DiscoveredHelper("192.168.1.50", HelperClient.DEFAULT_PORT, "MY-PC") else null) }
     var manualHost by remember { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
     var pairing by remember { mutableStateOf(false) }
-    var vlcPassword by remember { mutableStateOf("") }
-    var moviesPath by remember { mutableStateOf("") }
-    var testing by remember { mutableStateOf(false) }
-    // VLC was open when the PC tried to write vlcrc: the PC finishes it when VLC closes.
-    var vlcFinishPending by remember { mutableStateOf(false) }
+    // A code just paired on this screen: the success confirmation shows below the form.
+    var justPaired by remember { mutableStateOf(demoVlcPending && demo) }
+    var pairedName by remember { mutableStateOf(if (demoVlcPending && demo) "MY-PC" else "") }
+    // An earlier pairing continued to the VLC hand-off without a fresh code.
+    var continueVlc by remember { mutableStateOf(false) }
     // Automatic-first VLC setup (helper 1.7+): the PC picked the password at pairing time.
     // "checking" while the phone verifies it, then "ok" or "refused".
-    var autoSetup by remember { mutableStateOf(demoVlcPending && BuildConfig.DEBUG) }
-    var autoState by remember { mutableStateOf(if (demoVlcPending && BuildConfig.DEBUG) "ok" else "checking") }
+    var autoSetup by remember { mutableStateOf(demoVlcPending && demo) }
+    var autoState by remember { mutableStateOf(if (demoVlcPending && demo) "ok" else "checking") }
     // VLC is still running with its old settings: control starts when VLC reopens.
-    var autoPending by remember { mutableStateOf(demoVlcPending && BuildConfig.DEBUG) }
+    var autoPending by remember { mutableStateOf(demoVlcPending && demo) }
     // VLC is simply closed (the PC attests the settings are written): control starts when it opens.
     var autoNotOpen by remember { mutableStateOf(false) }
     // Bump to re-run the automatic check after the PC was unreachable.
     var checkRun by remember { mutableStateOf(0) }
-    // The manual password card stays as the backup, collapsed while the automatic path runs.
-    var showManual by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var messageIsError by remember { mutableStateOf(false) }
+    var discoveryMessage by remember { mutableStateOf<String?>(null) }
+    // The PC scan runs once when the pair screen opens; demos skip it so the renders are stable.
+    var scannedOnce by remember { mutableStateOf(demoPair || demoVlcPending) }
 
     fun say(text: String, isError: Boolean) { message = text; messageIsError = isError }
 
-    // The real check, run once when step 3 opens after an automatic pair (and again per
-    // Try again). The PC attests what is configured; a network error never becomes a
-    // green Done on its own. The demo preview state starts at "ok" and skips this.
-    LaunchedEffect(step, autoSetup, checkRun) {
-        if (step != 3 || !autoSetup || autoState != "checking") return@LaunchedEffect
+    val successVisible = justPaired || continueVlc
+
+    // The real check, run once when the success section opens after an automatic pair (and
+    // again per Try again). The PC attests what is configured; a network error never becomes
+    // a green Done on its own. The demo preview state starts at "ok" and skips this.
+    LaunchedEffect(successVisible, autoSetup, checkRun) {
+        if (!successVisible || !autoSetup || autoState != "checking") return@LaunchedEffect
         when (withContext(Dispatchers.IO) { AutoSetupCheck.run(store) }) {
             AutoSetupCheck.Outcome.OK -> { autoPending = false; autoNotOpen = false; autoState = "ok" }
             AutoSetupCheck.Outcome.OK_DEFERRED -> { autoPending = true; autoNotOpen = false; autoState = "ok" }
@@ -89,68 +92,75 @@ fun SetupScreen(
         }
     }
 
-    // Back walks the steps, and on step 1 leaves setup entirely (teardown A2:
-    // this screen is only reachable from Settings, so there is always a way out).
-    BackHandler(enabled = true) {
-        if (step > 1) { step -= 1; say("", false) } else onCancel()
+    // Re-entry from Your PC has a working setup to fall back on: Back leaves instead of
+    // walking to the install step. First run: Back walks pair -> install.
+    val reentry = store.setupDone && onCancel != null
+    BackHandler(enabled = step > 1 || onCancel != null) {
+        if (step > 1 && !reentry) { step -= 1; say("", false) } else onCancel?.invoke()
     }
 
     fun scan() {
         scanning = true
+        discoveryMessage = null
         say("", false)
         scope.launch {
             found = withContext(Dispatchers.IO) { HelperClient.discover() }
             scanning = false
-            if (found.isEmpty()) say("No PC found. Make sure Zephyr VLC Remote is running on the PC, or type its address below.", true)
+            if (found.isEmpty()) discoveryMessage = "No PC answered. Check Zephyr VLC Remote is running on the PC, then try again, or type its address."
         }
     }
 
+    // Auto-scan once when the pair screen opens; the button re-scans on demand.
+    LaunchedEffect(step) {
+        if (step == 2 && !scannedOnce) { scannedOnce = true; scan() }
+    }
+
     fun pair() {
-        // A typed "host:port" keeps its own port instead of getting the default glued on.
-        val manual = manualHost.trim()
-        val target = chosen ?: run {
-            val h = manual.substringBeforeLast(':', "")
-            val p = manual.substringAfterLast(':', "").toIntOrNull()
-            if (h.isNotBlank() && p != null) DiscoveredHelper(h, p, "PC")
-            else DiscoveredHelper(manual, HelperClient.DEFAULT_PORT, "PC")
-        }
-        if (target.host.isBlank()) { say("Enter your PC's address or pick it above.", true); return }
-        if (code.length != 6) { say("Enter the 6-digit code Zephyr VLC Remote is showing on your PC.", true); return }
+        val target = chosen ?: run { say("Select your PC first.", true); return }
+        if (code.length != 4 && code.length != 6) { say("Enter the code Zephyr VLC Remote is showing on your PC - 4 digits, or 6 on an older Zephyr VLC Remote.", true); return }
         pairing = true
         say("", false)
         scope.launch {
             try {
                 val paired = withContext(Dispatchers.IO) { HelperClient.pair(target.host, target.port, code) }
-                // Token FIRST (fail-closed): a broken secure store throws before any
-                // visible state changes, so no half-saved pairing.
-                store.helperToken = paired.token
-                store.host = target.host
-                store.helperPort = target.port
-                store.pcName = paired.name.ifBlank { target.name }
+                val fields = object : PairFields {
+                    override var host: String get() = store.host; set(v) { store.host = v }
+                    override var helperPort: Int get() = store.helperPort; set(v) { store.helperPort = v }
+                    override var helperToken: String get() = store.helperToken; set(v) { store.helperToken = v }
+                    override var pcName: String get() = store.pcName; set(v) { store.pcName = v }
+                    override var vlcPassword: String get() = store.vlcPassword; set(v) { store.vlcPassword = v }
+                    override fun flush(): Boolean = store.commitPairing()
+                    override fun healthy(): Boolean = !store.secureStoreBroken
+                }
+                val saveOutcome = withContext(Dispatchers.IO) { HelperPairSave.save(fields, target.host, target.port, paired.token,
+                    paired.name.ifBlank { target.name }, paired.vlcPassword) }
+                when (saveOutcome) {
+                    HelperPairSave.Outcome.SAVED -> {}
+                    HelperPairSave.Outcome.FAILED_PRIOR_KEPT -> {
+                        pairing = false; say(HelperPairSave.PRIOR_KEPT_MESSAGE, true); return@launch
+                    }
+                    HelperPairSave.Outcome.FAILED_RESTORE_UNCERTAIN -> {
+                        pairing = false; say(HelperPairSave.UNCERTAIN_MESSAGE, true); return@launch
+                    }
+                }
                 remote.publishAddress(target.host, target.port, paired.token)
-                remote.refreshPairing()
                 // Automatic-first: the PC generated the VLC password and handed it over with
-                // the pair. An old helper says nothing and step 3 stays the manual card.
+                // the pair. Older helpers need an update before automatic setup can finish.
                 if (paired.vlcPassword != null) {
-                    store.vlcPassword = paired.vlcPassword
                     autoSetup = true
                     autoState = "checking"
                     autoPending = paired.vlcPending
+                } else {
+                    autoSetup = false
+                    autoState = "unsupported"
                 }
                 pairing = false
+                pairedName = store.pcName
+                justPaired = true
                 say("", false)
-                step = 3
-            } catch (e: SecureStoreUnavailable) {
-                pairing = false
-                say("The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr VLC Remote's paired list, then pair again.", true)
             } catch (e: HelperClient.BadPairCode) {
                 pairing = false
-                // S-3: the helper's own reason (wrong/expired/too many tries/too many
-                // phones) is written for him - show it instead of one generic line.
-                say(e.msg, true)
-            } catch (e: HelperClient.Unreachable) {
-                pairing = false
-                say(e.msg, true)
+                say("That code didn't work. Get a fresh one: on your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)
             } catch (e: Exception) {
                 pairing = false
                 say("Couldn't reach Zephyr VLC Remote on ${target.host}. Check the PC is awake and try again.", true)
@@ -158,63 +168,14 @@ fun SetupScreen(
         }
     }
 
-    fun startOver() {
-        store.host = ""
-        // Broken secure store: nothing persisted anyway; the refusal is not an error here.
-        try { store.helperToken = "" } catch (e: SecureStoreUnavailable) { }
-        remote.refreshPairing()
-        store.pcName = ""
-        remote.publishAddress("", HelperClient.DEFAULT_PORT, "")
+    // A refused automatic password: back to the code field for a fresh pair. The saved
+    // pairing stays until the new one lands - nothing working is thrown away early.
+    fun retryPair() {
         code = ""
-        chosen = null
-        manualHost = ""
-        found = emptyList()
-        say("Pairing cleared. On your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, tap Pair, then enter the new code here.", false)
-    }
-
-    fun finish() {
-        if (vlcPassword.isBlank()) { say("Enter the password you set in VLC's web interface.", true); return }
-        if (store.helperToken.isBlank()) { say("Pair with your PC first.", true); return }
-        try {
-            store.vlcPassword = vlcPassword
-        } catch (e: SecureStoreUnavailable) {
-            say("Couldn't save the password (secure storage problem on this phone). Nothing was saved - close and reopen the app, then try again.", true)
-            return
-        }
-        store.moviesPath = moviesPath.trim().ifBlank { store.moviesPath }
-        testing = true
+        justPaired = false
+        autoSetup = false
+        continueVlc = false
         say("", false)
-        scope.launch {
-            val vlcOk = try {
-                withContext(Dispatchers.IO) { Vlc.status(store.host, store.vlcPort, store.vlcPassword) }
-                true
-            } catch (e: Exception) { false }
-            val helperOk = try {
-                withContext(Dispatchers.IO) { HelperClient.ping(store.host, store.helperPort, store.helperToken) }
-            } catch (e: Exception) { false }
-            testing = false
-            when {
-                vlcOk && helperOk -> {
-                    // Hand the password to the PC: it writes vlcrc so a hand-opened VLC has
-                    // the web remote too. VLC is open right now, so the PC defers the write
-                    // and does it when VLC closes - say so, then let him leave with Done.
-                    val deferred = withContext(Dispatchers.IO) {
-                        try {
-                            HelperClient.setupVlc(store.host, store.helperPort, store.helperToken, store.vlcPassword) == "vlc running"
-                        } catch (e: Exception) { false }
-                    }
-                    store.setupDone = true
-                    if (deferred) vlcFinishPending = true else onDone()
-                }
-                !vlcOk && helperOk -> {
-                    // VLC may just be closed: the PC writes vlcrc so the next hand-open has the remote.
-                    scope.launch(Dispatchers.IO) { try { HelperClient.setupVlc(store.host, store.helperPort, store.helperToken, store.vlcPassword) } catch (e: Exception) {} }
-                    say("Zephyr VLC Remote answers, but VLC didn't. Check the password and that VLC is open with the web interface on.", true)
-                }
-                vlcOk && !helperOk -> say("VLC answers, but Zephyr VLC Remote didn't. Mouse mode won't work until Zephyr VLC Remote is running on the PC.", true)
-                else -> say("Nothing answered. Check the PC is awake, VLC is open, and both are on the same Wi-Fi.", true)
-            }
-        }
     }
 
     Column(
@@ -222,55 +183,47 @@ fun SetupScreen(
     ) {
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Set up VLC PC", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+            Text("Set up Zephyr VLC Remote", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            if (onCancel != null) {
+                Spacer(Modifier.weight(1f))
+                TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+            }
         }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "Step $step of 3",
-            color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-        )
         Spacer(Modifier.height(18.dp))
 
         when (step) {
             1 -> Column {
                 SetupCard {
-                    Text("1. VLC control needs the free Zephyr VLC Remote PC app. Install it on your PC.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Get Zephyr VLC Remote PC",
-                        color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.clickable(role = androidx.compose.ui.semantics.Role.Button) {
-                            // The helper's OWN release page: the general releases list
-                            // also shows the old BingeMote recovery build, which is not
-                            // the helper. Ship order guarantees this tag exists before
-                            // the Android release that links to it.
-                            uriHandler.openUri("https://github.com/MtndaleRedneck/Zephyr-Dev/releases/tag/vlc-remote-v1.0.0")
-                        },
-                    )
+                    Text("1. On your PC, download the Zephyr VLC Remote installer from the Zephyr release page and run it.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("2. If Windows warns about an unrecognized app, click \"More info\", then \"Run anyway\".", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("2. Windows may warn about an unrecognized app. Click \"More info\", then \"Run anyway\". Zephyr VLC Remote is built by the same project as this app.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("3. Allow the one Windows prompt during install. It only opens Zephyr VLC Remote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("3. The installer asks for Windows permission once during install - that is the only admin prompt, and it only opens Zephyr VLC Remote to your home network.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                     Spacer(Modifier.height(10.dp))
-                    Text("4. Leave Zephyr VLC Remote running (by the clock). It shows a 6-digit code.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                    Text("4. Leave Zephyr VLC Remote running (it sits in the tray, by the clock, and starts with Windows). Open it, type a name under Pair new phone, and tap Pair - it shows a code for the next step.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                 }
                 Spacer(Modifier.height(18.dp))
                 OrangeButton("Zephyr VLC Remote is running", onClick = { say("", false); step = 2 })
                 SetupMessage(message, messageIsError)
             }
 
-            2 -> Column {
-                if (store.helperToken.isNotBlank()) {
+            else -> Column {
+                // Mid-setup recovery only: a pairing exists but setup never finished, so
+                // offer continuing to the VLC step. A finished setup re-entering from
+                // Your PC -> Pair again gets just the pair form - no wizard loop.
+                if (store.helperToken.isNotBlank() && !store.setupDone && !justPaired) {
                     SetupCard {
                         Text("Already paired" + (if (store.pcName.isNotBlank()) " with ${store.pcName}" else ""), color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
-                        Text("This phone paired with your PC earlier. Continue with it, or start over to pair again with a new code.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+                        Text("Continue to the VLC step below, or enter a new code to pair again - only needed for a new phone, or if this phone was removed on the PC.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
                         Spacer(Modifier.height(12.dp))
-                        OrangeButton("Continue with this PC", onClick = { say("", false); step = 3 })
-                        Spacer(Modifier.height(8.dp))
-                        TextButton(onClick = { startOver() }) { Text("Start over with a new code", color = Muted) }
+                        OrangeButton("Continue", onClick = {
+                            say("", false)
+                            autoSetup = store.vlcPassword.isNotBlank()
+                            autoState = if (autoSetup) "checking" else "unsupported"
+                            continueVlc = true
+                            checkRun++
+                        })
                     }
                     Spacer(Modifier.height(14.dp))
                 }
@@ -286,9 +239,12 @@ fun SetupScreen(
                         Spacer(Modifier.height(8.dp))
                         val isSel = chosen == h
                         PressTile(
-                            onTap = { chosen = h; manualHost = "" },
+                            onTap = { chosen = h; manualHost = ""; code = ""; justPaired = false; continueVlc = false; say("", false) },
                             background = if (isSel) OrangeGradient else CardGradient,
-                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            // Unselected rows carry the orange outline so they read as tappable
+                            // (approved); the selected row keeps the solid orange fill.
+                            modifier = Modifier.fillMaxWidth().height(52.dp)
+                                .then(if (isSel) Modifier else Modifier.border(1.dp, Orange, RoundedCornerShape(18.dp))),
                         ) {
                             Text(
                                 "${h.name}  (${h.host})",
@@ -302,7 +258,7 @@ fun SetupScreen(
                     Spacer(Modifier.height(6.dp))
                     OutlinedTextField(
                         value = manualHost,
-                        onValueChange = { manualHost = it; if (it.isNotBlank()) chosen = null },
+                        onValueChange = { manualHost = it; chosen = null; code = ""; justPaired = false; continueVlc = false; discoveryMessage = null; say("", false) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         placeholder = { Text("192.168.1.50", color = Muted) },
@@ -310,44 +266,81 @@ fun SetupScreen(
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Uri),
                         colors = fieldColors(),
                     )
+                    Spacer(Modifier.height(10.dp))
+                    OrangeButton("Use this address", enabled = manualHost.isNotBlank(), onClick = {
+                        val address = manualHost.trim()
+                        val host = address.substringBeforeLast(':', "")
+                        val port = address.substringAfterLast(':', "").toIntOrNull()
+                        if (address.contains(':') && (host.isBlank() || port == null || port !in 1..65535)) {
+                            discoveryMessage = "Enter a PC address, with an optional port from 1 to 65535."
+                        } else {
+                            chosen = if (port != null) DiscoveredHelper(host, port, "PC")
+                                else DiscoveredHelper(address, HelperClient.DEFAULT_PORT, "PC")
+                            discoveryMessage = null
+                            code = ""
+                            say("", false)
+                        }
+                    })
+                    chosen?.takeIf { manualHost.isNotBlank() }?.let {
+                        Spacer(Modifier.height(8.dp))
+                        Text("Selected: ${it.host}:${it.port}", color = TextC, fontSize = 13.sp)
+                    }
+                    SetupMessage(discoveryMessage, true)
                 }
+                if (chosen != null) {
                 Spacer(Modifier.height(14.dp))
                 SetupCard {
                     Text("Pair", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp))
-                    Text("Enter the 6-digit code Zephyr VLC Remote is showing on your PC. It only works once. No code on screen? Open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
+                    // No digit-count/older-version/one-use explanation - the field
+                    // and its error carry that when it matters. Validation is unchanged.
+                    Text("Enter the code Zephyr VLC Remote is showing on your PC. No code on screen? Open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", color = Muted, fontSize = 13.sp, lineHeight = 18.sp)
                     Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = code,
                         onValueChange = {
                             code = it.filter(Char::isDigit).take(6)
-                            // One less tap: a full 6th digit pairs right away (needs a picked or typed PC).
-                            if (code.length == 6 && !pairing && (chosen != null || manualHost.isNotBlank())) pair()
+                            // One less tap: a full 6th digit (older Zephyr VLC Remote) pairs right away; a 4-digit
+                            // code goes with the Pair button below, since 4 is a prefix of 6.
+                            if (code.length == 6 && !pairing && chosen != null) pair()
                         },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        placeholder = { Text("6-digit code", color = Muted) },
+                        placeholder = { Text("Code from your PC", color = Muted) },
                         // Number pad for the code (it opened the full keyboard).
                         keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.NumberPassword),
                         visualTransformation = androidx.compose.ui.text.input.VisualTransformation.None,
-                        colors = fieldColors(),
+                        // Orange outline like the Your PC > Pair again tile (user request).
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = TextC, unfocusedTextColor = TextC,
+                            focusedBorderColor = Orange, unfocusedBorderColor = Orange,
+                            cursorColor = Orange,
+                        ),
                     )
                     Spacer(Modifier.height(10.dp))
                     OrangeButton(if (pairing) "Pairing\u2026" else "Pair", enabled = !pairing, onClick = { pair() })
                     // Right under the button, not below Back where the keyboard hid it.
                     SetupMessage(message, messageIsError)
                 }
-                Spacer(Modifier.height(14.dp))
-                TextButton(onClick = { say("", false); step = 1 }) { Text("Back", color = Muted) }
-            }
 
-            else -> Column {
-                if (autoSetup) {
+                }
+
+                // The confirmation lives below the form, not on its
+                // own screen: paired, then the VLC hand-off under it.
+                if (successVisible) {
+                    Spacer(Modifier.height(14.dp))
                     SetupCard {
-                        when (autoState) {
+                        if (justPaired) {
+                            Text("\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(10.dp))
+                        }
+                        if (!autoSetup) {
+                            Text("Update Zephyr VLC Remote on your PC, then pair again to set up VLC automatically.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                            Spacer(Modifier.height(12.dp))
+                            OrangeButton("Pair again", onClick = { retryPair() })
+                        } else when (autoState) {
                             "checking" -> {
-                                Text("Setting up VLC remote control\u2026", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                                Spacer(Modifier.height(10.dp))
+                                if (!justPaired) { Text("Setting up VLC remote control\u2026", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.height(10.dp)) }
                                 Text("Your PC picked the password. Checking it once\u2026", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                             }
                             "ok" -> {
@@ -379,75 +372,15 @@ fun SetupScreen(
                             else -> {
                                 Text("VLC refused the password", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.height(10.dp))
-                                Text("If you changed it on the PC, re-pair or set it by hand.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
+                                Text("Pair again to get the password from Zephyr VLC Remote on your PC. If VLC is still running with old settings, close and reopen it.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
                                 Spacer(Modifier.height(12.dp))
-                                OrangeButton("Pair again", onClick = { startOver(); step = 2 })
+                                OrangeButton("Pair again", onClick = { retryPair() })
                                 SetupMessage(message, messageIsError)
                             }
                         }
                     }
-                    if (autoState != "refused") {
-                        Spacer(Modifier.height(8.dp))
-                        TextButton(onClick = { showManual = !showManual }) {
-                            Text(if (showManual) "Hide the manual setup" else "Set the password by hand instead", color = Muted)
-                        }
-                    }
                     Spacer(Modifier.height(6.dp))
                 }
-                if (!autoSetup || showManual || autoState == "refused") {
-                SetupCard {
-                    Text("Turn on VLC's web remote", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(10.dp))
-                    Text("1. Open VLC on your PC.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text("2. Tools - Preferences - at the bottom left, under \"Show settings\", pick All.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text("3. Go to Interface - Main interfaces and tick Web.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text("4. Under Main interfaces open Lua, and in Lua HTTP set a password. Type the same one below.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                    Spacer(Modifier.height(6.dp))
-                    Text("5. Save and restart VLC. If Windows asks about the firewall, allow Private networks.", color = TextC, fontSize = 14.sp, lineHeight = 20.sp)
-                }
-                Spacer(Modifier.height(14.dp))
-                SetupCard {
-                    Text("VLC password", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = vlcPassword,
-                        onValueChange = { vlcPassword = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("The password from step 4", color = Muted) },
-                        colors = fieldColors(),
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                    )
-                    Spacer(Modifier.height(14.dp))
-                    Text("Movies folder (optional)", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = moviesPath,
-                        onValueChange = { moviesPath = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("C:\\Users\\you\\Videos", color = Muted) },
-                        colors = fieldColors(),
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    if (vlcFinishPending) {
-                        OrangeButton("Done", onClick = { onDone() })
-                        Spacer(Modifier.height(8.dp))
-                        Text(
-                            "VLC is open on the PC - Zephyr VLC Remote will finish setting it up when VLC closes.",
-                            color = Muted, fontSize = 13.sp,
-                        )
-                    } else {
-                        OrangeButton(if (testing) "Checking\u2026" else "Finish", enabled = !testing, onClick = { finish() })
-                    }
-                    SetupMessage(message, messageIsError)
-                }
-                }
-                Spacer(Modifier.height(14.dp))
-                TextButton(onClick = { say("", false); step = 2 }) { Text("Back", color = Muted) }
             }
         }
 
@@ -456,7 +389,7 @@ fun SetupScreen(
 }
 
 @Composable
-fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(CardGradient).padding(16.dp),
         content = content,
@@ -464,14 +397,14 @@ fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun SetupMessage(message: String?, isError: Boolean) {
+internal fun SetupMessage(message: String?, isError: Boolean) {
     if (message.isNullOrBlank()) return
     Spacer(Modifier.height(10.dp))
     Text(message, color = if (isError) ErrorRed else Orange, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
 @Composable
-fun OrangeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun OrangeButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     // One primary button size app-wide: 48dp tall, 14dp corners (was 52/16 here, 46/14 in Settings).
     PressTile(
         onTap = { if (enabled) onClick() },

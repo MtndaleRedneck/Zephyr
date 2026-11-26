@@ -10,7 +10,7 @@ using System.Windows.Media;
 namespace ZephyrPlayer
 {
     /// <summary>
-    /// Compact centered settings window (Task-Manager-style
+    /// Compact centered settings window (tabbed
     /// layout): clickable section list on the LEFT, one section's content on
     /// the right, Feedback & bugs and Updates pinned at the bottom with the
     /// version under Updates. Every change writes through PlayerSettings,
@@ -18,6 +18,8 @@ namespace ZephyrPlayer
     /// </summary>
     public partial class SettingsWindow : Window
     {
+        internal static Func<PairingPanel>? PairingFactory;
+        private PairingPanel? _pairPanel;
         private readonly PlayerSettings _settings;
         private readonly PairedStore _store;
         private readonly Action _openPairing;
@@ -43,9 +45,13 @@ namespace ZephyrPlayer
                 InstallUpdateButton.Visibility = _updateOffer != null ? Visibility.Visible : Visibility.Collapsed;
                 UpdateStatusText.Text = UpdateState.Display(UpdateState.Outcome);
             };
-            NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
+            NavVersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
             Loaded += (_, __) => _updateStatusTimer.Start();
             Closed += (_, __) => { _updateStatusTimer.Stop(); _store.Changed -= OnStoreChanged; };
+            if (PairingFactory != null) { _pairPanel = PairingFactory(); PairingHost.Content = _pairPanel; PairButton.Visibility = Visibility.Collapsed; PairStatusText.Visibility = Visibility.Collapsed; PairHelpText.Visibility = Visibility.Collapsed; }
+            FeedbackHost.Content = new FeedbackPanel(_store.Count) { MinHeight = 420 };
+            _settings.Changed += OnSettingsUpdated;
+            Closed += (_, __) => _settings.Changed -= OnSettingsUpdated;
             WireSections();
             Refresh();
         }
@@ -54,14 +60,13 @@ namespace ZephyrPlayer
 
         private void WireSections()
         {
-            _sections["movies"] = (NavMovies, SectionMovies, "Movies folder");
             _sections["volume"] = (NavVolume, SectionVolume, "Volume");
-            _sections["skip"] = (NavSkip, SkipSettingsCard, "Skip buttons");
-            _sections["bar"] = (NavBar, SectionBar, "Playback bar");
-            _sections["remote"] = (NavRemote, SectionRemote, "Android remote");
+            _sections["skip"] = (NavSkip, SkipSettingsCard, "Playback");
+            _sections["bar"] = (NavBar, SectionBar, "Controls");
+            _sections["remote"] = (NavRemote, SectionRemote, "Phones");
             _sections["feedback"] = (NavFeedback, SectionFeedback, "Feedback & bugs");
             _sections["updates"] = (NavUpdates, SectionUpdates, "Updates");
-            SelectSection("movies");
+            SelectSection("volume");
         }
 
         private void OnNav(object sender, RoutedEventArgs e)
@@ -69,7 +74,7 @@ namespace ZephyrPlayer
             if (sender is Button b && b.Tag is string key) SelectSection(key);
         }
 
-        private void SelectSection(string key)
+        public void SelectSection(string key)
         {
             foreach (var (k, (nav, section, _)) in _sections)
             {
@@ -86,30 +91,42 @@ namespace ZephyrPlayer
             SectionTitle.Text = _sections[key].Title;
         }
 
+        private void OnSettingsUpdated(object? sender, EventArgs e) => Dispatcher.InvokeAsync(UpdatePreview);
+        private void UpdatePreview()
+        {
+            if (BarPreview.Content is PlaybackPreview preview) preview.Update(_settings);
+            else BarPreview.Content = new PlaybackPreview(_settings);
+        }
+
         private void OnStoreChanged(object? sender, EventArgs e) => Dispatcher.BeginInvoke(Refresh);
 
         private void Refresh()
         {
-            FolderText.Text = _settings.LibraryFolder.Length > 0 ? _settings.LibraryFolder : "Not set";
             BuildChoices(BoostPanel, PlayerSettings.BoostChoices, v => v + "%", () => _settings.VolumeBoostMaxPct, v => _settings.VolumeBoostMaxPct = v, "boost");
             BuildChoices(PrimarySkipPanel, PlayerSettings.PrimarySkipChoices, SkipLabel, () => _settings.PrimarySkipSeconds, v => _settings.PrimarySkipSeconds = v, "primaryskip");
             BuildChoices(SecondarySkipPanel, PlayerSettings.SecondarySkipChoices, SkipLabel, () => _settings.SecondarySkipSeconds, v => _settings.SecondarySkipSeconds = v, "secondaryskip");
             BuildChoices(BarColorPanel, PlayerSettings.BarColorStyles, Label, () => _settings.BarColorStyle, v => _settings.BarColorStyle = v, "barcolor");
             BuildChoices(IconStylePanel, PlayerSettings.IconStyles, Label, () => _settings.IconStyle, v => _settings.IconStyle = v, "iconstyle");
+            BuildChoices(HardwarePanel, PlayerSettings.HardwareChoices, v => v == "off" ? "Off" : "Auto", () => _settings.HardwareDecoding, v => _settings.HardwareDecoding = v, "hardware");
+            PreventSleepToggle.IsChecked = _settings.PreventSleep;
+            FlashToggle.IsChecked = _settings.ButtonFlash;
+            AnimateToggle.IsChecked = _settings.AnimateOnPress;
+            RememberToggle.IsChecked = _settings.RememberVolume;
             SpeedToggle.IsChecked = _settings.ShowSpeed;
             SleepToggle.IsChecked = _settings.ShowSleepTimer;
             PairStatusText.Text = _store.Count > 0
                 ? $"Paired with {_store.Count} phone{(_store.Count == 1 ? "" : "s")}."
                 : "Not paired yet.";
-            VersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(2) ?? "?");
+            UpdatePreview();
+            VersionText.Text = "v" + (Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "?");
         }
 
         private static string SkipLabel(int seconds) => PlayerSettings.FormatSkip(seconds);
 
         private static string Label(string v) => v switch
         {
-            "original" => "Original", "orange" => "Orange", "white" => "White", "twotone" => "Two-tone",
-            "hollow" => "Hollow", "filled" => "Filled", _ => v,
+            "original" => "Original", "orange" => "Orange", "white" => "White", "twotone" => "White, orange rings", "inverse" => "Orange, white rings",
+            "hollow" => "Outline", "filled" => "Solid", _ => v,
         };
 
         private void BuildChoices<T>(WrapPanel panel, T[] choices, Func<T, string> label, Func<T> get, Action<T> set, string group)
@@ -124,24 +141,16 @@ namespace ZephyrPlayer
             }
         }
 
+        private void OnAnimateToggle(object sender, RoutedEventArgs e) => _settings.AnimateOnPress = AnimateToggle.IsChecked == true;
+        private void OnRememberToggle(object sender, RoutedEventArgs e) => _settings.RememberVolume = RememberToggle.IsChecked == true;
+        private void OnFlashToggle(object sender, RoutedEventArgs e) => _settings.ButtonFlash = FlashToggle.IsChecked == true;
+
+        private void OnPlaybackToggle(object sender, RoutedEventArgs e) => _settings.PreventSleep = PreventSleepToggle.IsChecked == true;
+
         private void OnToggle(object sender, RoutedEventArgs e)
         {
             _settings.ShowSpeed = SpeedToggle.IsChecked == true;
             _settings.ShowSleepTimer = SleepToggle.IsChecked == true;
-        }
-
-        private void OnBrowse(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "Pick your designated movies folder",
-                InitialDirectory = _settings.LibraryFolder,
-            };
-            if (dlg.ShowDialog(this) == true)
-            {
-                _settings.LibraryFolder = dlg.FolderName;
-                Refresh();
-            }
         }
 
         private void OnPair(object sender, RoutedEventArgs e)

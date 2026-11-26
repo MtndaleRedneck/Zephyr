@@ -29,6 +29,12 @@ class ZephyrClientTest {
             .addHeader("Content-Type", "application/json"))
     }
 
+    @Test fun `play permits seven second response but control remains short`() {
+        server.enqueue(MockResponse().setBody("{}").setHeadersDelay(7, java.util.concurrent.TimeUnit.SECONDS))
+        ZephyrClient.play(host, port, "t", "http://127.0.0.1:8080/s/t/1", emptyList())
+        assertEquals("/play", server.takeRequest().path)
+    }
+
     @Test fun `pair trades code for token`() {
         enqueue("{\"token\":\"tok-1\"}")
         assertEquals("tok-1", ZephyrClient.pair(host, port, "123456"))

@@ -1,3 +1,4 @@
+param([switch]$HomeOnly)
 # Real-desktop capture of the actual ZephyrPlayer.exe on the Windows runner.
 # Framing rules (review grade): the app window is resized to fit the
 # runner's 1024x768 virtual screen so NO part is clipped, and every capture is
@@ -16,7 +17,7 @@ Remove-Item $crashLog -ErrorAction SilentlyContinue
 function DumpCrashLog($why) {
     if (Test-Path $crashLog) {
         Write-Host "::error::app crash log after: $why"
-        Get-Content $crashLog | ForEach-Object { Write-Host $_ }
+        Write-Host "app crash log: $((Get-Item $crashLog).Length) bytes, $(@(Get-Content $crashLog | Where-Object { $_ -match '^\[[^\]]+\] (dispatcher|unhandled|task|tray):' }).Count) entries; text withheld from the public log"
     }
 }
 
@@ -47,14 +48,23 @@ public static class ZWU32 {
     [DllImport("user32.dll")] public static extern int GetSystemMetrics(int n);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int X, int Y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out ZRECT r);
+    [DllImport("user32.dll")] public static extern bool SystemParametersInfo(int uAction, int uParam, ref ZRECT lpvParam, int fuWinIni);
     [DllImport("user32.dll")] public static extern void mouse_event(uint f, uint dx, uint dy, int data, UIntPtr extra);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, System.IntPtr w, System.IntPtr l);
     [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out ZRECT r, int size);
+    [DllImport("dwmapi.dll", EntryPoint="DwmGetWindowAttribute")] static extern int DwmGetWindowAttributeInt(IntPtr hWnd, int attr, out int v, int size);
+    public static bool HwndVisible(IntPtr h) { return IsWindowVisible(h); }
+    // DWMWA_CLOAKED (14): 0 = rendering; 1/2/4 = cloaked (app/shell/inherited).
+    // A cloaked window keeps sane frame/window rects but renders NOTHING, so a
+    // screen grab of its rect shows whatever is behind it (run 40989952680 mode).
+    public static int DwmCloaked(IntPtr h) { int v = -1; DwmGetWindowAttributeInt(h, 14, out v, 4); return v; }
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern int GetWindowTextW(IntPtr h, System.Text.StringBuilder sb, int max);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr h, uint cmd);
+    public static IntPtr OwnerOf(IntPtr h) { return GetWindow(h, 4 /* GW_OWNER */); }
     delegate bool EnumProc(IntPtr h, IntPtr l);
     public static IntPtr FindByTitle(uint pid, string title) {
         IntPtr found = IntPtr.Zero;
@@ -111,7 +121,21 @@ $SWP_NOZORDER = 0x4; $MOUSEEVENTF_WHEEL = 0x0800
 
 function CaptureWindow($hWnd, $path) {
     # Crop to the app's own window rect: no runner chrome in UI evidence.
+    # Names are reused (cycle files, paused2): remove any earlier file so a failed capture can never leave a stale image for the measurers.
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     if ($hWnd -eq [System.IntPtr]::Zero) { Write-Host "::error::no window handle for $path - capture skipped"; return "0 x 0" }
+    # Rendering guards: a hidden or DWM-cloaked window keeps SANE frame/window
+    # rects but paints nothing - CopyFromScreen then grabs desktop + whatever
+    # window is behind it, which is exactly the 40989952680 evidence-corruption
+    # mode (offset player, clipped chrome/bar, desktop in frame). Fail closed.
+    if (-not [ZWU32]::HwndVisible($hWnd)) {
+        # Evidence for the failure: which Player processes and windows exist right now.
+        foreach ($zp in @(Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { Write-Host "diag: ZephyrPlayer pid=$($zp.Id) exited=$($zp.HasExited) mainTitle='$($zp.MainWindowTitle)'"; foreach ($t in [ZWU32]::AllTitles([uint32]$zp.Id)) { Write-Host "diag:   window $t" } }
+        if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { Write-Host "diag: no ZephyrPlayer process is running" }
+        DumpCrashLog "hwnd $hWnd not visible for $path"
+        throw "CaptureWindow: hwnd $hWnd is not visible for $path - capture would grab other on-screen content" }
+    $cloakState = [ZWU32]::DwmCloaked($hWnd)
+    if ($cloakState -gt 0) { throw "CaptureWindow: hwnd $hWnd is DWM-cloaked ($cloakState) for $path - its rects are stale and the grab would show other content" }
     # CopyFromScreen grabs whatever is ON SCREEN in the rect: re-assert topmost
     # immediately before the grab, or the runner console / taskbar (also topmost)
     # lands in the evidence and covers the bar (67b6ee4 controls capture).
@@ -121,8 +145,32 @@ function CaptureWindow($hWnd, $path) {
     # GetWindowRect includes the invisible drop-shadow ring; through that ring
     # the runner's console/taskbar pixels bleed into UI evidence.
     $r = [ZRECT]::new()
-    if ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16) -ne 0) {
+    $dwmOk = ([ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16) -eq 0)
+    if (-not $dwmOk) {
         if (-not [ZWU32]::GetWindowRect($hWnd, [ref]$r)) { Write-Host "::error::GetWindowRect failed for hwnd $hWnd"; return "0 x 0" }
+    }
+    # Geometry agreement: the frame bounds must sit inside GetWindowRect's
+    # invisible-border envelope (any edge may carry the ~7px border; the
+    # --fullscreen window showed 7px on all four in run 40996037753). If they
+    # disagree, the DWM rect is stale (or the
+    # handle is not the rendered window) and CopyFromScreen would grab desktop +
+    # a shifted player - the run 40989952680 false-fail mode. One bounded
+    # re-assert + re-read, then throw WITH the rects: a capture whose crop does
+    # not match its window is decisive-logging-worthy, never silent evidence.
+    $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+    if ($dwmOk) {
+        $dL = $r.Left - $wr.Left; $dT = $r.Top - $wr.Top; $dR = $wr.Right - $r.Right; $dB = $wr.Bottom - $r.Bottom
+        if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 14 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
+            [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, 0, 0, 0x13) | Out-Null  # TOPMOST|NOMOVE|NOSIZE|NOACTIVATE
+            Start-Sleep -Milliseconds 400
+            $r = [ZRECT]::new()
+            [void][ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$r, 16)
+            $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+            $dL = $r.Left - $wr.Left; $dT = $r.Top - $wr.Top; $dR = $wr.Right - $r.Right; $dB = $wr.Bottom - $r.Bottom
+            if ($dL -lt -2 -or $dL -gt 14 -or $dT -lt -2 -or $dT -gt 14 -or $dR -lt -2 -or $dR -gt 14 -or $dB -lt -2 -or $dB -gt 14) {
+                throw "CaptureWindow: frame/window bounds disagree for hwnd ${hWnd} ($path): frame=($($r.Left),$($r.Top),$($r.Right),$($r.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) delta=($dL,$dT,$dR,$dB)"
+            }
+        }
     }
     $r.Left += 2; $r.Top += 2; $r.Right -= 2; $r.Bottom -= 2
     $w = $r.Right - $r.Left; $h = $r.Bottom - $r.Top
@@ -132,6 +180,7 @@ function CaptureWindow($hWnd, $path) {
     $g.CopyFromScreen($r.Left, $r.Top, 0, 0, $bmp.Size)
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
     $g.Dispose(); $bmp.Dispose()
+    "$(Split-Path $path -Leaf): frame=($($r.Left),$($r.Top),$($r.Right),$($r.Bottom)) window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) size=${w}x${h}" | Add-Content "$env:RUNNER_TEMP/pc-capture-bounds.txt"
     return "$w x $h"
 }
 function CountColored($path, $y0frac, $y1frac) {
@@ -205,25 +254,35 @@ function Measure-Bar($path) {
     # seekRun=86%. The bar gate is golden>=2 (half the control) + seekRun>=40; a
     # post-autohide frame scores golden=0. The control gate matches (>=2 / >=40).
     # The bar body occupies roughly the bottom third (about y 0.64-0.95 in an 800x500
-    # capture; the golden ElapsedText ~0.67, the seek track ~0.72). A 0.75+ band missed
-    # BOTH signatures (round-7 review C). 0.55 keeps full margin while the seek-run's
-    # near-gray requirement still rejects the test pattern's own content.
-    $band = Load-Band $path 0.55 1.0
-    $golden = 0; $goldenBand = [int]($band.W * 0.12); $bestRun = 0
-    for ($y = 0; $y -lt $band.H; $y += 2) {
+    # capture; the golden ElapsedText ~0.67, the seek track ~0.72-0.82). A 0.75+ band
+    # missed BOTH signatures (round-7 review C). 0.55 keeps full margin while the
+    # seek-run's near-gray requirement still rejects the test pattern's own content.
+    # The band stops at 0.93: below that sits window chrome / the taskbar top
+    # separator - a full-width RGB(190,190,190) line there satisfies the near-gray
+    # rule and scored seekRun=100% over a genuinely hidden bar (run 40960360181).
+    $band = Load-Band $path 0.55 0.93
+    $golden = 0; $goldenBand = [int]($band.W * 0.24); $bestRun = 0
+    for ($y = 0; $y -lt $band.H; $y++) {
         $run = 0
         for ($x = 0; $x -lt $band.W; $x++) {
             $o = $y * $band.S + $x * 4
             $b = $band.B[$o]; $g = $band.B[$o + 1]; $r = $band.B[$o + 2]
             # ElapsedText signature: gold #F0C23E for an explicit "original" pick,
-            # brand orange #FF9500 for the default style. Counting only gold went
+            # brand orange #F97C02 for the default style. Counting only gold went
             # blind the day the default became orange (b11db80 run: bar visible,
             # seekRun 88%, golden 0).
             $isGold = [math]::Abs($r - 240) -lt 28 -and [math]::Abs($g - 194) -lt 28 -and [math]::Abs($b - 62) -lt 40
             $isOrange = $r -gt 227 -and [math]::Abs($g - 149) -lt 28 -and $b -lt 40
             if ($x -lt $goldenBand -and ($isGold -or $isOrange)) { $golden++ }
-            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 120 -and $r -lt 235) { $run++; if ($run -gt $bestRun) { $bestRun = $run } } else { $run = 0 }
+            if ([math]::Abs($r - $g) -lt 20 -and [math]::Abs($g - $b) -lt 20 -and $r -gt 65 -and $r -lt 235) { $run++ } else {
+                # Only runs bounded on BOTH sides by non-matching pixels count.
+                # A run touching a row edge is full-bleed chrome (taskbar
+                # separator, window border), never the inset seek track.
+                if ($run -gt 0 -and ($x - $run) -gt 0 -and $run -gt $bestRun) { $bestRun = $run }
+                $run = 0
+            }
         }
+        # A run still open at the right edge touched it: reject (chrome, not track).
     }
     return @($golden, [int](100.0 * $bestRun / $band.W))
 }
@@ -238,32 +297,116 @@ function ClickAt($xf, $yf) {
     Start-Sleep -Milliseconds 700
 }
 function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force; Start-Sleep -Seconds 2 }
+function Get-Http($method, $path, $token, $body) {
+    # Status code only; an unreachable server is -1, never "fine".
+    try {
+        $h = @{}; if ($token) { $h['Authorization'] = "Bearer $token" }
+        $r = Invoke-WebRequest -Method $method -Uri "http://127.0.0.1:47823$path" -Headers $h -ContentType 'application/json' -Body $body -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 10
+        return [int]$r.StatusCode
+    } catch { return -1 }
+}
 function Close-PairingWindow($proc) {
     # A fresh profile auto-shows the pairing screen over Home; close it so the
-    # Home captures show the grid itself. WM_CLOSE keeps this a real UI close.
-    $pw = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player - Pair your phone')
-    if ($pw -ne [System.IntPtr]::Zero) {
-        [ZWU32]::PostMessage($pw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
-        Start-Sleep -Milliseconds 600
+    # captures show the grid itself. WM_CLOSE keeps this a real UI close.
+    # The first-run Settings window can appear AFTER this runs (it is created on
+    # the dispatcher, not necessarily before the player HWND exists), so a single
+    # find-and-close can miss it and leave it covering the player for the whole
+    # leg. Poll: wait for it to appear if it is going to, close every surface
+    # that shows, and return only once none remains - or when none ever came.
+    $seen = $false
+    for ($i = 0; $i -lt 16; $i++) {
+        $settings = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Settings')
+        $pw = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player - Pair your phone')
+        if ($settings -eq [System.IntPtr]::Zero -and $pw -eq [System.IntPtr]::Zero) {
+            if ($seen) { return }          # was open, now closed and stayed closed
+            if ($i -ge 7) { return }       # never appeared within ~3.5s: nothing to close
+            Start-Sleep -Milliseconds 500
+            continue
+        }
+        $seen = $true
+        if ($settings -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($settings, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
+        if ($pw -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($pw, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
+        Start-Sleep -Milliseconds 500
     }
 }
 function FitWindow($hWnd) {
-    # Whole window inside the virtual screen, top-left aligned, no clipping.
-    # HWND_TOPMOST (-1): the runner taskbar otherwise overlaps the window's
-    # bottom strip and lands in UI evidence.
-    [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), 0, 0, $vs.Width, $vs.Height, 0) | Out-Null
-    Start-Sleep -Milliseconds 700
+    # Whole window inside the WORK AREA (screen minus taskbar), top-left aligned:
+    # no part of the player - including the bottom control row - sits under the
+    # taskbar, and no taskbar pixels (its top separator is a full-width light-gray
+    # line) land in the evidence. 10px bottom margin keeps the window's invisible
+    # DWM border off the taskbar edge; window-height variance previously decided
+    # whether that separator fell inside the measured band (runs 40893158780 vs
+    # 40960360181). HWND_TOPMOST (-1) kept so nothing else overlaps either.
+    $wa = [ZRECT]::new()
+    [ZWU32]::SystemParametersInfo(0x0030 <# SPI_GETWORKAREA #>, 0, [ref]$wa, 0) | Out-Null
+    $wantW = $wa.Right - $wa.Left
+    $wantH = $wa.Bottom - $wa.Top - 10
+    # VERIFY the fitted geometry landed. An externally positioned WPF window can
+    # be re-placed by a late dispatcher/layout pass (startup/cascade position)
+    # after SetWindowPos returns; every later capture then crops the rect the
+    # window USED to occupy and grabs desktop + a down-right-shifted player with
+    # clipped chrome and a clipped control bar (run 40989952680, offset ~20,25px,
+    # windowed mouse-recovery 20/20 false fail). Bounded re-fit, then fail
+    # loudly with every rect logged instead of producing misleading evidence.
+    for ($try = 0; $try -lt 4; $try++) {
+        [ZWU32]::SetWindowPos($hWnd, [System.IntPtr]::new(-1), $wa.Left, $wa.Top, $wantW, $wantH, 0) | Out-Null
+        Start-Sleep -Milliseconds 700
+        # SetWindowPos positions the WINDOW rect; the DWM frame sits ~7px inside
+        # it (run 40993947776 calibration: requested (0,0) 1024x710 settled at
+        # window=(0,0,1024,710) exactly, frame=(7,0,1017,703)). Verify against
+        # GetWindowRect - the rect SetWindowPos actually controls.
+        $wr = [ZRECT]::new(); [void][ZWU32]::GetWindowRect($hWnd, [ref]$wr)
+        if ([Math]::Abs($wr.Left - $wa.Left) -le 4 -and [Math]::Abs($wr.Top - $wa.Top) -le 4 -and
+            [Math]::Abs(($wr.Right - $wr.Left) - $wantW) -le 4 -and [Math]::Abs(($wr.Bottom - $wr.Top) - $wantH) -le 4) {
+            return
+        }
+    }
+    $fr = [ZRECT]::new()
+    [void][ZWU32]::DwmGetWindowAttribute($hWnd, 9, [ref]$fr, 16)
+    throw "FitWindow: window did not settle at ($($wa.Left),$($wa.Top)) ${wantW}x${wantH}; window=($($wr.Left),$($wr.Top),$($wr.Right),$($wr.Bottom)) frame=($($fr.Left),$($fr.Top),$($fr.Right),$($fr.Bottom)) workarea=($($wa.Left),$($wa.Top),$($wa.Right),$($wa.Bottom))"
 }
 function Wait-MainWindow($proc, $seconds) {
     # WPF can take a while to create its HWND on a cold runner; poll instead
     # of assuming the window exists after a fixed sleep.
     for ($i = 0; $i -lt ($seconds * 2); $i++) {
         $proc.Refresh()
-        if ($proc.MainWindowHandle -ne [System.IntPtr]::Zero) { return $proc.MainWindowHandle }
+        # First-run Settings can be the process main HWND. Select the actual
+        # Player/Home title, never whatever window last gained focus.
+        $candidate = [ZWU32]::FindByTitle($proc.Id, 'Zephyr Player')
+        if ($candidate -ne [System.IntPtr]::Zero) { return $candidate }
         Start-Sleep -Milliseconds 500
     }
     Write-Host "::error::process $($proc.Id) had no main window after $seconds s (HasExited=$($proc.HasExited))"
     DumpCrashLog "process $($proc.Id) no main window"
+    return [System.IntPtr]::Zero
+}
+function Wait-PlaybackWindow($proc, $seconds) {
+    # --play starts on Home and then swaps to the player window; both are titled
+    # "Zephyr Player" (product behavior: Home hides when playback shows). Wait for
+    # the swap: the video host window is visible AND exactly one visible
+    # "Zephyr Player" window remains, stable across two polls. Never mask a product
+    # state: if the swap does not happen, report both windows and return zero.
+    $last = [System.IntPtr]::Zero; $stable = 0
+    for ($i = 0; $i -lt ($seconds * 4); $i++) {
+        $proc.Refresh()
+        $host_ = [ZWU32]::FindByTitle($proc.Id, 'LibVLCSharp.WPF')
+        $all = @([ZWU32]::FindAllByTitle($proc.Id, 'Zephyr Player'))
+        # Only the player window (MainWindow) hosts the VideoView; Home has none. When the
+        # video host is owned by a window, that owner must be the chosen one (never Home).
+        $owner = if ($host_ -ne [System.IntPtr]::Zero) { [ZWU32]::OwnerOf($host_) } else { [System.IntPtr]::Zero }
+        # LibVLCSharp.WPF 3.x ForegroundWindow is a top-level Window titled "LibVLCSharp.WPF" with
+        # Owner = the window containing the VideoView (MainWindow), so GW_OWNER must equal the player. No owner-0 fallback.
+        $ownerOk = ($owner -ne [System.IntPtr]::Zero) -and ($all.Count -eq 1 -and $owner -eq $all[0])
+        if ($host_ -ne [System.IntPtr]::Zero -and $all.Count -eq 1 -and $ownerOk) {
+            if ($all[0] -eq $last) { $stable++ } else { $last = $all[0]; $stable = 1 }
+            if ($stable -ge 2) { Write-Host "playback window: hwnd=$($all[0]) videoHostOwner=$owner"; return $all[0] }
+        } else { $stable = 0 }
+        Start-Sleep -Milliseconds 250
+    }
+    Write-Host "diag: videoHost=$host_ owner=$owner"
+    Write-Host "::error::playback window swap did not settle after $seconds s: videoHost=$([ZWU32]::FindByTitle($proc.Id, 'LibVLCSharp.WPF')) visibleZephyrPlayerWindows=$(@([ZWU32]::FindAllByTitle($proc.Id, 'Zephyr Player')).Count)"
+    foreach ($t in [ZWU32]::AllTitles($proc.Id)) { Write-Host "diag:   window $t" }
+    DumpCrashLog "process $($proc.Id) playback window did not settle"
     return [System.IntPtr]::Zero
 }
 function WakeControls() {
@@ -287,9 +430,13 @@ if (-not $ffmpeg) {
 }
 if (-not $ffmpeg) { throw 'ffmpeg unavailable after choco install' }
 $mp4 = "$env:RUNNER_TEMP/clip.mp4"
+$streamFixture = Join-Path $env:RUNNER_TEMP "s/tok"
+New-Item -ItemType Directory -Path $streamFixture -Force | Out-Null
 # Long enough for every leg of the bar proof (a 30s clip ENDED mid-proof: the last
 # phonestart poll frame already showed the counter at 29s - round-7 review C).
-& $ffmpeg -y -f lavfi -i "testsrc=duration=120:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+& $ffmpeg -y -f lavfi -i "testsrc=duration=600:size=320x240:rate=10" -pix_fmt yuv420p $mp4 2>$null
+
+Copy-Item $mp4 (Join-Path $streamFixture "1") -Force
 
 # Populated-grid evidence: distinct REAL bitmaps per tile, fed through the app's
 # ZEPHYR_THUMB_FIXTURE_DIR evidence seam. Whether THIS runner's shell can produce
@@ -361,6 +508,15 @@ $libJson = $libDir -replace '\\','\\'
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', '1', 'Process')
 $prevFx = [Environment]::GetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR','Process')
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $thumbDir, 'Process')
+if ($HomeOnly) {
+    # Test-only paired fixture avoids the intentional first-run Settings overlay.
+    '[{"token":"home-visual-fixture","name":"CI phone"}]' | Set-Content (Join-Path $cfgDir 'paired.json')
+    $history = @{}
+    foreach ($file in Get-ChildItem $libDir -Filter '*.mp4') {
+        $history[$file.FullName.ToUpperInvariant()] = @{ PositionMs=120000; DurationMs=600000; FileSize=$file.Length; ModifiedUtc=$file.LastWriteTimeUtc }
+    }
+    $history | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $cfgDir 'playback-history.json')
+}
 $pH = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -PassThru
 [Environment]::SetEnvironmentVariable('ZEPHYR_THUMB_FIXTURE_DIR', $prevFx, 'Process')
 $hwH = Wait-MainWindow $pH 15
@@ -369,8 +525,16 @@ if ($hwH -ne [System.IntPtr]::Zero) {
     [ZWU32]::SetWindowPos($hwH, [System.IntPtr]::Zero, 30, 4, 940, 700, $SWP_NOZORDER) | Out-Null
     Start-Sleep -Milliseconds 900
 }
+[ZWU32]::SetForegroundWindow($hwH) | Out-Null
+Start-Sleep -Seconds 2
+Close-PairingWindow $pH
 $sz1b = CaptureWindow $hwH "$env:RUNNER_TEMP/pc-home-library.png"
 StopZephyr
+if ($HomeOnly) {
+    if ($sz1b -eq '0 x 0') { throw 'Home visual capture missing' }
+    Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
+    return
+}
 # Back to a clean first-run state for the sections below.
 Remove-Item (Join-Path $cfgDir 'settings.json') -Force -ErrorAction SilentlyContinue
 
@@ -418,6 +582,80 @@ if ($pw -eq [System.IntPtr]::Zero) { Write-Host "::error::pairing window handle 
 Start-Sleep -Milliseconds 900
 $sz4b = CaptureWindow $pw "$env:RUNNER_TEMP/pc-desktop-pairing.png"
 StopZephyr
+
+# 2b-state) Player pairing STATE proofs (evidence repair c). The state is asserted through UI Automation and
+# the paired.json file, not by the existence of a picture. Fixture tokens are labelled CI fixtures.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function Find-UiaById($rootEl, $id) {
+    $cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, $id)
+    return $rootEl.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $cond)
+}
+function Read-PairedEntries($path) {
+    try { return @(Get-Content $path -Raw | ConvertFrom-Json) } catch { return $null }
+}
+function Open-PairingForState() {
+    $p = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--open-pairing" -PassThru
+    $null = Wait-MainWindow $p 15
+    $w = [System.IntPtr]::Zero
+    for ($i = 0; $i -lt 20 -and $w -eq [System.IntPtr]::Zero; $i++) {
+        $w = [ZWU32]::FindByTitle($p.Id, 'Zephyr Player - Pair your phone')
+        if ($w -eq [System.IntPtr]::Zero) { Start-Sleep -Milliseconds 500 }
+    }
+    if ($w -eq [System.IntPtr]::Zero) { throw 'pairing window never appeared' }
+    [ZWU32]::SetForegroundWindow($w) | Out-Null
+    [ZWU32]::SetWindowPos($w, [System.IntPtr]::new(-1), 40, 4, 560, 600, 0) | Out-Null
+    Start-Sleep -Milliseconds 1200
+    return $w
+}
+$pairedStatePath = Join-Path $cfgDir 'paired.json'
+$pairedStateBackup = if (Test-Path $pairedStatePath) { [IO.File]::ReadAllBytes($pairedStatePath) } else { $null }
+$fgVerdict = 'NOT PROVEN'; $brVerdict = 'NOT PROVEN'
+$fgDetail = ''; $brDetail = ''
+try {
+    # Forget: two fixture phones, forget one through the real button, assert UI and file.
+    '[{"token":"ci-forget-token-a","name":"CI phone A"},{"token":"ci-forget-token-b","name":"CI phone B"}]' | Set-Content $pairedStatePath
+    $wF = Open-PairingForState
+    $rootF = [System.Windows.Automation.AutomationElement]::FromHandle($wF)
+    $fa = Find-UiaById $rootF 'Forget:CI phone A'; $fb = Find-UiaById $rootF 'Forget:CI phone B'
+    if (-not $fa -or -not $fb) { throw "forget buttons before: A=$([bool]$fa) B=$([bool]$fb)" }
+    $authA1 = Get-Http 'Get' '/control/status' 'ci-forget-token-a' $null
+    $authB1 = Get-Http 'Get' '/control/status' 'ci-forget-token-b' $null
+    $nBefore = (Read-PairedEntries $pairedStatePath).Count
+    $null = CaptureWindow $wF "$env:RUNNER_TEMP/pc-pairing-two-phones.png"
+    $fa.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Start-Sleep -Milliseconds 1500
+    $fa2 = Find-UiaById $rootF 'Forget:CI phone A'; $fb2 = Find-UiaById $rootF 'Forget:CI phone B'
+    $authA2 = Get-Http 'Get' '/control/status' 'ci-forget-token-a' $null
+    $authB2 = Get-Http 'Get' '/control/status' 'ci-forget-token-b' $null
+    $after = Read-PairedEntries $pairedStatePath
+    $null = CaptureWindow $wF "$env:RUNNER_TEMP/pc-pairing-after-forget.png"
+    $remainName = if ($after -and $after.Count -ge 1) { "$($after[0].name)" } else { '' }
+    if ($nBefore -eq 2 -and $after -and $after.Count -eq 1 -and -not $fa2 -and $fb2 -and $remainName -eq 'CI phone B' -and $authA1 -eq 200 -and $authB1 -eq 200 -and $authA2 -eq 401 -and $authB2 -eq 200) {
+        $fgVerdict = 'PROVEN'
+    }
+    $fgDetail = "file entries $nBefore -> $(if ($after) { $after.Count } else { 'unreadable' }); A button after=$([bool]$fa2); B button after=$([bool]$fb2); remaining name matches B=$($remainName -eq 'CI phone B'); token A status $authA1 -> $authA2 (want 200 -> 401); token B status $authB1 -> $authB2 (want 200 -> 200)"
+} catch { $fgDetail = "error: $($_.Exception.GetType().Name)" }
+StopZephyr
+try {
+    # Broken store: an unreadable paired.json. Pair is off, the file is untouched, the screen is captured.
+    [IO.File]::WriteAllText($pairedStatePath, '{ not valid json at all')
+    $brBefore = [IO.File]::ReadAllBytes($pairedStatePath)
+    $wB = Open-PairingForState
+    $rootB = [System.Windows.Automation.AutomationElement]::FromHandle($wB)
+    $pairBtn = Find-UiaById $rootB 'PairButton'; $resetBtn = Find-UiaById $rootB 'ResetPairingsButton'
+    $pairEnabled = if ($pairBtn) { "$($pairBtn.Current.IsEnabled)" } else { 'missing' }
+    $resetVisible = [bool]($resetBtn -and -not $resetBtn.Current.IsOffscreen)
+    $codeEl = Find-UiaById $rootB 'PairCodeText'
+    $codeShown = [bool]($codeEl -and $codeEl.Current.Name -match '\d' -and -not $codeEl.Current.IsOffscreen)
+    $pairHttp = Get-Http 'Post' '/pair' $null '{"code":"000000"}'
+    $null = CaptureWindow $wB "$env:RUNNER_TEMP/pc-pairing-broken-store.png"
+    $brUnchanged = (Compare-Object $brBefore ([IO.File]::ReadAllBytes($pairedStatePath)) -SyncWindow 0) -eq $null
+    if ($pairBtn -and $pairEnabled -eq 'False' -and $brUnchanged -and $resetVisible -and -not $codeShown -and $pairHttp -ne 200 -and $pairHttp -ne -1) { $brVerdict = 'PROVEN' }
+    $brDetail = "Pair button enabled=$pairEnabled; reset button visible=$resetVisible; damaged file unchanged while the app ran=$brUnchanged; a pairing code showing=$codeShown; POST /pair status $pairHttp (must refuse)"
+} catch { $brDetail = "error: $($_.Exception.GetType().Name)" }
+StopZephyr
+if ($pairedStateBackup) { [IO.File]::WriteAllBytes($pairedStatePath, $pairedStateBackup) } else { Remove-Item $pairedStatePath -Force -ErrorAction SilentlyContinue }
 
 # 2b+) Tray ICON proof (round-3 P1): the icon must really exist in the
 # notification area, not only its menu. Crop the bottom-right corner of the
@@ -470,8 +708,8 @@ $hwHome = Wait-MainWindow $pBar 15
 # BOTTOM of the z-order so the player window paints above it in the captures.
 [ZWU32]::SetWindowPos($hwHome, [System.IntPtr]::new(1), 100, 100, 800, 500, 0) | Out-Null
 # The first-run pairing window covers the video: close it like a user would.
-$hwPair = [ZWU32]::FindByTitle($pBar.Id, 'Zephyr Player - Pair your phone')
-if ($hwPair -ne [System.IntPtr]::Zero) { [ZWU32]::PostMessage($hwPair, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null }
+# Close whichever first-run surface shows (Settings or the pairing window), same helper the other legs use.
+Close-PairingWindow $pBar
 $hdr = @{ Authorization = "Bearer ci-capture-token" }
 # The control server comes up after the window exists: wait for a real answer
 # instead of POSTing into a closed port and silently capturing the home window.
@@ -484,8 +722,8 @@ if (-not $ctrlUp) { throw "control server did not come up for the phone-start ba
 # /play is the route the real phone uses to START playback (ZephyrClient.play): it
 # hides Home and SHOWS the player window. /control/play only drives the current
 # session (no Show) - using it here proved nothing about the phone-start flow.
-$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/clip.mp4"}') -SkipHttpErrorCheck
-if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode): $($playResp.Content)" }
+$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') -SkipHttpErrorCheck
+if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode) (body of $("$($playResp.Content)".Length) chars withheld from the public log)" }
 # Find the player window BY TITLE: Home and MainWindow are both titled "Zephyr
 # Player", the pairing window has its own title, and any transient dialog (which
 # once masqueraded as the player, then died mid-poll and left a stale handle) is
@@ -506,7 +744,7 @@ foreach ($i in 1..40) {
 if ($hwBar -eq [System.IntPtr]::Zero) {
     # Diagnose, don't just fail: list every visible window this process owns,
     # grab the whole desktop, and dump the crash forensics.
-    Write-Host "play POST answered $($playResp.StatusCode): $($playResp.Content)"
+    Write-Host "play POST answered $($playResp.StatusCode) (body withheld from the public log)"
     Write-Host "process alive: $(-not $pBar.HasExited)"
     foreach ($h in [ZWU32]::FindAllVisible($pBar.Id)) { Write-Host "visible window hwnd=$h" }
     $titles = [ZWU32]::AllTitles($pBar.Id)
@@ -611,6 +849,23 @@ Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Hea
 [ZWU32]::SetCursorPos(500, 350) | Out-Null   # window center: inside, over the video
 Start-Sleep -Seconds 5
 $szBar4 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-parked.png"
+# Close the real player to return Home, then start again through the phone route.
+[ZWU32]::PostMessage($hwBar, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
+Start-Sleep -Milliseconds 800
+Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') | Out-Null
+Start-Sleep -Seconds 2
+$hwRestart = Find-PlayerWindow $pBar.Id $hwHome
+if ($hwRestart -eq [System.IntPtr]::Zero) { throw "Home/replay did not restore player" }
+[ZWU32]::SetWindowPos($hwRestart, [System.IntPtr]::new(-1), 0, 0, $vs.Width, $vs.Height, 0) | Out-Null
+[ZWU32]::SetCursorPos(2, 2) | Out-Null
+Start-Sleep -Seconds 4
+$null = CaptureWindow $hwRestart "$env:RUNNER_TEMP/pc-replay-hidden.png"
+$restartHidden = Measure-Bar "$env:RUNNER_TEMP/pc-replay-hidden.png"
+WakeControls
+$null = CaptureWindow $hwRestart "$env:RUNNER_TEMP/pc-replay-shown.png"
+$restartShown = Measure-Bar "$env:RUNNER_TEMP/pc-replay-shown.png"
+if ($restartHidden[1] -ge 40 -or $restartShown[0] -lt 2 -or $restartShown[1] -lt 40) { throw "Mouse recovery failed after Home/replay" }
+"Home/replay mouse-only recovery passed" | Add-Content "$env:RUNNER_TEMP/pc-mouse-recovery.txt"
 [ZWU32]::SetCursorPos(5, 5) | Out-Null
 StopZephyr
 Write-Host "phone-start bar captures: $sz / $szBar2 / $szBar3 / $szBar4"
@@ -631,11 +886,31 @@ $vidOkAuto   = ($vidAutoPx   -ge 3000)
 $vidOkParked = ($vidParkedPx -ge 3000)
 
 # 3) Real video, real mouse event, controls shown - WINDOWED.
-$p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4" -PassThru
-$hw3 = Wait-MainWindow $p3 15
+$p3 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/s/tok/1" -PassThru
+$hw3 = Wait-PlaybackWindow $p3 20
+Close-PairingWindow $p3
 FitWindow $hw3
 WakeControls
 $sz5 = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-playing-controls-window.png"
+# Mouse-only recovery, twenty independent hides/reveals; no phone commands to rescue it.
+function Prove-MouseRecovery($handle, $mode) {
+    $failures = 0
+    for ($cycle = 1; $cycle -le 20; $cycle++) {
+        [ZWU32]::SetCursorPos(2, 2) | Out-Null
+        Start-Sleep -Milliseconds 3500
+        $null = CaptureWindow $handle "$env:RUNNER_TEMP/pc-cycle-hidden.png"
+        $hidden = Measure-Bar "$env:RUNNER_TEMP/pc-cycle-hidden.png"
+        WakeControls
+        $null = CaptureWindow $handle "$env:RUNNER_TEMP/pc-cycle-shown.png"
+        $shown = Measure-Bar "$env:RUNNER_TEMP/pc-cycle-shown.png"
+        $ok = ($hidden[1] -lt 40 -and $shown[0] -ge 2 -and $shown[1] -ge 40)
+        "$mode cycle=$cycle hidden=$($hidden[1]) shown=$($shown[0])/$($shown[1]) ok=$ok" | Add-Content "$env:RUNNER_TEMP/pc-mouse-recovery.txt"
+        if (-not $ok) { $failures++ }
+    }
+    if ($failures -gt 0) { throw "$mode mouse recovery failed $failures of20cycles" }
+}
+Prove-MouseRecovery $hw3 'windowed'
+
 
 # Functional desktop control smoke (real mouse input through the actual UI,
 # verdicts from pixel diffs - route tests alone do not close these):
@@ -651,16 +926,52 @@ $sz5 = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-playing-controls-window.png"
 # seek 0.60,0.807; brackets 0.94,0.90); a missed click shows up as a
 # NOT PROVEN verdict, never a silent pass.
 $fnPauseGlyph = -1; $fnPauseClock = -1; $fnSeek = -1; $fnFs = 0
-ClickAt 0.497 0.90
+# Evidence repair (d): the pause click is aimed at the REAL PlayPauseButton found through UI Automation.
+# The measured-fraction click is only a fallback and does NOT count as a verified click. State is read
+# from the app's own /control/status (state + time), not only from pixels.
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+function Get-PlayerStatus {
+    try { return Invoke-RestMethod -Uri "http://127.0.0.1:47823/control/status" -Headers $hdr -TimeoutSec 5 } catch { return $null }
+}
+WakeControls
+$ppTarget = $null
+try {
+    $ppCond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'PlayPauseButton')
+    $ppEl = [System.Windows.Automation.AutomationElement]::FromHandle($hw3).FindFirst([System.Windows.Automation.TreeScope]::Descendants, $ppCond)
+    if ($ppEl -and -not $ppEl.Current.IsOffscreen) {
+        $r = $ppEl.Current.BoundingRectangle
+        $ppTarget = @((($r.X + $r.Width / 2) / $vs.Width), (($r.Y + $r.Height / 2) / $vs.Height))
+    }
+} catch { }
+$ppUia = [bool]$ppTarget
+$null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-prepause.png"
+$stBeforeObj = Get-PlayerStatus
+$stBefore = if ($stBeforeObj) { "$($stBeforeObj.state)" } else { 'unreachable' }
+if ($ppUia) { ClickAt $ppTarget[0] $ppTarget[1] } else { ClickAt 0.497 0.90 }
+$stAfterObj = Get-PlayerStatus
+$stAfterClick = if ($stAfterObj) { "$($stAfterObj.state)" } else { 'unreachable' }
+$pauseT1 = if ($stAfterObj) { [int]$stAfterObj.time } else { -1 }
 $szPause = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused.png"
 # Keep the bar from auto-hiding between frames (mouse nudge, not a click).
 Start-Sleep -Milliseconds 800
 [ZWU32]::SetCursorPos([int]($vs.Width * 0.497), [int]($vs.Height * 0.88)) | Out-Null
-Start-Sleep -Milliseconds 700
+Start-Sleep -Milliseconds 2200
 $null = CaptureWindow $hw3 "$env:RUNNER_TEMP/pc-smoke-paused2.png"
-$fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-playing-controls-window.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
+$stLaterObj = Get-PlayerStatus
+$pauseT2 = if ($stLaterObj) { [int]$stLaterObj.time } else { -2 }
+$pauseStalled = ($pauseT1 -ge 0 -and $pauseT2 -eq $pauseT1)
+$fnPauseGlyph = CountDiff "$env:RUNNER_TEMP/pc-smoke-prepause.png" "$env:RUNNER_TEMP/pc-smoke-paused.png" 0.47 0.53 0.88 0.93
 $fnPauseClock = CountDiff "$env:RUNNER_TEMP/pc-smoke-paused.png" "$env:RUNNER_TEMP/pc-smoke-paused2.png" 0.02 0.10 0.82 0.87
-ClickAt 0.497 0.90   # resume
+$pauseStatusTwice = ($stAfterClick -eq 'Paused' -and $stLaterObj -and "$($stLaterObj.state)" -eq 'Paused')
+$pauseGateOk = ($ppUia -and $stBefore -eq 'Playing' -and $pauseStatusTwice -and $pauseStalled -and $fnPauseGlyph -gt 20 -and $fnPauseClock -le 2)
+$fnPauseVerdict = if ($pauseGateOk) { "PROVEN (UIA target; status $stBefore -> $stAfterClick -> $($stLaterObj.state); time $pauseT1 -> $pauseT2 s; glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" }
+    elseif (-not $ppUia) { 'NOT PROVEN (no UI Automation target for PlayPauseButton; the fraction fallback click does not count as verified)' }
+    else { "NOT PROVEN (UIA target used; status $stBefore -> $stAfterClick -> $(if ($stLaterObj) { $stLaterObj.state } else { 'unreachable' }); time $pauseT1 -> $pauseT2 s; glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" }
+if ($ppUia) { ClickAt $ppTarget[0] $ppTarget[1] } else { ClickAt 0.497 0.90 }   # resume
+Start-Sleep -Milliseconds 1200
+$stResumeObj = Get-PlayerStatus
+$stResume = if ($stResumeObj) { "$($stResumeObj.state)" } else { 'unreachable' }
 # Seek by DRAGGING the real thumb. Fraction-guessed coordinates miss the
 # thumb (a track press only steps LargeChange ~1%, invisible at second
 # granularity), so locate the controls through UI Automation: x:Name becomes
@@ -720,8 +1031,9 @@ if ([ZWU32]::DwmGetWindowAttribute($hw3, 9, [ref]$r, 16) -eq 0) {
 StopZephyr
 
 # 4) Real video, real mouse event, controls shown - FULLSCREEN.
-$p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/clip.mp4","--fullscreen" -PassThru
-$hw4 = Wait-MainWindow $p4 15
+$p4 = Start-Process -FilePath "windows/capture-out/ZephyrPlayer.exe" -ArgumentList "--play=http://127.0.0.1:8901/s/tok/1","--fullscreen" -PassThru
+$hw4 = Wait-PlaybackWindow $p4 20
+Close-PairingWindow $p4
 # Fullscreen transition and floating VideoView overlay can lag HWND creation.
 # Position the already-fullscreen window on the captured monitor and wait for
 # both host and overlay layout to settle. Do not crop an offscreen rectangle.
@@ -729,6 +1041,7 @@ $hw4 = Wait-MainWindow $p4 15
 Start-Sleep -Seconds 2
 WakeControls
 $sz6 = CaptureWindow $hw4 "$env:RUNNER_TEMP/pc-playing-controls-fullscreen.png"
+Prove-MouseRecovery $hw4 'fullscreen'
 StopZephyr
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
@@ -756,7 +1069,10 @@ bar_pixels_windowed: $barWin
 video_pixels_fullscreen: $vidFs
 bar_pixels_fullscreen: $barFs
 controls_over_video_windowed: $(if ($vidWin -gt 500 -and $barWin -gt 60) { 'PROVEN' } else { 'NOT PROVEN - inspect images' })
-functional_pause_toggle: $(if ($fnPauseGlyph -gt 20 -and $fnPauseClock -le 2) { "PROVEN (glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" } else { "NOT PROVEN (glyph diff=$fnPauseGlyph, paused-clock diff=$fnPauseClock)" })
+functional_pause_toggle: $fnPauseVerdict
+functional_resume_status: $stResume
+player_forget_state: $fgVerdict ($fgDetail)
+player_broken_store_state: $brVerdict ($brDetail)
 functional_seek: $(if ($fnSeek -gt 10) { "PROVEN (time-label diff=$fnSeek)" } else { "NOT PROVEN (time-label diff=$fnSeek)" })
 functional_fullscreen_click: $(if ($fnFs -eq 1) { 'PROVEN (DWM bounds = virtual screen)' } else { 'NOT PROVEN' })
 volume_audio_apply: UNVERIFIED (headless runner has no audio device; UI drag path only)
@@ -776,4 +1092,8 @@ $barGateFailed = $false
 if (-not ($vidOkAuto -and -not $barOnAuto)) { Write-Host "::error::autohide leg failed (video=$vidAutoPx golden=$($mAuto[0]) seekRun=$($mAuto[1])%) - the bar must hide on the idle timer while video keeps playing"; $barGateFailed = $true }
 if (-not $barOnPaused) { Write-Host "::error::paused leg failed (golden=$($mPaused[0]) seekRun=$($mPaused[1])%) - a paused movie must keep the bar"; $barGateFailed = $true }
 if (-not ($vidOkParked -and -not $barOnParked)) { Write-Host "::error::parked-cursor leg failed (video=$vidParkedPx golden=$($mParked[0]) seekRun=$($mParked[1])%) - a still cursor over the video must not pin the bar"; $barGateFailed = $true }
+if (-not $pauseGateOk) { Write-Host "::error::functional pause proof failed: $fnPauseVerdict"; $barGateFailed = $true }
+if ($stResume -ne 'Playing') { Write-Host "::error::the second click did not resume playback (status $stResume)"; $barGateFailed = $true }
+if ($fgVerdict -ne 'PROVEN') { Write-Host "::error::Player forget state proof failed ($fgDetail)"; $barGateFailed = $true }
+if ($brVerdict -ne 'PROVEN') { Write-Host "::error::Player broken-store state proof failed ($brDetail)"; $barGateFailed = $true }
 if ($incomplete -or $barGateFailed) { exit 1 }

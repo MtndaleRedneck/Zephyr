@@ -14,7 +14,15 @@ namespace ZephyrPlayer
     {
         /// <summary>null = never ran; "checking"; "failed: <reason>"; "no_release"; "up_to_date" (installed == newest published);
         /// "ahead_of_feed" (installed newer than anything published - no published-version claim); or "available: <version>".</summary>
-        public static volatile string? Outcome;
+        public static string? Outcome
+        {
+            get => _outcome;
+            set { var old = _outcome; _outcome = value; if (!string.Equals(old, value, StringComparison.Ordinal)) Changed?.Invoke(); }
+        }
+        private static volatile string? _outcome;
+        /// <summary>2.0.2: raised (on the setting thread) when Outcome changes, so the library's
+        /// small "Update available" notice can follow it.</summary>
+        public static event Action? Changed;
         public sealed record Offer(string Version, string ExeUrl, string? Sha256);
         public static Offer? AvailableOffer;
         public static string Display(string? outcome) => outcome switch
@@ -24,6 +32,7 @@ namespace ZephyrPlayer
             "no_release" => "No published player installer available yet.",
             "up_to_date" => "You're up to date.",
             "ahead_of_feed" => "No newer version is available.",
+            "unverified_release" => "This update has no verified checksum. It was not offered for installation.",
             _ when outcome.StartsWith("available: ") => "Update available: " + outcome.Substring(11),
             _ when outcome.StartsWith("failed:") => "Could not check for updates. Try again later.",
             _ => "Update status unavailable."
@@ -34,11 +43,51 @@ namespace ZephyrPlayer
 
     internal static class UpdateCheck
     {
-        private const string Api = "https://api.github.com/repos/MtndaleRedneck/Zephyr-Dev/releases?per_page=30";
+        /// <summary>The update feed's repository: MtndaleRedneck/Zephyr. Older 1.4
+        /// installs may keep checking the old repository name; the owner installs 2.0
+        /// by hand.</summary>
+        internal const string Repo = "MtndaleRedneck/Zephyr";
+        internal const string Api = "https://api.github.com/repos/" + Repo + "/releases?per_page=30";
         /// <summary>Phone, helper and player release separately; this only looks at player-v* tags.</summary>
         private const string TagPrefix = "player-v";
         private const string AssetPrefix = "Zephyr-PC";
-        public const string ReleasePage = "https://github.com/MtndaleRedneck/Zephyr-Dev/releases";
+        public const string ReleasePage = "https://github.com/" + Repo + "/releases";
+
+        /// <summary>The canonical asset URL: the canonical repo's own release download for
+        /// this exact tag and file name.</summary>
+        internal static string ExpectedAssetUrl(string tag, string name) => $"https://github.com/{Repo}/releases/download/{tag}/{name}";
+
+        /// <summary>Only the current repository is accepted (the 3.0 feed is MtndaleRedneck/Zephyr; the old
+        /// Zephyr-Dev name is deliberately not trusted).</summary>
+        internal static readonly string[] AcceptedRepos = { Repo };
+
+        /// <summary>CP4 item 94: an asset URL is accepted only as
+        /// https://github.com/MtndaleRedneck/Zephyr/releases/download/{tag}/{name} - exact owner, exact repository, exact
+        /// host (github.com, the host rule of SelfUpdate), https, this tag and this file. Any
+        /// other owner, repository, host, scheme, port, query or extra path is refused.</summary>
+        internal static bool IsAcceptedAssetUrl(string url, string tag, string name)
+        {
+            foreach (var repo in AcceptedRepos)
+                if (string.Equals(url, $"https://github.com/{repo}/releases/download/{tag}/{name}", StringComparison.Ordinal)) return true;
+            return false;
+        }
+
+        /// <summary>The start of a production download (SelfUpdate): any release download of
+        /// the accepted repository, https on github.com, no query, no fragment, no port.</summary>
+        internal static bool IsAcceptedReleaseDownload(string url)
+        {
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var u)) return false;
+            if (u.Scheme != Uri.UriSchemeHttps || !u.IsDefaultPort || u.UserInfo.Length > 0) return false;
+            if (!string.Equals(u.Host, "github.com", StringComparison.Ordinal)) return false;
+            if (u.Query.Length > 0 || u.Fragment.Length > 0) return false;
+            var parts = u.AbsolutePath.Split('/');
+            // "", owner, repo, "releases", "download", tag, file
+            if (parts.Length != 7 || parts[0].Length != 0) return false;
+            if (parts[3] != "releases" || parts[4] != "download" || parts[5].Length == 0 || parts[6].Length == 0) return false;
+            var repo = parts[1] + "/" + parts[2];
+            return Array.Exists(AcceptedRepos, r => string.Equals(r, repo, StringComparison.Ordinal))
+                && string.Equals(url, u.GetLeftPart(UriPartial.Path), StringComparison.Ordinal);
+        }
 
         /// <summary>The published version newer than [current] shipping the installer, else null. Never throws.</summary>
         public static (string Version, string ExeUrl, string? Sha256)? LatestNewerThan(string current)
@@ -56,6 +105,7 @@ namespace ZephyrPlayer
             var cmp = Compare(Parse(published.Value.Version)!, Parse(current) ?? throw new ArgumentException("Invalid installed version"));
             if (cmp > 0)
             {
+                if (published.Value.Sha256 == null) return "unverified_release";
                 UpdateState.AvailableOffer = new UpdateState.Offer(published.Value.Version, published.Value.ExeUrl, published.Value.Sha256);
                 return "available: " + published.Value.Version;
             }
@@ -105,11 +155,10 @@ namespace ZephyrPlayer
                     var name = a.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
                     if (name != $"{AssetPrefix}-{version}.exe") continue;
                     var url = a.TryGetProperty("browser_download_url", out var u) ? u.GetString() ?? "" : "";
-                    var expected = $"https://github.com/MtndaleRedneck/Zephyr-Dev/releases/download/{tag}/{name}";
                     // Loopback feed tests may use a loopback asset; production never can.
                     bool testAsset = apiOverride != null && Uri.TryCreate(apiOverride, UriKind.Absolute, out var apiUri) && apiUri.IsLoopback
                         && Uri.TryCreate(url, UriKind.Absolute, out var assetUri) && assetUri.IsLoopback;
-                    if (url != expected && !testAsset) continue;
+                    if (!IsAcceptedAssetUrl(url, tag, name) && !testAsset) continue;
                     string? sha = null;
                     if (a.TryGetProperty("digest", out var dg))
                     {
@@ -133,5 +182,56 @@ namespace ZephyrPlayer
                 if (!int.TryParse(parts[i], out nums[i]) || nums[i] is < 0 or > 9999) return null;
             return nums;
         }
+    }
+
+    /// <summary>2.0.2: the automatic check runs at launch, every 6 hours while the app runs
+    /// (it lives in the tray for days), and when the app is brought back from the tray (at
+    /// most every 30 minutes). A later check that fails keeps an offer already found, so a
+    /// network blip does not hide a known update.</summary>
+    internal static class BackgroundUpdateCheck
+    {
+        internal static readonly TimeSpan Interval = TimeSpan.FromHours(6);
+        internal static readonly TimeSpan MinGapOnRestore = TimeSpan.FromMinutes(30);
+        /// <summary>Test seam: replaces the feed check (installed version in, outcome out).</summary>
+        internal static Func<string, string>? CheckOverride;
+        private static int _running;
+        internal static DateTime LastRunUtc { get; private set; } = DateTime.MinValue;
+        internal static int RunCount { get; private set; }
+
+        internal static bool DueOnRestore(DateTime nowUtc) => nowUtc - LastRunUtc >= MinGapOnRestore;
+
+        internal static string InstalledVersion() =>
+            System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "0.0.0";
+
+        /// <summary>One check, unless one is already running. [first] is the launch check
+        /// (shows "checking" first, as before).</summary>
+        internal static System.Threading.Tasks.Task Run(bool first = false)
+        {
+            if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1) return System.Threading.Tasks.Task.CompletedTask;
+            LastRunUtc = DateTime.UtcNow;
+            RunCount++;
+            var current = InstalledVersion();
+            return System.Threading.Tasks.Task.Run(() =>
+            {
+                var previous = UpdateState.Outcome;
+                var previousOffer = UpdateState.AvailableOffer;
+                try
+                {
+                    if (first) UpdateState.Outcome = "checking";
+                    string outcome;
+                    try { outcome = CheckOverride != null ? CheckOverride(current) : UpdateCheck.CheckOutcomeOrThrow(current); }
+                    catch (Exception ex) { outcome = "failed: " + ex.GetType().Name; }
+                    if (outcome.StartsWith("failed:", StringComparison.Ordinal) && previous != null && previous.StartsWith("available: ", StringComparison.Ordinal) && previousOffer != null)
+                    {
+                        UpdateState.AvailableOffer = previousOffer;
+                        outcome = previous;
+                    }
+                    UpdateState.Outcome = outcome;
+                }
+                finally { System.Threading.Interlocked.Exchange(ref _running, 0); }
+            });
+        }
+
+        internal static void ResetForTest() { LastRunUtc = DateTime.MinValue; RunCount = 0; CheckOverride = null; System.Threading.Interlocked.Exchange(ref _running, 0); }
     }
 }

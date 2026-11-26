@@ -4,6 +4,6 @@ namespace ZephyrPlayer
     /// so the five scattered copies can never drift apart again (review should-fix).</summary>
     internal static class Brand
     {
-        public static readonly System.Windows.Media.Color Orange = System.Windows.Media.Color.FromRgb(0xFF, 0x95, 0x00);
+        public static readonly System.Windows.Media.Color Orange = System.Windows.Media.Color.FromRgb(0xF9, 0x7C, 0x02);
     }
 }

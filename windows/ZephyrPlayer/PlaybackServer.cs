@@ -21,6 +21,8 @@ namespace ZephyrPlayer
     {
         public const int DefaultPort = 47823; // distinct from BingeMote helper's port
         private readonly HttpListener _listener = new HttpListener();
+        private readonly SemaphoreSlim _requests = new(16);
+        private readonly SemaphoreSlim _pairRequests = new(4);
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly Func<string, long?, string[], Task> _onPlay;
         private readonly Func<string, bool> _validateToken;
@@ -29,6 +31,11 @@ namespace ZephyrPlayer
         private readonly IInputSink? _input;
         private readonly IPlaybackControl? _control;
         private readonly bool _loopbackOnly;
+        private readonly InputLease? _inputLease;
+        private readonly Timer? _inputTimer;
+        private readonly DisplayGate? _display;
+        // Non-touching "still paired" read for housekeeping (falls back to the request validator).
+        private readonly Func<string, bool>? _isPaired;
 
         private static readonly System.Collections.Generic.HashSet<string> NamedKeys = new()
             { "enter", "backspace", "escape", "space", "tab", "up", "down", "left", "right" };
@@ -39,7 +46,7 @@ namespace ZephyrPlayer
         /// in tests without it.</param>
         /// <param name="port">Listening port; tests pass an explicit loopback port.</param>
         /// <param name="loopbackOnly">Bind 127.0.0.1 only (CI harness); production binds all interfaces.</param>
-        /// <param name="onPair">6-digit code in, (outcome, token) out - the PairingGate
+        /// <param name="onPair">pairing code in, (outcome, token) out - the PairingGate
         /// owns code lifetime, one-shot spend, lockout and the phone cap. Optional so the
         /// loopback harness can run without pairing; production wires it.</param>
         public PlaybackServer(Func<string, long?, string[], Task> onPlay, Func<string, bool> validateToken,
@@ -47,13 +54,18 @@ namespace ZephyrPlayer
             Func<string, (PairOutcome outcome, string? token)>? onPair = null,
             PlayerSettings? settings = null,
             IInputSink? input = null,
-            IPlaybackControl? control = null)
+            IPlaybackControl? control = null,
+            DisplayGate? display = null,
+            Func<string, bool>? isPaired = null)
         {
+            _display = display;
+            _isPaired = isPaired;
             _onPlay = onPlay;
             _validateToken = validateToken ?? throw new ArgumentNullException(nameof(validateToken));
             _onPair = onPair;
             _settings = settings ?? new PlayerSettings();
             _input = input;
+            if (input != null) { _inputLease = new InputLease(input); _inputTimer = new Timer(_ => { try { _inputLease.Expire(DateTime.UtcNow, _validateToken); _display?.Prune(_isPaired ?? _validateToken); } catch { } }, null, 500, 500); }
             _control = control;
             _loopbackOnly = loopbackOnly;
             Port = port;
@@ -66,14 +78,52 @@ namespace ZephyrPlayer
             _ = Task.Run(Loop);
         }
 
+        /// <summary>Test seam: replaces the accept call (to inject a failing accept).</summary>
+        internal Func<HttpListener, Task<HttpListenerContext>>? AcceptForTest;
+        /// <summary>Accept or triage errors survived since Start (2.0.2).</summary>
+        internal int LoopErrors => _loopErrors;
+        private int _loopErrors;
+        internal static TimeSpan LoopErrorPause = TimeSpan.FromMilliseconds(250);
+
         private async Task Loop()
         {
             while (!_cts.IsCancellationRequested)
             {
                 HttpListenerContext ctx;
-                try { ctx = await _listener.GetContextAsync(); }
-                catch { break; }
-                _ = Task.Run(() => Handle(ctx));
+                try { ctx = await (AcceptForTest?.Invoke(_listener) ?? _listener.GetContextAsync()); }
+                catch (Exception ex)
+                {
+                    // 2.0.2: one failed accept used to end the loop for good (the phone remote
+                    // was dead until a restart). Only a stop ends it now; anything else is
+                    // logged, and the loop pauses briefly and goes on.
+                    if (_cts.IsCancellationRequested || !_listener.IsListening) break;
+                    Interlocked.Increment(ref _loopErrors);
+                    System.Diagnostics.Trace.TraceWarning("Phone server accept failed, continuing: " + ex.GetType().Name + ": " + ex.Message);
+                    try { await Task.Delay(LoopErrorPause, _cts.Token); } catch (OperationCanceledException) { break; }
+                    continue;
+                }
+                try
+                {
+                    if (!TrustedRequest(ctx)) {ctx.Response.StatusCode=403;ctx.Response.Close();continue;}
+                    var pair = ctx.Request.HttpMethod == "POST" && ctx.Request.Url?.AbsolutePath == "/pair";
+                    if (!pair)
+                    {
+                        var auth = ctx.Request.Headers["Authorization"] ?? "";
+                        if (!auth.StartsWith("Bearer ") || !_validateToken(auth.Substring(7)))
+                        { ctx.Response.StatusCode = 401; ctx.Response.Close(); continue; }
+                    }
+                    var slots = pair ? _pairRequests : _requests;
+                    if (!slots.Wait(0)) { ctx.Response.StatusCode = 503; ctx.Response.Close(); continue; }
+                    _ = Task.Run(async () => { try { await Handle(ctx); } finally { slots.Release(); } });
+                }
+                catch (Exception ex)
+                {
+                    // A client that hung up while being turned away (or any triage error)
+                    // costs that one request, not the server.
+                    Interlocked.Increment(ref _loopErrors);
+                    System.Diagnostics.Trace.TraceWarning("Phone server request triage failed, continuing: " + ex.GetType().Name);
+                    try { ctx.Response.Abort(); } catch { }
+                }
             }
         }
 
@@ -89,12 +139,12 @@ namespace ZephyrPlayer
                     await Reply(ctx, 403, "{\"error\":\"not a home network address\"}");
                     return;
                 }
+                if (!TrustedRequest(ctx)) {await Reply(ctx,403,"{\"error\":\"origin or host refused\"}");return;}
                 // Pairing is the ONE unauthenticated route: the phone trades the 6-digit
                 // code on the player screen for a pairing token (protocol.md Pairing).
                 if (ctx.Request.HttpMethod == "POST" && path == "/pair")
                 {
-                    using var pairReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var pairBody = await pairReader.ReadToEndAsync();
+                    var pairBody = await ReadBody(ctx);
                     var code = System.Text.Json.JsonDocument.Parse(pairBody).RootElement.GetProperty("code").GetString() ?? "";
                     var (outcome, newToken) = code.Length == 0 || _onPair == null
                         ? (PairOutcome.NoCode, null)
@@ -107,7 +157,7 @@ namespace ZephyrPlayer
                         case PairOutcome.Locked:
                             // Time-based lock: the phone says "try again in a few
                             // minutes", never "restart the PC" (1.2.0).
-                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Try again in a few minutes.\"}");
+                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair on the PC for a new code.\"}");
                             return;
                         case PairOutcome.TooManyPhones:
                             await Reply(ctx, 409, "{\"error\":\"too many phones\"}");
@@ -139,8 +189,7 @@ namespace ZephyrPlayer
                 }
                 if (ctx.Request.HttpMethod == "POST" && path == "/play")
                 {
-                    using var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var body = await reader.ReadToEndAsync();
+                    var body = await ReadBody(ctx);
                     var doc = System.Text.Json.JsonDocument.Parse(body).RootElement;
                     var url = doc.GetProperty("url").GetString();
                     if (url == null) { await Reply(ctx, 400, "{\"error\":\"missing url\"}"); return; }
@@ -148,6 +197,9 @@ namespace ZephyrPlayer
                     var subs = doc.TryGetProperty("subtitles", out var s)
                         ? System.Text.Json.JsonSerializer.Deserialize<string[]>(s.GetRawText()) ?? Array.Empty<string>()
                         : Array.Empty<string>();
+                    if (!PlaybackSourcePolicy.AllowedSet(url, subs, _settings.LibraryFolder, ctx.Request.RemoteEndPoint.Address)) { await Reply(ctx, 400, "{\"error\":\"playback source not allowed\"}"); return; }
+                    // Dark PC screen: starting a movie is a press, so this tap only wakes the screen.
+                    if (_display != null && _display.ShouldSwallowDiscrete()) { await Reply(ctx, 200, "{\"ok\":true,\"woke\":true}"); return; }
                     await _onPlay(url, position, subs);
                     await Reply(ctx, 200, "{\"ok\":true}");
                     return;
@@ -162,8 +214,7 @@ namespace ZephyrPlayer
                 }
                 if (ctx.Request.HttpMethod == "POST" && path == "/library/folder")
                 {
-                    using var folderReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var folderBody = await folderReader.ReadToEndAsync();
+                    var folderBody = await ReadBody(ctx);
                     var folder = System.Text.Json.JsonDocument.Parse(folderBody).RootElement.GetProperty("folder").GetString()?.Trim() ?? "";
                     if (folder.Length > 0)
                     {
@@ -196,13 +247,26 @@ namespace ZephyrPlayer
                         await Reply(ctx, 200, _control.StatusJson());
                         return;
                     }
+                    if (ctx.Request.HttpMethod == "GET" && path == "/control/screen-state")
+                    {
+                        // Dark or unknown counts as dark. With no display source the gate is off: not dark.
+                        await Reply(ctx, 200, "{\"dark\":" + (_display != null && _display.DarkOrUnknown ? "true" : "false") + "}");
+                        return;
+                    }
                     if (ctx.Request.HttpMethod != "POST") { await Reply(ctx, 404, "{}"); return; }
+                    if (path == "/control/wake-display")
+                    {
+                        _display?.Wake();
+                        await Reply(ctx, 200, "{\"ok\":true}");
+                        return;
+                    }
+                    // First press while the PC screen is dark only wakes it (playback commands are presses).
+                    if (_display != null && _display.ShouldSwallowDiscrete()) { await Reply(ctx, 200, "{\"ok\":true,\"woke\":true}"); return; }
                     System.Text.Json.JsonElement cjson = default;
                     var hasBody = ctx.Request.HasEntityBody;
                     if (hasBody)
                     {
-                        using var controlReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                        var controlBody = await controlReader.ReadToEndAsync();
+                        var controlBody = await ReadBody(ctx);
                         cjson = System.Text.Json.JsonDocument.Parse(controlBody).RootElement;
                     }
                     switch (path)
@@ -215,7 +279,9 @@ namespace ZephyrPlayer
                                 ? System.Text.Json.JsonSerializer.Deserialize<string[]>(cs.GetRawText()) ?? Array.Empty<string>()
                                 : Array.Empty<string>();
                             if (url.Length == 0) { await Reply(ctx, 400, "{\"error\":\"no url\"}"); return; }
-                            _control.Play(url, pos, subs);
+                            if (!PlaybackSourcePolicy.AllowedSet(url, subs, _settings.LibraryFolder, ctx.Request.RemoteEndPoint.Address)) { await Reply(ctx, 400, "{\"error\":\"playback source not allowed\"}"); return; }
+                            if(_control is IAsyncPlaybackControl asyncControl) await asyncControl.PlayAsync(url,pos,subs);
+                            else _control.Play(url, pos, subs);
                             break;
                         }
                         case "/control/pause": _control.Pause(); break;
@@ -244,11 +310,33 @@ namespace ZephyrPlayer
                 if (ctx.Request.HttpMethod == "POST" && path.StartsWith("/input/"))
                 {
                     if (_input == null) { await Reply(ctx, 404, "{}"); return; }
-                    using var inputReader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8);
-                    var inputBody = await inputReader.ReadToEndAsync();
+                    var inputBody = await ReadBody(ctx);
                     var json = System.Text.Json.JsonDocument.Parse(inputBody).RootElement;
+                    // Validate before the dark gate so a bad key/button is a 400 even while dark.
+                    if (path == "/input/key" && !NamedKeys.Contains(json.GetProperty("key").GetString() ?? "")) { await Reply(ctx, 400, "{\"error\":\"unknown key\"}"); return; }
+                    if (path == "/input/button")
+                    {
+                        var vb = json.GetProperty("button").GetString() ?? "";
+                        if (vb != "left" && vb != "right") { await Reply(ctx, 400, "{\"error\":\"unknown button\"}"); return; }
+                    }
+                    if (_display != null && path != "/input/heartbeat")
+                    {
+                        // Dark PC screen: the first touch only wakes it; a gesture is eaten to its end.
+                        var swallowed = path switch
+                        {
+                            "/input/move" or "/input/scroll" or "/input/zoom" => _display.ShouldSwallowContinuous(),
+                            "/input/button" => _display.ShouldSwallowButton(token,
+                                json.TryGetProperty("button", out var bb) ? bb.GetString() : null,
+                                json.TryGetProperty("down", out var dd) && dd.ValueKind == System.Text.Json.JsonValueKind.True),
+                            _ => _display.ShouldSwallowDiscrete(),
+                        };
+                        if (swallowed) { await Reply(ctx, 200, "{\"ok\":true,\"woke\":true}"); return; }
+                    }
                     switch (path)
                     {
+                        case "/input/heartbeat":
+                            _inputLease!.Renew(token, DateTime.UtcNow);
+                            break;
                         case "/input/move":
                             _input.Move(json.GetProperty("dx").GetSingle(), json.GetProperty("dy").GetSingle());
                             break;
@@ -259,7 +347,7 @@ namespace ZephyrPlayer
                                 await Reply(ctx, 400, "{\"error\":\"unknown button\"}");
                                 return;
                             }
-                            _input.Button(button, json.GetProperty("down").GetBoolean());
+                            _inputLease!.Button(token, button, json.GetProperty("down").GetBoolean(), DateTime.UtcNow);
                             break;
                         case "/input/scroll":
                             _input.Scroll(json.GetProperty("dy").GetSingle());
@@ -288,10 +376,49 @@ namespace ZephyrPlayer
                 }
                 await Reply(ctx, 404, "{}");
             }
-            catch (Exception e)
+            catch (BodyLimitException) { await SafeError(ctx, 413, "request too large"); }
+            catch (OperationCanceledException) { await SafeError(ctx, 408, "request timed out"); }
+            catch (Exception) { await SafeError(ctx, 400, "invalid request"); }
+        }
+
+        private static bool TrustedRequest(HttpListenerContext ctx)
+        {
+            if (ctx.Request.Headers["Origin"] != null) return false;
+            if (!IsPrivateAddress(ctx.Request.RemoteEndPoint.Address)) return false;
+            var host=ctx.Request.Url?.Host ?? "";
+            return IPAddress.TryParse(host,out _) || host.Equals("localhost",StringComparison.OrdinalIgnoreCase) || host.Equals(Environment.MachineName,StringComparison.OrdinalIgnoreCase);
+        }
+
+        private sealed class BodyLimitException : Exception { }
+        private static async Task<string> ReadBody(HttpListenerContext ctx)
+        {
+            const int max = 64 * 1024;
+            if (ctx.Request.ContentLength64 > max) throw new BodyLimitException();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var buffer = new MemoryStream();
+            var bytes = new byte[4096];
+            while (true)
             {
-                await Reply(ctx, 500, "{\"error\":" + System.Text.Json.JsonSerializer.Serialize(e.Message) + "}");
+                var read = ctx.Request.InputStream.ReadAsync(bytes.AsMemory(), timeout.Token).AsTask();
+                if (await Task.WhenAny(read, Task.Delay(Timeout.Infinite, timeout.Token)) != read)
+                {
+                    ctx.Response.StatusCode = 408;
+                    try { ctx.Response.Abort(); } catch { }
+                    try { ctx.Request.InputStream.Close(); } catch { }
+                    _ = read.ContinueWith(t => { _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                    throw new OperationCanceledException();
+                }
+                var n = await read;
+                if (n == 0) break;
+                if (buffer.Length + n > max) throw new BodyLimitException();
+                buffer.Write(bytes, 0, n);
             }
+            return Encoding.UTF8.GetString(buffer.ToArray());
+        }
+        private static async Task SafeError(HttpListenerContext ctx, int code, string message)
+        {
+            try { await Reply(ctx, code, "{\"error\":\"" + message + "\"}"); }
+            catch { try { ctx.Response.Abort(); } catch { } }
         }
 
         private static async Task Reply(HttpListenerContext ctx, int code, string json)
@@ -308,6 +435,7 @@ namespace ZephyrPlayer
         /// Same rule as the BingeMote helper's HttpServer.IsPrivateAddress.</summary>
         internal static bool IsPrivateAddress(IPAddress ip)
         {
+            if(ip.IsIPv4MappedToIPv6)ip=ip.MapToIPv4();
             if (IPAddress.IsLoopback(ip)) return true;
             if (ip.AddressFamily != AddressFamily.InterNetwork) return false;
             var b = ip.GetAddressBytes();
@@ -319,6 +447,8 @@ namespace ZephyrPlayer
 
         public void Dispose()
         {
+            _inputTimer?.Dispose();
+            _inputLease?.ReleaseAll();
             _cts.Cancel();
             try { _listener.Stop(); } catch { }
         }

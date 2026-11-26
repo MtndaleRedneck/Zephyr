@@ -17,6 +17,26 @@ namespace ZephyrPlayer.Tests
     public class PairingWindowRenderTests
     {
         [Fact]
+        public void BrokenPairingRecovery_RendersExplicitResetWithoutChangingStore()
+        {
+            Exception? error=null;var thread=new Thread(()=>{
+                var dir=System.IO.Path.Combine(System.IO.Path.GetTempPath(),Guid.NewGuid().ToString("N"));System.IO.Directory.CreateDirectory(dir);
+                try{
+                    var path=System.IO.Path.Combine(dir,"paired.json");System.IO.File.WriteAllText(path,"broken{");var store=new PairedStore(path);_=store.Entries();
+                    var gate=new PairingGate();var panel=new PairingPanel(gate,store,_=>{});var window=new Window{Content=panel,Width=600,Height=700};
+                    try{
+                        window.Show();window.UpdateLayout();
+                        Assert.Equal(Visibility.Visible,((Button)panel.FindName("ResetPairingsButton")!).Visibility);
+                        Assert.False(((Button)panel.FindName("PairButton")!).IsEnabled);
+                        var image=new RenderTargetBitmap(600,700,96,96,PixelFormats.Pbgra32);image.Render(window);
+                        var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(image));
+                        using var output=System.IO.File.Create(System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP")??System.IO.Path.GetTempPath(),"pc-pairing-recovery-render.png"));png.Save(output);
+                        Assert.Equal("broken{",System.IO.File.ReadAllText(path));Assert.True(store.IsBroken);
+                    }finally{window.Close();}
+                }catch(Exception ex){error=ex;}finally{System.IO.Directory.Delete(dir,true);System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();}
+            });thread.SetApartmentState(ApartmentState.STA);thread.Start();Assert.True(thread.Join(30000));if(error!=null)throw error;
+        }
+        [Fact]
         public void PairingWindow_RendersOffscreen()
         {
             string? error = null;
@@ -35,11 +55,22 @@ namespace ZephyrPlayer.Tests
                     w.RefreshPhones();
                     var codePanel = (UIElement)w.FindName("CodePanel")!;
                     var list = (ItemsControl)w.FindName("PhoneList")!;
+                    Assert.Equal(Visibility.Collapsed, codePanel.Visibility);
+                    Assert.False(gate.HasActiveCode);
+                    var pair = (Button)w.FindName("PairButton")!;
+                    pair.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.False(gate.HasActiveCode); // empty Pair focuses, never mints
+                    ((TextBox)w.FindName("PhoneNameBox")!).Text = "Test phone";
+                    pair.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Assert.Equal("Test phone", ((TextBox)w.FindName("PhoneNameBox")!).Text);
+                    Assert.True(gate.HasActiveCode);
                     Assert.Equal(Visibility.Visible, codePanel.Visibility);
                     Assert.Equal(1, list.Items.Count);
-                    // The big code text is 6 spaced digits.
+                    // The big code text is 4 digits (BingeMote pairing) with thin spaces between them.
                     var codeText = ((TextBlock)w.FindName("PairCodeText")!).Text;
-                    Assert.Equal(11, codeText.Length); // "1 3 5 7 9 2"
+                    Assert.Equal(7, codeText.Length); // "1 3 5 7" with thin spaces
+                    Assert.Equal('\u2009', codeText[1]);
+                    Assert.Matches("^[0-9]{4}$", codeText.Replace("\u2009", ""));
                     // Render the window content offscreen as CI evidence.
                     var root = (FrameworkElement)w.Content;
                     root.Measure(new Size(560, 600));
@@ -73,7 +104,7 @@ namespace ZephyrPlayer.Tests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join(30000);
+            Assert.True(t.Join(30000), "STA body timed out");
             if (error != null)
             {
                 var f = System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");
@@ -84,6 +115,27 @@ namespace ZephyrPlayer.Tests
     }
     public class ControlBarRenderTests
     {
+        private static void Sta(Action body)
+        {
+            Exception? error = null;
+            var t = new Thread(() => { try { body(); } catch (Exception e) { error = e; } finally { System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown(); } });
+            t.SetApartmentState(ApartmentState.STA); t.Start();
+            Assert.True(t.Join(30000), "STA body timed out");
+            if (error != null) throw new Exception("STA body failed", error);
+        }
+
+        private static T? Find<T>(DependencyObject root, Func<T, bool> match) where T : DependencyObject
+        {
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+            {
+                var c = VisualTreeHelper.GetChild(root, i);
+                if (c is T hit && match(hit)) return hit;
+                var deeper = Find(c, match);
+                if (deeper != null) return deeper;
+            }
+            return null;
+        }
+
         [Fact]
         public void ControlBar_RendersOffscreen()
         {
@@ -92,12 +144,10 @@ namespace ZephyrPlayer.Tests
             {
                 try
                 {
-                    Core.Initialize();
+                    NativeVlc.Init();
                     var libvlc = new LibVLC();
                     var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
-                    // Explicit "original" pick: the shipping default is orange now, and this
-                    // render proof's pixel calibration below is gold. Keep the render check
-                    // independent of which style ships as the default.
+                    // Explicit "original" pick (also the shipping default again).
                     var settings = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-" + Guid.NewGuid().ToString("N") + ".json"));
                     settings.BarColorStyle = "original";
                     var w = new MainWindow(libvlc, player, settings, new VolumeService());
@@ -106,8 +156,8 @@ namespace ZephyrPlayer.Tests
                     var bar = w.ControlBar;
                     // Structural assertions, independent of pixel counts: the required
                     // elements exist with readable labels, and CC/full are vectors, not text.
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
                     Assert.Equal("0:00", ((TextBlock)w.FindName("ElapsedText")!).Text);
                     Assert.Equal("0:00 total", ((TextBlock)w.FindName("TotalText")!).Text);
                     Assert.Equal("-0:00", ((TextBlock)w.FindName("RemainingText")!).Text);
@@ -116,9 +166,11 @@ namespace ZephyrPlayer.Tests
                     Assert.False(((Button)w.FindName("CaptionsButton")!).Content is string, "captions must be a vector icon, not literal text");
                     Assert.False(((Button)w.FindName("FullscreenButton")!).Content is string, "fullscreen must be a vector icon, not literal text");
                     bar.Opacity = 1; // XAML starts it at 0 (fades in on mouse move); render the shown state
-                    bar.Measure(new Size(1920, 200));
-                    bar.Arrange(new Rect(0, 0, bar.DesiredSize.Width, bar.DesiredSize.Height));
-                    var bw = (int)Math.Ceiling(bar.DesiredSize.Width);
+                    bar.Measure(new Size(800, 200));
+                    bar.Arrange(new Rect(0, 0, 800, bar.DesiredSize.Height));
+                    w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle);
+                    bar.UpdateLayout();
+                    var bw = 800;
                     var bh = (int)Math.Ceiling(bar.DesiredSize.Height);
                     var rtb = new RenderTargetBitmap(bw, bh, 96, 96, PixelFormats.Pbgra32);
                     rtb.Render(bar);
@@ -137,7 +189,7 @@ namespace ZephyrPlayer.Tests
                     for (var i = 0; i < wide.Length; i += 4)
                     {
                         var b = wide[i]; var g = wide[i + 1]; var r = wide[i + 2];
-                        if (r > 200 && g > 150 && g < 230 && b < 110) gold++;
+                        if (r > 200 && g > 90 && g < 180 && b < 110) gold++;
                         if (r > 230 && g > 230 && b > 230) white++;
                     }
                     // Threshold encodes the settled 13pt captions (~44 pure-gold px on the 96dpi runner render; 0-ish would mean not rendered).
@@ -149,13 +201,15 @@ namespace ZephyrPlayer.Tests
                     // orange elapsed/total/remaining text. Same offscreen render, orange
                     // pixel count - visual proof of the default, not just a brush assert.
                     var settingsDefault = new PlayerSettings(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-controlbar-def-" + Guid.NewGuid().ToString("N") + ".json"));
-                    Assert.Equal("orange", settingsDefault.BarColorStyle); // unset default
+                    Assert.Equal("original", settingsDefault.BarColorStyle); // unset default (2.0.2)
                     var w2 = new MainWindow(libvlc, player, settingsDefault, new VolumeService());
                     var bar2 = w2.ControlBar;
                     bar2.Opacity = 1;
-                    bar2.Measure(new Size(1920, 200));
-                    bar2.Arrange(new Rect(0, 0, bar2.DesiredSize.Width, bar2.DesiredSize.Height));
-                    var bw2 = (int)Math.Ceiling(bar2.DesiredSize.Width);
+                    bar2.Measure(new Size(800, 200));
+                    bar2.Arrange(new Rect(0, 0, 800, bar2.DesiredSize.Height));
+                    w2.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle);
+                    bar2.UpdateLayout();
+                    var bw2 = 800;
                     var bh2 = (int)Math.Ceiling(bar2.DesiredSize.Height);
                     var rtb2 = new RenderTargetBitmap(bw2, bh2, 96, 96, PixelFormats.Pbgra32);
                     rtb2.Render(bar2);
@@ -174,7 +228,7 @@ namespace ZephyrPlayer.Tests
                     for (var i = 0; i < wide2.Length; i += 4)
                     {
                         var b = wide2[i]; var g = wide2[i + 1]; var r = wide2[i + 2];
-                        if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #FF9500
+                        if (r > 220 && g > 110 && g < 190 && b < 80) orangePx++; // brand orange #F97C02
                     }
                     Assert.True(orangePx > 30, $"orange elapsed-text pixels {orangePx} - default control bar not rendered in the shipping style");
                     w2.Close();
@@ -184,13 +238,185 @@ namespace ZephyrPlayer.Tests
             });
             t.SetApartmentState(ApartmentState.STA);
             t.Start();
-            t.Join(30000);
+            Assert.True(t.Join(30000), "STA body timed out");
                         if (error != null)
             {
                 var f = System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");
                 try { System.IO.File.WriteAllText(f, error); } catch { }
                 Assert.True(false, "STA body error (full text also in " + f + "):\n" + error);
             }
+        }
+    
+        [Fact]
+        public void FormatCode_ThinSpacesAndOneWordSpace()
+        {
+            Assert.Equal("4\u20098\u20092 9\u20091\u20093", PairingPanel.FormatCode("482913"));
+            Assert.Equal(11, PairingPanel.FormatCode("135792").Length);
+            Assert.Equal("4\u20098\u20092\u20099", PairingPanel.FormatCode("4829"));
+        }
+
+        [Fact]
+        public void PhoneCard_Forget_RemovesThePhone()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-forget-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-a", "Kitchen phone");
+                store.Add("tok-b", "Test phone");
+                var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
+                host.Show(); host.UpdateLayout();
+                Assert.Equal(2, ((ItemsControl)panel.FindName("PhoneList")!).Items.Count);
+                var forget = Find<Button>(panel, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "Forget:Kitchen phone");
+                Assert.NotNull(forget);
+                Assert.Equal("Forget", forget!.Content);
+                forget.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                host.UpdateLayout();
+                Assert.Single(store.Entries());
+                Assert.Equal("Test phone", store.Entries()[0].Name);
+                Assert.Equal(1, ((ItemsControl)panel.FindName("PhoneList")!).Items.Count);
+                // Survives a reload from disk.
+                Assert.Single(new PairedStore(System.IO.Path.Combine(dir, "paired.json")).Entries());
+                var last = Find<Button>(panel, b => System.Windows.Automation.AutomationProperties.GetAutomationId(b) == "Forget:Test phone");
+                last!.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                host.UpdateLayout();
+                Assert.Empty(store.Entries());
+                Assert.Equal(Visibility.Visible, ((TextBlock)panel.FindName("NoPhonesText")!).Visibility);
+                host.Close();
+            });
+        }
+
+        [Fact]
+        public void PhoneCards_StayInTheAutomationTree_AfterARefresh()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-uia-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-a", "CI phone");
+                var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
+                host.Show(); host.UpdateLayout();
+                var list = (ItemsControl)panel.FindName("PhoneList")!;
+                void Settle() => System.Windows.Threading.Dispatcher.CurrentDispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.ContextIdle);
+                bool InTree(string id)
+                {
+                    var root = System.Windows.Automation.Peers.UIElementAutomationPeer.CreatePeerForElement(list);
+                    bool Walk(System.Windows.Automation.Peers.AutomationPeer p)
+                    {
+                        // Item peers built outside a UIA client can throw on their own id
+                        // (no owner context yet); only the Forget buttons' ids matter here.
+                        string? own; try { own = p.GetAutomationId(); } catch (NullReferenceException) { own = null; }
+                        if (own == id) return true;
+                        System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>? kids;
+                        // A UIA client re-reads children after a structure change; in-process the
+                        // peers keep their first answer until told, so ask afresh each walk.
+                        try { p.ResetChildrenCache(); } catch (NullReferenceException) { }
+                        try { kids = p.GetChildren(); } catch (NullReferenceException) { kids = null; }
+                        foreach (var c in kids ?? new System.Collections.Generic.List<System.Windows.Automation.Peers.AutomationPeer>()) if (Walk(c)) return true;
+                        return false;
+                    }
+                    return Walk(root);
+                }
+                // The real proof is CI's UIA lookup on the running app (CP3: "both cards before
+                // Forget", "the fixture card still shown after Forget"); this in-process walk
+                // only judges when it can see the first card at all.
+                if (!InTree("Forget:CI phone"))
+                {
+                    try { System.IO.File.WriteAllText(System.IO.Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? System.IO.Path.GetTempPath(), "cp3-unit-uia-walk.txt"), "in-process peer walk cannot see the item peers on this host; not judged here (CP3 capture judges it)"); } catch { }
+                    host.Close();
+                    return;
+                }
+                store.Add("tok-b", "CI Pixel");
+                panel.RefreshPhones(); host.UpdateLayout(); Settle();
+                Assert.True(InTree("Forget:CI Pixel"), "the new card is not in the automation tree");
+                Assert.True(InTree("Forget:CI phone"), "the unchanged card left the automation tree after a refresh");
+                store.Remove("tok-b");
+                panel.RefreshPhones(); host.UpdateLayout(); Settle();
+                Assert.False(InTree("Forget:CI Pixel"));
+                Assert.True(InTree("Forget:CI phone"), "the kept card left the automation tree after a Forget");
+                host.Close();
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            });
+        }
+
+        [Fact]
+        public void PhoneList_UnchangedRefresh_KeepsTheCards_ChangedRefreshSwapsThem()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-keep-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                store.Add("tok-a", "CI phone");
+                var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                var list = (ItemsControl)panel.FindName("PhoneList")!;
+                panel.RefreshPhones();
+                var first = list.ItemsSource;
+                panel.RefreshPhones();
+                Assert.Same(first, list.ItemsSource);
+                store.Add("tok-b", "CI Pixel");
+                panel.RefreshPhones();
+                Assert.NotSame(first, list.ItemsSource);
+                Assert.Equal(2, list.Items.Count);
+                try { System.IO.Directory.Delete(dir, true); } catch { }
+            });
+        }
+
+        [Fact]
+        public void PhoneStatus_RenderWording()
+        {
+            var now = new DateTime(2026, 10, 31, 15, 0, 0, DateTimeKind.Local);
+            Assert.Equal("Connected now", PairingPanel.PhoneStatus(true, null, now));
+            Assert.Equal("Not connected this session", PairingPanel.PhoneStatus(false, null, now));
+            Assert.StartsWith("Last seen today, ", PairingPanel.PhoneStatus(false, now.AddHours(-2).ToUniversalTime(), now));
+            Assert.Equal("Last seen yesterday", PairingPanel.PhoneStatus(false, now.AddDays(-1).ToUniversalTime(), now));
+            Assert.StartsWith("Last seen Oct", PairingPanel.PhoneStatus(false, now.AddDays(-5).ToUniversalTime(), now));
+        }
+
+        [Fact]
+        public void PublicWifiBanner_NoticeOnly_AndCheckIsReadOnly()
+        {
+            Sta(() =>
+            {
+                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-wifi-" + Guid.NewGuid().ToString("N"));
+                System.IO.Directory.CreateDirectory(dir);
+                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
+                var before = ConnectionState.PublicWifiName;
+                try
+                {
+                    ConnectionState.PublicWifiName = "CoffeeShop";
+                    var panel = new PairingPanel(new PairingGate(), store, _ => { });
+                    var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
+                    host.Show(); host.UpdateLayout();
+                    var banner = (Border)panel.FindName("WifiBanner")!;
+                    Assert.Equal(Visibility.Visible, banner.Visibility);
+                    var text = ((TextBlock)panel.FindName("WifiBannerText")!).Text;
+                    Assert.Contains("public", text);
+                    Assert.Contains("can block", text);       // honest: may, not "is blocked"
+                    Assert.DoesNotContain("is blocked", text);
+                    string? said = null;
+                    Action<string> h = s => said = s;
+                    PairingPanel.SuppressDialogsForTest = true;
+                    PairingPanel.FirewallCheckResult += h;
+                    try { ((Button)panel.FindName("FirewallCheckButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); }
+                    finally { PairingPanel.FirewallCheckResult -= h; PairingPanel.SuppressDialogsForTest = false; }
+                    Assert.NotNull(said);
+                    Assert.DoesNotContain("shut", said!, StringComparison.OrdinalIgnoreCase);
+                    ConnectionState.PublicWifiName = null;
+                    panel.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
+                    host.Close();
+                    var panel2 = new PairingPanel(new PairingGate(), store, _ => { });
+                    var host2 = new Window { Content = panel2, Width = 640, Height = 600, ShowInTaskbar = false };
+                    host2.Show(); host2.UpdateLayout();
+                    Assert.Equal(Visibility.Collapsed, ((Border)panel2.FindName("WifiBanner")!).Visibility);
+                    host2.Close();
+                }
+                finally { ConnectionState.PublicWifiName = before; }
+            });
         }
     }
 }

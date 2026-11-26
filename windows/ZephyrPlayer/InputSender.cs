@@ -45,7 +45,34 @@ internal static class InputSender
     // Two phones can tap at the same instant; keep one gesture's SendInput calls together.
     private static readonly object Gate = new();
 
-    private static void Send(params INPUT[] inputs) => SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    // SendInput returns how many inputs it actually played; a short count means Windows did
+    // not play the batch. Surface that once per episode instead of freezing silently:
+    // true = not played, false = played again. The count is all we know; no cause is claimed.
+    public static event Action<bool>? BlockedStateChanged;
+    private static bool _blocked;
+    /// <summary>Current blocked state, so a late-created tray can replay the notice.</summary>
+    public static bool IsBlocked => _blocked;
+
+    /// <summary>Pure rule: a short count means Windows did not play the whole batch.</summary>
+    internal static bool IsShortCount(uint sent, int expected) => sent < expected;
+
+    /// <summary>Records one SendInput result and raises BlockedStateChanged on a change only.</summary>
+    internal static void NoteSendResult(uint sent, int expected)
+    {
+        var blocked = IsShortCount(sent, expected);
+        if (blocked == _blocked) return;
+        _blocked = blocked;
+        BlockedStateChanged?.Invoke(blocked);
+    }
+
+    /// <summary>Test seam: forget the remembered state.</summary>
+    internal static void ResetBlockedForTests() { _blocked = false; }
+
+    private static void Send(params INPUT[] inputs)
+    {
+        var sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+        NoteSendResult(sent, inputs.Length);
+    }
 
     private static INPUT Mouse(uint flags, int dx = 0, int dy = 0, uint data = 0) =>
         new() { type = INPUT_MOUSE, U = new INPUTUNION { mi = new MOUSEINPUT { dx = dx, dy = dy, dwFlags = flags, mouseData = data } } };

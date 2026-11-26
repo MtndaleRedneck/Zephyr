@@ -11,11 +11,11 @@ namespace ZephyrPlayer
     /// sees EXACTLY what would be sent, and submits in the browser via the same
     /// pre-filled Google Form or a pre-filled GitHub issue. The report carries only
     /// what he typed plus app version + Windows version - no PC name, Wi-Fi names,
-    /// paired phones or file paths.
+    /// phone names, tokens or file paths (only the paired-phone count).
     /// </summary>
     public partial class FeedbackWindow : Window
     {
-        private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr-Dev/issues";
+        private const string RepoIssues = "https://github.com/MtndaleRedneck/Zephyr/issues";
         // The dedicated Zephyr feedback form (created + verified public by the
         // coordinator, Oct 26). The shared BingeMote form is NEVER used. The
         // "Reply email" field (entry.1538046022) is never prefilled - the user
@@ -92,10 +92,15 @@ namespace ZephyrPlayer
 
         private void UpdatePreview() => PreviewText.Text = Preview(MessageTextBox.Text);
 
-        private void OnForm(object sender, RoutedEventArgs e) =>
-            Process.Start(new ProcessStartInfo(FormUrl()) { UseShellExecute = true });
+        private void OnForm(object sender, RoutedEventArgs e) => OpenInBrowser(FormUrl());
 
-        private void OnIssue(object sender, RoutedEventArgs e) =>
-            Process.Start(new ProcessStartInfo(IssueUrl()) { UseShellExecute = true });
+        private void OnIssue(object sender, RoutedEventArgs e) => OpenInBrowser(IssueUrl());
+
+        /// <summary>Test seam: replaces the browser launch (throw to act as a PC with no browser).</summary>
+        internal static Action<string>? LaunchOverride { get => FeedbackPanel.LaunchOverride; set => FeedbackPanel.LaunchOverride = value; }
+        /// <summary>Test seam: the note shown when no browser could open the link.</summary>
+        internal static Action<string>? NoteOverride { get => FeedbackPanel.NoteOverride; set => FeedbackPanel.NoteOverride = value; }
+
+        internal static bool OpenInBrowser(string url) => FeedbackPanel.OpenInBrowser(url);
     }
 }

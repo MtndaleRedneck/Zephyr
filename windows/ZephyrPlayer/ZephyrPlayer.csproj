@@ -3,13 +3,16 @@
        Cross-builds in CI on Linux with EnableWindowsTargeting. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <UseWPF>true</UseWPF>
 
     <Nullable>enable</Nullable>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
     <AssemblyName>ZephyrPlayer</AssemblyName>
-    <Version>1.2.0</Version>
+    <Version>3.1.0</Version>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
@@ -19,9 +22,12 @@
     <Resource Include="assets\icon.ico" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="LibVLCSharp" Version="3.*" />
-    <PackageReference Include="LibVLCSharp.WPF" Version="3.*" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.*" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <!-- Pinned so single-file publish does not add it implicitly at a floating version. -->
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="10.0.0" PrivateAssets="all" />
+    <PackageReference Include="LibVLCSharp" Version="3.10.2" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.10.2" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
       <PackageReference Include="H.NotifyIcon.Wpf" Version="2.1.4" />
   </ItemGroup>
 

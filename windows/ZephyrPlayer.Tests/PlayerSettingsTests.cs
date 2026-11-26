@@ -18,6 +18,49 @@ namespace ZephyrPlayer.Tests
         public void Dispose() { try { Directory.Delete(_dir, true); } catch { } }
 
         [Fact]
+        public void CorruptSettings_ArePreservedAndNeverOverwrittenByDefaults() {
+            var s = new PlayerSettings(_path); s.LastVolume = 37; s.LibraryFolder = "movies";
+            Assert.True(File.Exists(_path + ".bak"));
+            var good = File.ReadAllText(_path); File.WriteAllText(_path, "{broken");
+            Assert.Equal(37, s.LastVolume);
+            var warnings = 0; s.WriteFailed += (_, __) => warnings++;
+            s.LastVolume = 70; s.LastVolume = 71;
+            Assert.Equal(1, warnings);
+            Assert.Equal("{broken", File.ReadAllText(_path));
+            File.WriteAllText(_path, good); s.LastVolume = 70;
+            Assert.Equal("movies", new PlayerSettings(_path).LibraryFolder);
+        }
+        // 2.0.2 Ver201RenderTests.RememberVolume_IsASwitch_OffStartsAt100, original assertions.
+        [Fact]
+        public void RememberVolume_IsASwitch_OffStartsAt100()
+        {
+            var s = new PlayerSettings(_path);
+            Assert.True(s.RememberVolume);
+            s.LastVolume = 37;
+            Assert.Equal(37, s.StartVolume);
+            s.RememberVolume = false;
+            Assert.Equal(100, s.StartVolume);
+            Assert.Equal(37, new PlayerSettings(_path).LastVolume);
+            Assert.False(new PlayerSettings(_path).RememberVolume);
+        }
+        [Fact]
+        public void ButtonFlash_DefaultOff_ChoicePersists()
+        {
+            var s = new PlayerSettings(_path);
+            Assert.False(s.ButtonFlash);
+            s.ButtonFlash = true;
+            Assert.True(new PlayerSettings(_path).ButtonFlash);
+        }
+        [Fact]
+        public void Library_Sort_Roundtrips_Without_Losing_Older_Settings()
+        {
+            var settings = new PlayerSettings(_path);
+            Assert.Equal("name", settings.LibrarySort); Assert.True(settings.FoldersFirst);
+            settings.LibraryFolder = @"C:\Movies"; settings.LibrarySort = "created"; settings.FoldersFirst = false;
+            var reread = new PlayerSettings(_path);
+            Assert.Equal("created", reread.LibrarySort); Assert.False(reread.FoldersFirst); Assert.Equal(@"C:\Movies", reread.LibraryFolder);
+        }
+        [Fact]
         public void Defaults_On_Missing_File()
         {
             var s = new PlayerSettings(_path);
@@ -25,21 +68,30 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(200, s.VolumeBoostMaxPct);
             Assert.Equal(10, s.PrimarySkipSeconds);
             Assert.Equal(30, s.SecondarySkipSeconds);
-            Assert.Equal("orange", s.BarColorStyle); // unset default
+            Assert.Equal("original", s.BarColorStyle); // unset default (2.0.2)
             Assert.Equal("hollow", s.IconStyle);
-            Assert.False(s.ShowSpeed);
-            Assert.False(s.ShowSleepTimer);
+            Assert.True(s.ShowSpeed);
+            Assert.True(s.ShowSleepTimer);
             Assert.Equal(100, s.LastVolume);
+            Assert.True(s.AnimateOnPress);
+            Assert.Equal("M", s.SubtitleSize);
+            Assert.True(s.RememberVolume);
+            Assert.Equal("", s.ShellBounds);
+            Assert.Equal(100, s.StartVolume);
         }
 
         [Fact]
-        public void Stored_Original_Choice_Survives_The_Default_Change()
+        public void Stored_Choices_Win_Over_Defaults()
         {
-            // The default moved to orange, but an explicit earlier pick is a stored
-            // value, not a missing one: it must read back exactly as chosen.
-            File.WriteAllText(_path, "{\"BarColorStyle\":\"original\"}");
+            // A stored choice is never a missing value: it reads back exactly as chosen.
+            File.WriteAllText(_path, "{\"BarColorStyle\":\"orange\",\"ShowSpeed\":false,\"RememberVolume\":false,\"LastVolume\":42,\"SubtitleSize\":\"L\"}");
             var s = new PlayerSettings(_path);
-            Assert.Equal("original", s.BarColorStyle);
+            Assert.Equal("orange", s.BarColorStyle);
+            Assert.False(s.ShowSpeed);
+            Assert.False(s.RememberVolume);
+            Assert.Equal(42, s.LastVolume);
+            Assert.Equal(100, s.StartVolume); // Remember volume off: always opens at 100
+            Assert.Equal("L", s.SubtitleSize);
         }
 
         [Fact]
@@ -86,7 +138,7 @@ namespace ZephyrPlayer.Tests
             s.PrimarySkipSeconds = 7;
             Assert.Equal(10, s.PrimarySkipSeconds);
             s.BarColorStyle = "purple";
-            Assert.Equal("orange", s.BarColorStyle); // unset default
+            Assert.Equal("original", s.BarColorStyle); // unset default (2.0.2)
             s.IconStyle = "sparkly";
             Assert.Equal("hollow", s.IconStyle);
         }
@@ -176,9 +228,107 @@ namespace ZephyrPlayer.Tests
             var s = new PlayerSettings(_path);
             var fired = 0;
             s.Changed += (_, __) => fired++;
-            s.ShowSpeed = true;
+            s.ShowSpeed = false;
+            Assert.Equal(1, fired);
+            // 2.0.2: the remembered volume is written without Changed (nothing else shows it,
+            // so no screen rebuilds per volume step), and it is still saved.
             s.LastVolume = 33;
-            Assert.Equal(2, fired);
+            Assert.Equal(1, fired);
+            Assert.Equal(33, new PlayerSettings(_path).LastVolume);
+        }
+
+        [Fact]
+        public void AnimateOnPress_DefaultOn_And_SubtitleSize_DefaultM()
+        {
+            var s = new PlayerSettings(_path);
+            Assert.True(s.AnimateOnPress);
+            Assert.Equal("M", s.SubtitleSize);
+            s.AnimateOnPress = false;
+            s.SubtitleSize = "L";
+            s.SubtitleSize = "XL"; // ignored
+            var reread = new PlayerSettings(_path);
+            Assert.False(reread.AnimateOnPress);
+            Assert.Equal("L", reread.SubtitleSize);
+        }
+
+        [Fact]
+        public void Stored_Orange_Choice_Survives_The_Default_Change()
+        {
+            // The default is "original" again (render 06b), but an explicit earlier pick
+            // is a stored value, not a missing one: it must read back exactly as chosen.
+            File.WriteAllText(_path, "{\"BarColorStyle\":\"orange\"}");
+            var s = new PlayerSettings(_path);
+            Assert.Equal("orange", s.BarColorStyle);
+        }
+
+        [Fact]
+        public void Stored_Speed_And_Sleep_Choices_Survive_The_Default_Change()
+        {
+            // U8: the new "on" default applies only when the key was never written.
+            File.WriteAllText(_path, "{\"ShowSpeed\":false,\"ShowSleepTimer\":false}");
+            var s = new PlayerSettings(_path);
+            Assert.False(s.ShowSpeed);
+            Assert.False(s.ShowSleepTimer);
+        }
+    }
+}
+
+namespace ZephyrPlayer.Tests
+{
+    public class HardwareAndSleepSettingTests
+    {
+        [Fact]
+        public void Defaults_AreAutoAndPreventSleepOn_AndRoundTrip()
+        {
+            var path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.Guid.NewGuid() + ".json");
+            try
+            {
+                var s = new PlayerSettings(path);
+                Assert.Equal("auto", s.HardwareDecoding);
+                Assert.True(s.PreventSleep);
+                s.HardwareDecoding = "off"; s.PreventSleep = false; s.HardwareDecoding = "bogus";
+                var again = new PlayerSettings(path);
+                Assert.Equal("off", again.HardwareDecoding);
+                Assert.False(again.PreventSleep);
+            }
+            finally { System.IO.File.Delete(path); }
+        }
+
+        [Fact]
+        public void Options_AutoAddsNothing_OffDisablesAvcodecHardware()
+        {
+            Assert.Empty(HardwareDecoding.Options("auto"));
+            Assert.Equal(new[] { "--avcodec-hw=none" }, HardwareDecoding.Options("off"));
+        }
+    
+        [Fact]
+        public void WriteFailure_IsReported_Once_AndNeverThrows()
+        {
+            // The settings "file" path is a directory: every write fails with an I/O error.
+            var dir = Path.Combine(Path.GetTempPath(), "zephyr-202-savefail-" + Guid.NewGuid().ToString("N"));
+            var blocked = Path.Combine(dir, "settings.json");
+            Directory.CreateDirectory(blocked);
+            try
+            {
+                var s = new PlayerSettings(blocked);
+                var failed = new System.Collections.Generic.List<Exception>();
+                var changed = 0;
+                s.SaveFailed += (_, ex) => failed.Add(ex);
+                s.Changed += (_, __) => changed++;
+                var ex1 = Record.Exception(() => { s.ShowSpeed = true; s.LastVolume = 40; s.LibraryFolder = "x"; });
+                Assert.Null(ex1);
+                Assert.Single(failed);
+                Assert.Equal(0, changed);
+                // A file that can be written again clears the warning; the next failure is said again.
+                Directory.Delete(blocked);
+                s.ShowSpeed = true;
+                Assert.Equal(1, changed);
+                File.Delete(blocked);
+                Directory.CreateDirectory(blocked);
+                s.ShowSpeed = false;
+                Assert.Equal(2, failed.Count);
+            }
+            finally { try { Directory.Delete(dir, true); } catch { } }
         }
     }
 }

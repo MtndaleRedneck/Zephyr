@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
@@ -14,7 +15,7 @@ namespace ZephyrPlayer
 {
     /// <summary>
     /// Home: the app's resting screen, now an Explorer-style icon grid of the
-    /// designated movies folder: back/up + clickable
+    /// designated movies folder (pairing layout): back/up + clickable
     /// breadcrumb + search box on a toolbar, large folder tiles with a poster
     /// peeking out of the wireframe folder outline, loose videos as film-strip
     /// frames around the real Windows shell thumbnail, names under each tile.
@@ -31,6 +32,9 @@ namespace ZephyrPlayer
         private readonly List<string> _backStack = new();
         private List<Entry> _all = new();
         private int _thumbGeneration;
+        private readonly PlaybackHistory _history;
+        private readonly bool _loadDurations;
+        internal Task DurationWork { get; private set; } = Task.CompletedTask;
 
         private sealed record Crumb(string Label, string Rel);
 
@@ -39,8 +43,19 @@ namespace ZephyrPlayer
             public required string Name { get; init; }
             public required bool Dir { get; init; }
             public required string Rel { get; init; }
+            public DateTime Created { get; init; }
+            public string Detail { get; init; } = "";
             public Visibility FolderVis => Dir ? Visibility.Visible : Visibility.Collapsed;
             public Visibility FileVis => Dir ? Visibility.Collapsed : Visibility.Visible;
+            private long _durationMs;
+            private long _positionMs;
+            public string Duration => PlaybackHistory.DurationLabel(_durationMs);
+            public Visibility DurationVis => !Dir && _durationMs > 0 ? Visibility.Visible : Visibility.Collapsed;
+            public double Progress => _durationMs > 0 ? Math.Clamp(1.0 * _positionMs / _durationMs, 0, 1) : 0;
+            public Visibility ProgressVis => !Dir && Progress > 0 && Progress < .98 ? Visibility.Visible : Visibility.Collapsed;
+            public Visibility WatchedVis => Dir && Name.Equals(".Watched", StringComparison.OrdinalIgnoreCase) ? Visibility.Visible : Visibility.Collapsed;
+            public void SetMetadata(long position, long duration)
+            { _positionMs = position; _durationMs = duration; PropertyChanged?.Invoke(this, new(null)); }
 
             private ImageSource? _peek;
             public ImageSource? Peek { get => _peek; set { _peek = value; PropertyChanged?.Invoke(this, new(nameof(Peek))); } }
@@ -49,17 +64,32 @@ namespace ZephyrPlayer
             public event PropertyChangedEventHandler? PropertyChanged;
         }
 
-        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing)
+        public HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations = true)
+            : this(settings, store, playLocal, openPairing, loadDurations, null) { }
+
+        // Tests inject an isolated history file here; the app uses the default location.
+        internal HomeWindow(PlayerSettings settings, PairedStore store, Action<string> playLocal, Action openPairing, bool loadDurations, PlaybackHistory? history)
         {
+            _history = history ?? new PlaybackHistory();
             InitializeComponent();
             WindowChrome.ApplyDarkTitleBar(this);
+            _loadDurations = loadDurations;
             _settings = settings;
             _store = store;
             _playLocal = playLocal;
             _openPairing = openPairing;
             _settings.Changed += (_, __) => Dispatcher.InvokeAsync(OnSettingsChanged);
-            Activated += (_, __) => RefreshStatus();
+            Activated += (_, __) => { RefreshStatus(); BuildContinue(); foreach (var entry in _all.Where(e => !e.Dir)) { var item = _history.Get(Path.Combine(_settings.LibraryFolder, entry.Rel.Replace('/', Path.DirectorySeparatorChar))); if (item != null) entry.SetMetadata(item.PositionMs, item.DurationMs); } };
             ConnectionState.Changed += () => Dispatcher.InvokeAsync(RefreshStatus);
+            var statusTimer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
+            statusTimer.Tick += (_, __) => RefreshStatus();
+            Loaded += (_, __) => statusTimer.Start();
+            // The small "Update available" notice follows the automatic check and opens Settings > Updates.
+            Action onUpdate = () => Dispatcher.InvokeAsync(RefreshUpdateNotice);
+            Loaded += (_, __) => { UpdateState.Changed -= onUpdate; UpdateState.Changed += onUpdate; RefreshUpdateNotice(); };
+            Unloaded += (_, __) => UpdateState.Changed -= onUpdate;
+            RefreshUpdateNotice();
+            Closed += (_, __) => statusTimer.Stop();
             Refresh();
         }
 
@@ -72,7 +102,7 @@ namespace ZephyrPlayer
         private void OnSettingsChanged()
         {
             var folder = _settings.LibraryFolder;
-            if (folder == _lastFolder) return;
+            if (folder == _lastFolder) { ApplySearch(); return; }
             _currentRel = "";
             _backStack.Clear();
             SearchBox.Text = "";
@@ -91,7 +121,25 @@ namespace ZephyrPlayer
                 BuildBreadcrumb(folder);
                 LoadEntries(folder, _currentRel);
             }
+            BuildContinue();
             RefreshStatus();
+        }
+
+        private sealed record ContinueItem(string Path, string Name, string Left, double Progress);
+
+        /// <summary>Last few unfinished movies from this library, newest first.</summary>
+        private void BuildContinue()
+        {
+            var folder = _settings.LibraryFolder;
+            var items = folder.Length == 0 ? new List<(string Path, PlaybackHistory.Item Item)>() : _history.Recent(3, folder, LibraryIsVideo);
+            ContinueList.ItemsSource = items.Select(r => new ContinueItem(r.Path, System.IO.Path.GetFileNameWithoutExtension(r.Path),
+                PlaybackHistory.TimeLeftLabel(r.Item.PositionMs, r.Item.DurationMs), 1.0 * r.Item.PositionMs / r.Item.DurationMs)).ToList();
+            ContinueStrip.Visibility = items.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void OnContinue(object sender, RoutedEventArgs e)
+        {
+            if (sender is System.Windows.Controls.Button { Tag: string path } && File.Exists(path)) _playLocal(new Uri(path).AbsoluteUri);
         }
 
         public void RefreshStatus()
@@ -106,9 +154,54 @@ namespace ZephyrPlayer
             else if (ConnectionState.PublicWifiName != null)
                 status += "  ·  Windows is treating this Wi-Fi as public, which can block your phone.";
             StatusText.Text = status;
+            var active = _store.Entries().FirstOrDefault(e => _store.IsConnected(e.Token));
+            PhoneCardName.Text = active?.Name ?? (paired > 0 ? "Paired phones" : "Pair a phone");
+            PhoneCardStatus.Text = active != null ? "connected" : paired > 0 ? "not connected" : "";
+            PhoneConnectedDot.Visibility = active != null ? Visibility.Visible : Visibility.Collapsed;
         }
 
         // ---------- breadcrumb ----------
+
+        /// <summary>Every real folder above the library root, drive first (C:\Users\TestUser\Videos\Movies gives C:, Users, TestUser, Videos).
+        /// 2.0.1: the whole path is shown; the bar folds the middle into "..." only when it would not fit. Pure, for tests.</summary>
+        internal static string[] RootPrefix(string folder)
+        {
+            var trimmed = folder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var parent = Path.GetDirectoryName(trimmed);
+            if (string.IsNullOrEmpty(parent)) return Array.Empty<string>();
+            var root = Path.GetPathRoot(trimmed) ?? "";
+            var drive = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var rest = parent.Length > root.Length ? parent.Substring(root.Length) : "";
+            var parts = new List<string>();
+            if (drive.Length > 0) parts.Add(drive);
+            parts.AddRange(rest.Split(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries));
+            return parts.ToArray();
+        }
+
+        /// <summary>Which crumbs to show when the full trail is too wide: indices kept, in order, -1 standing for one "...". Pure, for tests.</summary>
+        internal static int[] FoldPlan(double[] widths, double ellipsisWidth, double available)
+        {
+            var n = widths.Length;
+            var all = Enumerable.Range(0, n).ToArray();
+            if (n <= 2 || widths.Sum() <= available) return all;
+            var used = widths[0] + ellipsisWidth + widths[n - 1];
+            var keepFrom = n - 1;
+            while (keepFrom - 1 > 1 && used + widths[keepFrom - 1] <= available) { keepFrom--; used += widths[keepFrom]; }
+            if (keepFrom <= 1) return all;
+            return new[] { 0, -1 }.Concat(Enumerable.Range(keepFrom, n - keepFrom)).ToArray();
+        }
+
+        private System.Windows.Controls.TextBlock Chevron() => new()
+        {
+            Text = ">", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0),
+        };
+
+        // One folder name can be arbitrarily long (a temp-dir GUID proved it): no segment may
+        // push the command row - and with it the header's right-hand controls - off the window.
+        private const double CrumbMaxWidth = 220;
+        private readonly List<FrameworkElement> _crumbParts = new();
+        private string _crumbFolder = "";
 
         private void BuildBreadcrumb(string folder)
         {
@@ -122,19 +215,88 @@ namespace ZephyrPlayer
                 rel = rel.Length == 0 ? part : rel + "/" + part;
                 crumbs.Add(new Crumb(part, rel));
             }
-            Breadcrumb.Items.Clear();
+            _crumbParts.Clear();
+            foreach (var prefix in RootPrefix(folder))
+                _crumbParts.Add(new System.Windows.Controls.TextBlock
+                {
+                    Text = prefix, Foreground = (Brush)FindResource("MutedBrush"), FontSize = 13,
+                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0),
+                    MaxWidth = CrumbMaxWidth, TextTrimming = TextTrimming.CharacterEllipsis,
+                });
             for (var i = 0; i < crumbs.Count; i++)
             {
-                if (i > 0) Breadcrumb.Items.Add(new System.Windows.Controls.TextBlock
-                {
-                    Text = ">", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 12,
-                    VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(2, 0, 2, 0),
-                });
                 var crumb = crumbs[i];
-                var b = new System.Windows.Controls.Button { Content = crumb.Label, Style = (Style)FindResource("CrumbButton") };
+                var b = new System.Windows.Controls.Button
+                {
+                    Content = new System.Windows.Controls.TextBlock
+                    {
+                        Text = crumb.Label, MaxWidth = CrumbMaxWidth,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                    },
+                    Style = (Style)FindResource("CrumbButton"),
+                };
                 b.Click += (_, __) => NavigateTo(crumb.Rel, pushHistory: true);
-                Breadcrumb.Items.Add(b);
+                _crumbParts.Add(b);
             }
+            var full = folder.TrimEnd(Path.DirectorySeparatorChar);
+            if (_currentRel.Length > 0) full = Path.Combine(full, _currentRel.Replace('/', Path.DirectorySeparatorChar));
+            _crumbFolder = full;
+            Breadcrumb.ToolTip = full;
+            FitBreadcrumb();
+        }
+
+        /// <summary>Lays the trail out in full, or folds the middle into one "..." when the row has no room. Re-run on every size change.</summary>
+        private void FitBreadcrumb()
+        {
+            if (Breadcrumb == null) return;
+            Breadcrumb.Items.Clear();
+            if (_crumbParts.Count == 0) return;
+            var inf = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            var chevron = Chevron(); chevron.Measure(inf);
+            var chevronW = chevron.DesiredSize.Width + chevron.Margin.Left + chevron.Margin.Right;
+            var widths = _crumbParts.Select(p => { p.Measure(inf); return p.DesiredSize.Width + chevronW; }).ToArray();
+            var dots = MakeDots(); dots.Measure(inf);
+            var plan = FoldPlan(widths, dots.DesiredSize.Width + chevronW, BreadcrumbRoom());
+            var first = true;
+            foreach (var idx in plan)
+            {
+                if (!first) Breadcrumb.Items.Add(Chevron());
+                first = false;
+                Breadcrumb.Items.Add(idx < 0 ? MakeDots() : _crumbParts[idx]);
+            }
+        }
+
+        private System.Windows.Controls.TextBlock MakeDots() => new()
+        {
+            Text = "...", Foreground = (Brush)FindResource("MutedBrush"), FontSize = 13,
+            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0, 4, 0), ToolTip = _crumbFolder,
+        };
+
+        /// <summary>Width the trail may use: the command row minus every other control in it.</summary>
+        private double BreadcrumbRoom()
+        {
+            if (CommandRow == null || CommandRow.ActualWidth <= 0) return double.PositiveInfinity;
+            var inf = new Size(double.PositiveInfinity, double.PositiveInfinity);
+            double others = 0;
+            foreach (UIElement c in CommandLeft.Children)
+            {
+                if (ReferenceEquals(c, Breadcrumb) || c.Visibility == Visibility.Collapsed) continue;
+                c.Measure(inf); others += c.DesiredSize.Width;
+            }
+            CommandRight.Measure(inf); others += CommandRight.DesiredSize.Width;
+            // CountText lives with the breadcrumb (not in CommandLeft) since the Slate header split:
+            // subtract it explicitly or the trail takes the count's space at narrow widths.
+            if (CountText.Visibility != Visibility.Collapsed)
+            {
+                CountText.Measure(inf);
+                others += CountText.DesiredSize.Width + CountText.Margin.Left + CountText.Margin.Right;
+            }
+            return Math.Max(120, CommandRow.ActualWidth - others - 24);
+        }
+
+        private void OnCommandRowSizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 0.5) FitBreadcrumb();
         }
 
         // ---------- entries ----------
@@ -157,13 +319,24 @@ namespace ZephyrPlayer
                 var name = e.GetProperty("name").GetString() ?? "";
                 var dir = e.GetProperty("dir").GetBoolean();
                 var childRel = rel.Length == 0 ? name : rel + "/" + name;
-                entries.Add(new Entry { Name = name, Dir = dir, Rel = childRel });
+                var path = Path.Combine(root, childRel.Replace('/', Path.DirectorySeparatorChar));
+                DateTime created;
+                try { created = File.GetCreationTimeUtc(path); } catch { created = DateTime.MinValue; }
+                string detail;
+                try { detail = dir ? Plural(Directory.EnumerateFiles(path).Count(LibraryIsVideo), "video") : Path.GetExtension(path).TrimStart('.').ToUpperInvariant() + " - " + FileSize(new FileInfo(path).Length); }
+                catch { detail = dir ? "Folder" : "Video"; }
+                var entry = new Entry { Name = name, Dir = dir, Rel = childRel, Created = created, Detail = detail };
+                var saved = dir ? null : _history.Get(path);
+                if (saved != null) entry.SetMetadata(saved.PositionMs, saved.DurationMs);
+                entries.Add(entry);
             }
+            CountText.Text = Plural(entries.Count(e => e.Dir), "folder") + " · " + Plural(entries.Count(e => !e.Dir), "video");
             _all = entries;
             ApplySearch();
             BackButton.IsEnabled = _backStack.Count > 0;
             UpButton.IsEnabled = rel.Length > 0;
             LoadThumbnails(root, entries);
+            if (_loadDurations) LoadDurations(root, entries, _thumbGeneration);
         }
 
         /// <summary>First video inside a folder, descending into subfolders when the
@@ -253,14 +426,26 @@ namespace ZephyrPlayer
                         if (img == null)
                         {
                             var full = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
+                            // 2.0.1: folder artwork first, then Windows' thumbnail, then our own
+                            // libVLC frame (cached) - Windows has none for most MKVs.
                             if (entry.Dir)
                             {
-                                var firstVideo = PeekFirstVideo(full);
-                                if (firstVideo != null) img = ShellThumbs.Get(firstVideo, 192);
+                                var art = VlcThumbs.FolderArt(full);
+                                if (art != null) img = VlcThumbs.LoadArt(art, 320);
+                                if (img == null)
+                                {
+                                    var firstVideo = PeekFirstVideo(full);
+                                    if (firstVideo != null)
+                                    {
+                                        img = ShellThumbs.Get(firstVideo, 256);
+                                        if (img == null && _loadDurations) img = VlcThumbs.Get(firstVideo, 320);
+                                    }
+                                }
                             }
                             else
                             {
                                 img = ShellThumbs.Get(full, 256);
+                                if (img == null && _loadDurations) img = VlcThumbs.Get(full, 320);
                             }
                         }
                     }
@@ -272,6 +457,60 @@ namespace ZephyrPlayer
                         if (entry.Dir) entry.Peek = img; else entry.Thumb = img;
                     }));
                 }
+            });
+        }
+
+        /// <summary>Test seam, no behavior: why a movie got no time badge. At most 20 short entries, cleared at each scan,
+        /// file NAME and exception TYPE only (no path, no message text).</summary>
+        internal System.Collections.Concurrent.ConcurrentQueue<string> DurationDiagnostics { get; } = new();
+        private void NoteDuration(string text) { if (DurationDiagnostics.Count < 20) DurationDiagnostics.Enqueue(text); }
+
+        private void LoadDurations(string root, List<Entry> entries, int generation)
+        {
+            DurationDiagnostics.Clear();
+            DurationWork = Task.Run(() =>
+            {
+                try
+                {
+                    LibVLCSharp.Shared.Core.Initialize();
+                    using var vlc = new LibVLCSharp.Shared.LibVLC("--no-video", "--no-audio");
+                    foreach (var entry in entries.Where(e => !e.Dir))
+                    {
+                        if (generation != _thumbGeneration) return;
+                        var path = Path.Combine(root, entry.Rel.Replace('/', Path.DirectorySeparatorChar));
+                        if (_history.Get(path) is { DurationMs: > 0 }) continue; // 2.0.1: a saved spot with no length still gets its badge
+                        try
+                        {
+                            using var safe = new SafeMediaSource(vlc, new Uri(path).AbsoluteUri);
+                            var media = safe.Media;
+                            // Keep native release on this worker, never on LibVLC's ParsedChanged
+                            // callback thread (Parse's completion can run continuations inline).
+                            try { media.Parse(LibVLCSharp.Shared.MediaParseOptions.ParseLocal, 5000).GetAwaiter().GetResult(); }
+                            finally { media.ParseStop(); }
+                            var duration = media.Duration;
+                            if (duration <= 0)
+                            {
+                                // 2.0.1: libVLC 3 skips the preparser for media fed through our own stream input (parsed
+                                // status "skipped"), so Parse reads no length. Open it silently (this LibVLC has no video or
+                                // audio output) until the demuxer knows the length. Bounded to 4 s, abandoned when the scan
+                                // is superseded, stopped and released here on the worker.
+                                using var probe = new LibVLCSharp.Shared.MediaPlayer(media);
+                                if (probe.Play())
+                                {
+                                    var until = DateTime.UtcNow.AddSeconds(4);
+                                    while (DateTime.UtcNow < until && (duration = probe.Length) <= 0 && generation == _thumbGeneration)
+                                        System.Threading.Thread.Sleep(30);
+                                    try { probe.Stop(); } catch { }
+                                }
+                            }
+                            if (duration <= 0) { NoteDuration($"{Path.GetFileName(entry.Rel)}: duration {duration} ms after Parse"); continue; }
+                            _history.Save(path, 0, duration, metadataOnly: true);
+                            Dispatcher.BeginInvoke(new Action(() => { if (generation == _thumbGeneration) entry.SetMetadata(_history.Get(path)?.PositionMs ?? 0, duration); }));
+                        }
+                        catch (Exception ex) { NoteDuration($"{Path.GetFileName(entry.Rel)}: {ex.GetType().Name}"); }
+                    }
+                }
+                catch (Exception ex) { NoteDuration($"worker: {ex.GetType().Name}"); } // Missing codec/invalid file: omit the badge, never invent a duration.
             });
         }
 
@@ -289,11 +528,63 @@ namespace ZephyrPlayer
         private void ApplySearch()
         {
             var q = SearchBox.Text.Trim();
-            MovieList.ItemsSource = q.Length == 0
-                ? _all
-                : _all.Where(e => e.Name.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
+            IEnumerable<Entry> filtered = _all.Where(e => q.Length == 0 || e.Name.Contains(q, StringComparison.OrdinalIgnoreCase));
+            var comparer = Comparer<string>.Create(NaturalCompare);
+            IOrderedEnumerable<Entry> ordered = _settings.FoldersFirst
+                ? filtered.OrderBy(e => !e.Dir)
+                : filtered.OrderBy(e => 0);
+            ordered = _settings.LibrarySort == "created"
+                ? ordered.ThenByDescending(e => e.Created).ThenBy(e => e.Name, comparer)
+                : ordered.ThenBy(e => e.Name, comparer);
+            MovieList.ItemsSource = ordered.ToList();
+            if (SortButton != null) SortButton.Content = _settings.LibrarySort == "created" ? "Sort: Date created" : "Sort: Name";
             EmptyFolderText.Text = q.Length == 0 ? "This folder is empty." : "Nothing here matches \"" + q + "\".";
             EmptyFolderText.Visibility = ((IEnumerable<Entry>)MovieList.ItemsSource).Any() ? Visibility.Collapsed : Visibility.Visible;
+        }
+
+        [DllImport("shlwapi.dll", CharSet = CharSet.Unicode)]
+        private static extern int StrCmpLogicalW(string a, string b);
+        private static int NaturalCompare(string? a, string? b) =>
+            OperatingSystem.IsWindows() ? StrCmpLogicalW(a ?? "", b ?? "") : StringComparer.OrdinalIgnoreCase.Compare(a, b);
+
+        internal static string Plural(int n, string noun) => n + " " + noun + (n == 1 ? "" : "s");
+
+        private static string FileSize(long bytes) => bytes >= 1024L * 1024 * 1024 ? (bytes / (1024d * 1024 * 1024)).ToString("0.#") + " GB" : bytes >= 1024 * 1024 ? (bytes / (1024d * 1024)).ToString("0.#") + " MB" : bytes >= 1024 ? (bytes / 1024d).ToString("0.#") + " KB" : bytes + " B";
+
+        private void OnBrowseFolder(object sender, RoutedEventArgs e)
+        {
+            var picker = new Microsoft.Win32.OpenFolderDialog { Title = "Choose movies folder", InitialDirectory = _settings.LibraryFolder };
+            if (picker.ShowDialog(this) == true) _settings.LibraryFolder = picker.FolderName;
+        }
+        private void OnRefresh(object sender, RoutedEventArgs e) => Refresh();
+        internal void RefreshUpdateNotice()
+        {
+            var version = UpdateState.AvailableVersion;
+            UpdateNoticeButton.Visibility = version != null ? Visibility.Visible : Visibility.Collapsed;
+            UpdateNoticeButton.ToolTip = version != null ? $"Zephyr Player {version} is ready to install" : null;
+        }
+        internal bool IsUpdateNoticeShown => UpdateNoticeButton.Visibility == Visibility.Visible;
+        private void OnUpdateNotice(object sender, RoutedEventArgs e) => OpenSettings("updates");
+
+        private void OnPairing(object sender, RoutedEventArgs e) => OpenSettings("remote");
+
+        private void OnSort(object sender, RoutedEventArgs e)
+        {
+            var menu = new System.Windows.Controls.ContextMenu();
+            void Add(string label, bool selected, Action act)
+            {
+                var item = new System.Windows.Controls.MenuItem { Header = label, IsCheckable = true, IsChecked = selected };
+                item.Click += (_, __) => act();
+                menu.Items.Add(item);
+            }
+            Add("Name", _settings.LibrarySort == "name", () => _settings.LibrarySort = "name");
+            Add("Date created", _settings.LibrarySort == "created", () => _settings.LibrarySort = "created");
+            menu.Items.Add(new System.Windows.Controls.Separator());
+            Add("Folders first", _settings.FoldersFirst, () => _settings.FoldersFirst = true);
+            Add("Mixed in", !_settings.FoldersFirst, () => _settings.FoldersFirst = false);
+            menu.PlacementTarget = SortButton;
+            menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            menu.IsOpen = true;
         }
 
         private void OnSearchChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
@@ -353,9 +644,17 @@ namespace ZephyrPlayer
         /// must not freeze playback controls (review should-fix 6).</summary>
         private void OnSettings(object sender, RoutedEventArgs e)
         {
-            if (_settingsWin != null) { _settingsWin.Activate(); return; }
+            OpenSettings("volume");
+        }
+        /// <summary>Test seam: receives the section instead of opening the Settings window.</summary>
+        internal Action<string>? OpenSettingsOverride;
+        public void OpenSettings(string section)
+        {
+            if (OpenSettingsOverride != null) { OpenSettingsOverride(section); return; }
+            if (_settingsWin != null) { _settingsWin.SelectSection(section); _settingsWin.Activate(); return; }
             _settingsWin = new SettingsWindow(_settings, _store, _openPairing) { Owner = this };
             _settingsWin.Closed += (_, __) => _settingsWin = null;
+            _settingsWin.SelectSection(section);
             _settingsWin.Show();
         }
     }

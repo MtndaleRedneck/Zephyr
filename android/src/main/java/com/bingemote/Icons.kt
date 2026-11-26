@@ -71,18 +71,16 @@ fun CursorIcon(color: Color, size: Dp = 21.dp) {
     }
 }
 
-/** Speaker body, shared by the volume icons: small base rect + full-height horn. */
+/** Speaker body, shared by the volume icons: small base rect + full-height horn.
+ * Corners blunted with the same roundedPoly treatment as the cursor/fullscreen
+ * artwork (slightly blunted corners, r = 0.035w). */
 private fun DrawScope.drawSpeaker(color: Color, w: Float, h: Float) {
-    val p = Path().apply {
-        moveTo(w * 0.02f, h * 0.34f)
-        lineTo(w * 0.20f, h * 0.34f)
-        lineTo(w * 0.48f, h * 0.04f)
-        lineTo(w * 0.48f, h * 0.96f)
-        lineTo(w * 0.20f, h * 0.66f)
-        lineTo(w * 0.02f, h * 0.66f)
-        close()
-    }
-    drawPath(p, color)
+    val pts = listOf(
+        Offset(w * 0.02f, h * 0.34f), Offset(w * 0.20f, h * 0.34f),
+        Offset(w * 0.48f, h * 0.04f), Offset(w * 0.48f, h * 0.96f),
+        Offset(w * 0.20f, h * 0.66f), Offset(w * 0.02f, h * 0.66f),
+    )
+    drawPath(roundedPoly(pts, w * 0.035f), color)
 }
 
 /** One sound wave: a bold arc right of the speaker's mouth, round caps. */
@@ -270,18 +268,18 @@ fun KeyboardIcon(color: Color, size: Dp = 22.dp) {
     }
 }
 
-/** Play triangle. */
+/** Play triangle. Corners slightly blunted (roundedPoly, r = 0.025w) to match
+ * the cursor/fullscreen/speaker artwork; straight sides and pointed shape kept. */
 @Composable
 fun PlayIcon(color: Color, size: Dp = 40.dp) {
     Canvas(Modifier.size(size)) {
         val w = this.size.width; val h = this.size.height
-        val p = Path().apply {
-            moveTo(w * 0.34f, h * 0.20f)
-            lineTo(w * 0.34f, h * 0.80f)
-            lineTo(w * 0.82f, h * 0.50f)
-            close()
-        }
-        drawPath(p, color)
+        val pts = listOf(
+            Offset(w * 0.34f, h * 0.20f),
+            Offset(w * 0.34f, h * 0.80f),
+            Offset(w * 0.82f, h * 0.50f),
+        )
+        drawPath(roundedPoly(pts, w * 0.025f), color)
     }
 }
 

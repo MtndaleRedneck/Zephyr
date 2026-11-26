@@ -3,7 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:libvlc="clr-namespace:LibVLCSharp.WPF;assembly=LibVLCSharp.WPF"
         Title="Zephyr Player" Width="1920" Height="1080" Icon="/ZephyrPlayer;component/assets/icon.ico"
-        Background="Black" MouseMove="OnMouseMove">
+        Background="Black" MouseMove="OnMouseMove" PreviewKeyDown="OnPlayerKeyDown" MouseDoubleClick="OnVideoDoubleClick">
+    <Window.Resources><ResourceDictionary><ResourceDictionary.MergedDictionaries><ResourceDictionary Source="Theme.xaml"/></ResourceDictionary.MergedDictionaries></ResourceDictionary></Window.Resources>
     <!-- Every floating control lives inside VideoView.Content
          (WPF airspace), not over the VideoView. -->
     <!-- Black surface before the first frame: the VideoView default is the light
@@ -11,118 +12,119 @@
          (round-7 S7-4). -->
     <libvlc:VideoView x:Name="Video" Background="Black">
         <libvlc:VideoView.Content>
-            <Grid x:Name="Overlay" Background="Transparent" MouseMove="OnMouseMove">
-                <Border x:Name="ControlBar" x:FieldModifier="public"
-                        VerticalAlignment="Bottom" Margin="24"
-                        Padding="16,10" CornerRadius="12"
-                        Background="#CC202124" Opacity="0">
+            <Grid x:Name="Overlay" Background="#01000000" MouseMove="OnMouseMove">
+                <Border x:Name="TopOverlay" VerticalAlignment="Top" Background="#B3141820" Padding="18,10"><DockPanel><Button x:Name="HomeButton" ToolTip="Back to Movies" Click="OnHome" Background="Transparent" Foreground="{StaticResource TextBrush}" BorderThickness="0" Padding="8"><Path Data="M16,4 L8,12 L16,20 M8,12 H23" Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="20" Height="20" Stretch="Uniform"/></Button><TextBlock Text="Zephyr Player" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" Margin="14,0"/><TextBlock x:Name="MovieTitle" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/></DockPanel></Border>
+                <!-- A library movie resumed from its saved spot says so for a few seconds, with Start over. -->
+                <Border x:Name="ResumeNotice" VerticalAlignment="Top" HorizontalAlignment="Center" Margin="0,70,0,0" Background="#F01E232B" BorderBrush="#1FFFFFFF" BorderThickness="1" CornerRadius="10" Padding="14,5,5,5" Visibility="Collapsed" AutomationProperties.AutomationId="ResumeNotice">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="ResumeText" Foreground="{StaticResource TextBrush}" FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" AutomationProperties.AutomationId="ResumeText"/>
+                        <Button x:Name="StartOverButton" Content="Start over" Click="OnStartOver" Margin="12,0,0,0" Padding="12,4" Foreground="{StaticResource OrangeBrush}" Background="Transparent" BorderThickness="0" Cursor="Hand" AutomationProperties.AutomationId="StartOverButton"/>
+                    </StackPanel>
+                </Border>
+                <!-- Midnight Slate bar: one centered pill in both windowed and fullscreen,
+                     two rows (seek over controls), no Viewbox scaling, nothing hides. -->
+                <Border x:Name="ControlBar" x:FieldModifier="public" SizeChanged="OnBarSizeChanged"
+                        VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,28"
+                        Width="760" Padding="22,14" CornerRadius="18"
+                        Background="#E0141820" BorderBrush="#1FFFFFFF" BorderThickness="1" Opacity="0">
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <!-- Banked approved placement: elapsed above-left,
-                             remaining above-right, total below-right. -->
-                        <Grid Grid.Row="0" Margin="0,0,0,2">
-                            <TextBlock x:Name="ElapsedText" Text="0:00" Foreground="#F0C23E" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Left"/>
-                            <TextBlock x:Name="RemainingText" Text="-0:00" Foreground="White" FontSize="13" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                        <Grid Grid.Row="0">
+                          <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                          <TextBlock x:Name="ElapsedText" Text="0:00" Foreground="{StaticResource TextBrush}" FontSize="12" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                          <Slider Style="{StaticResource PlaybackSlider}" x:Name="SeekBar" Grid.Column="1" Minimum="0" Maximum="1000" Value="0" Foreground="{StaticResource OrangeBrush}" PreviewMouseDown="OnSeekDown" PreviewMouseMove="OnSeekMove" PreviewMouseUp="OnSeekUp" LostMouseCapture="OnSeekLostCapture" ValueChanged="OnSeekValueChanged"/>
+                          <TextBlock x:Name="RemainingText" Grid.Column="2" Text="-0:00" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="10,0,0,0"/>
                         </Grid>
-                        <Slider x:Name="SeekBar" Grid.Row="1"
-                                Minimum="0" Maximum="1000" Value="0"
-                                PreviewMouseDown="OnSeekDown" PreviewMouseUp="OnSeekUp"/>
-                        <TextBlock x:Name="TotalText" Grid.Row="2" Text="0:00 total" Foreground="#9696A0" FontSize="12"
-                                   HorizontalAlignment="Right" Margin="0,2,0,4"/>
-                        <Grid Grid.Row="3">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TotalText" Grid.Row="1" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,2" Text="0:00 total"/>
+                        <Viewbox Grid.Row="2" Margin="0,8,0,0" Stretch="Uniform" StretchDirection="DownOnly">
+                          <Grid x:Name="ControlsRow">
                             <!-- default placement: volume LEFT, other icons RIGHT -->
-                            <StackPanel Grid.Column="0" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
+                            <StackPanel x:Name="LeftGroup" Orientation="Horizontal" HorizontalAlignment="Left" VerticalAlignment="Center">
                                 <Button x:Name="VolumeButton" Width="34" Height="34" Padding="0" Click="OnMute"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand">
                                     <Path x:Name="VolumeGlyph" Data="M2,10 v6 h4 l5,4 V6 l-5,4 Z M14,9 a4,4 0 0 1 0,8" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Stretch="Uniform" Height="16" Width="16"/>
                                 </Button>
-                                <Slider x:Name="VolumeSlider" Width="110" Minimum="0" Maximum="100" Value="100"
-                                        VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"
-                                        ToolTip="Volume (matches Windows)"/>
+                                <Slider Style="{StaticResource PlaybackSlider}" Foreground="{StaticResource TextBrush}" x:Name="VolumeSlider" Width="92" Minimum="0" Maximum="100" Value="100"
+                                        VerticalAlignment="Center" Margin="6,0,0,0" ValueChanged="OnVolumeChanged"/>
+                                <TextBlock x:Name="VolumeLabel" Text="100%" MinWidth="40" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" Margin="6,0"/>
                             </StackPanel>
-                            <StackPanel x:Name="CenterPlaybackControls" Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                                <Button x:Name="SpeedButton" Visibility="Collapsed" Margin="0,0,10,0" Padding="8,4" Click="OnSpeed"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
-                                    <TextBlock x:Name="SpeedLabel" Text="1x" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" FontSize="13" FontWeight="SemiBold"/>
+                            <StackPanel x:Name="CenterPlaybackControls" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+
+                                <Button x:Name="SecondarySkipBackButton" ToolTip="Skip back" Width="58" Height="50" Padding="0" Click="OnSecondarySkipBack" Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                  <Viewbox Stretch="Uniform"><Grid ClipToBounds="False" Width="54" Height="46">
+                                    <Canvas Width="54" Height="46" RenderTransformOrigin="0.5,0.5"><Canvas.RenderTransform><RotateTransform x:Name="SecondaryBackSpin"/></Canvas.RenderTransform><Path x:Name="SecondarySkipBackIcon" Data="M46,17 Q27,-2 8,17 M8,17 L8,8 M8,17 L17,14" Stroke="#F0F2F5" StrokeThickness="2.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas><TextBlock x:Name="SecondarySkipBackLabel" Text="30s" Foreground="#F0F2F5" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,1"/>
+                                      </Grid></Viewbox>
                                 </Button>
-                                <TextBlock x:Name="SecondarySkipBackLabel" Text="30s" Foreground="#F5F5F7" FontSize="14"
-                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
-                                <Button x:Name="SecondarySkipBackButton" ToolTip="Secondary skip backward" AutomationProperties.Name="Secondary skip backward" Width="40" Height="40" Padding="0" Click="OnSecondarySkipBack"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" Margin="0,0,6,0">
-                                    <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
-                                        <Path x:Name="SecondarySkipBackIcon" Data="M11,4 L3,12 L11,20 Z M19,4 L11,12 L19,20 Z" Fill="#F5F5F7"/>
-                                    </Canvas></Viewbox>
-                                </Button>
-                                <Button x:Name="SkipBackButton" ToolTip="Primary skip backward" AutomationProperties.Name="Primary skip backward" Width="60" Height="60" Padding="0" Click="OnSkipBack"
+                                <Button x:Name="SkipBackButton" ToolTip="Primary skip backward" AutomationProperties.Name="Primary skip backward" Width="66" Height="66" Padding="0" Click="OnSkipBack"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Grid>
-                                        <Grid RenderTransformOrigin="0.5,0.5">
+                                    <Viewbox Stretch="Uniform"><Grid Width="60" Height="60">
+                                        <Grid Width="46" Height="46" RenderTransformOrigin="0.5,0.5">
                                             <Grid.RenderTransform><RotateTransform x:Name="SkipBackSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Path x:Name="SkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
-                                            <Path x:Name="SkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F5F5F7"/>
+                                            <Path x:Name="SkipBackRing" Data="M33.41,35.40 A16.19,16.19 0 1 0 9.27,31.58" Stroke="#F0F2F5" StrokeThickness="3.9"/>
+                                            <Path x:Name="SkipBackArrow" Data="M14.91,38.37 L12.58,28.06 L5.20,34.21 Z" Fill="#F0F2F5"/>
                                         </Grid>
-                                        <TextBlock x:Name="SkipBackLabel" Text="10" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Grid>
+                                        <TextBlock x:Name="SkipBackLabel" Text="10s" Foreground="#F0F2F5" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid></Viewbox>
                                 </Button>
-                                <Button x:Name="PlayPauseButton" Width="72" Height="72" Padding="0" Click="OnPlayPause"
+                                <Button x:Name="PlayPauseButton" Width="64" Height="64" Padding="0" Click="OnPlayPause"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="10,0">
                                     <Grid>
-                                        <Ellipse x:Name="PlayRing" Width="64" Height="64" Stroke="#F5F5F7" StrokeThickness="3" Fill="Transparent"/>
-                                        <Path x:Name="PlayGlyph" Data="M26,20 L46,32 L26,44 Z" Fill="#F5F5F7"/>
-                                        <Grid x:Name="PauseGlyph" Visibility="Collapsed">
-                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Left" Margin="24,0,0,0"/>
-                                            <Rectangle Width="6" Height="24" Fill="#F5F5F7" HorizontalAlignment="Right" Margin="0,0,24,0"/>
+                                        <Ellipse x:Name="PlayRing" Width="60" Height="60" Stroke="#F0F2F5" StrokeThickness="3" Fill="Transparent"/>
+                                        <Path x:Name="PlayGlyph" Data="M26,20 L46,32 L26,44 Z" Fill="#F0F2F5"/>
+                                        <Grid x:Name="PauseGlyph" Width="24" Height="24" Visibility="Collapsed">
+                                            <Rectangle Width="6" Height="24" Fill="#F0F2F5" HorizontalAlignment="Left" Margin="2,0,0,0"/>
+                                            <Rectangle Width="6" Height="24" Fill="#F0F2F5" HorizontalAlignment="Right" Margin="0,0,2,0"/>
                                         </Grid>
                                     </Grid>
                                 </Button>
-                                <Button x:Name="SkipForwardButton" ToolTip="Primary skip forward" AutomationProperties.Name="Primary skip forward" Width="60" Height="60" Padding="0" Click="OnSkipForward"
+                                <Button x:Name="SkipForwardButton" ToolTip="Primary skip forward" AutomationProperties.Name="Primary skip forward" Width="66" Height="66" Padding="0" Click="OnSkipForward"
                                         Background="Transparent" BorderThickness="0" Cursor="Hand">
-                                    <Grid>
-                                        <Grid RenderTransformOrigin="0.5,0.5">
+                                    <Viewbox Stretch="Uniform"><Grid Width="60" Height="60">
+                                        <Grid Width="46" Height="46" RenderTransformOrigin="0.5,0.5">
                                             <Grid.RenderTransform><RotateTransform x:Name="SkipForwardSpin" Angle="0"/></Grid.RenderTransform>
-                                            <Path x:Name="SkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F5F5F7" StrokeThickness="3.9"/>
-                                            <Path x:Name="SkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F5F5F7"/>
+                                            <Path x:Name="SkipForwardRing" Data="M12.59,35.40 A16.19,16.19 0 1 1 36.73,31.58" Stroke="#F0F2F5" StrokeThickness="3.9"/>
+                                            <Path x:Name="SkipForwardArrow" Data="M31.09,38.37 L33.42,28.06 L40.80,34.21 Z" Fill="#F0F2F5"/>
                                         </Grid>
-                                        <TextBlock x:Name="SkipForwardLabel" Text="10" Foreground="#F5F5F7" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                    </Grid>
+                                        <TextBlock x:Name="SkipForwardLabel" Text="10s" Foreground="#F0F2F5" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Grid></Viewbox>
                                 </Button>
-                                <Button x:Name="SecondarySkipForwardButton" ToolTip="Secondary skip forward" AutomationProperties.Name="Secondary skip forward" Width="40" Height="40" Padding="0" Click="OnSecondarySkipForward"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" Margin="6,0,0,0">
-                                    <Viewbox Width="22" Height="22"><Canvas Width="24" Height="24">
-                                        <Path x:Name="SecondarySkipForwardIcon" Data="M5,4 L13,12 L5,20 Z M13,4 L21,12 L13,20 Z" Fill="#F5F5F7"/>
-                                    </Canvas></Viewbox>
+                                <Button x:Name="SecondarySkipForwardButton" ToolTip="Skip forward" Width="58" Height="50" Padding="0" Click="OnSecondarySkipForward" Background="Transparent" BorderThickness="0" Cursor="Hand">
+                                  <Viewbox Stretch="Uniform"><Grid ClipToBounds="False" Width="54" Height="46">
+                                    <Canvas Width="54" Height="46" RenderTransformOrigin="0.5,0.5"><Canvas.RenderTransform><RotateTransform x:Name="SecondaryForwardSpin"/></Canvas.RenderTransform><Path x:Name="SecondarySkipForwardIcon" Data="M8,17 Q27,-2 46,17 M46,17 L46,8 M46,17 L37,14" Stroke="#F0F2F5" StrokeThickness="2.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Canvas><TextBlock x:Name="SecondarySkipForwardLabel" Text="30s" Foreground="#F0F2F5" FontSize="14" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,1"/>
+                                      </Grid></Viewbox>
                                 </Button>
-                                <TextBlock x:Name="SecondarySkipForwardLabel" Text="30s" Foreground="#F5F5F7" FontSize="14"
-                                           VerticalAlignment="Center" Margin="8,0,0,0"/>
-                                <Button x:Name="SleepButton" Visibility="Collapsed" Margin="10,0,0,0" Padding="8,4" Click="OnSleep"
-                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
-                                    <TextBlock x:Name="SleepLabel" Text="zZ" Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" FontSize="13" FontWeight="SemiBold"/>
-                                </Button>
+
                             </StackPanel>
-                            <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <Button x:Name="CaptionsButton" Margin="0,0,8,0" Padding="6" Click="OnCaptions" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Subtitles">
-                                    <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
+                            <StackPanel x:Name="RightGroup" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <Button x:Name="CaptionsButton" Margin="0,0,4,0" Padding="5" Click="OnCaptions" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Subtitles">
+                                    <Viewbox Width="20" Height="20"><Canvas Width="28" Height="28">
                                         <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Data="M5.7,5.0 H22.3 A1.7,1.7 0 0 1 24,6.7 V17.3 A1.7,1.7 0 0 1 22.3,19.0 H14.5 L7.4,24.8 L9.5,19.0 H5.7 A1.7,1.7 0 0 1 4,17.3 V6.7 A1.7,1.7 0 0 1 5.7,5.0 Z"/>
                                         <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M7.2,9.0 H13.3 M14.7,9.0 H17.7 M19.1,9.0 H20.8 M7.2,12.0 H8.7 M10.1,12.0 H16.2 M17.6,12.0 H20.8 M7.2,15.0 H11.8 M13.2,15.0 H15.1 M16.5,15.0 H20.8"/>
                                     </Canvas></Viewbox>
                                 </Button>
-                                <Button x:Name="FullscreenButton" Padding="6" Click="OnFullscreen" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Fullscreen">
-                                    <Viewbox Width="24" Height="24"><Canvas Width="28" Height="28">
-                                        <Path Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8"/>
+                                <Button x:Name="SpeedButton" Visibility="Collapsed" Margin="0,0,6,0" Padding="6,4" Click="OnSpeed"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><Path Data="M3,17 A9,9 0 1 1 21,17 M12,13 L17,6" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Width="20" Height="20" Stretch="Uniform"/><TextBlock x:Name="SpeedLabel" Text="1&#xD7;" Foreground="{StaticResource MutedBrush}" FontSize="12" FontWeight="SemiBold" Margin="3,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                                </Button>
+                                <Button x:Name="SleepButton" Visibility="Collapsed" Margin="6,0,0,0" Padding="6,4" Click="OnSleep"
+                                        Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><Path Data="M19,15 A8,8 0 1 1 9,3 A7,7 0 0 0 19,15" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1.6" Width="20" Height="20" Stretch="Uniform"/><TextBlock x:Name="SleepLabel" Visibility="Collapsed" Foreground="{StaticResource OrangeBrush}" FontSize="12" FontWeight="SemiBold" Margin="3,0,0,0" VerticalAlignment="Center"/></StackPanel>
+                                </Button>
+                                <Button x:Name="MoreButton" AutomationProperties.Name="More: speed, audio, aspect" Visibility="Collapsed" Margin="0,0,4,0" Padding="5" Click="OnMore" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="More">
+                                    <Viewbox Width="20" Height="20"><Canvas Width="28" Height="28"><Ellipse Canvas.Left="4" Canvas.Top="12.5" Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/><Ellipse Canvas.Left="12.5" Canvas.Top="12.5" Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/><Ellipse Canvas.Left="21" Canvas.Top="12.5" Width="3" Height="3" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"/></Canvas></Viewbox>
+                                </Button>
+                                <Button x:Name="FullscreenButton" Padding="5" Click="OnFullscreen" Background="Transparent" BorderThickness="0" Cursor="Hand" VerticalAlignment="Center" ToolTip="Fullscreen">
+                                    <Viewbox Width="20" Height="20"><Canvas Width="28" Height="28">
+                                        <Path x:Name="FullscreenGlyph" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" StrokeThickness="1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Data="M4,9.8 V5.7 A1.7,1.7 0 0 1 5.7,4 H9.8 M18.2,4 H22.3 A1.7,1.7 0 0 1 24,5.7 V9.8 M24,18.2 V22.3 A1.7,1.7 0 0 1 22.3,24 H18.2 M4,18.2 V22.3 A1.7,1.7 0 0 0 5.7,24 H9.8"/>
                                     </Canvas></Viewbox>
                                 </Button>
                             </StackPanel>
-                        </Grid>
+                          </Grid>
+                        </Viewbox>
                     </Grid>
                 </Border>
             </Grid>

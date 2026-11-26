@@ -1,0 +1,84 @@
+name: Player
+on:
+  workflow_dispatch:
+  push:
+    branches: [player-rebuild-1124, player-redesign-1125]
+    paths:
+      - 'windows/ZephyrPlayer/**'
+      - 'windows/ZephyrPlayer.Tests/**'
+      - '.github/workflows/player.yml'
+      - 'windows/*.props'
+      - 'windows/*.targets'
+      - 'global.json'
+
+# Zephyr Player rebuild branch: build and test on .NET 10. Only one-day screenshot PNGs are uploaded (public repo: run artifacts are publicly downloadable); never installers.
+permissions:
+  contents: read
+jobs:
+  player:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Regenerate the lock file (only when the commit message says [regen-lock])
+        if: ${{ contains(github.event.head_commit.message, '[regen-lock]') }}
+        run: dotnet restore windows/ZephyrPlayer/ZephyrPlayer.csproj -r win-x64 -p:PublishSingleFile=true -p:RestoreLockedMode=false --force-evaluate
+      - name: Lock file for review (regeneration only, one day)
+        if: ${{ contains(github.event.head_commit.message, '[regen-lock]') }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: player-lock
+          path: windows/ZephyrPlayer/packages.lock.json
+          retention-days: 1
+      - name: Restore with locked packages (fails if the lock file drifts)
+        if: ${{ !contains(github.event.head_commit.message, '[regen-lock]') }}
+        run: dotnet restore windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -p:RestoreLockedMode=true
+      - name: Build Player
+        run: dotnet build windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release --no-restore
+      - name: Player tests
+        if: always()
+        timeout-minutes: 12
+        run: |
+          # Evidence for the intermittent STA hang: if the test host is still alive after 100 s (a green run
+          # needs about 30 s), write every managed thread stack of it to a file that the next step prints.
+          # Diagnostic only: it changes no timeout and no test.
+          dotnet tool install --global dotnet-stack --version 10.0.731102 2>&1 | Out-Host
+          $stacks = Join-Path $env:RUNNER_TEMP 'hang-stacks.txt'
+          $watch = Start-Job -ArgumentList $stacks -ScriptBlock {
+            param($out)
+            Start-Sleep -Seconds 100
+            $env:PATH += ";$env:USERPROFILE\.dotnet\tools"
+            Get-Process | Where-Object { $_.ProcessName -like 'testhost*' } | ForEach-Object {
+              "== managed stacks of $($_.ProcessName) pid $($_.Id) at $(Get-Date -Format o)" | Out-File $out -Append
+              dotnet-stack report -p $_.Id 2>&1 | Out-File $out -Append
+            }
+          }
+          dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini --logger "console;verbosity=normal"
+          $code = $LASTEXITCODE
+          Stop-Job $watch -ErrorAction SilentlyContinue
+          Remove-Job $watch -Force -ErrorAction SilentlyContinue
+          exit $code
+      - name: Print hang stacks (only exists after a slow run)
+        if: always()
+        run: |
+          $f = Join-Path $env:RUNNER_TEMP 'hang-stacks.txt'
+          if (Test-Path $f) { Get-Content $f | Select-Object -First 400 } else { 'no hang watcher output (tests finished within 100 s)' }
+      - name: Publish check (win-x64 single file, locked; nothing is uploaded)
+        if: always()
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+      - name: Headless host builds on net10
+        if: always()
+        run: dotnet build windows/ZephyrPlayer.HeadlessHost/ZephyrPlayer.HeadlessHost.csproj -c Release
+      - name: Screenshots for review (one day)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: player-shots
+          path: |
+            ${{ runner.temp }}/pc-*.png
+            ${{ runner.temp }}/cp2-unit-r2-speed-second-start.txt
+          retention-days: 1
+          if-no-files-found: ignore

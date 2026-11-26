@@ -20,13 +20,24 @@ namespace ZephyrPlayer
         public static readonly int[] BoostChoices = { 100, 125, 150, 175, 200 };
         public static readonly int[] PrimarySkipChoices = { 5, 10, 15, 30 };
         public static readonly int[] SecondarySkipChoices = { 15, 30, 60, 120, 180 };
-        public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone" };
+        public static readonly string[] BarColorStyles = { "original", "orange", "white", "twotone", "inverse" };
+        public static readonly string[] HardwareChoices = { "auto", "off" };
         public static readonly string[] IconStyles = { "hollow", "filled" };
 
-        /// <summary>Raised on the setting thread after any change is written.</summary>
+        /// <summary>Raised on the setting thread after any change is written (not for the
+        /// remembered volume, which only the player itself reads).</summary>
         public event EventHandler? Changed;
+        public event EventHandler? WriteFailed;
+        /// <summary>2.0.2: the settings file could not be written (disk full, folder not
+        /// writable, file locked). Raised once until a write succeeds again; the app keeps
+        /// running and the file keeps its last saved values.</summary>
+        public event EventHandler<Exception>? SaveFailed;
+        private bool _warned;
+        private bool _saveFailWarned;
 
         public PlayerSettings(string? path = null) { _path = path ?? DefaultPath; }
+        /// <summary>Test seam (InternalsVisibleTo): the settings file this instance reads and writes.</summary>
+        internal string PathForTest => _path;
 
         public string LibraryFolder
         {
@@ -67,9 +78,9 @@ namespace ZephyrPlayer
 
         public string BarColorStyle
         {
-            // Unset default is orange; a stored choice is never null, so an explicit
-            // pick in Settings always wins over this fallback.
-            get { lock (_lock) return Read().BarColorStyle ?? "orange"; }
+            // Unset default is "original" (render 06b: "Default is the original", the look of
+            // render 02); a stored choice is never null, so an explicit pick always wins.
+            get { lock (_lock) return Read().BarColorStyle ?? "original"; }
             set { if (Array.IndexOf(BarColorStyles, value) < 0) return; Write(d => d with { BarColorStyle = value }); }
         }
 
@@ -79,15 +90,44 @@ namespace ZephyrPlayer
             set { if (Array.IndexOf(IconStyles, value) < 0) return; Write(d => d with { IconStyle = value }); }
         }
 
+        /// <summary>"Flash on press": the brief colour flash of a pressed skip glyph. Render
+        /// 06 shows it OFF; unset = off (U6), a stored value is kept on upgrade.</summary>
+        public bool ButtonFlash
+        {
+            get { lock (_lock) return Read().ButtonFlash ?? false; }
+            set { Write(d => d with { ButtonFlash = value }); }
+        }
+
+        /// <summary>"Animate on press" (item 80, a new key): primary rings turn and the
+        /// secondary arrows get a light that runs to the tip. Unset = on (render 06).</summary>
+        public bool AnimateOnPress
+        {
+            get { lock (_lock) return Read().AnimateOnPress ?? true; }
+            set { Write(d => d with { AnimateOnPress = value }); }
+        }
+
+        public static readonly string[] SubtitleSizes = { "S", "M", "L" };
+        /// <summary>Subtitle size S/M/L from the subtitles pop-up (render 04). libVLC 3 sets
+        /// text size when its LibVLC instance is created (per-media options do not change it,
+        /// SubtitleSizePathTests), so a change applies after Zephyr Player is quit from the tray
+        /// and opened again; the player says so in a popup (U4: never re-open a playing
+        /// movie). Unset = M.</summary>
+        public string SubtitleSize
+        {
+            get { lock (_lock) { var v = Read().SubtitleSize; return Array.IndexOf(SubtitleSizes, v) >= 0 ? v! : "M"; } }
+            set { if (Array.IndexOf(SubtitleSizes, value) < 0) return; Write(d => d with { SubtitleSize = value }); }
+        }
+
         public bool ShowSpeed
         {
-            get { lock (_lock) return Read().ShowSpeed ?? false; }
+            // On by default (render 06b toggles ON, item 57); a stored choice is kept (U8).
+            get { lock (_lock) return Read().ShowSpeed ?? true; }
             set { Write(d => d with { ShowSpeed = value }); }
         }
 
         public bool ShowSleepTimer
         {
-            get { lock (_lock) return Read().ShowSleepTimer ?? false; }
+            get { lock (_lock) return Read().ShowSleepTimer ?? true; }
             set { Write(d => d with { ShowSleepTimer = value }); }
         }
 
@@ -95,7 +135,55 @@ namespace ZephyrPlayer
         public int LastVolume
         {
             get { lock (_lock) { var v = Read().LastVolume ?? 100; return Math.Clamp(v, 0, 100); } }
-            set { Write(d => d with { LastVolume = Math.Clamp(value, 0, 100) }); }
+            // 2.0.2: the volume is the player's own; nothing else on screen shows it, so its
+            // write raises no Changed (no bar, library or Settings rebuild per volume step).
+            set { Write(d => d with { LastVolume = Math.Clamp(value, 0, 100) }, notify: false); }
+        }
+
+        /// <summary>2.0.1: the Volume card is a real switch.
+        /// On (default, the 2.0.0 behaviour) = open at the last volume; off = always 100 %.</summary>
+        public bool RememberVolume
+        {
+            get { lock (_lock) return Read().RememberVolume ?? true; }
+            set { Write(d => d with { RememberVolume = value }); }
+        }
+
+        /// <summary>The volume a new player starts at.</summary>
+        public int StartVolume => RememberVolume ? LastVolume : 100;
+
+        /// <summary>Keep the PC awake (not the screen) while a movie is open. On by default.</summary>
+        public bool PreventSleep
+        {
+            get { lock (_lock) return Read().PreventSleep ?? true; }
+            set { Write(d => d with { PreventSleep = value }); }
+        }
+
+        /// <summary>"auto" (default) or "off". Read once when Zephyr Player starts (LibVLC is created then); there is no other value.</summary>
+        public string HardwareDecoding
+        {
+            get { lock (_lock) return Read().HardwareDecoding == "off" ? "off" : "auto"; }
+            set { if (Array.IndexOf(HardwareChoices, value) < 0) return; Write(d => d with { HardwareDecoding = value }); }
+        }
+
+        public string LibrarySort
+        {
+            get { lock (_lock) return Read().LibrarySort == "created" ? "created" : "name"; }
+            set { if (value is "name" or "created") Write(d => d with { LibrarySort = value }); }
+        }
+
+        public bool FoldersFirst
+        {
+            get { lock (_lock) return Read().FoldersFirst ?? true; }
+            set { Write(d => d with { FoldersFirst = value }); }
+        }
+
+        /// <summary>The shell window's last restored bounds and maximized flag, as
+        /// "left,top,width,height,max" in device-independent pixels; "" when never saved.
+        /// Shared by every view (library and player): one window, one geometry.</summary>
+        public string ShellBounds
+        {
+            get { lock (_lock) return Read().ShellBounds ?? ""; }
+            set { Write(d => d with { ShellBounds = value }); }
         }
 
         private record Data(
@@ -109,28 +197,71 @@ namespace ZephyrPlayer
             bool? ShowSleepTimer,
             int? LastVolume,
             int? PrimarySkipSeconds = null,
-            int? SecondarySkipSeconds = null);
+            int? SecondarySkipSeconds = null,
+            string? LibrarySort = null,
+            bool? FoldersFirst = null,
+            bool? ButtonFlash = null,
+            string? ShellBounds = null,
+            bool? AnimateOnPress = null,
+            string? SubtitleSize = null,
+            bool? RememberVolume = null,
+            bool? PreventSleep = null,
+            string? HardwareDecoding = null);
+
+        private bool _readFailed;
+        private Data? _lastGood;
 
         private Data Read()
         {
             try
             {
-                if (!File.Exists(_path)) return Empty();
-                return JsonSerializer.Deserialize<Data>(File.ReadAllText(_path)) ?? Empty();
+                if (!File.Exists(_path)) { _readFailed = false; return _lastGood ?? Empty(); }
+                var data = JsonSerializer.Deserialize<Data>(File.ReadAllText(_path)) ?? throw new InvalidDataException("Empty settings");
+                _readFailed = false;
+                return _lastGood = data;
             }
-            catch { return Empty(); } // unreadable settings = defaults, never fail-open
+            catch { _readFailed = true; return _lastGood ?? Empty(); } // Keep original; refuse writes until readable.
         }
 
         private static Data Empty() => new(null, null, null, null, null, null, null, null, null);
 
-        private void Write(Func<Data, Data> update)
+        private void Write(Func<Data, Data> update, bool notify = true)
         {
+            Exception? failure = null;
+            bool raiseFailure = false;
             lock (_lock)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-                File.WriteAllText(_path, JsonSerializer.Serialize(update(Read())));
+                var current = Read();
+                if (_readFailed) { if (!_warned) { _warned = true; WriteFailed?.Invoke(this, EventArgs.Empty); } return; }
+                _warned = false;
+                var next = update(current);
+                var tmp = _path + ".tmp-" + Guid.NewGuid().ToString("N");
+                try {
+                    Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
+                    File.WriteAllText(tmp, JsonSerializer.Serialize(next));
+                    if (File.Exists(_path)) File.Replace(tmp, _path, _path + ".bak");
+                    else File.Move(tmp, _path);
+                    _lastGood = next;
+                    _saveFailWarned = false;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is System.Security.SecurityException || ex is NotSupportedException)
+                {
+                    // 2.0.2: a failed write never takes the app down (it was reached from UI
+                    // setters and every volume step). The file keeps its last saved values
+                    // and the user is told once.
+                    failure = ex;
+                    raiseFailure = !_saveFailWarned;
+                    _saveFailWarned = true;
+                }
+                finally { try { if (File.Exists(tmp)) File.Delete(tmp); } catch { } }
             }
-            Changed?.Invoke(this, EventArgs.Empty);
+            if (failure != null)
+            {
+                System.Diagnostics.Trace.TraceWarning("Settings write failed: " + failure.GetType().Name + ": " + failure.Message);
+                if (raiseFailure) SaveFailed?.Invoke(this, failure);
+                return;
+            }
+            if (notify) Changed?.Invoke(this, EventArgs.Empty);
         }
     }
 }

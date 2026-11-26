@@ -10,7 +10,7 @@ INHERITANCE: BingeMote's shipped protocol is the base. These shapes are copied
 from the actual 1.11.x source, not re-invented:
 
 ## Pairing (unchanged from BingeMote)
-- 6-digit code shown on PC, entered on phone (SetupScreen filters digits, take(6)).
+- 4-digit code shown on PC (older players: 6), entered on phone (filters digits, take(6), accepts 4 or 6).
 - On success the phone stores a per-source pairing token; all calls carry it.
 - The pairing token NEVER appears in a stream URL (stream sessions get their own
   per-session token, see Streaming).
@@ -81,7 +81,7 @@ an explicit choice.
 Separate from BingeMote helper pairing: the Zephyr Player holds its OWN token store
 (%AppData%/ZephyrPlayer/paired.json) and never shares the helper's.
 
-- The player shows a 6-digit code while nothing is paired (one active code at a
+- The player shows a 4-digit code while nothing is paired (one active code at a
   time, regenerated after every successful pair).
 - Phone: POST /pair {"code":"123456"} (unauthenticated - the code is the proof)
   -> 200 {"token": "<32 hex>"} or 403 {"error":"pairing rejected"}.

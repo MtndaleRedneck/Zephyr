@@ -49,6 +49,28 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void SecondaryHighlight_ReversesSelectedColor_AndRendersBroadBand()
+        {
+            Sta(path=>{
+                Assert.Equal(Colors.White,SecondarySkipHighlight.HighlightColor(Brand.Orange));Assert.Equal(Brand.Orange,SecondarySkipHighlight.HighlightColor(Color.FromRgb(245,245,247)));
+                foreach(var color in new[]{Brand.Orange,Color.FromRgb(245,245,247)}) {
+                    var canvas=new Canvas{Width=108,Height=92,Background=new SolidColorBrush(Color.FromRgb(27,27,30))};
+                    var basePath=new System.Windows.Shapes.Path{Data=Geometry.Parse("M8,17 Q27,-2 46,17 M46,17 L46,8 M46,17 L37,14"),Stroke=new SolidColorBrush(color),StrokeThickness=2.6};
+                    var highlight=new SecondarySkipHighlight{Width=54,Height=46};canvas.Children.Add(basePath);canvas.Children.Add(highlight);canvas.LayoutTransform=new ScaleTransform(2,2);
+                    highlight.Preview(color,.54);Capture(canvas,216,"pc-secondary-highlight-"+(color==Brand.Orange?"orange":"white")+".png");
+                    var pixels=new RenderTargetBitmap(216,184,96,96,PixelFormats.Pbgra32);pixels.Render(canvas);
+                    var bytes=new byte[216*184*4];pixels.CopyPixels(bytes,216*4,0);
+                    Color AtPixel(int x,int y){var at=(y*216+x)*4;return Color.FromRgb(bytes[at+2],bytes[at+1],bytes[at]);}
+                    double Dist(Color a,Color b)=>Math.Abs(a.R-b.R)+Math.Abs(a.G-b.G)+Math.Abs(a.B-b.B);
+                    var center=AtPixel(57,15);var outside=AtPixel(20,30);var inverse=SecondarySkipHighlight.HighlightColor(color);
+                    Assert.True(Dist(center,inverse)<Dist(center,color),"band center did not render inverse color");
+                    Assert.True(Dist(outside,color)<Dist(outside,inverse),"outside band must retain selected base color");
+
+                    highlight.Start(color);Assert.True(highlight.HasAnimatedProperties);highlight.Stop();Assert.False(highlight.HasAnimatedProperties);Assert.Equal(-2,highlight.Progress);
+                }
+            });
+        }
+        [Fact]
         public void Settings_Choices_Update_Both_Directions_And_Keep_Pairs_Independent()
         {
             Sta(path =>
@@ -82,6 +104,72 @@ namespace ZephyrPlayer.Tests
             });
         }
 
+        [Fact]
+        public void Pause_Bars_Stay_Separated_And_Fullscreen_Pill_Is_Bounded()
+        {
+            Sta(path => {
+                NativeVlc.Init(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
+                var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
+                // The pill width only updates through the window's real resize path, so the window
+                // must actually be shown (offscreen) - an unshown window keeps the XAML default.
+                window.Left = -20000; window.Top = -20000; window.Width = 1600; window.Height = 900;
+                window.Show(); window.UpdateLayout();
+                var pause = (Grid)window.FindName("PauseGlyph")!;
+                pause.Visibility = Visibility.Visible;
+                pause.Measure(new Size(24,24)); pause.Arrange(new Rect(0,0,24,24)); pause.UpdateLayout();
+                var a = (FrameworkElement)pause.Children[0]; var b = (FrameworkElement)pause.Children[1];
+                var ar = a.TransformToAncestor(pause).TransformBounds(new Rect(0,0,a.ActualWidth,a.ActualHeight));
+                var br = b.TransformToAncestor(pause).TransformBounds(new Rect(0,0,b.ActualWidth,b.ActualHeight));
+                Assert.True(br.Left - ar.Right >= 6, "Pause bars merge");
+                var fullscreenGlyph = (System.Windows.Shapes.Path)window.FindName("FullscreenGlyph")!;
+                var enterShape = fullscreenGlyph.Data.ToString();
+                window.SetFullscreen(true);
+                Assert.NotEqual(enterShape, fullscreenGlyph.Data.ToString());
+                Assert.Contains("Exit", window.FindName("FullscreenButton") is Button fb ? fb.ToolTip.ToString() : "");
+                window.SetMuteTied(true);
+                var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
+                window.SetMuteTied(false);
+                Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
+                // Midnight Slate: one centered fixed-width pill in both modes, width from the real
+                // resize path (fullscreen here maximizes onto the runner's primary screen).
+                Assert.Equal(MainWindow.BarWidth(window.ActualWidth), window.ControlBar.Width);
+                Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
+                window.ControlBar.Opacity=1;
+                ((FrameworkElement)window.FindName("PlayGlyph")!).Visibility = Visibility.Collapsed; // fixture: show only the pause state, not both glyphs stacked
+                Capture(window.ControlBar,(int)window.ControlBar.Width,"pc-redesign-fullscreen-pill.png");
+                window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
+                // Below the cap: a real window resize narrows the pill (700 -> 652 with 24px margins).
+                window.Width = 700; window.UpdateLayout();
+                Assert.Equal(MainWindow.BarWidth(700), window.ControlBar.Width);
+                window.Close();
+            });
+        }
+
+        [Fact]
+        public void More_Menu_Has_Speed_Audio_Aspect_And_Button_Is_Keyboard_Reachable()
+        {
+            Sta(path => {
+                NativeVlc.Init(); using var vlc = new LibVLC(); using var player = new LibVLCSharp.Shared.MediaPlayer(vlc);
+                var window = new MainWindow(vlc, player, new PlayerSettings(path), new VolumeService());
+                window.SetFullscreen(true);
+                var more = (Button)window.FindName("MoreButton")!;
+                Assert.Equal(Visibility.Visible, more.Visibility);
+                Assert.True(more.Focusable && more.IsTabStop, "More must be reachable with the keyboard");
+                Assert.False(string.IsNullOrWhiteSpace(System.Windows.Automation.AutomationProperties.GetName(more)));
+                var menu = window.BuildMoreMenu();
+                var heads = menu.Items.OfType<MenuItem>().Select(i => i.Header.ToString()).ToArray();
+                Assert.Equal(new[] { "Speed", "Audio", "Aspect ratio" }, heads);
+                Assert.Equal(6, ((MenuItem)menu.Items[0]).Items.Count);
+                Assert.Equal(4, ((MenuItem)menu.Items[2]).Items.Count);
+                // Pixels of the top level of the menu with the player theme (the submenu popups cannot be rendered offscreen).
+                menu.Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("pack://application:,,,/ZephyrPlayer;component/Theme.xaml") });
+                Capture(menu, 220, "pc-redesign-more-menu.png");
+                window.SetFullscreen(false);
+                Assert.Equal(Visibility.Collapsed, more.Visibility);
+                window.Close();
+            });
+        }
+
         [Theory]
         [InlineData(1024, false)]
         [InlineData(1024, true)]
@@ -90,7 +178,7 @@ namespace ZephyrPlayer.Tests
         {
             Sta(path =>
             {
-                Core.Initialize();
+                NativeVlc.Init();
                 using var libvlc = new LibVLC();
                 using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
                 var settings = new PlayerSettings(path) { ShowSpeed = extras, ShowSleepTimer = extras };
@@ -99,7 +187,11 @@ namespace ZephyrPlayer.Tests
                 {
                     var bar = w.ControlBar;
                     bar.Opacity = 1;
-                    Capture(bar, width - 48, $"pc-skip-controlbar-{width}-{extras}.png");
+                    // ControlBar carries an explicit Width (XAML default, then window resize), which
+                    // overrides any measure constraint - set the real width for this window size or
+                    // the narrow path never runs.
+                    bar.Width = MainWindow.BarWidth(width);
+                    Capture(bar, (int)System.Math.Ceiling(MainWindow.BarWidth(width)), $"pc-skip-controlbar-{width}-{extras}.png");
                     var names = new[] { "VolumeButton", "VolumeSlider", "SecondarySkipBackButton", "SkipBackButton", "PlayPauseButton", "SkipForwardButton", "SecondarySkipForwardButton", "CaptionsButton", "FullscreenButton" };
                     Rect? previous = null;
                     var center = (FrameworkElement)w.FindName("CenterPlaybackControls")!;
@@ -115,10 +207,67 @@ namespace ZephyrPlayer.Tests
                         if (previous.HasValue) Assert.True(previous.Value.Right <= rect.Left + 0.5, name + " overlaps its left neighbor");
                         previous = rect;
                     }
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
-                    Assert.Equal("10", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("TotalText")!).Visibility);
+                    foreach (var side in new[] { "Back", "Forward" })
+                    {
+                        var ring = (FrameworkElement)((System.Windows.Shapes.Path)w.FindName("Skip" + side + "Ring")!).Parent;
+                        var text = (TextBlock)w.FindName("Skip" + side + "Label")!;
+                        var rc = ring.TransformToAncestor(bar).Transform(new Point(ring.ActualWidth/2, ring.ActualHeight/2));
+                        var tc = text.TransformToAncestor(bar).Transform(new Point(text.ActualWidth/2, text.ActualHeight/2));
+                        Assert.True(Math.Abs(rc.X-tc.X)<0.5 && Math.Abs(rc.Y-tc.Y)<0.5, "Primary label not centered within ring");
+                    }
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
+                    Assert.Equal("10s", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
                     Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipBackLabel")!).Text);
                     Assert.Equal("30s", ((TextBlock)w.FindName("SecondarySkipForwardLabel")!).Text);
+                }
+                finally { w.Close(); }
+            });
+        }
+
+        [Theory]
+        [InlineData(700)]   // below the 780 cap: compact level, then uniform scale - still nothing hides
+        [InlineData(1024)]
+        [InlineData(1920)]
+        public void WorstCase_Controls_Visible_Ordered_NoOverlap(int width)
+        {
+            Sta(path =>
+            {
+                NativeVlc.Init();
+                using var libvlc = new LibVLC();
+                using var player = new LibVLCSharp.Shared.MediaPlayer(libvlc);
+                var settings = new PlayerSettings(path) { ShowSpeed = true, ShowSleepTimer = true };
+                var w = new MainWindow(libvlc, player, settings, new VolumeService());
+                try
+                {
+                    w.SetFullscreen(true);  // More button joins the right group FIRST
+                    w.SetRate(1.25);        // then dynamic labels widen with no resize
+                    w.SetSleep(45);         // active countdown badge
+                    var bar = w.ControlBar;
+                    bar.Opacity = 1;
+                    bar.Width = MainWindow.BarWidth(width);   // explicit Width overrides the measure constraint
+                    Capture(bar, (int)System.Math.Ceiling(MainWindow.BarWidth(width)), $"pc-skip-controlbar-worst-{width}.png");
+                    var names = new[] { "VolumeButton", "VolumeSlider", "VolumeLabel",
+                                        "SecondarySkipBackButton", "SkipBackButton", "PlayPauseButton", "SkipForwardButton", "SecondarySkipForwardButton",
+                                        "CaptionsButton", "SpeedButton", "SleepButton", "MoreButton", "FullscreenButton" };
+                    Rect? previous = null;
+                    var center = (FrameworkElement)w.FindName("CenterPlaybackControls")!;
+                    var centerRect = center.TransformToAncestor(bar).TransformBounds(new Rect(0, 0, center.ActualWidth, center.ActualHeight));
+                    Assert.True(Math.Abs((centerRect.Left + centerRect.Right) / 2 - bar.ActualWidth / 2) <= 1, "Playback controls are not centered");
+                    foreach (var name in names)
+                    {
+                        var element = (FrameworkElement)w.FindName(name)!;
+                        Assert.Equal(Visibility.Visible, element.Visibility);
+                        var rect = element.TransformToAncestor(bar).TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+                        Assert.True(rect.Width > 0 && rect.Height > 0, name + " has no usable size");
+                        Assert.True(rect.Left >= -0.5 && rect.Right <= bar.ActualWidth + 0.5, name + " is clipped");
+                        if (previous.HasValue) Assert.True(previous.Value.Right <= rect.Left + 0.5, name + " overlaps its left neighbor");
+                        previous = rect;
+                    }
+                    // State readouts never reflow away.
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("SpeedLabel")!).Visibility);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("SleepLabel")!).Visibility);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("TotalText")!).Visibility);
                 }
                 finally { w.Close(); }
             });

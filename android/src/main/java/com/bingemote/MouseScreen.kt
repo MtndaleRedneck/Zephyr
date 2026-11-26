@@ -91,7 +91,7 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
     // clock; foreground again: reconnect. `away` also re-keys the pad's gesture block so a
     // latched drag (released on background) doesn't eat the first tap after coming back.
     var away by remember { mutableStateOf(false) }
-    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner, live) {
         val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
             when (ev) {
@@ -122,8 +122,13 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
     }
     DisposableEffect(commands) { onDispose {
         commands.close()
-        // Always release a held mouse button when leaving this screen.
+        // Best-effort release of EVERY button this screen can hold (left and
+        // right) when leaving: releasing only "left" would strand a held right
+        // button pressed on the PC. Not a guarantee: a press already draining
+        // through the command channel can land after these releases, and the
+        // fire-and-forget queue itself can drop them if the line is down.
         HelperClient.io.execute { try { InputRouter.button(remote, "left", false) } catch (_: Exception) {} }
+        HelperClient.io.execute { try { InputRouter.button(remote, "right", false) } catch (_: Exception) {} }
     } }
     fun fire(block: () -> Unit): Boolean {
         val queued = commands.trySend(block).isSuccess
@@ -153,12 +158,12 @@ fun MouseScreen(remote: RemoteState, startKeyboardOpen: Boolean = false, onBack:
                             var lastSentAt = 0L
                             while (isActive) {
                                 // Send-when-free: the next batch leaves the moment the previous one
-                                // landed (paced to at most ~60/sec), so the rate follows the
+                                // landed (paced to at most ~120/sec), so the rate follows the
                                 // connection - fast on a healthy LAN, self-throttling when it's not.
                                 val sendStarted = System.currentTimeMillis()
                                 landed?.await()
                                 val stalledMs = if (landed != null) System.currentTimeMillis() - sendStarted else 0L
-                                val pace = lastSentAt + 16 - System.currentTimeMillis()
+                                val pace = lastSentAt + 8 - System.currentTimeMillis()
                                 if (pace > 0) delay(pace)
                                 // Moves ride the same channel as buttons and scrolls, so a
                                 // drag can never start before its button-down reaches the PC.

@@ -11,6 +11,11 @@ on:
       - 'scripts/range_server.py'
       - '.github/workflows/windows.yml'
   workflow_dispatch:
+    inputs:
+      run_published_202_migration:
+        description: 'Run the published 2.0.2 to candidate migration smoke (needs an explicit go)'
+        type: boolean
+        default: false
 
 # Windows player: build, tests, real-VLC proof, installer, desktop captures.
 # Runs only when Windows-side files change.
@@ -276,16 +281,24 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
       - name: Build Zephyr Player
         timeout-minutes: 8
         run: dotnet build windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release
       - name: Build Zephyr VLC Remote helper
         timeout-minutes: 8
         run: dotnet build windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release
+      - name: Real VLC and a short video fixture for the real-VLC subtitle test
+        run: |
+          choco install vlc --no-progress -y
+          choco install ffmpeg --no-progress -y
+          $clip = Join-Path $env:RUNNER_TEMP 'subtitle-fixture.mp4'
+          ffmpeg -y -f lavfi -i testsrc=duration=20:size=320x240:rate=15 -f lavfi -i sine=frequency=440:duration=20 -pix_fmt yuv420p -shortest $clip
+          if (-not (Test-Path $clip)) { throw 'fixture not created' }
+          "BINGEMOTE_SUBTITLE_VIDEO=$clip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Windows test suite (blame-hang bounded; no silent host)
         # Independent suites: a red in one never skips the other - both results are collected.
         if: always()
@@ -296,6 +309,29 @@ jobs:
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "trx;LogFileName=win-tests.trx"
           --logger "console;verbosity=detailed"
+      - name: Display modes the runner offers (probe only, changes nothing)
+        if: always()
+        shell: pwsh
+        run: |
+          Add-Type @"
+          using System; using System.Runtime.InteropServices;
+          public static class DispProbe {
+            [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Ansi)] public struct DEVMODE {
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmDeviceName;
+              public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra; public int dmFields;
+              public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+              public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string dmFormName;
+              public short dmLogPixels; public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+              public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight; }
+            [DllImport("user32.dll", CharSet=CharSet.Ansi)] public static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
+          }
+          "@
+          $dm = New-Object DispProbe+DEVMODE; $dm.dmSize = [Runtime.InteropServices.Marshal]::SizeOf($dm)
+          $modes = @(); for ($i = 0; [DispProbe]::EnumDisplaySettings($null, $i, [ref]$dm); $i++) { $modes += "$($dm.dmPelsWidth)x$($dm.dmPelsHeight)" }
+          "available modes: " + (($modes | Sort-Object -Unique) -join ', ')
+          Add-Type -AssemblyName System.Windows.Forms
+          "current virtual screen: " + [System.Windows.Forms.SystemInformation]::VirtualScreen
       - name: Zephyr VLC Remote test suite
         # Independent suites: a red in one never skips the other - both results are collected.
         if: always()
@@ -303,17 +339,20 @@ jobs:
         timeout-minutes: 10
         run: >
           dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
+          --filter 'FullyQualifiedName!~RealVlc'
           --blame-hang --blame-hang-timeout 120s --blame-hang-dump-type mini
           --logger "trx;LogFileName=zvr-tests.trx"
       - name: Upload test diagnostics (TRX + hang dumps)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-test-diagnostics
           path: |
             windows/ZephyrPlayer.Tests/TestResults/
             windows/ZephyrVlcRemote.Tests/TestResults/
             ${{ runner.temp }}/sta-error-*.txt
+            ${{ runner.temp }}/cp2-unit-r2-speed-second-start.txt
+            ${{ runner.temp }}/zvr-loneup-proof.txt
           if-no-files-found: warn
       - name: Real VLC network playback proof (phone->VLC route)
         if: always()
@@ -323,20 +362,29 @@ jobs:
       - name: Publish single-file exe
         if: always()
         timeout-minutes: 8
-        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/out
+      - name: Verify bundled native VLC inventory against resolved package
+        if: always()
+        shell: pwsh
+        run: scripts/verify_native_inventory.ps1 -Published windows/out -Version 3.0.24
       - name: Build installer (Inno Setup)
         if: always()
         timeout-minutes: 8
         shell: pwsh
         run: |
-          choco install innosetup --no-progress -y
+          ./scripts/pinned_installer_toolchain.ps1
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-iscc-sha256.txt").Trim()){throw 'ISCC binary drifted'}
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCmplr.dll' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-compiler-engine-sha256.txt").Trim()){throw 'Compiler engine drifted'}
           $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" windows/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/player-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if ((Get-Content "$env:RUNNER_TEMP/player-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
+          (Get-FileHash "windows/Output/Zephyr-PC-$v.exe" -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content "$env:RUNNER_TEMP/player-installer-built-sha256.txt"
+          Write-Host "installer built: Zephyr-PC-$v.exe sha256 $((Get-Content "$env:RUNNER_TEMP/player-installer-built-sha256.txt" -Raw).Trim())"
       - name: Publish hooked capture build (CI-only seam compiled in - never shipped)
         if: always()
         timeout-minutes: 8
-        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
+        run: dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/capture-out
       - name: Player hook compile-out proof (shipped exe has no CI seams)
         # Same byte-true scan as the helper's (round-12): the tray diag env read was
         # the one seam found outside a hook; the scan keeps that class from returning.
@@ -346,7 +394,7 @@ jobs:
           $latin = [Text.Encoding]::GetEncoding(28591)
           $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/out/ZephyrPlayer.exe"))
           $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/capture-out/ZephyrPlayer.exe"))
-          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot') {
+          foreach ($needle in 'ZEPHYR_TRAY_DIAG', 'dialog-shot', 'ci-capture-token', 'ZEPHYR_CI_CAPTURE') {
             $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
               $n = $latin.GetString($enc.GetBytes($needle))
@@ -358,7 +406,9 @@ jobs:
           Write-Output 'Player compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
       - name: Real-desktop capture (hooked CI build - the shipped exe has no capture token)
         if: always()
-        timeout-minutes: 6
+        # Passing runs already take ~5:47 of the old 6-minute budget; the
+        # poll-close of the first-run Settings window adds seconds per leg.
+        timeout-minutes: 10
         shell: pwsh
         run: scripts/pc_desktop_capture.ps1
       - name: Install + update continuity smoke (real installer)
@@ -374,6 +424,7 @@ jobs:
           $installer = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $installer)) { throw "installer missing: $installer" }
           $installLog = "$env:RUNNER_TEMP/installer-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $installer -Label 'player-smoke-1'
           $ip = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$installLog" -PassThru
           if (-not $ip.WaitForExit(150000)) {
             Get-Content $installLog -Tail 80 -ErrorAction SilentlyContinue
@@ -464,14 +515,14 @@ jobs:
           }
           if (-not $alive) {
             $cl = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
-            if (Test-Path $cl) { Write-Host "app crash log:"; Get-Content $cl }
+            if (Test-Path $cl) { Write-Host "app crash log: $((Get-Item $cl).Length) bytes, $(@(Get-Content $cl | Where-Object { $_ -match '^\[[^\]]+\] (dispatcher|unhandled|task|tray):' }).Count) entries; text withheld from the public log" }
             throw "installed exe never stayed running (startup/update-check crash or auto-launch dead)"
           }
           # Stay alive through the on-open update check window.
           Start-Sleep -Seconds 6
           if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) {
             $cl = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
-            if (Test-Path $cl) { Write-Host "app crash log:"; Get-Content $cl }
+            if (Test-Path $cl) { Write-Host "app crash log: $((Get-Item $cl).Length) bytes, $(@(Get-Content $cl | Where-Object { $_ -match '^\[[^\]]+\] (dispatcher|unhandled|task|tray):' }).Count) entries; text withheld from the public log" }
             throw "installed exe died during the update-check window"
           }
           Write-Output "installed exe alive through launch + on-open update check window"
@@ -488,6 +539,7 @@ jobs:
           $beforeSettings = (Get-FileHash $settingsPath).Hash
           $beforePairing = (Get-FileHash $pairingPath).Hash
           $updateLog = "$env:RUNNER_TEMP/installer-update-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $installer -Label 'player-smoke-2'
           $up = Start-Process $installer -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$updateLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $updateLog -Tail 50; throw 'replacement installer timed out' }
           if ($up.ExitCode -ne 0) { throw "replacement installer exit $($up.ExitCode)" }
@@ -495,9 +547,24 @@ jobs:
           $running = Get-Process ZephyrPlayer -ErrorAction SilentlyContinue
           if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'replacement did not relaunch installed app' }
           if ((Get-FileHash $settingsPath).Hash -ne $beforeSettings) { throw 'replacement changed settings' }
-          if ((Get-FileHash $pairingPath).Hash -ne $beforePairing) { throw 'replacement changed pairing' }
+          # Startup may migrate the legacy token to DPAPI. Prove identity, not ciphertext bytes.
+          $req = [System.Net.Http.HttpClient]::new()
+          $req.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer','local-smoke-token')
+          $auth = $req.GetAsync('http://127.0.0.1:47823/control/status').GetAwaiter().GetResult()
+          if ([int]$auth.StatusCode -ne 200) { throw "replacement lost original pairing: $($auth.StatusCode)" }
+          $req.DefaultRequestHeaders.Authorization = $null
+          $noAuth = $req.GetAsync('http://127.0.0.1:47823/control/status').GetAwaiter().GetResult()
+          if ([int]$noAuth.StatusCode -ne 401) { throw 'replacement accepted unauthenticated control' }
+          $savedPairings = Get-Content $pairingPath -Raw | ConvertFrom-Json
+          if (@($savedPairings).Count -ne 1) { throw 'replacement changed pairing count' }
+          $storedToken = [string]$savedPairings[0].token
+          if (-not $storedToken.StartsWith('dpapi:')) { throw 'replacement pairing was not protected at rest' }
+          Add-Type -AssemblyName System.Security
+          $decoded = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($storedToken.Substring(6)), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
+          if ($decoded -cne 'local-smoke-token') { throw 'replacement changed pairing identity' }
+          $req.Dispose()
           if (-not (Test-Path (Join-Path (Split-Path $installed) 'libvlc'))) { throw 'installed libvlc directory missing' }
-          Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings and pairing hashes unchanged. Same-version replacement, not published version upgrade.'
+          Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings hash unchanged; original pairing identity/count preserved, protected at rest, authenticated 200/unauthenticated 401. Same-version replacement, not published version upgrade.'
           # Report actual installed shortcut display names, never user paths.
           $shell = New-Object -ComObject WScript.Shell
           $desktopFolders = @([Environment]::GetFolderPath('Desktop'), "$env:PUBLIC/Desktop")
@@ -571,6 +638,7 @@ jobs:
           $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
           if (-not (Test-Path $newInstaller)) { throw "new-build installer missing: $newInstaller" }
           $upLog = "$env:RUNNER_TEMP/installer-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-3'
           $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
           if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'upgrade installer timed out' }
           if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "upgrade installer exit $($up.ExitCode)" }
@@ -713,6 +781,148 @@ jobs:
           }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           Write-Output 'N-10 UNINSTALL: a foreign 47823 reservation survived the post-upgrade uninstall byte-identical (URL + SDDL + flags), and the log shows the legacy blind delete never ran.' 
+      - name: Published 1.4.0 -> candidate upgrade smoke (real published asset)
+        if: always()
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The real installed-base upgrade path: the PUBLISHED 1.4.0 release
+          # asset -> THIS build's installer. Complements the 1.1.0 leg (state
+          # continuity) with the version users actually upgrade FROM.
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            if (-not $pu.WaitForExit(150000)) { throw 'pre-cleanup uninstaller timed out' }
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          gh release download player-v1.4.0 -p 'Zephyr-PC-1.4.0.exe' --dir "$env:RUNNER_TEMP/pub140" --clobber
+          $oldInstaller = "$env:RUNNER_TEMP/pub140/Zephyr-PC-1.4.0.exe"
+          if (-not (Test-Path $oldInstaller)) { throw "published 1.4.0 installer missing after download" }
+          $oldLog = "$env:RUNNER_TEMP/installer-old140.log"
+          $op = Start-Process $oldInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$oldLog" -PassThru
+          if (-not $op.WaitForExit(150000)) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw 'published 1.4.0 installer timed out' }
+          if ($op.ExitCode -ne 0) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw "published 1.4.0 installer exit $($op.ExitCode)" }
+          $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $installed)) { throw "1.4.0 installed exe missing: $installed" }
+          $alive = $false
+          for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive) { Start-Process $installed; for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) } }
+          if (-not $alive) { throw 'published 1.4.0 never stayed running after install' }
+          Write-Output 'published 1.4.0 installed and ran'
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          if (-not (Test-Path $newInstaller)) { throw "candidate installer missing: $newInstaller" }
+          $upLog = "$env:RUNNER_TEMP/installer-140-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-4'
+          $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
+          if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'candidate upgrade installer timed out' }
+          if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "candidate upgrade installer exit $($up.ExitCode)" }
+          $newInstalled = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $newInstalled)) { throw "upgraded exe missing: $newInstalled" }
+          $pv = (Get-Item $newInstalled).VersionInfo.ProductVersion
+          if ($pv -notlike "$v*") { throw "upgraded exe ProductVersion is $pv, expected $v.x" }
+          Start-Process $newInstalled
+          $alive2 = $false
+          for ($i = 0; $i -lt 30 -and -not $alive2; $i++) { Start-Sleep -Seconds 1; $alive2 = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive2) { throw 'upgraded build never stayed running' }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Write-Output "published 1.4.0 -> $v upgrade OK (ProductVersion $pv)"
+
+      - name: Published 2.0.2 -> candidate upgrade smoke with seeded settings and history (real published asset)
+        id: pub202_seeded
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # The version installed today (2.0.2, published sha256 889126cc... from the release API) -> THIS build's installer.
+          # Seeds settings.json, playback-history.json and a sentinel paired.json in %AppData%\ZephyrPlayer between the two
+          # installs. Proves: the installer leaves that folder byte-for-byte alone, and the new app starts on the old files
+          # and still reads the stored choices. paired.json is a sentinel (arbitrary bytes), NOT a real DPAPI store: this step
+          # does not prove paired-phone preservation (PairedStore.cs, Dpapi.cs are byte-identical to the 2.0.2 tag).
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $priorUnins = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
+          if (Test-Path $priorUnins) {
+            $pu = Start-Process $priorUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru
+            if (-not $pu.WaitForExit(150000)) { throw 'pre-cleanup uninstaller timed out' }
+          }
+          Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item "$env:APPDATA\ZephyrPlayer" -Recurse -Force -ErrorAction SilentlyContinue
+          gh release download player-v2.0.2 -p 'Zephyr-PC-2.0.2.exe' --dir "$env:RUNNER_TEMP/pub202" --clobber
+          $oldInstaller = "$env:RUNNER_TEMP/pub202/Zephyr-PC-2.0.2.exe"
+          if (-not (Test-Path $oldInstaller)) { throw 'published 2.0.2 installer missing after download' }
+          $sha = (Get-FileHash $oldInstaller -Algorithm SHA256).Hash.ToLower()
+          if ($sha -ne '889126cc0bc0ae7105fca2bb635416192566a79ed6dce7e51d6b1886f113c485') { throw "published 2.0.2 installer sha256 is $sha" }
+          $oldLog = "$env:RUNNER_TEMP/installer-old202.log"
+          $op = Start-Process $oldInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$oldLog" -PassThru
+          if (-not $op.WaitForExit(150000)) { throw 'published 2.0.2 installer timed out' }
+          if ($op.ExitCode -ne 0) { Get-Content $oldLog -Tail 60 -ErrorAction SilentlyContinue; throw "published 2.0.2 installer exit $($op.ExitCode)" }
+          $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          if (-not (Test-Path $installed)) { throw "2.0.2 installed exe missing: $installed" }
+          $pv0 = (Get-Item $installed).VersionInfo.ProductVersion
+          if ($pv0 -notlike '2.0.2*') { throw "installed exe ProductVersion is $pv0, expected 2.0.2.x" }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $dataDir = "$env:APPDATA\ZephyrPlayer"
+          New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+          $utf8 = New-Object System.Text.UTF8Encoding($false)
+          $settings = '{"LibraryFolder":"C:\\Users\\Public\\Videos","VolumeBoostMaxPct":150,"SkipBackSeconds":5,"SkipForwardSeconds":60,"BarColorStyle":"white","IconStyle":"filled","ShowSpeed":true,"ShowSleepTimer":false,"LastVolume":42,"PrimarySkipSeconds":15,"SecondarySkipSeconds":120,"LibrarySort":"created","FoldersFirst":false,"ButtonFlash":true,"ShellBounds":"10,20,1280,720,0","AnimateOnPress":false,"SubtitleSize":"L","RememberVolume":false}'
+          [IO.File]::WriteAllText("$dataDir\settings.json", $settings, $utf8)
+          [IO.File]::WriteAllText("$dataDir\playback-history.json", '{"C:\\USERS\\PUBLIC\\VIDEOS\\SEEDED.MP4":{"PositionMs":600000,"DurationMs":5400000,"FileSize":4096,"ModifiedUtc":"2026-01-01T00:00:00Z"}}', $utf8)
+          [IO.File]::WriteAllBytes("$dataDir\paired.json", [byte[]](1..64))
+          $before = @{}
+          foreach ($f in 'settings.json','playback-history.json','paired.json') { $before[$f] = (Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash }
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          $newInstaller = "windows/Output/Zephyr-PC-$v.exe"
+          if (-not (Test-Path $newInstaller)) { throw "candidate installer missing: $newInstaller" }
+          $upLog = "$env:RUNNER_TEMP/installer-202-upgrade-smoke.log"
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-5'
+          $up = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$upLog" -PassThru
+          if (-not $up.WaitForExit(150000)) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw 'candidate upgrade installer timed out' }
+          if ($up.ExitCode -ne 0) { Get-Content $upLog -Tail 60 -ErrorAction SilentlyContinue; throw "candidate upgrade installer exit $($up.ExitCode)" }
+          foreach ($f in 'settings.json','playback-history.json','paired.json') {
+            $after = (Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash
+            if ($after -ne $before[$f]) { throw "the installer changed $f in the user data folder" }
+          }
+          Write-Output 'installer left settings.json, playback-history.json and paired.json byte-identical'
+          $newInstalled = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
+          $pv = (Get-Item $newInstalled).VersionInfo.ProductVersion
+          if ($pv -notlike "$v*") { throw "upgraded exe ProductVersion is $pv, expected $v.x" }
+          $uninstEntries = @(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall' -ErrorAction SilentlyContinue | Where-Object { (Get-ItemProperty $_.PSPath).DisplayName -like 'Zephyr Player*' })
+          if ($uninstEntries.Count -ne 1) { throw "expected exactly one per-user uninstall entry for Zephyr Player, found $($uninstEntries.Count)" }
+          Start-Process $newInstalled
+          $alive = $false
+          for ($i = 0; $i -lt 30 -and -not $alive; $i++) { Start-Sleep -Seconds 1; $alive = [bool](Get-Process ZephyrPlayer -ErrorAction SilentlyContinue) }
+          if (-not $alive) { throw 'upgraded build never stayed running on the 2.0.2 data' }
+          Start-Sleep -Seconds 8
+          if (-not (Get-Process ZephyrPlayer -ErrorAction SilentlyContinue)) { throw 'upgraded build exited within 8 s on the 2.0.2 data' }
+          Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 2
+          $now = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
+          if ($now.LibraryFolder -ne 'C:\Users\Public\Videos' -or $now.PrimarySkipSeconds -ne 15 -or $now.SecondarySkipSeconds -ne 120 -or $now.LastVolume -ne 42 -or $now.BarColorStyle -ne 'white') {
+            throw "settings choices changed after the upgraded build ran: $($now | ConvertTo-Json -Compress)"
+          }
+          Write-Output "published 2.0.2 -> $v upgrade OK (ProductVersion $pv, 1 uninstall entry, seeded settings choices intact after run)"
+
+      - name: Published 2.0.2 REAL app-created data -> candidate (production pair, settings and history paths)
+        id: pub202_real
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        timeout-minutes: 15
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          ./scripts/pub202_real_data.ps1 -Candidate "windows/Output/Zephyr-PC-$v.exe" -OldSha256 889126cc0bc0ae7105fca2bb635416192566a79ed6dce7e51d6b1886f113c485 -ExpectedVersion $v -ExpectedHead (git rev-parse HEAD).Trim()
+
       - name: Legacy chain + fresh-install uninstall smokes (real artifacts)
         if: always()
         timeout-minutes: 12
@@ -745,6 +955,7 @@ jobs:
             Start-Sleep -Seconds 1
             $link++
             $linkLog = "$env:RUNNER_TEMP/chain-install-$link.log"
+            if ($inst -eq $newInstaller) { & scripts/assert_installer_sha.ps1 -Path $inst -Label 'player-chain-6' }
             $ip = Start-Process $inst -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS',"/LOG=$linkLog" -PassThru
             if (-not $ip.WaitForExit(150000)) { Get-Content $linkLog -Tail 60 -ErrorAction SilentlyContinue; throw "chain installer timed out: $inst" }
             if ($ip.ExitCode -ne 0) { Get-Content $linkLog -Tail 60 -ErrorAction SilentlyContinue; throw "chain installer exit $($ip.ExitCode): $inst" }
@@ -770,6 +981,7 @@ jobs:
           # must be removed by the ownership-checked cleanup.
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
           netsh http delete urlacl url=http://+:47823/ | Out-Null
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-7'
           $ip = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
           if (-not $ip.WaitForExit(150000)) { throw 'T6 fresh installer timed out' }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -788,6 +1000,7 @@ jobs:
           # the uninstall must leave the reservation AND the rules untouched.
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
           netsh http delete urlacl url=http://+:47823/ | Out-Null
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-8'
           $ip = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
           if (-not $ip.WaitForExit(150000)) { throw 'T6b fresh installer timed out' }
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -847,9 +1060,12 @@ jobs:
           if ($i1.ExitCode -ne 0) { throw "legacy leg: 1.1.0 install exit $($i1.ExitCode)" }
           $uninsPath = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
           $stamp110 = (Get-Item $uninsPath).LastWriteTimeUtc
+          $beforeEngineHash = (Get-FileHash $uninsPath -Algorithm SHA256).Hash
+          Write-Output "UNINSTALL_ENGINE_BEFORE_SHA256=$beforeEngineHash"
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 1
           # Upgrade; do NOT run setup - the UAC-declined/failed leg.
+          & scripts/assert_installer_sha.ps1 -Path $newInstaller -Label 'player-smoke-9'
           $i2 = Start-Process $newInstaller -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/NOCLOSEAPPLICATIONS' -PassThru
           if (-not $i2.WaitForExit(150000)) { throw 'legacy leg: upgrade install timed out' }
           if ($i2.ExitCode -ne 0) { throw "legacy leg: upgrade install exit $($i2.ExitCode)" }
@@ -863,13 +1079,17 @@ jobs:
           if (-not $entry) { throw 'legacy leg: expected the 1.1.0 HKLM uninstall entry to STILL EXIST after a setup-declined upgrade' }
           $us = [string]$entry.UninstallString
           Write-Output "legacy HKLM UninstallString: $us"
-          # Identity: the entry must target the shared unins000.exe, REWRITTEN by the
-          # upgrade (newer than the 1.1.0 install) - not 1.1.0's own engine.
+          # Identity: the entry must target the shared unins000.exe. Engine bytes
+          # may be unchanged; actual behavior below is the safety verdict.
           $target = $us.Trim() -replace '^"', '' -replace '".*$', '' -replace '\s+/.*$', ''
           if (-not (Test-Path $target)) { throw "legacy leg: entry target missing: $target" }
           $stampNew = (Get-Item $target).LastWriteTimeUtc
           Write-Output "unins000.exe stamps: after-1.1.0=$stamp110 entry-target=$stampNew"
-          if ($stampNew -le $stamp110) { throw "legacy leg: entry target predates the upgrade - it would run 1.1.0's OWN uninstaller engine" }
+          # Timestamp/hash are diagnostic. Actual legacy-entry behavior below is
+          # the safety verdict; do not infer replacement from modification time.
+          Write-Output "uninstaller engine metadata: $((Get-Item $target).VersionInfo.FileVersion)"
+          $afterEngineHash = (Get-FileHash $target -Algorithm SHA256).Hash
+          Write-Output "UNINSTALL_ENGINE_AFTER_SHA256=$afterEngineHash CHANGED=$($afterEngineHash -ne $beforeEngineHash)"
           if ((Resolve-Path $target).Path -ne (Resolve-Path $uninsPath).Path) { throw "legacy leg: entry target is not the shared uninstaller: $target" }
           # Behavior through THAT entry: plant a foreign reservation, invoke the path.
           netsh http delete urlacl url=http://+:47823/ | Out-Null
@@ -894,12 +1114,18 @@ jobs:
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           Write-Output 'LEGACY HKLM ENTRY: targets the shared post-upgrade unins000.exe; the foreign reservation survived byte-identical and every blind legacy id was skipped through this path too.'
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: windows-ui-evidence
           path: |
+            ${{ runner.temp }}/pc-redesign-*.png
+            ${{ runner.temp }}/pc-mouse-recovery.txt
+            ${{ runner.temp }}/pc-capture-bounds.txt
+            ${{ runner.temp }}/pc-cycle-*.png
             ${{ runner.temp }}/pc-pairing-render.png
+            ${{ runner.temp }}/pc-pairing-recovery-render.png
+            ${{ runner.temp }}/pc-secondary-highlight-*.png
             ${{ runner.temp }}/pc-home-render.png
             ${{ runner.temp }}/pc-desktop-pairing.png
             ${{ runner.temp }}/pc-tray-menu.png
@@ -914,11 +1140,15 @@ jobs:
             ${{ runner.temp }}/pc-playing-controls-window.png
             ${{ runner.temp }}/pc-playing-controls-fullscreen.png
             ${{ runner.temp }}/pc-smoke-*.png
+            ${{ runner.temp }}/pc-pairing-*.png
             ${{ runner.temp }}/pc-bar-*.png
             ${{ runner.temp }}/pc-desktop-note.txt
             ${{ runner.temp }}/installer-smoke.log
+            ${{ runner.temp }}/pub202-real-data.txt
             ${{ runner.temp }}/installer-update-smoke.log
             ${{ runner.temp }}/installer-old110.log
+            ${{ runner.temp }}/installer-old140.log
+            ${{ runner.temp }}/installer-140-upgrade-smoke.log
             ${{ runner.temp }}/installer-upgrade-smoke.log
             ${{ runner.temp }}/uninstall-upgrade-smoke.log
             ${{ runner.temp }}/n10-acl-poll.log
@@ -928,13 +1158,59 @@ jobs:
             ${{ runner.temp }}/uninstall-t6a.log
             ${{ runner.temp }}/uninstall-t6b.log
           if-no-files-found: warn
+      - name: Prove installer bytes unchanged from build through the smokes to upload
+        if: always()
+        shell: pwsh
+        run: |
+          $v = (Select-Xml -Path windows/ZephyrPlayer/ZephyrPlayer.csproj -XPath "//Version").Node.InnerText
+          & scripts/assert_installer_sha.ps1 -Path "windows/Output/Zephyr-PC-$v.exe" -Label 'player-pre-upload'
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        id: up_installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: Zephyr-PC-installer
           path: windows/Output/Zephyr-PC-*.exe
           if-no-files-found: warn
+      - name: Round-trip the uploaded artifact and compare its bytes with the installer the smokes installed
+        if: always()
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $id = '${{ steps.up_installer.outputs.artifact-id }}'
+          Write-Host "uploaded artifact id $id, zip digest ${{ steps.up_installer.outputs.artifact-digest }}"
+          if (-not $id) { throw 'upload step returned no artifact id' }
+          $dir = Join-Path $env:RUNNER_TEMP 'artifact-roundtrip'
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # Binary-safe download (-OutFile writes the bytes as they are). Same reviewed download-only logic as the
+          # helper job: retry ONLY an HTTP 404, up to 6 attempts 10 s apart, every status logged; 401/403/other codes,
+          # a missing response object, a too-small file and any hash mismatch fail at once. No cause is claimed for a 404.
+          $got = $false
+          for ($try = 1; $try -le 6 -and -not $got; $try++) {
+            Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue
+            $r = Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing -SkipHttpErrorCheck -PassThru
+            if (-not $r) { throw 'artifact download returned no response object' }
+            $code = [int]$r.StatusCode
+            Write-Host "artifact download attempt ${try}: HTTP $code"
+            if ($code -eq 200) { $got = $true }
+            elseif ($code -eq 404 -and $try -lt 6) { Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 10 }
+            else { throw "artifact download failed with HTTP $code on attempt $try" }
+          }
+          if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'artifact download failed or is too small' }
+          Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
+          $exe = @(Get-ChildItem "$dir/x" -Filter 'Zephyr-PC-*.exe')
+          if ($exe.Count -ne 1) { throw "expected one installer in the artifact, found $($exe.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $exe[0].FullName -Label 'player-artifact-roundtrip'
+          Write-Host "installer hash log:"; Get-Content "$env:RUNNER_TEMP/installer-hash-log.txt"
+      - name: Upload installer hash log (after the final round trip)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Zephyr-PC-installer-hash-log
+          path: ${{ runner.temp }}/installer-hash-log.txt
+          if-no-files-found: error
       - name: "Gate summary (honest split - tests vs evidence)"
         if: always()
         shell: pwsh
@@ -942,3 +1218,13 @@ jobs:
           Write-Host "PLAYER TESTS OUTCOME: ${{ steps.tests.outcome }}"
           Write-Host "HELPER TESTS OUTCOME: ${{ steps.zvrtests.outcome }}"
           Write-Host "Evidence steps run unconditionally; a green job requires tests green too."
+          # Migration opt-in gate: when this run asked for the published 2.0.2 migration, both migration steps must
+          # have EXECUTED and succeeded. A skipped step is not green evidence.
+          $migrationRequested = '${{ github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration }}'
+          Write-Host "PUBLISHED 2.0.2 MIGRATION REQUESTED: $migrationRequested"
+          Write-Host "PUBLISHED 2.0.2 SEEDED OUTCOME: ${{ steps.pub202_seeded.outcome }}"
+          Write-Host "PUBLISHED 2.0.2 REAL-DATA OUTCOME: ${{ steps.pub202_real.outcome }}"
+          if ($migrationRequested -eq 'true') {
+            if ('${{ steps.pub202_seeded.outcome }}' -ne 'success') { throw "migration was requested but the seeded 2.0.2 step outcome is '${{ steps.pub202_seeded.outcome }}'" }
+            if ('${{ steps.pub202_real.outcome }}' -ne 'success') { throw "migration was requested but the real-data 2.0.2 step outcome is '${{ steps.pub202_real.outcome }}'" }
+          }

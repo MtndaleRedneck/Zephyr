@@ -1,0 +1,171 @@
+using System;
+using System.IO;
+using System.Reflection;
+using System.Threading;
+using LibVLCSharp.Shared;
+using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
+using Xunit;
+
+namespace ZephyrPlayer.Tests;
+
+// 2.0.2 volume model: the player's OWN volume, 0-100 % on the
+// slider, with the Settings boost (100-200 %, kept) as extra decoder gain, and
+// the player's OWN mute. Windows' master volume and mute are never read or
+// written by the player, so a Windows-side state (or a failed Windows read) can
+// never move the player. The VolumeService helper mapping stays pinned below
+// because the service still exists (it no longer drives any UI).
+public class VolumeMuteTests
+{
+    [Fact]
+    public void MuteFromRead_Success_MapsToBool()
+    {
+        Assert.Equal((bool?)true, VolumeService.MuteFromRead(0, 1));
+        Assert.Equal((bool?)false, VolumeService.MuteFromRead(0, 0));
+    }
+
+    [Fact]
+    public void MuteFromRead_FailureHResult_IsNull_NotUnmuted()
+    {
+        const int E_FAIL = unchecked((int)0x80004005);
+        Assert.Null(VolumeService.MuteFromRead(E_FAIL, 0));
+        Assert.Null(VolumeService.MuteFromRead(E_FAIL, 1));
+    }
+
+    [Fact]
+    public void Gain_IsSliderTimesBoost_BoostKept()
+    {
+        Assert.Equal(62, MainWindow.GainFor(62, 100));
+        Assert.Equal(93, MainWindow.GainFor(62, 150));
+        Assert.Equal(200, MainWindow.GainFor(100, 200)); // Boost 200 % still doubles
+        Assert.Equal(0, MainWindow.GainFor(0, 200));
+        Assert.Equal(100, MainWindow.GainFor(150, 100)); // slider clamps at 100
+    }
+
+    internal static void Sta(Action<MainWindow, PlayerSettings> body, VolumeService? volume = null, int joinMs = 30000, bool mustFinish = false)
+    {
+        string? error = null;
+        var path = Path.Combine(Path.GetTempPath(), "zephyr-volmute-" + Guid.NewGuid().ToString("N") + ".json");
+        var t = new Thread(() =>
+        {
+            try
+            {
+                NativeVlc.Init();
+                var libvlc = new LibVLC();
+                var player = new MediaPlayer(libvlc);
+                var settings = new PlayerSettings(path);
+                var w = new MainWindow(libvlc, player, settings, volume);
+                body(w, settings);
+                w.Close();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.InvokeShutdown();
+            }
+            catch (Exception e) { error = e.ToString(); }
+        });
+        t.SetApartmentState(ApartmentState.STA);
+        t.Start();
+        var finished = t.Join(joinMs);
+        if (!finished && error == null) Assert.True(false, "STA body did not finish within " + joinMs + " ms");
+        if (error != null)
+        {
+            var f = Path.Combine(Environment.GetEnvironmentVariable("RUNNER_TEMP") ?? Path.GetTempPath(), "sta-error-" + Guid.NewGuid().ToString("N") + ".txt");
+            try { File.WriteAllText(f, error); } catch { }
+            Assert.True(false, "STA body error (full text also in " + f + "):\n" + error);
+        }
+        try { File.Delete(path); } catch { }
+    }
+
+    private static void InvokePoll(MainWindow w) =>
+        typeof(MainWindow).GetMethod("UpdatePosition", BindingFlags.NonPublic | BindingFlags.Instance)!.Invoke(w, null);
+
+    [Fact]
+    public void Mute_IsThePlayersOwn_WindowsStateNeverMovesIt()
+    {
+        foreach (var forced in new[] { VolumeService.ForcedMute.True, VolumeService.ForcedMute.False, VolumeService.ForcedMute.Unknown })
+        {
+            Sta((w, _) =>
+            {
+                w.TrackedPlayerMute = true;
+                InvokePoll(w);
+                Assert.True(w.TrackedPlayerMute);
+                Assert.True(w.SharedMute);
+                w.TrackedPlayerMute = false;
+                InvokePoll(w);
+                Assert.False(w.TrackedPlayerMute);
+                Assert.False(w.SharedMute);
+            }, new VolumeService { ForcedMuteOverride = forced });
+        }
+    }
+
+    // 2.0.2: a drag (dozens of slider steps) writes the settings file once, after the
+    // slider rests, and raises no settings Changed (no bar/library/Settings rebuild).
+    [Fact]
+    public void VolumeDrag_WritesSettingsOnce_AfterTheSliderRests_NoChangedEvent()
+    {
+        Sta((w, settings) =>
+        {
+            var changed = 0;
+            settings.Changed += (_, __) => changed++;
+            var writesBefore = w.VolumeSaveCount;
+            for (var v = 99; v >= 40; v--) w.SetVolumeTied(v);
+            Assert.Equal(writesBefore, w.VolumeSaveCount);
+            var until = Environment.TickCount64 + 3000;
+            while (w.VolumeSaveCount == writesBefore && Environment.TickCount64 < until)
+            {
+                var frame = new System.Windows.Threading.DispatcherFrame();
+                System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() => frame.Continue = false));
+                System.Windows.Threading.Dispatcher.PushFrame(frame);
+                Thread.Sleep(20);
+            }
+            Assert.Equal(writesBefore + 1, w.VolumeSaveCount);
+            Assert.Equal(40, settings.LastVolume);
+            Assert.Equal(0, changed);
+            // Nothing pending: a flush writes nothing more.
+            w.FlushVolumeSave();
+            Assert.Equal(writesBefore + 1, w.VolumeSaveCount);
+        });
+    }
+
+    [Fact]
+    public void Slider_And_Phone_Drive_OwnVolume_Label_ShowsPercent()
+    {
+        Sta((w, settings) =>
+        {
+            var label = (System.Windows.Controls.TextBlock)w.FindName("VolumeLabel")!;
+            w.SetVolumeTied(62);
+            Assert.Equal(62, w.SharedVolume);
+            Assert.Equal("62%", label.Text);
+            // 2.0.2: the remembered volume is saved once the slider rests, not per step.
+            Assert.NotEqual(62, settings.LastVolume);
+            w.FlushVolumeSave();
+            Assert.Equal(62, settings.LastVolume);
+            w.SetVolumeTied(140); // phone values clamp to 0-100
+            Assert.Equal(100, w.SharedVolume);
+            w.SetMuteTied(true);
+            Assert.Equal("Muted", label.Text);
+            Assert.True(((System.Windows.Controls.Slider)w.FindName("VolumeSlider")!).Opacity < 1);
+            w.SetMuteTied(false);
+            Assert.Equal("100%", label.Text);
+            var slider = (System.Windows.Controls.Slider)w.FindName("VolumeSlider")!;
+            Assert.Null(slider.ToolTip); // no "matches Windows" tooltip
+        });
+    }
+
+    [Fact]
+    public void UpDown_Step_Volume_By_Five_And_Clamp()
+    {
+        Sta((w, _) =>
+        {
+            w.SetVolumeTied(62);
+            w.StepVolume(+MainWindow.VolumeStep);
+            Assert.Equal(67, w.SharedVolume);
+            w.StepVolume(-MainWindow.VolumeStep);
+            w.StepVolume(-MainWindow.VolumeStep);
+            Assert.Equal(57, w.SharedVolume);
+            w.SetVolumeTied(98);
+            w.StepVolume(+MainWindow.VolumeStep);
+            Assert.Equal(100, w.SharedVolume);
+            w.SetVolumeTied(3);
+            w.StepVolume(-MainWindow.VolumeStep);
+            Assert.Equal(0, w.SharedVolume);
+        });
+    }
+}

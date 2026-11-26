@@ -71,7 +71,7 @@ class StoreMigrationTest {
         // The saved pairing token is never touched: the PC helper imports it.
         assertEquals("a1".repeat(32), secrets.map["helperToken"])
         // Nothing but the port and the notice flag is rewritten.
-        assertEquals(setOf("helperPort", "vlcRemoteNoticePending"), plain.writtenKeys - "seekOnTop" - "autoReconnect")
+        assertEquals(setOf("helperPort", "vlcRemoteNoticePending"), plain.writtenKeys - "seekOnTop" - "autoReconnect" - "cancelStyle")
         // Host and name survive.
         assertEquals("192.168.1.50", store.host)
         assertEquals("Office PC", store.pcName)
