@@ -25,7 +25,7 @@
       <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
 
       <!-- Top bar: tabs, search, phone status. One row, nothing else competes. -->
-      <Grid Grid.Row="0" Margin="20,14,20,6">
+      <Grid x:Name="HeaderRow" Grid.Row="0" Margin="20,14,20,6">
         <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
         <StackPanel Orientation="Horizontal">
           <Grid><Button x:Name="LibraryTab" Style="{StaticResource TabButton}" Content="Library" Foreground="{StaticResource TextBrush}" FontWeight="SemiBold"/><Border Height="2" CornerRadius="1" Background="{StaticResource OrangeBrush}" VerticalAlignment="Bottom" Margin="14,0,14,0" IsHitTestVisible="False"/></Grid>
