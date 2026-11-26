@@ -239,6 +239,7 @@ class MainActivity : ComponentActivity() {
                         onCancel = { current.value = "settings" },
                         initialStep = 2,
                     )
+                    "pairdemo-found" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "found")
                     "pairdemo-chosen" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "chosen")
                     "pairdemo-code" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "code")
                     "pairdemo-error" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "error")

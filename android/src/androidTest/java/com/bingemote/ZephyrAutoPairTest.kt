@@ -36,6 +36,8 @@ class ZephyrAutoPairTest {
         store.zephyrHost = "127.0.0.1"
         store.zephyrPort = server.port
         server.enqueue(MockResponse().setResponseCode(200).setBody("{\"token\":\"autopair-test-token\"}"))
+        // The read-only check right after the pair (GET /control/status) answers OK, so Done appears.
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
         try {
             device.wakeUp()
             device.executeShellCommand("wm dismiss-keyguard")
@@ -64,7 +66,7 @@ class ZephyrAutoPairTest {
             val deadline = System.currentTimeMillis() + 8000
             while (store.zephyrToken != "autopair-test-token" && System.currentTimeMillis() < deadline) Thread.sleep(100)
             assertEquals("successful token not saved", "autopair-test-token", store.zephyrToken)
-            // BingeMote flow: the success card sits under the form with Continue; it does not jump away.
+            // BingeMote flow: the result card sits under the form with Done after the check; it does not jump away.
             // The card sits under the form in a scrolling column: scroll down until it is on screen.
             var card = device.wait(Until.findObject(By.textContains("Paired with")), 3000)
             var swipes = 0
@@ -73,13 +75,13 @@ class ZephyrAutoPairTest {
                 card = device.wait(Until.findObject(By.textContains("Paired with")), 1500)
             }
             assertNotNull("success card did not appear", card)
-            val cont = findScrolling(device, By.text("Continue"), 3000)
-            assertNotNull("Continue button missing", cont)
+            val cont = findScrolling(device, By.text("Done"), 8000)
+            assertNotNull("Done button missing after a good check", cont)
             cont!!.click()
-            assertNotNull("Continue did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
+            assertNotNull("Done did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
             device.executeShellCommand("screencap -p /sdcard/zephyr-autopair-success.png")
             Thread.sleep(700)
-            assertEquals("one entry must create exactly one pairing request", 1, server.requestCount)
+            assertEquals("one entry must create exactly one pairing request and one status check", 2, server.requestCount)
         } finally {
             store.zephyrToken = ""
             server.shutdown()

@@ -346,11 +346,7 @@ fun SettingsScreen(
 
         SettingsSection("Phone can't connect?") {
             Text(
-                // Per source (S3): the tip names the app you actually use.
-                if (store.selectedSource == Source.ZEPHYR)
-                    "Open Zephyr Player on the PC and check both are on the same Wi-Fi."
-                else
-                    "Open Zephyr VLC Remote on the PC and tap \u201CThis is my home Wi-Fi\u201D.",
+                "Check that your phone and PC are on the same Wi-Fi and that the app is open on the PC.",
                 color = TextC, fontSize = 14.sp,
             )
         }

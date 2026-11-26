@@ -33,5 +33,21 @@ shoot hi560-home main --ei accent 0
 shoot hi560-icondemo icondemo --ei accent 0
 adb shell wm size 1080x2310; adb shell wm density 480; sleep 3
 shoot ref480-home main --ei accent 0
-adb shell wm size reset; adb shell wm density reset
 adb logcat -d -s AndroidRuntime:E > $OUT/crashes.txt || true
+
+# --- Pairing screens and the help card (debug demo states; no network). ---
+adb shell wm size 1080x2340; adb shell wm density 440; sleep 3
+shoot help-settings-bottom settings --ei accent 0
+adb shell input swipe 540 1900 540 300 300; sleep 1; adb shell input swipe 540 1900 540 300 300; sleep 1; adb shell input swipe 540 1900 540 300 300; sleep 1; adb shell input swipe 540 1900 540 300 300; sleep 2
+adb exec-out screencap -p > "$OUT/help-settings-bottom.png"
+shoot pair1-install setup-zephyr
+shoot pair2-find pairdemo-found
+shoot pair3-chosen pairdemo-chosen
+shoot pair3b-code pairdemo-code
+shoot pair3c-error pairdemo-error
+shoot pair4-result-ok pairdemo-success-ok
+shoot pair4-result-bad pairdemo-success-bad
+shoot pair4-result-cant pairdemo-success-cant
+shoot pair4-result-checking pairdemo-success-checking
+adb shell wm size reset; adb shell wm density reset
+adb logcat -d -s AndroidRuntime:E > $OUT/crashes2.txt || true
