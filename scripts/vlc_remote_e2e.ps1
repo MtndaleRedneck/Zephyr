@@ -54,6 +54,25 @@ function Invoke-Helper($path, $body, $token, [int]$timeoutSec = 10) {
 }
 function Assert($cond, $msg) { $script:assertCount++; if (-not $cond) { throw "ASSERT FAILED: $msg" } ; Write-Host "ok ($script:assertCount): $msg" }
 
+# Reads the LIVE config.json past a transient lock: the helper saves atomically (temp file,
+# then File.Replace) and the rotation pass it kicks after a pair/adopt can persist on its
+# background thread the moment after a response, so a plain Get-Content (FileShare.Read) can
+# land in the replace window. Bounded at ~5 s and requires COMPLETE parseable JSON - no
+# shared-mode read, so a torn/partial read is never accepted. Preserves whatever assertion
+# the caller runs on the returned text.
+function Read-ConfigJson([string]$path) {
+    for ($i = 0; ; $i++) {
+        try {
+            $text = Get-Content $path -Raw -ErrorAction Stop
+            $null = $text | ConvertFrom-Json -ErrorAction Stop
+            return $text
+        } catch {
+            if ($i -ge 24) { throw }
+            Start-Sleep -Milliseconds 200
+        }
+    }
+}
+
 # CI-ONLY cleanup (never product behavior): kill every helper copy by NAME, then VERIFY
 # none remains. A stale-PID kill would leave the old instance holding the single-instance
 # mutex and answering on 8492 while the "restarted" copy silently exits.
@@ -314,7 +333,7 @@ try {
     Assert ($r.code -eq 401) "a BingeMote pairing token is never accepted (no cross-product import)"
     Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the BingeMote config is untouched"
     $ownCfg = Join-Path $ownDir 'config.json'
-    Assert ((-not (Test-Path $ownCfg)) -or ((Get-Content $ownCfg -Raw) -notmatch 'CI legacy phone|CI-HomeLAN')) "nothing from BingeMote was copied into the Zephyr config"
+    Assert ((-not (Test-Path $ownCfg)) -or ((Read-ConfigJson $ownCfg) -notmatch 'CI legacy phone|CI-HomeLAN')) "nothing from BingeMote was copied into the Zephyr config"
     # The sections below run against a helper that already has its own config on disk (the shape every later launch has).
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
@@ -342,13 +361,13 @@ try {
         $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
         if (Test-Path $logf) { Write-Host "== helper.log =="; Show-Log $logf 0 }
         $cfgf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json'
-        if (Test-Path $cfgf) { Write-Host "== config.json =="; Write-Host (Redact-Config (Get-Content $cfgf -Raw)) }
+        if (Test-Path $cfgf) { Write-Host "== config.json =="; Write-Host (Redact-Config (Read-ConfigJson $cfgf)) }
     }
     Assert ($r.code -eq 200) "pair with right code is 200"
     $paired = $r.body | ConvertFrom-Json
     $token = $paired.token
     Assert ($token.Length -eq 64) "token is 64 hex chars"
-    Assert ((Get-Content (Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json') -Raw) -match 'dpapi:') "the persisted token is DPAPI-wrapped on disk"
+    Assert ((Read-ConfigJson (Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json')) -match 'dpapi:') "the persisted token is DPAPI-wrapped on disk"
 
     # Automatic-first VLC setup: the code-gated pair response hands over the PC's
     # generated VLC password, and the one-shot adopt fetch behaves exactly once.
@@ -375,7 +394,7 @@ try {
     # Paired phones get stored with a name; a code made outside the window pairs as "Phone N".
     # Nothing was imported from BingeMote, so this first pairing is phone #1.
     $cfg = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote/config.json'
-    $cfgText = Get-Content $cfg -Raw
+    $cfgText = Read-ConfigJson $cfg
     Assert ($cfgText -match '"name":"Phone 1"') "the first pairing on a fresh Zephyr is named Phone 1 (config redacted: $(Redact-Config $cfgText))"
 
     $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
@@ -466,7 +485,7 @@ try {
     $r = Invoke-Helper '/vlc/adopt' '{"requestId":"req-pre-restart"}' $token2
     Assert ($r.code -eq 200) "second phone fetches its VLC password"
     $preRestart = ($r.body | ConvertFrom-Json).password
-    $cfgText = Get-Content $cfg -Raw
+    $cfgText = Read-ConfigJson $cfg
     Assert ($cfgText -match '"adoptRequestId":"req-pre-restart"') "the served marker is persisted at serve time"
     Assert (-not ($cfgText -match [regex]::Escape($preRestart))) "the password value is never written to config.json"
     Stop-HelperVerified
@@ -518,7 +537,7 @@ try {
         Assert ($paired3.vlcPending -eq $true) "pair reports the vlcrc write is pending while VLC runs"
         $pendingPw = $paired3.vlcPassword
         Assert ($pendingPw.Length -ge 16) "pair hands over the pending password"
-        $cfgText = Get-Content $cfg -Raw
+        $cfgText = Read-ConfigJson $cfg
         # The rotation redesign persists the pending write as vlcTarget (DPAPI-wrapped) with vlcLanded=false, not as pendingVlcPassword.
         Assert (($cfgText -match '"vlcTarget"\s*:\s*"') -and ($cfgText -match '"vlcLanded"\s*:\s*false')) "the pending write is persisted in config.json (vlcTarget set, vlcLanded=false)"
         Stop-HelperVerified
@@ -534,7 +553,7 @@ try {
         Assert ($vlcrcText -match 'extraintf=http') "vlcrc enables the web interface"
         Assert ($vlcrcText -match 'http-host=0.0.0.0') "vlcrc listens on the LAN"
         Start-Sleep -Seconds 1
-        $cfgText = Get-Content $cfg -Raw
+        $cfgText = Read-ConfigJson $cfg
         # Two valid post-landing states (a quiet verify pass clears the target on a ~15 s timer): landed with the target still set, or
         # the target cleared with landed=false. The vlcrc content (password, extraintf, host) was already asserted healthy above.
         $landedSet = ($cfgText -match '"vlcTarget"\s*:\s*"') -and ($cfgText -match '"vlcLanded"\s*:\s*true')
