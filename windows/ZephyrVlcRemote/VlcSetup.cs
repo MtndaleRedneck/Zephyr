@@ -235,11 +235,27 @@ internal static class VlcSetup
         var fresh = !File.Exists(Path.Combine(VlcDir, "vlcrc"));
         if (VlcRotation.TargetValue == null)
         {
-            var backup = VlcRotation.BackupTarget();
-            Program.MutateAndPersist(() => VlcRotation.SetTargetUnderConfigSaveLock(password),
-                () => VlcRotation.RestoreTargetUnderConfigSaveLock(backup), "the VLC password setup");
-            VlcRotation.Kick();
-            if (fresh) Program.Log("VLC web-remote password generated for the phone (value never logged).");
+            // Recheck INSIDE the mutation (serialized under ConfigSaveLock): a removal that
+            // staged its own NEW target between the check above and this transaction must win -
+            // the setup exception never overwrites a live target, even one staged mid-call.
+            (string? t, bool landed, int gen) backup = default;
+            var staged = false;
+            Program.MutateAndPersist(() =>
+                {
+                    if (VlcRotation.TargetValue == null)
+                    {
+                        backup = VlcRotation.BackupTarget();
+                        VlcRotation.SetTargetUnderConfigSaveLock(password);
+                        staged = true;
+                    }
+                },
+                () => { if (staged) VlcRotation.RestoreTargetUnderConfigSaveLock(backup); },
+                "the VLC password setup");
+            if (staged)
+            {
+                VlcRotation.Kick();
+                if (fresh) Program.Log("VLC web-remote password generated for the phone (value never logged).");
+            }
         }
         lock (Gate) { if (_candidate == password) _candidate = null; }   // the target is the truth now
         return password;

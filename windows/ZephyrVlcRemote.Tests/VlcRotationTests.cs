@@ -335,4 +335,35 @@ public class VlcRotationTests : IDisposable
         VlcRotation.PassOnce();
         Assert.True(VlcSetup.ReadHealthy().HealthyFor(pw));
     }
+
+    [Fact]
+    public void CrashAfterWriteBeforePersist_RestartPassCountsTheFreshUnlandedObservationAsLanding()
+    {
+        // I2: the pass writes vlcrc NEW and dies before the landing persist. On restart the
+        // marker is empty (nothing observed this process) but the persisted target is UNLANDED:
+        // the healthy read must count as the landing, or a kept phone that spent its grant on
+        // OLD is never re-armed and can never fetch NEW.
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        Program.AddPhoneAndPersist("tok-b", "Phone B");
+        var kept = Phone("tok-a");
+        kept.AdoptSpent = true;                              // spent on OLD before the removal
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => x.Token == "tok-b").ToArray(), "new-password-22");
+        Assert.True(ok);
+        Program.StoreBroken = true;
+        VlcRotation.PassOnce();                              // vlcrc written NEW; the landing persist is refused
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
+        Assert.True(kept.AdoptSpent);                        // no landing committed, no re-arm yet
+        // Simulate the restart: in-memory state gone, the persisted target restored as UNLANDED.
+        var (t, landed, gen) = VlcRotation.Snapshot();
+        Assert.False(landed);
+        VlcRotation.ResetForTests();                         // clears the in-memory marker (_hasObserved)
+        VlcRotation.LoadPersisted(t, landed, gen);
+        Program.StoreBroken = false;
+        VlcRotation.PassOnce();                              // first pass of the "new process": nothing observed yet
+        Assert.False(kept.AdoptSpent);                       // the fresh unlanded observation counted as the landing
+        Assert.True(VlcRotation.Landed);
+        VlcRotation.PassOnce();                              // quiet healthy verify clears the target
+        Assert.Null(VlcRotation.TargetValue);
+        Assert.False(kept.AdoptSpent);                       // and the verify pass does not flip it back
+    }
 }

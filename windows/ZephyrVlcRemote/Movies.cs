@@ -126,7 +126,7 @@ internal static class Movies
                 if (t != null)
                 {
                     var obs = VlcSetup.ReadHealthy();
-                    if (!obs.HealthyFor(t)) VlcRotation.RecordDivergence(obs.Password);
+                    if (obs.ReadOk && !obs.HealthyFor(t)) VlcRotation.RecordDivergence(obs.Password); // a failed read is unknown, not divergence
                     VlcRotation.ApplyTargetUnderMutex(t, landed, gen, obs);
                 }
             }

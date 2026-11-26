@@ -11,7 +11,11 @@ namespace ZephyrVlcRemote.Tests;
 /// without the choco VLC or the fixture, exactly like RealVlcAddsSidecar. No VlcRunningOverride
 /// here: the pass must detect the REAL process. The tests drive VLC's graceful exit through a
 /// lua request probe (same pattern as bm-subtitle-probe.json) so the exit-rewrite path - the
-/// mechanism the repair branch exists for - is actually exercised and measured.</summary>
+/// mechanism the repair branch exists for - is actually exercised, and the rewrite is ASSERTED
+/// as a premise (not just printed) before the repair assertions run. Honest coverage limits:
+/// these two tests drive ONE VLC session at a time through the rotation pass directly; they do
+/// not exercise the Movies.Play inline attempt, the HelperWindow removal UI, or the production
+/// timer - those paths share the same PassOnce core but are not proven against a live VLC here.</summary>
 [Collection("ProgramState")]
 public class RealVlcRotationTests : IDisposable
 {
@@ -173,10 +177,13 @@ public class RealVlcRotationTests : IDisposable
 
             var graceful = await TryGracefulQuit(8098, OldPassword, vlc);
             Assert.True(vlc.HasExited, "VLC did not exit (graceful=" + graceful + ")");
-            // T6 measurement: does an exiting VLC rewrite vlcrc? Printed, not assumed.
+            // T6 measurement AND premise assertion: the repair-after-exit path is only exercised
+            // if the exiting VLC actually rewrote vlcrc back to OLD. If VLC ever stops rewriting,
+            // this fails loudly instead of silently passing a scenario it never ran.
             var bytesChanged = !File.ReadAllBytes(VlcrcPath).SequenceEqual(before);
             var healthyOld = VlcSetup.ReadHealthy().HealthyFor(OldPassword);
             Console.WriteLine("REAL_VLC_EXIT graceful=" + graceful + " vlcrc_bytes_changed=" + bytesChanged + " healthy_old_after_exit=" + healthyOld);
+            Assert.True(healthyOld, "T6 premise failed: the exiting VLC did not rewrite vlcrc to the OLD password, so the repair-after-exit-rewrite path was never exercised.");
 
             VlcRotation.PassOnce(); // converges: writes NEW (repairing any exit rewrite), lands, re-arms the kept phone
             Assert.True(VlcSetup.ReadHealthy().HealthyFor(NewPassword));

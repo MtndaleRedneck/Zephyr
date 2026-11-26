@@ -220,7 +220,13 @@ internal static class VlcRotation
             lock (Gate)
             {
                 if (_target != expectT || _landed != expectLanded || _generation != expectGen) return false; // abandoned
-                edge = _hasObserved && _lastObserved != t;
+                // A restart loses the marker: when this process has observed nothing yet and the
+                // target was persisted UNLANDED, the previous run wrote vlcrc and died before the
+                // landing persist - the fresh unlanded observation IS the landing, or a kept phone
+                // that spent its grant on OLD is never re-armed and can never fetch NEW. A landed
+                // target with no observation is the normal post-landing restart: the grants were
+                // already re-armed at the original landing, so no edge.
+                edge = (_hasObserved && _lastObserved != t) || (!_hasObserved && !expectLanded);
                 priorT = _target; priorLanded = _landed; priorGen = _generation;
                 lock (Program.PhonesLock)
                 {
