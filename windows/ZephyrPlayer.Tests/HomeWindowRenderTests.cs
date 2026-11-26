@@ -185,6 +185,17 @@ namespace ZephyrPlayer.Tests
                     var chipRight = phoneChip.TranslatePoint(new Point(phoneChip.ActualWidth, 0), root).X;
                     Assert.True(chipRight <= 900, $"phone chip clipped at 900 wide: right edge {chipRight}");
                     Assert.True(list.ActualWidth <= 900, $"movie list wider than the window: {list.ActualWidth}");
+                    // The count text must not be squeezed or painted over by the command buttons:
+                    // the breadcrumb room accounting has to subtract it.
+                    var countText = (TextBlock)w.FindName("CountText")!;
+                    countText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    Assert.True(countText.ActualWidth >= countText.DesiredSize.Width - 0.5,
+                        $"count text width squeezed at 900: actual {countText.ActualWidth} desired {countText.DesiredSize.Width}");
+                    var commandRight = (FrameworkElement)w.FindName("CommandRight")!;
+                    var countRightEdge = countText.TranslatePoint(new Point(countText.ActualWidth, 0), root).X;
+                    var rightLeftEdge = commandRight.TranslatePoint(new Point(0, 0), root).X;
+                    Assert.True(countRightEdge <= rightLeftEdge + 0.5,
+                        $"count text runs under the command buttons at 900: {countRightEdge} > {rightLeftEdge}");
                     var rtb = new RenderTargetBitmap(900, 600, 96, 96, PixelFormats.Pbgra32);
                     var bg = new DrawingVisual();
                     using (var dc = bg.RenderOpen()) dc.DrawRectangle(w.Background, null, new Rect(0, 0, 900, 600));

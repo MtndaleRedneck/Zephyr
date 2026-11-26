@@ -55,6 +55,11 @@ namespace ZephyrPlayer
         public static bool SeekCommitDue(DateTime lastCommitUtc, DateTime nowUtc) =>
             (nowUtc - lastCommitUtc).TotalMilliseconds >= SeekCommitThrottleMs;
 
+        /// <summary>A mouse release seeks only when it ends an active scrub on loaded media. A lone
+        /// release (press started elsewhere, or capture already lost) must not jump to a stale thumb.</summary>
+        public static bool SeekReleaseCommits(bool seeking, bool opening, double mediaLength) =>
+            seeking && !opening && mediaLength > 0;
+
         // ---------- top overlay meta (render 02: "2012 · 1h 42m") ----------
 
         /// <summary>Year only when the file says it; duration as "1h 42m" / "42m" / "0m 6s".</summary>

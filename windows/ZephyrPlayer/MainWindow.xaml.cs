@@ -470,14 +470,13 @@ namespace ZephyrPlayer
         private void OnSeekUp(object sender, MouseButtonEventArgs e)
         {
             if (e.ChangedButton != MouseButton.Left) return;
+            var commit = PlayerBarLogic.SeekReleaseCommits(_seeking, _opening, _player.Length);
             _seeking = false;   // before ReleaseMouseCapture: LostMouseCapture must not commit a second time
             if (SeekBar.IsMouseCaptured) SeekBar.ReleaseMouseCapture();
-            if (!_opening && _player.Length > 0)
-            {
-                SeekCommitCount++;
-                LastSeekFraction = SeekBar.Value / 1000.0;
-                _player.Position = (float)LastSeekFraction;
-            }
+            if (!commit) return; // a release without an active scrub commits nothing (no stale seek)
+            SeekCommitCount++;
+            LastSeekFraction = SeekBar.Value / 1000.0;
+            _player.Position = (float)LastSeekFraction;
         }
 
         // ---------- play / pause / skips ----------

@@ -284,6 +284,13 @@ namespace ZephyrPlayer
                 c.Measure(inf); others += c.DesiredSize.Width;
             }
             CommandRight.Measure(inf); others += CommandRight.DesiredSize.Width;
+            // CountText lives with the breadcrumb (not in CommandLeft) since the Slate header split:
+            // subtract it explicitly or the trail takes the count's space at narrow widths.
+            if (CountText.Visibility != Visibility.Collapsed)
+            {
+                CountText.Measure(inf);
+                others += CountText.DesiredSize.Width + CountText.Margin.Left + CountText.Margin.Right;
+            }
             return Math.Max(120, CommandRow.ActualWidth - others - 24);
         }
 
