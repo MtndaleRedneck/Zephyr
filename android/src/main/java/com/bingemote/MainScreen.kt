@@ -207,7 +207,7 @@ private fun HomeContent(
                 // in the header selector.
                 Text(
                     if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC isn't paired" else "VLC PC isn't paired",
-                    color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                    color = OnAccent, fontSize = 21.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2,
                 )
                 Text(
@@ -218,7 +218,7 @@ private fun HomeContent(
             Text(
                 if (refused) "VLC refused the password" else if (lost) "Trying to reconnect" else if (vlcOut) "VLC isn't open"
                 else s?.title?.let { displayName(it).ifBlank { "Nothing playing" } } ?: "Nothing playing",
-                color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                color = OnAccent, fontSize = 21.sp, fontWeight = FontWeight.Bold,
                 maxLines = 2,
             )
             Text(
@@ -279,7 +279,7 @@ private fun HomeContent(
                     Spacer(Modifier.width(8.dp))
                     Text(
                         "Got it",
-                        color = Orange, fontSize = 13.sp,
+                        color = AccentText, fontSize = 13.sp,
                         modifier = Modifier.clickable {
                             remote.store.vlcRemoteNoticePending = false
                             showVlcRemoteNotice = false
@@ -443,7 +443,7 @@ private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
             // exists - no new bubble. Live everywhere, inside the circle too.
             val previewSec = dragPos?.takeIf { length > 0 }?.let { (it * length).toLong() } ?: s?.timeSec ?: 0
             val previewRemain = (length - previewSec).coerceAtLeast(0)
-            Text(formatTime(previewSec), color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, style = tight)
+            Text(formatTime(previewSec), color = AccentText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, style = tight)
             Spacer(Modifier.weight(1f))
             Text("-${formatTime(previewRemain)}", color = TextC, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, style = tight)
         }
@@ -573,7 +573,7 @@ private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
         Row(Modifier.fillMaxWidth()) {
             Text(
                 if (unlocked) "Unlocked. Locks again in a few seconds" else "Hold the bar to unlock seeking",
-                color = if (unlocked) Orange else Muted, fontSize = 12.sp,
+                color = if (unlocked) AccentText else Muted, fontSize = 12.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, style = tight,
                 modifier = Modifier.weight(1f),
             )
@@ -624,7 +624,7 @@ private fun VolumeRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scal
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.offset(y = 3.dp)) {
                     Text(
                         if (muted) "0%" else "${remote.winVolume ?: (s?.volumePct ?: 0)}%",
-                        color = if (muted) Dimmed else if (pressed && flashAll) Orange else TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                        color = if (muted) Dimmed else if (pressed && flashAll) AccentText else TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
                     )
                     Text(
                         if (muted) "MUTED" else "VOL",
@@ -732,7 +732,7 @@ private fun PlayPauseButton(remote: RemoteState, playing: Boolean, flashAll: Boo
 @Composable
 private fun CancelCircleContent(drag: SeekDrag) {
     val p = drag.proximity
-    val dark = Color(0xFF1B1B1E)
+    val dark = OnAccent
     val ringColor = androidx.compose.ui.graphics.lerp(Orange, OrangeLight, p)
     val labelColor = androidx.compose.ui.graphics.lerp(Orange, dark, (p * 3f).coerceAtMost(1f))
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -947,7 +947,7 @@ private fun SubtitleRow(name: String, checked: Boolean, hapticsOn: Boolean, onCl
         } else {
             Spacer(Modifier.width(26.dp))
         }
-        Text(name, color = if (checked) Orange else TextC, fontSize = 16.sp, fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal)
+        Text(name, color = if (checked) AccentText else TextC, fontSize = 16.sp, fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal)
     }
 }
 

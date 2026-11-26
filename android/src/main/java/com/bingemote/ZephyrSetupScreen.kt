@@ -136,7 +136,7 @@ fun ZephyrSetupScreen(
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Set up Zephyr Player", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-            androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = AccentText) }
         }
         Spacer(Modifier.height(18.dp))
 
@@ -170,7 +170,7 @@ fun ZephyrSetupScreen(
                     ) {
                         Text(
                             "${h.name}  (${h.host})",
-                            color = if (isSel) androidx.compose.ui.graphics.Color(0xFF1B1B1E) else TextC,
+                            color = if (isSel) OnAccent else TextC,
                             fontSize = 14.sp, fontWeight = FontWeight.Bold,
                         )
                     }
@@ -247,7 +247,7 @@ fun ZephyrSetupScreen(
                             androidx.compose.material3.TextButton(onClick = {
                                 val t = store.zephyrToken
                                 if (t.isNotBlank()) checkAfterPair(store.zephyrHost, store.zephyrPort, t)
-                            }) { Text("Try again", color = Orange) }
+                            }) { Text("Try again", color = AccentText) }
                         }
                         else -> {}
                     }

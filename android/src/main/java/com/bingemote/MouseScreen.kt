@@ -397,7 +397,7 @@ if (lastX != 0f || lastY != 0f) fire { InputRouter.move(remote, lastX * remote.s
                 modifier = Modifier.size(52.dp),
                 corner = 26.dp,
             ) {
-                Icon(Icons.Default.Settings, contentDescription = "Pointer speed", tint = androidx.compose.ui.graphics.Color(0xFF1B1B1E), modifier = Modifier.size(26.dp))
+                Icon(Icons.Default.Settings, contentDescription = "Pointer speed", tint = OnAccent, modifier = Modifier.size(26.dp))
             }
             Spacer(Modifier.width(12.dp))
             PressTile(
@@ -406,7 +406,7 @@ if (lastX != 0f || lastY != 0f) fire { InputRouter.move(remote, lastX * remote.s
                 modifier = Modifier.size(52.dp),
                 corner = 26.dp,
             ) {
-                KeyboardIcon(androidx.compose.ui.graphics.Color(0xFF1B1B1E), 26.dp)
+                KeyboardIcon(OnAccent, 26.dp)
             }
         }
 
@@ -503,7 +503,7 @@ private fun SpeedStep(glyph: String, hapticsOn: Boolean, onTap: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        Text(glyph, color = Orange, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+        Text(glyph, color = AccentText, fontSize = 24.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -616,7 +616,7 @@ private fun KeyboardSheet(onClose: () -> Unit, onType: (String) -> Unit, onKey: 
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                label, color = Orange, fontSize = 13.sp, fontWeight = FontWeight.Bold,
+                                label, color = AccentText, fontSize = 13.sp, fontWeight = FontWeight.Bold,
                                 maxLines = 1, softWrap = false,
                             )
                         }

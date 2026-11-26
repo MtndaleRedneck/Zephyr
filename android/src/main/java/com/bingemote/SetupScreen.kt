@@ -185,7 +185,7 @@ fun SetupScreen(
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Set up Zephyr VLC Remote", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
             if (onCancel != null) {
-                TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+                TextButton(onClick = onCancel) { Text("Cancel", color = AccentText) }
             }
         }
         Spacer(Modifier.height(18.dp))
@@ -247,7 +247,7 @@ fun SetupScreen(
                         ) {
                             Text(
                                 "${h.name}  (${h.host})",
-                                color = if (isSel) androidx.compose.ui.graphics.Color(0xFF1B1B1E) else TextC,
+                                color = if (isSel) OnAccent else TextC,
                                 fontSize = 14.sp, fontWeight = FontWeight.Bold,
                             )
                         }
@@ -399,7 +399,7 @@ internal fun SetupCard(content: @Composable ColumnScope.() -> Unit) {
 internal fun SetupMessage(message: String?, isError: Boolean) {
     if (message.isNullOrBlank()) return
     Spacer(Modifier.height(10.dp))
-    Text(message, color = if (isError) ErrorText else Orange, fontSize = 13.sp, lineHeight = 18.sp)
+    Text(message, color = if (isError) ErrorText else AccentText, fontSize = 13.sp, lineHeight = 18.sp)
 }
 
 @Composable
@@ -412,6 +412,6 @@ internal fun OrangeButton(label: String, enabled: Boolean = true, onClick: () ->
         corner = 14.dp,
         enabled = enabled,
     ) {
-        Text(label, color = if (enabled) androidx.compose.ui.graphics.Color(0xFF1B1B1E) else Dimmed, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(label, color = if (enabled) OnAccent else Dimmed, fontSize = 15.sp, fontWeight = FontWeight.Bold)
     }
 }
