@@ -535,7 +535,11 @@ try {
         Assert ($vlcrcText -match 'http-host=0.0.0.0') "vlcrc listens on the LAN"
         Start-Sleep -Seconds 1
         $cfgText = Get-Content $cfg -Raw
-        Assert ($cfgText -match '"vlcLanded"\s*:\s*true') "the completed pending write is recorded as landed in config.json (vlcLanded=true)"
+        # Two valid post-landing states (a quiet verify pass clears the target on a ~15 s timer): landed with the target still set, or
+        # the target cleared with landed=false. The vlcrc content (password, extraintf, host) was already asserted healthy above.
+        $landedSet = ($cfgText -match '"vlcTarget"\s*:\s*"') -and ($cfgText -match '"vlcLanded"\s*:\s*true')
+        $landedCleared = ($cfgText -match '"vlcTarget"\s*:\s*null') -and ($cfgText -match '"vlcLanded"\s*:\s*false')
+        Assert ($landedSet -or $landedCleared) "the completed pending write is recorded in config.json (target set + landed, or target cleared after the quiet verify)"
         $r = Invoke-HelperGet '/vlc/setup-status' $token
         Assert (($r.body | ConvertFrom-Json).configured -eq $true) "setup-status attests configured after the completed write"
 
