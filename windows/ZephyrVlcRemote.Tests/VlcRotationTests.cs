@@ -147,6 +147,40 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void StalePassNeverWritesASupersededTarget()
+    {
+        // The atomic staging/write ordering, exercised as the real race: a pass snapshots T1 and
+        // blocks on LaunchWriteMutex (held here by the test thread - the same exclusion Play's
+        // multi-second VLC launch holds); a SECOND removal stages T2 from under that same mutex
+        // (re-entrant on this thread, which is exactly what proves staging is mutex-ordered now);
+        // the released pass must refuse its stale snapshot and write NOTHING - vlcrc keeps the old
+        // password until T2 itself lands. Pre-fix, the pass wrote T1 and only its persist abandoned.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        Program.AddPhoneAndPersist("tok-b", "Phone B");
+        var (ok1, _) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => x.Token != "tok-a").ToArray(), "new-password-1");
+        Assert.True(ok1);                                        // T1 staged (unlanded)
+        var snapshotted = new ManualResetEventSlim();
+        VlcRotation.AfterSnapshotForTests = () => snapshotted.Set();
+        Thread passThread;
+        lock (VlcRotation.LaunchWriteMutex)                      // the pass blocks on this AFTER its snapshot
+        {
+            passThread = new Thread(() => VlcRotation.PassOnce());
+            passThread.Start();
+            Assert.True(snapshotted.Wait(TimeSpan.FromSeconds(10)), "the pass never reached its snapshot");
+            var (ok2, _) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-2");
+            Assert.True(ok2);                                    // T2 staged WHILE the pass waits: mutex-ordered
+        }
+        Assert.True(passThread.Join(TimeSpan.FromSeconds(10)), "the pass never finished");
+        Assert.True(VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5)));
+        Assert.Equal("old-password-1", VlcSetup.ReadVlcrcValue("http-password")); // T1 was NEVER written
+        Assert.True(VlcSetup.Pending);                           // T2 is outstanding, truthfully
+        VlcRotation.PassOnce();                                  // the kicked convergence: T2 itself lands
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-2"));
+        Assert.False(VlcSetup.Pending);
+    }
+
+    [Fact]
     public void InlineAttemptOnDivergedLandedReopensBeforeDeferring()
     {
         // The re-open lives in the ONE shared write path, so an INLINE attempt (the /vlc/setup

@@ -157,6 +157,17 @@ internal static class VlcSetup
             return JsonSerializer.Serialize(new { ok = false, reason = "bad password" });
         if (ReadHealthy().HealthyFor(password))
         {
+            // The same stale-value rule as the main path: vlcrc carrying the phone's value is NOT
+            // "done" when a NEWER rotation target of a different value is outstanding - that value
+            // is on its way out, so the phone must fetch the current one (adopt), not hear ok.
+            var liveTargetHealthy = VlcRotation.TargetValue;
+            if (liveTargetHealthy != null && liveTargetHealthy != password)
+            {
+                Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
+                return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
+            }
+            // Clear-only, never a stage: the value vlcrc already carries is the target's own value,
+            // so a pass writing it between snapshot and clear lands the SAME value - no ordering needed.
             var exitBackup = VlcRotation.BackupTarget();
             Program.MutateAndPersist(() => VlcRotation.ClearTargetIfMatchesUnderConfigSaveLock(password),
                 () => VlcRotation.RestoreTargetUnderConfigSaveLock(exitBackup), "the VLC setup");
@@ -192,7 +203,12 @@ internal static class VlcSetup
         var refuseReason = (string?)null;
         var staged = false;
         (string? t2, bool l2, int g2) backup = default;
-        var okPersist = Program.MutateAndPersist(() =>
+        bool okPersist;
+        // Staging is serialized under LaunchWriteMutex (same ordering rule as the removal): a pass
+        // holding a PREVIOUS snapshot can then never write it over the target staged here.
+        lock (VlcRotation.LaunchWriteMutex)
+        {
+            okPersist = Program.MutateAndPersist(() =>
             {
                 // Authoritative recheck under ConfigSaveLock: every rotation's target persists
                 // BEFORE its vlcrc write can land, and vlcrc itself is re-read here, so no
@@ -214,6 +230,7 @@ internal static class VlcSetup
                 staged = true;
             },
             () => { if (staged) VlcRotation.RestoreTargetUnderConfigSaveLock(backup); }, "the VLC setup");
+        }
         if (refuseReason != null)
         {
             Program.Log("A phone's VLC setup was refused (" + refuseReason + ") - left the rotation state untouched.");
@@ -292,9 +309,13 @@ internal static class VlcSetup
             // Recheck INSIDE the mutation (serialized under ConfigSaveLock): a removal that
             // staged its own NEW target between the check above and this transaction must win -
             // the setup exception never overwrites a live target, even one staged mid-call.
+            // The LaunchWriteMutex wrap is the staging/write ordering: no waiting pass can write
+            // its older snapshot over the target staged here.
             (string? t, bool landed, int gen) backup = default;
             var staged = false;
-            Program.MutateAndPersist(() =>
+            lock (VlcRotation.LaunchWriteMutex)
+            {
+                Program.MutateAndPersist(() =>
                 {
                     if (VlcRotation.TargetValue == null)
                     {
@@ -305,6 +326,7 @@ internal static class VlcSetup
                 },
                 () => { if (staged) VlcRotation.RestoreTargetUnderConfigSaveLock(backup); },
                 "the VLC password setup");
+            }
             if (staged)
             {
                 VlcRotation.Kick();

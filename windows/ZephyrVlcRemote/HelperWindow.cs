@@ -880,8 +880,9 @@ internal sealed class HelperWindow : Form
     /// be open, and rotation is confirmed complete only when every one of them has closed.</summary>
     private async Task ShowRotationOutcomeAsync(string label, int gen, bool allRemoved)
     {
+        var after = VlcRotation.PassStartCount; // ignore completions of passes already in flight
         VlcRotation.Kick();
-        await VlcRotation.AwaitNextPassCompletion(TimeSpan.FromSeconds(2));
+        await VlcRotation.AwaitNextPassCompletion(after, TimeSpan.FromSeconds(2));
         var done = VlcRotation.RotationOutcomeComplete(gen); // landed OR already verified+cleared: both are done
         var foreign = VlcRotation.Generation != gen;         // a NEWER rotation superseded this dialog's pass
         var vlcOpen = await Task.Run(() => VlcSetup.VlcRunning());

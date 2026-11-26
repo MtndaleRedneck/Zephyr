@@ -799,19 +799,28 @@ internal static class Program
     {
         PairedPhone[] before = Array.Empty<PairedPhone>();
         (string? t, bool landed, int gen) backup = default;
-        var ok = MutateAndPersist(
-            () =>
-            {
-                lock (PhonesLock) { before = Phones.ToArray(); foreach (var r in pick(before)) Phones.Remove(r); }
-                backup = VlcRotation.BackupTarget();
-                VlcRotation.SetTargetUnderConfigSaveLock(newVlcPassword);
-            },
-            () =>
-            {
-                VlcRotation.RestoreTargetUnderConfigSaveLock(backup);
-                lock (PhonesLock) { Phones.Clear(); Phones.AddRange(before); }
-            },
-            "the phone removal");
+        bool ok;
+        // Staging is serialized under LaunchWriteMutex (the lock ORDER: LaunchWriteMutex >
+        // ConfigSaveLock > PhonesLock/Gate): a pass that snapshotted the previous target and is
+        // waiting for the mutex can then never write it over this newer stage - the apply's
+        // in-mutex recheck catches any stage that landed first, and any later stage waits for
+        // the apply. The UI thread can block here for the duration of a Play inline launch.
+        lock (VlcRotation.LaunchWriteMutex)
+        {
+            ok = MutateAndPersist(
+                () =>
+                {
+                    lock (PhonesLock) { before = Phones.ToArray(); foreach (var r in pick(before)) Phones.Remove(r); }
+                    backup = VlcRotation.BackupTarget();
+                    VlcRotation.SetTargetUnderConfigSaveLock(newVlcPassword);
+                },
+                () =>
+                {
+                    VlcRotation.RestoreTargetUnderConfigSaveLock(backup);
+                    lock (PhonesLock) { Phones.Clear(); Phones.AddRange(before); }
+                },
+                "the phone removal");
+        }
         return (ok, VlcRotation.Generation);
     }
 

@@ -20,6 +20,8 @@ internal static class VlcRotation
     private static int _rerunRequested;    // a kick dropped by an active pass is not lost
     private static System.Threading.Timer? _timer;
     private static TaskCompletionSource _passDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private static long _passStarts;    // incremented when a pass acquires applyBusy
+    private static long _passDoneUpTo;  // start id of the latest completed pass
 
     // Test seam: Kick normally queues a background pool pass, which can outlive a test's Dispose
     // and land in the NEXT test's static state. Fixtures disable the background and drive PassOnce
@@ -31,8 +33,20 @@ internal static class VlcRotation
         set => Volatile.Write(ref _backgroundDisabled, value ? 1 : 0);
     }
 
+    /// <summary>Passes started so far. A caller captures this BEFORE a kick, then waits for a
+    /// completion newer than it: a completion of a pass that was already in flight at the kick
+    /// says nothing about the kicked work.</summary>
+    internal static long PassStartCount => Interlocked.Read(ref _passStarts);
+
+    /// <summary>Test seam: fires right after PassCore's snapshot, so a fixture can hold the
+    /// LaunchWriteMutex and stage a NEWER target between a pass's snapshot and its write - the
+    /// exact stale-snapshot race the in-mutex recheck closes. Null in production.</summary>
+    internal static Action? AfterSnapshotForTests;
+
     /// <summary>Wait until no pass is running and none is queued; false on timeout. Tests call
-    /// this in Dispose so no pool pass leaks into the next test's static state.</summary>
+    /// this in Dispose so no pool pass leaks into the next test's static state. Queued pool items
+    /// only exist if a test queued them itself: the background is disabled in fixtures, and this
+    /// drains passes that already hold applyBusy or a flagged rerun, not never-started items.</summary>
     internal static bool AwaitQuiescenceForTests(TimeSpan timeout)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
@@ -79,6 +93,7 @@ internal static class VlcRotation
         lock (Gate) { _target = null; _landed = false; _generation = 0; _lastObserved = null; _hasObserved = false; }
         Interlocked.Exchange(ref _applyBusy, 0);
         Interlocked.Exchange(ref _rerunRequested, 0);
+        AfterSnapshotForTests = null;
     }
 
     // Target mutation: only ever inside a ConfigSaveLock persist (the single-writer invariant).
@@ -128,21 +143,30 @@ internal static class VlcRotation
 
     /// <summary>The removal path's async join: completes when the next pass finishes (or on timeout);
     /// the caller then chooses its copy from the persisted state, never from whichever pass ran.</summary>
-    internal static async Task AwaitNextPassCompletion(TimeSpan timeout)
+    internal static async Task AwaitNextPassCompletion(long afterStart, TimeSpan timeout)
     {
-        var t = _passDone.Task;
-        await Task.WhenAny(t, Task.Delay(timeout));
+        var deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (Interlocked.Read(ref _passDoneUpTo) > afterStart) return; // a pass that STARTED after the kick finished
+            var remaining = deadline - DateTime.UtcNow;
+            if (remaining <= TimeSpan.Zero) return;                       // no newer pass inside the window: read the state as-is
+            var t = _passDone.Task;                                       // re-captured each round: a stale completion swaps it
+            await Task.WhenAny(t, Task.Delay(remaining));                 // a stale completion (older pass) loops, not returns
+        }
     }
 
     /// <summary>One pass on a worker: single-flight, broad catch (no secrets in the log), finally releases.</summary>
     internal static void PassOnce()
     {
         if (Interlocked.CompareExchange(ref _applyBusy, 1, 0) != 0) return;
+        var myStart = Interlocked.Increment(ref _passStarts);
         try { PassCore(); }
         catch (Exception ex) { Program.Log("VLC password-change pass failed (" + ex.GetType().Name + ")."); }
         finally
         {
             Interlocked.Exchange(ref _applyBusy, 0);
+            Interlocked.Exchange(ref _passDoneUpTo, myStart);
             SignalPassDone();
             if (Interlocked.Exchange(ref _rerunRequested, 0) == 1 && !BackgroundDisabledForTests) ThreadPool.QueueUserWorkItem(_ => PassOnce());
         }
@@ -151,6 +175,7 @@ internal static class VlcRotation
     private static void PassCore()
     {
         var (t, landed, gen) = SnapshotCommitted(); // never a staged-but-unsaved target
+        AfterSnapshotForTests?.Invoke();
         if (t == null) return;
         var obs = VlcSetup.ReadHealthy();
         if (!obs.ReadOk) return; // a read glitch is not divergence: keep the marker, retry next pass
@@ -204,6 +229,13 @@ internal static class VlcRotation
     /// + readback, then the SAME persist. The caller holds LaunchWriteMutex.</summary>
     internal static ApplyOutcome ApplyTargetUnderMutex(string t, bool landed, int gen, VlcSetup.VlcrcHealth obs)
     {
+        // PassCore/TryInlinePass snapshot BEFORE the mutex, and every stage of a new target is
+        // serialized under this SAME mutex - so one committed re-read here makes a superseded
+        // write impossible, not just unlikely: a stage either completed before we acquired the
+        // mutex (caught now) or starts after we release it (ordered strictly after this apply,
+        // and its own kick converges it). Play snapshots inside the mutex; its recheck passes.
+        var (tNow, _, genNow) = SnapshotCommitted();
+        if (tNow != t || genNow != gen) return ApplyOutcome.WriteFailed; // moved on while we waited for the mutex
         if (!obs.ReadOk) return ApplyOutcome.WriteFailed; // never write over a vlcrc we could not read
         if (landed && !obs.HealthyFor(t))
         {
@@ -229,6 +261,7 @@ internal static class VlcRotation
     internal static ApplyOutcome TryInlinePass()
     {
         if (Interlocked.CompareExchange(ref _applyBusy, 1, 0) != 0) return ApplyOutcome.Deferred;
+        var myStart = Interlocked.Increment(ref _passStarts);
         try
         {
             var (t, landed, gen) = SnapshotCommitted(); // never a staged-but-unsaved target
@@ -242,7 +275,7 @@ internal static class VlcRotation
             Program.Log("VLC password-change pass failed (" + ex.GetType().Name + ").");
             return ApplyOutcome.WriteFailed;
         }
-        finally { Interlocked.Exchange(ref _applyBusy, 0); SignalPassDone(); }
+        finally { Interlocked.Exchange(ref _applyBusy, 0); Interlocked.Exchange(ref _passDoneUpTo, myStart); SignalPassDone(); }
     }
 
     /// <summary>Divergence observation (vlcrc not healthy-for-t, and the read itself succeeded):

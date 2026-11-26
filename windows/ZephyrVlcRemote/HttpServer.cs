@@ -302,6 +302,9 @@ internal sealed class HttpServer : IDisposable
         var deniedServe = false;
         try
         {
+            // LaunchWriteMutex OUTSIDE ConfigSaveLock (the standing order): the setup exception in
+            // ServeForAdoptInMemory can STAGE a target, and staging is serialized with pass writes.
+            lock (VlcRotation.LaunchWriteMutex)
             lock (Program.ConfigSaveLock)
             {
                 Program.PairedPhone? phone;
