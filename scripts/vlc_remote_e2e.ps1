@@ -8,10 +8,48 @@ if (-not (Test-Path $exe)) { throw "helper exe missing at $exe" }
 
 # Assertions are counted: a run that exercised nothing must FAIL, never pass.
 $script:assertCount = 0
-function Invoke-Helper($path, $body, $token) {
+# Job logs are PUBLIC. Nothing that can carry a token, password, DPAPI blob or config content may reach them.
+# Redact-Text: last-line defense for free text (helper.log lines, errors): masks DPAPI blobs, long hex/base64-ish runs
+# and the value of any token/password-like JSON field (escaped quotes included).
+function Redact-Text([string]$t) {
+    if ($null -eq $t) { return '' }
+    $t = $t -replace '"(?<k>[^"\\]*(?:token|password|secret)[^"\\]*)"\s*:\s*"(?:\\.|[^"\\])*"', '"${k}":"<redacted>"'
+    $t = $t -replace 'dpapi:[A-Za-z0-9+/=_\\.-]+', 'dpapi:<redacted>'
+    $t = $t -replace '\b[0-9A-Fa-f]{32,}\b', '<hex-redacted>'
+    return $t
+}
+function Redact-Config([string]$t) { return (Redact-Text $t) }
+# Safe-Body: public logs get status-level facts only: the key NAMES, booleans/numbers for a few flags, and the length of
+# every string value. No response string value is ever printed.
+function Safe-Body($body) {
+    if ($null -eq $body) { return '<no body>' }
+    try {
+        $j = $body | ConvertFrom-Json -ErrorAction Stop
+        if ($j -is [System.Array]) { return "<json array of $($j.Count)>" }
+        $flags = @('ok','configured','vlcPending','atRoot')
+        $nums = @('code','position','length')
+        $parts = foreach ($pr in $j.PSObject.Properties) {
+            if (($flags -contains $pr.Name) -and ($pr.Value -is [bool])) { "$($pr.Name)=$($pr.Value)" }
+            elseif (($nums -contains $pr.Name) -and ($pr.Value -is [ValueType])) { "$($pr.Name)=$($pr.Value)" }
+            else { "$($pr.Name):$((("$($pr.Value)").Length))ch" }
+        }
+        return '{' + ($parts -join ', ') + '}'
+    } catch {
+        return "<non-JSON body: $(([string]$body).Length) chars>"
+    }
+}
+# Show-Log: helper.log text is never printed to the public log. Only counts of known literal message categories.
+function Show-Log([string]$path, [int]$tail) {
+    if (-not (Test-Path $path)) { return }
+    $lines = @(if ($tail -gt 0) { Get-Content $path -Tail $tail } else { Get-Content $path })
+    $cats = [ordered]@{ 'started' = 'Started\.'; 'wrong-code' = 'Wrong pairing code entered'; 'locked' = 'Pairing locked'; 'code-created' = 'Pairing code created for'; 'firewall-preflight' = 'needs its own firewall setup first' }
+    $out = foreach ($k in $cats.Keys) { "$k=$(@($lines | Where-Object { $_ -match $cats[$k] }).Count)" }
+    Write-Host "helper.log: $($lines.Count) lines read; known-message counts: $($out -join ', '); line text withheld from the public log"
+}
+function Invoke-Helper($path, $body, $token, [int]$timeoutSec = 10) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec $timeoutSec -SkipHttpErrorCheck
     return @{ code = [int]$r.StatusCode; body = $r.Content }
 }
 function Assert($cond, $msg) { $script:assertCount++; if (-not $cond) { throw "ASSERT FAILED: $msg" } ; Write-Host "ok ($script:assertCount): $msg" }
@@ -47,7 +85,7 @@ function Wait-HelperListening([int]$pidToServe, [string]$what) {
     Write-Host "== firewall rule dump (Zephyr VLC Remote) =="
     netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Select-String -Pattern 'Rule Name|Enabled|Direction|Profiles|Action|Protocol|LocalPort|RemoteIP|Program'
     $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
-    if (Test-Path $logf) { Write-Host "== helper.log tail =="; Get-Content $logf -Tail 60 }
+    if (Test-Path $logf) { Write-Host "== helper.log tail =="; Show-Log $logf 60 }
     throw $what
 }
 
@@ -87,19 +125,47 @@ function Assert-HelperFirewallRules([string]$exePath) {
     Assert ($actual -eq $expected) "the listen permission names the installing user's SID, not Everyone"
     Assert ($acl -notmatch 'S-1-1-0') "the listen permission is not Everyone"
 }
-function Invoke-HelperGet($path, $token) {
+function Invoke-HelperGet($path, $token, [int]$timeoutSec = 10) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec $timeoutSec -SkipHttpErrorCheck
     return @{ code = [int]$r.StatusCode; body = $r.Content }
 }
 
+
+# Real protocol, from the helper source: a freshly started helper holds the display as Unknown until Windows
+# delivers a display-state notification, and /screen-state is READ-ONLY (it cannot wake anything). A discrete press
+# while the display is not On (here: /movies/play) is consumed as a wake tap: the helper calls WakeDisplay and
+# answers {"ok":true,"woke":true} BEFORE it parses the request, so no VLC is launched and a repeat cannot
+# duplicate a launch. The phone's behavior is to tap again. Play-Movie does the same, bounded: it re-sends only
+# when the answer is woke:true, between taps it watches /screen-state for dark:false for a bounded time, and it
+# stops after 5 taps (the last one only after the final watch) or the 55 s watch deadline. If the last answer is still woke:true it THROWS that the display never reported On (no later VLC assert has to explain it). Worst case: the 55 s watch deadline plus one in-flight 10 s play request and one 3 s state read, about 70 s.
+function Play-Movie([string]$body, $token, [string]$what) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $r = $null; $dark = 'not read'
+    foreach ($attempt in 1..5) {
+        $r = Invoke-Helper '/movies/play' $body $token
+        if ($r.body -notmatch '"woke"\s*:\s*true') { if ($attempt -gt 1) { Write-Host "play ($what) launched on tap $attempt after $([int]$sw.Elapsed.TotalSeconds)s" }; return $r }
+        if ($attempt -eq 5) { break }
+        $dark = 'unreadable'
+        $wait = [Diagnostics.Stopwatch]::StartNew()
+        while ($wait.Elapsed.TotalSeconds -lt 15 -and $sw.Elapsed.TotalSeconds -lt 55) {
+            try { $g = Invoke-HelperGet '/screen-state' $token 3; if ($g.code -eq 200) { $dark = if ($g.body -match '"dark"\s*:\s*false') { 'false' } else { 'true' }; if ($dark -eq 'false') { break } } } catch { $dark = 'request failed' }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Host "play ($what) tap $attempt consumed as a wake tap (woke:true); screen-state dark=$dark after $([int]$wait.Elapsed.TotalSeconds)s waiting; elapsed $([int]$sw.Elapsed.TotalSeconds)s"
+        if ($sw.Elapsed.TotalSeconds -ge 55) { break }
+    }
+    if ($r.body -match '"woke"\s*:\s*true') { throw "ASSERT FAILED: play ($what) was still consumed as a wake tap after $([int]$sw.Elapsed.TotalSeconds)s; the helper never reported the display On (last screen-state dark=$dark)" }
+    return $r
+}
 
 # --- Part 0: per-user install of the CLEAN build; firewall is the app's explained
 # first-run elevation; the shipped exe must ignore the CI pairing hook. ---
 Write-Host "== per-user install + clean-build hook proof =="
 $setup = Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe" | Select-Object -First 1
 if (-not $setup) { throw "installer exe missing in helper/Output" }
+& (Join-Path $PSScriptRoot 'assert_installer_sha.ps1') -Path $setup.FullName -Label 'helper-e2e-install' -Kind helper
 & $setup.FullName /VERYSILENT /SUPPRESSMSGBOXES /NORESTART | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "silent install failed with exit $LASTEXITCODE" }
 $installed = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\ZephyrVlcRemote.exe'
@@ -125,7 +191,7 @@ $fw0 = Start-Process $installed -ArgumentList "--install-firewall `"$sid0`" `"$d
 if ($fw0.ExitCode -ne 0) {
     Write-Host "install-firewall exit: $($fw0.ExitCode)"
     $log0 = Join-Path $data0 'helper.log'
-    if (Test-Path $log0) { Write-Host "== helper.log tail =="; Get-Content $log0 -Tail 20 }
+    if (Test-Path $log0) { Write-Host "== helper.log tail =="; Show-Log $log0 20 }
     $acl0 = netsh http show urlacl | Out-String
     $block0 = ($acl0 -split "\r?\n\r?\n" | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
     Write-Host "8492 reservation after setup:"; Write-Host $block0
@@ -134,12 +200,12 @@ Assert ($fw0.ExitCode -eq 0) "installed exe's elevated firewall setup succeeds"
 Assert-HelperFirewallRules $installed
 # Negative hook proof on the SHIPPED build: it was published without PAIR_CODE_HOOK,
 # so ZEPHYR_VLC_REMOTE_PAIR_CODE must NOT produce a working pairing.
-$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
 Remove-Item (Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote') -Recurse -Force -ErrorAction SilentlyContinue
 Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
 $pClean = Start-Process $installed -PassThru
 Wait-HelperListening $pClean.Id "installed clean helper did not start listening"
-$rClean = Invoke-Helper '/pair' '{"code":"424242"}' $null
+$rClean = Invoke-Helper '/pair' '{"code":"4242"}' $null
 Assert ($rClean.code -eq 403) "the shipped build ignores the CI pairing hook (got $($rClean.code))"
 Stop-HelperVerified
 # Silent uninstall: app files go away, and the uninstaller's elevated cleanup removes
@@ -226,39 +292,33 @@ Assert-HelperFirewallRules $exe
 
 # --- Part 2: run the helper and drive its HTTP API over loopback ---
 Write-Host "== helper runtime =="
-$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+$env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
 $p = Start-Process $exe -PassThru
 try {
     Wait-HelperListening $p.Id "helper did not start listening on 8492"
     Write-Host "helper is listening"
 
     # --- Part 2a: BingeMote migration on a real old config (settled: no forced re-pair) ---
-    Write-Host "== BingeMote pairing migration =="
+    Write-Host "== BingeMote pairing is NOT imported (a fresh Zephyr pairs explicitly) =="
     Stop-HelperVerified
     $legacyDir = Join-Path $env:LOCALAPPDATA 'BingeMote'
     $ownDir = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote'
     New-Item -ItemType Directory -Force $legacyDir | Out-Null
     $legacyCfg = Join-Path $legacyDir 'config.json'
-    $legacyText = '{"phones":[{"token":"' + ('a1' * 32) + '","name":"CI migration phone","adoptSpent":true}],"moviesFolder":null,"declinedNetworks":["CI-CafeWiFi"],"homeNetworks":["CI-HomeLAN"]}'
+    $legacyText = '{"phones":[{"token":"' + ('a1' * 32) + '","name":"CI legacy phone"}],"moviesFolder":null,"declinedNetworks":["CI-CafeWiFi"],"homeNetworks":["CI-HomeLAN"]}'
     Set-Content $legacyCfg $legacyText -NoNewline
     Remove-Item $ownDir -Recurse -Force -ErrorAction SilentlyContinue
     $p = Start-Process $exe -PassThru
-    Wait-HelperListening $p.Id "helper did not start on the migration run"
+    Wait-HelperListening $p.Id "helper did not start on the no-import run"
     $r = Invoke-Helper '/ping' '{}' ('a1' * 32)
-    Assert ($r.code -eq 200) "an imported BingeMote pairing serves immediately (no re-pair)"
-    Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the legacy config is byte-identical after the import"
-    $ownCfgText = Get-Content (Join-Path $ownDir 'config.json') -Raw
-    Assert ($ownCfgText -match 'CI migration phone') "the phone name carried over"
-    Assert ($ownCfgText -match 'CI-HomeLAN') "the home Wi-Fi choice carried over"
-    # A second run with an existing own config must NOT re-import or overwrite.
+    Assert ($r.code -eq 401) "a BingeMote pairing token is never accepted (no cross-product import)"
+    Assert ((Get-Content $legacyCfg -Raw) -eq $legacyText) "the BingeMote config is untouched"
+    $ownCfg = Join-Path $ownDir 'config.json'
+    Assert ((-not (Test-Path $ownCfg)) -or ((Get-Content $ownCfg -Raw) -notmatch 'CI legacy phone|CI-HomeLAN')) "nothing from BingeMote was copied into the Zephyr config"
+    # The sections below run against a helper that already has its own config on disk (the shape every later launch has).
     Stop-HelperVerified
-    Set-Content $legacyCfg ('{"phones":[{"token":"' + ('b2' * 32) + '","name":"should never import"}]}') -NoNewline
     $p = Start-Process $exe -PassThru
-    Wait-HelperListening $p.Id "helper did not restart for the no-reimport check"
-    $r = Invoke-Helper '/ping' '{}' ('a1' * 32)
-    Assert ($r.code -eq 200) "the migrated phone still works on the next launch"
-    $r = Invoke-Helper '/ping' '{}' ('b2' * 32)
-    Assert ($r.code -eq 401) "a later legacy change never re-imports"
+    Wait-HelperListening $p.Id "helper did not restart after the no-import check"
     Remove-Item $legacyDir -Recurse -Force -ErrorAction SilentlyContinue
 
 
@@ -270,19 +330,19 @@ try {
     Assert ($r.body -match 'detail') "wrong code answers with a written-for-him detail"
 
     # CSRF / DNS-rebinding guards (round-5): browsers send Origin; rebound names fail Host.
-    $rOrigin = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/pair' -Method Post -Body '{"code":"424242"}' -Headers @{ Origin = 'http://evil.example' } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
+    $rOrigin = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/pair' -Method Post -Body '{"code":"4242"}' -Headers @{ Origin = 'http://evil.example' } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
     Assert ([int]$rOrigin.StatusCode -eq 403) "a browser-style Origin header is refused"
     $rHost = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/ping' -Headers @{ Host = 'evil.example.com'; 'X-Zephyr-VLC-Remote-Token' = ('a1' * 32) } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
     Assert ([int]$rHost.StatusCode -eq 403) "a rebound DNS name in Host is refused"
 
-    $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
-    Write-Host "right-code pair -> $($r.code): $($r.body)"
+    $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
+    Write-Host "right-code pair -> $($r.code): $(Safe-Body $r.body)"
     if ($r.code -ne 200) {
         Get-Process | Where-Object { $_.ProcessName -like '*ZephyrVlcRemote*' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) path=$($_.Path)" }
         $logf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
-        if (Test-Path $logf) { Write-Host "== helper.log =="; Get-Content $logf }
+        if (Test-Path $logf) { Write-Host "== helper.log =="; Show-Log $logf 0 }
         $cfgf = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json'
-        if (Test-Path $cfgf) { Write-Host "== config.json =="; Get-Content $cfgf -Raw }
+        if (Test-Path $cfgf) { Write-Host "== config.json =="; Write-Host (Redact-Config (Get-Content $cfgf -Raw)) }
     }
     Assert ($r.code -eq 200) "pair with right code is 200"
     $paired = $r.body | ConvertFrom-Json
@@ -311,14 +371,14 @@ try {
     Assert ($r.code -eq 200) "a retried ack is an idempotent no-op"
     $r = Invoke-Helper '/vlc/adopt' '{"requestId":""}' $token
     Assert ($r.code -eq 400) "an empty request id is rejected"
-    Write-Host "paired with machine: $($paired.name)"
+    Write-Host "paired (machine name of $("$($paired.name)".Length) chars withheld)"
     # Paired phones get stored with a name; a code made outside the window pairs as "Phone N".
-    # The migrated BingeMote phone above is already phone #1, so THIS pairing is #2.
+    # Nothing was imported from BingeMote, so this first pairing is phone #1.
     $cfg = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote/config.json'
     $cfgText = Get-Content $cfg -Raw
-    Assert ($cfgText -match '"name":"Phone 2"') "the first NEW pairing after a migration is named Phone 2: $cfgText"
+    Assert ($cfgText -match '"name":"Phone 1"') "the first pairing on a fresh Zephyr is named Phone 1 (config redacted: $(Redact-Config $cfgText))"
 
-    $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($r.code -eq 403) "pairing code is single-use"
 
     $r = Invoke-Helper '/ping' '{}' $token
@@ -357,7 +417,7 @@ try {
     } else {
         # Headless runners have no audio device; the helper must say so clearly, not crash.
         Assert ($r.code -eq 503) "volume/get without an audio device is 503, got $($r.code)"
-        Assert ($r.body -match 'no audio device') "503 body names the reason: $($r.body)"
+        Assert ($r.body -match 'no audio device') "503 body names the reason: $(Safe-Body $r.body)"
         Write-Host "no audio device on this machine; 503 path verified"
     }
 
@@ -374,7 +434,7 @@ try {
     Remove-Item Env:ZEPHYR_VLC_REMOTE_PAIR_CODE -ErrorAction SilentlyContinue
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart"
-    $r = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($r.code -eq 403) "no live pair code after pairing (got $($r.code))"
     $r = Invoke-Helper '/ping' '{}' $token
     Assert ($r.code -eq 200) "saved token still works after restart"
@@ -386,10 +446,10 @@ try {
     # A second phone pairs with a fresh code and both phones stay connected.
     Write-Host "== multi-phone pairing =="
     Stop-HelperVerified
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '123456'
+    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '1234'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for second pairing"
-    $r = Invoke-Helper '/pair' '{"code":"123456"}' $null
+    $r = Invoke-Helper '/pair' '{"code":"1234"}' $null
     Assert ($r.code -eq 200) "second phone pairs with a fresh code"
     $token2 = ($r.body | ConvertFrom-Json).token
     Assert ($token2 -ne $token) "second phone gets its own token"
@@ -408,7 +468,7 @@ try {
     $preRestart = ($r.body | ConvertFrom-Json).password
     $cfgText = Get-Content $cfg -Raw
     Assert ($cfgText -match '"adoptRequestId":"req-pre-restart"') "the served marker is persisted at serve time"
-    Assert (-not ($cfgText -match $preRestart)) "the password value is never written to config.json"
+    Assert (-not ($cfgText -match [regex]::Escape($preRestart))) "the password value is never written to config.json"
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart with an unacked adopt"
@@ -446,13 +506,13 @@ try {
     Assert (-not $fakeVlc.HasExited) "the simulated VLC process is running"
     try {
         Stop-HelperVerified
-        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '555555'
+        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '5555'
         $p = Start-Process $exe -PassThru
         Wait-HelperListening $p.Id "helper did not restart for the pending-write test"
         $r = Invoke-HelperGet '/vlc/setup-status' $token
         $ss = $r.body | ConvertFrom-Json
         Assert ($ss.configured -eq $false -and $ss.pending -eq $false) "with vlcrc deleted, setup-status attests neither configured nor pending"
-        $r = Invoke-Helper '/pair' '{"code":"555555"}' $null
+        $r = Invoke-Helper '/pair' '{"code":"5555"}' $null
         Assert ($r.code -eq 200) "third phone pairs while VLC is running"
         $paired3 = $r.body | ConvertFrom-Json
         Assert ($paired3.vlcPending -eq $true) "pair reports the vlcrc write is pending while VLC runs"
@@ -469,7 +529,7 @@ try {
         $vlcrc = Join-Path $env:APPDATA 'vlc\vlcrc'
         Assert (Test-Path $vlcrc) "the restarted helper completed the deferred vlcrc write"
         $vlcrcText = Get-Content $vlcrc -Raw
-        Assert ($vlcrcText -match "http-password=$pendingPw") "vlcrc has the pending password"
+        Assert ($vlcrcText -match ("http-password=" + [regex]::Escape($pendingPw))) "vlcrc has the pending password"
         Assert ($vlcrcText -match 'extraintf=http') "vlcrc enables the web interface"
         Assert ($vlcrcText -match 'http-host=0.0.0.0') "vlcrc listens on the LAN"
         Start-Sleep -Seconds 1
@@ -485,10 +545,10 @@ try {
         Start-Sleep -Seconds 2
         Assert (-not $fakeVlc2.HasExited) "the simulated VLC is running for the re-pair test"
         Stop-HelperVerified
-        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '777777'
+        $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '7777'
         $p = Start-Process $exe -PassThru
         Wait-HelperListening $p.Id "helper did not restart for the re-pair test"
-        $r = Invoke-Helper '/pair' '{"code":"777777"}' $null
+        $r = Invoke-Helper '/pair' '{"code":"7777"}' $null
         Assert ($r.code -eq 200) "fourth phone pairs while VLC runs with the settings already written"
         Assert ((($r.body | ConvertFrom-Json).vlcPending) -ne $true) "no false pending when vlcrc already has the settings"
         $r = Invoke-HelperGet '/vlc/setup-status' $token
@@ -524,8 +584,8 @@ try {
     Assert ($r.code -eq 404) "list outside the folder is refused (got $($r.code))"
     $r = Invoke-Helper '/movies/play' '{"path":"../Windows/win.ini"}' $token
     Assert ($r.code -eq 400) "play outside the folder is refused (got $($r.code))"
-    $r = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
-    Assert ($r.code -eq 200) "play starts VLC: $($r.body)"
+    $r = Play-Movie '{"path":"clip.mkv"}' $token 'first play'
+    Assert ($r.code -eq 200) "play starts VLC: $(Safe-Body $r.body)"
     $vlcUp = $false
     foreach ($i in 1..20) {
         if (Get-Process vlc -ErrorAction SilentlyContinue) { $vlcUp = $true; break }
@@ -544,11 +604,11 @@ try {
     Stop-HelperVerified
     $resumeJson = '{"' + ($clipFull -replace '\\','\\') + '":{"Position":120.0,"Length":600.0}}'
     Set-Content (Join-Path $resumeDir 'resume-places.json') $resumeJson -NoNewline
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '424242'
+    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the resume check"
-    $rResume = Invoke-Helper '/movies/play' '{"path":"clip.mkv"}' $token
-    Write-Host "resume play answer: $($rResume.code) $($rResume.body)"
+    $rResume = Play-Movie '{"path":"clip.mkv"}' $token 'resume ask after restart'
+    Write-Host "resume play answer: $($rResume.code) $(Safe-Body $rResume.body)"
     Assert ($rResume.body -match '"ask"') "a saved place survives a restart - play asks Resume / Start over"
     Assert ($rResume.body -match '"position":120') "the saved place's position comes back"
 
@@ -560,12 +620,24 @@ try {
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the end-to-end resume check"
-    $rLong = Invoke-Helper '/movies/play' '{"path":"long.mkv","resume":false}' $token
+    $rLong = Play-Movie '{"path":"long.mkv","resume":false}' $token 'long clip after restart'
     Assert ($rLong.code -eq 200) "end-to-end resume: the long clip starts (start-over arm)"
     $vlcUp = $false
     foreach ($i in 1..40) {
         if (Get-Process vlc -ErrorAction SilentlyContinue) { $vlcUp = $true; break }
         Start-Sleep -Milliseconds 500
+    }
+    if (-not $vlcUp) {
+        # Forensics before failing (no config content; the helper log carries no tokens): who is alive,
+        # what the helper logged, and whether Windows recorded a VLC crash.
+        Write-Host "== forensics: VLC did not appear after the long-clip play =="
+        Write-Host "play answer: $($rLong.code) $(Safe-Body $rLong.body)"
+        Get-Process | Where-Object { $_.ProcessName -match 'vlc|Zephyr' } | ForEach-Object { Write-Host "process: $($_.ProcessName) pid=$($_.Id) exited=$($_.HasExited)" }
+        $hl = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\helper.log'
+        if (Test-Path $hl) { Write-Host "== helper.log tail =="; Show-Log $hl 60 }
+        try { $ev = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-3) } -MaxEvents 40 -ErrorAction Stop | Where-Object { $_.Message -match 'vlc' })
+              Write-Host "Application events mentioning vlc in the last 3 min: $($ev.Count); providers/ids: $((($ev | ForEach-Object { "$($_.ProviderName)#$($_.Id)" }) | Select-Object -Unique) -join ', '); message text withheld" } catch { Write-Host "event log read failed ($($_.Exception.GetType().Name))" }
+        Write-Host "long clip present: $(Test-Path (Join-Path $movies 'long.mkv')) size=$((Get-Item (Join-Path $movies 'long.mkv') -ErrorAction SilentlyContinue).Length)"
     }
     Assert $vlcUp "end-to-end resume: VLC is running the long clip"
     # Seek past the 60s ask floor through VLC's own web interface. The password comes
@@ -591,8 +663,8 @@ try {
     Stop-HelperVerified
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart after the app's own save"
-    $rResume2 = Invoke-Helper '/movies/play' '{"path":"long.mkv"}' $token
-    Write-Host "end-to-end resume play answer: $($rResume2.code) $($rResume2.body)"
+    $rResume2 = Play-Movie '{"path":"long.mkv"}' $token 'saved-place ask after restart'
+    Write-Host "end-to-end resume play answer: $($rResume2.code) $(Safe-Body $rResume2.body)"
     Assert ($rResume2.body -match '"ask"') "end-to-end resume: the helper's own saved place survives a restart"
     Assert ($rResume2.body -match '"position":1[0-4][0-9]') "end-to-end resume: the saved position is the one VLC reported"
     Get-Process vlc -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -625,7 +697,7 @@ try {
     }
     $rLocked = Invoke-Helper '/pair' '{"code":"999999"}' $null
     Assert ($rLocked.code -eq 429) "the 6th wrong code is 429 (locked)"
-    $rLockedRight = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rLockedRight = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rLockedRight.code -eq 429) "even the right code is 429 while locked"
     Assert ($rLocked.body -match 'Pair again') "the lockout text says press Pair again, not restart"
 
@@ -640,7 +712,7 @@ try {
     $before = Get-Content $corruptPath -Raw
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not start on the corrupt-config run"
-    $rCorrupt = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rCorrupt = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rCorrupt.code -eq 503) "a broken store refuses pairing with 503 (got $($rCorrupt.code))"
     Assert ($rCorrupt.body -match 'detail') "the broken store answers with a written-for-him detail"
     Assert ((Get-Content $corruptPath -Raw) -eq $before) "the unreadable config is preserved byte-for-byte"
@@ -657,7 +729,7 @@ try {
     Set-Content $mixPath $mixText -NoNewline
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not start on the mixed-record run"
-    $rMix = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rMix = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rMix.code -eq 503) "one unreadable record fails the whole store closed (got $($rMix.code))"
     Assert ($rMix.body -match 'detail') "the mixed broken store answers with a written-for-him detail"
     Assert ((Get-Content $mixPath -Raw) -eq $mixText) "the mixed config is preserved byte-for-byte"
@@ -666,7 +738,7 @@ try {
     # Restore a good paired state for the takeover phase.
     $p = Start-Process $exe -PassThru
     Wait-HelperListening $p.Id "helper did not restart for the takeover phase"
-    $rPair2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rPair2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rPair2.code -eq 200) "re-pair after the corrupt-config phase"
     $token = ($rPair2.body | ConvertFrom-Json).token
 
@@ -742,32 +814,20 @@ try {
     Write-Host "== failed save keeps the code =="
     $cfgRo = Join-Path $env:LOCALAPPDATA 'Zephyr VLC Remote\config.json'
     Set-ItemProperty $cfgRo -Name IsReadOnly -Value $true
-    $rFs1 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rFs1 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rFs1.code -eq 503) "a failed save refuses the pair with 503 (got $($rFs1.code))"
     Assert ($rFs1.body -match 'detail') "the failed save answers with a written-for-him detail"
-    $rFs2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rFs2 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rFs2.code -eq 503) "the failed save did not spend the code (got $($rFs2.code))"
     Set-ItemProperty $cfgRo -Name IsReadOnly -Value $false
-    $rFs3 = Invoke-Helper '/pair' '{"code":"424242"}' $null
+    $rFs3 = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Assert ($rFs3.code -eq 200) "the same code pairs once the file is writable again"
     Assert ((($rFs3.body | ConvertFrom-Json).token).Length -eq 64) "the retried pair returns a real token"
 
-    # Round-6: an expired code answers 410 and a guess against it is told expired (it
-    # never spends a lockout try).
-    Write-Host "== expired code =="
-    Stop-HelperVerified
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = '1'
-    $p = Start-Process $exe -PassThru
-    Wait-HelperListening $p.Id "helper did not restart for the expired-code check"
-    $rEx1 = Invoke-Helper '/pair' '{"code":"424242"}' $null
-    Assert ($rEx1.code -eq 410) "an expired code is 410 (got $($rEx1.code): $($rEx1.body))"
-    $rEx2 = Invoke-Helper '/pair' '{"code":"424242"}' $null
-    Assert ($rEx2.code -eq 410) "a retried expired code stays 410"
-    $rEx3 = Invoke-Helper '/pair' '{"code":"999999"}' $null
-    Assert ($rEx3.code -eq 410) "a wrong guess on an expired code is told expired, not wrong (got $($rEx3.code): $($rEx3.body))"
-    $rEx4 = Invoke-Helper '/pair' '{"code":"424242"}' $null
-    Assert ($rEx4.code -eq 410) "the expired code still answers 410 after the guess - no lock was spent"
-    $env:ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST = $null
+    # The old "expired code answers 410" section was removed: the helper (BingeMote PC 1.9 baseline, 5ef5b68) has
+    # no pairing-code expiry (HelperWindow.TickStatus: "codes never expire"), no ZEPHYR_VLC_REMOTE_PAIR_CODE_EXPIRES_PAST
+    # handler exists anywhere under windows/, and no earlier CI run reached this section (the harness stopped
+    # at the long-clip assert first). Wrong-code lockout (5 tries, 429) and the pair-spent paths stay covered above.
 
     if ($script:assertCount -lt 80) { throw "only $script:assertCount assertions ran - the harness did not exercise the full flow" }
     Write-Host "HELPER E2E PASSED ($script:assertCount assertions)"

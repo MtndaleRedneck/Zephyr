@@ -32,13 +32,13 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 10.0.x
 
       - name: Publish helper exe (with the CI-only pairing hook)
-        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/out
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/out
 
       # The movies test launches real VLC; install it as its own step so a mirror hiccup is visible.
       - name: Install VLC (for the movies launch test)
@@ -47,41 +47,58 @@ jobs:
         run: choco install ffmpeg --no-progress -y
 
       - name: Publish the clean release exe (no CI hooks - the build that ships)
-        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
+        run: dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/ZephyrVlcRemote/release-out
 
       # The installer is built ONLY from the clean release build - the hooked test exe
       # (out/) never reaches an artifact. The e2e proves the installed build ignores
       # ZEPHYR_VLC_REMOTE_PAIR_CODE before any runtime test runs.
       - name: Build the installer from the clean release build
         run: |
-          choco install innosetup --no-progress -y
+          ./scripts/pinned_installer_toolchain.ps1
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCC.exe' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-iscc-sha256.txt").Trim()){throw 'ISCC binary drifted'}
+          if((Get-FileHash 'C:/Program Files (x86)/Inno Setup 6/ISCmplr.dll' -Algorithm SHA256).Hash-ne(Get-Content "$env:RUNNER_TEMP/zephyr-compiler-engine-sha256.txt").Trim()){throw 'Compiler engine drifted'}
           $v = Select-String -Path windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -Pattern '<Version>([^<]+)</Version>' | ForEach-Object { $_.Matches.Groups[1].Value -replace '\.0$','' }
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DMyAppVersion=$v" "/DMySourceDir=release-out" windows/ZephyrVlcRemote/installer.iss 2>&1 | Tee-Object "$env:RUNNER_TEMP/helper-iscc.log"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          if ((Get-Content "$env:RUNNER_TEMP/helper-iscc.log" -Raw) -notmatch 'Compiler engine version: Inno Setup 6\.6\.1(?:\D|$)') { throw "Actual successful compile banner is not 6.6.1" }
+          $helperSetup = @(Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe")
+          if ($helperSetup.Count -ne 1) { throw "expected exactly one helper installer, found $($helperSetup.Count)" }
+          (Get-FileHash $helperSetup[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant() | Set-Content "$env:RUNNER_TEMP/helper-installer-built-sha256.txt"
+          Write-Host "helper installer built: $($helperSetup[0].Name) sha256 $((Get-Content "$env:RUNNER_TEMP/helper-installer-built-sha256.txt" -Raw).Trim())"
 
+      - name: Prove helper installer bytes unchanged before upload
+        shell: pwsh
+        run: |
+          $f = @(Get-ChildItem "windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe")
+          if ($f.Count -ne 1) { throw "expected one helper installer, found $($f.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $f[0].FullName -Label 'helper-pre-upload' -Kind helper
+          Write-Host "helper installer hash log:"; Get-Content "$env:RUNNER_TEMP/installer-hash-log.txt"
       - name: Upload helper installer artifact
+        id: up_helper
         # The E2E legs install and pair-test this exact installer; keep it as a
         # run artifact so the tested build can be delivered without a rebuild.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Zephyr-VLC-Remote-installer
           path: windows/ZephyrVlcRemote/Output/ZephyrVLCRemote-PC-*.exe
           if-no-files-found: error
-
-
       - name: Render the helper window for layout review (CI only)
         run: |
-          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/shot
           $shots = @(
             @('window', 'window.png'),
-            @('pairing-expired', 'window-pairing-expired.png'),
             @('pairing', 'window-pairing.png'),
             @('broken-store', 'window-broken-store.png'),
             @('remove', 'dialog-remove.png'),
             @('remove-all', 'dialog-remove-all.png'),
             @('tray', 'tray-menu.png')
           )
+          # The broken-store note PNG is deleted ONCE, before the loop. Only the broken-store mode writes it,
+          # so no later mode may delete it.
+          Remove-Item windows/ZephyrVlcRemote/dialog-broken-store-note.png -Force -ErrorAction SilentlyContinue
           foreach ($shot in $shots) {
+            # Fresh outputs only: a stale PNG or sidecar from an earlier mode or run must never satisfy a check.
+            Remove-Item "windows/ZephyrVlcRemote/$($shot[1])", "windows/ZephyrVlcRemote/$($shot[1]).state.txt" -Force -ErrorAction SilentlyContinue
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$PWD\windows\ZephyrVlcRemote\$($shot[1])"
             $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = $shot[0]
             # pwsh does NOT wait for a GUI-subsystem exe started with &: the stale
@@ -92,15 +109,44 @@ jobs:
             $pngOk = $false
             foreach ($try in 1..40) { if (Test-Path "windows/ZephyrVlcRemote/$($shot[1])") { $pngOk = $true; break }; Start-Sleep -Milliseconds 250 }
             if (-not $pngOk) { Get-ChildItem windows/ZephyrVlcRemote -Filter *.png | Select-Object Name,Length; throw "helper window-shot $($shot[0]) wrote no PNG" }
+            # State proof, not file existence: the hook asserts state while it runs and records it in a sidecar.
+            $stateExpect = @{
+              'broken-store' = @('store_broken=1','note_png=dialog-broken-store-note.png','dialog_text_ok=1','pair_code_minted=0','file_unchanged=1','add_refused=1')
+              'remove'       = @('remove_dialog_text_ok=1','remove_cancel_kept=2','remove_cancel_reload=2','remove_confirm_left=1','remove_reload_left=1')
+              'remove-all'   = @('remove_all_dialog_text_ok=1','remove_all_cancel_kept=2','remove_all_cancel_reload=2','remove_all_confirm_left=0','remove_all_reload_left=0')
+              'tray'         = @('tray_items=Show Zephyr VLC Remote;Quit Zephyr VLC Remote','tray_icon_visible=1')
+            }
+            if ($stateExpect.ContainsKey($shot[0])) {
+              $sidecar = "windows/ZephyrVlcRemote/$($shot[1]).state.txt"
+              foreach ($try in 1..40) { if (Test-Path $sidecar) { break }; Start-Sleep -Milliseconds 250 }
+              if (-not (Test-Path $sidecar)) { throw "helper state shot $($shot[0]) wrote no state sidecar" }
+              $stateText = Get-Content $sidecar -Raw
+              foreach ($needle in $stateExpect[$shot[0]]) {
+                if ($stateText -cnotmatch ('(?m)^' + [regex]::Escape($needle) + '\r?$')) { throw "helper state shot $($shot[0]): expected state line '$needle' is missing" }
+              }
+              Write-Host "helper state shot $($shot[0]): $($stateExpect[$shot[0]].Count) state lines asserted"
+            }
           }
           Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT, Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+          # The state shots must be different pictures AND carry asserted state (above).
+          $baseHash = (Get-FileHash windows/ZephyrVlcRemote/window.png -Algorithm SHA256).Hash
+          $seenHashes = @{}
+          # window-broken-store.png is a truthful capture of the window in that state; the helper window has no
+          # on-window broken-store indicator, so it may equal the plain window and is NOT in this distinctness list.
+          foreach ($png in 'dialog-broken-store-note.png','dialog-remove.png','dialog-remove-all.png','tray-menu.png') {
+            $h = (Get-FileHash "windows/ZephyrVlcRemote/$png" -Algorithm SHA256).Hash
+            if ($h -eq $baseHash) { throw "$png is byte-identical to the plain window shot" }
+            if ($seenHashes.ContainsKey($h)) { throw "$png is byte-identical to $($seenHashes[$h])" }
+            $seenHashes[$h] = $png
+          }
+          Write-Host 'helper state shots: 4 state dialogs/menus, all distinct from the plain window and from each other'
 
       # Round-9 missing-captures: the Player permission dialogs with REAL interaction
       # state - hover/pressed from the real cursor parked over the primary button,
       # focus from real keyboard focus. Behavior proof for the N9-7 template fix.
       - name: Render the Player permission dialogs with real states (CI only)
         run: |
-          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrPlayer/shot
+          dotnet publish windows/ZephyrPlayer/ZephyrPlayer.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:CaptureHook=true" -o windows/ZephyrPlayer/shot
           foreach ($m in 'explain','hover','pressed','focus','note') {
             # Same GUI-wait fix as the helper loop above; on failure the hook's own
             # diag file names the exact step/exception.
@@ -116,15 +162,24 @@ jobs:
       # disposed-Build crash class, not just the capture path.
       - name: Production remove-dialog open/cancel/confirm proof (CI only)
         run: |
+          Remove-Item "$env:RUNNER_TEMP\remove-paths.png.state.txt" -Force -ErrorAction SilentlyContinue
+          $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT = "$env:RUNNER_TEMP\remove-paths.png"
           $env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE = "remove-paths"
           $rp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP\remove-paths.log"
           Get-Content "$env:RUNNER_TEMP\remove-paths.log" -ErrorAction SilentlyContinue
           if ($rp.ExitCode -ne 0) { throw "remove-dialog production paths exit $($rp.ExitCode)" }
-          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE
+          Remove-Item Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT_MODE, Env:ZEPHYR_VLC_REMOTE_WINDOW_SHOT
+          $side = "$env:RUNNER_TEMP\remove-paths.png.state.txt"
+          if (-not (Test-Path $side)) { throw 'remove-paths wrote no state sidecar: the production paths did not run' }
+          $st = Get-Content $side -Raw
+          foreach ($needle in 'remove_cancel_kept=2','remove_confirm_left=1','remove_reload_left=1','remove_all_cancel_kept=2','remove_all_confirm_left=0','remove_all_reload_left=0') {
+            if ($st -cnotmatch ('(?m)^' + [regex]::Escape($needle) + '\r?$')) { throw "remove-paths: expected state line '$needle' is missing" }
+          }
+          Write-Host 'remove-paths: cancel kept both phones, confirm removed exactly the chosen phones, and the saved file agrees'
 
       - name: Upload the window shot
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: Zephyr-VLC-Remote-window
           path: |
@@ -132,6 +187,7 @@ jobs:
             windows/ZephyrVlcRemote/dialog-*.png
             windows/ZephyrVlcRemote/tray-menu.png
             windows/ZephyrVlcRemote/window-diag.txt
+            windows/ZephyrVlcRemote/*.state.txt
             windows/ZephyrPlayer/dialog-*.png
             windows/ZephyrPlayer/dialog-*.diag.txt
           if-no-files-found: warn
@@ -151,10 +207,15 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: |
+          # The shipped helper exe uses single-file COMPRESSION, so a byte scan of it sees no literals (it would
+          # pass "clean" vacuously and fail "hooked"). The same source is therefore published twice more WITHOUT
+          # compression, once clean and once hooked, and those two uncompressed bundles are scanned.
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=false -o windows/ZephyrVlcRemote/proof-clean
+          dotnet publish windows/ZephyrVlcRemote/ZephyrVlcRemote.csproj -p:RestoreLockedMode=true -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=false "-p:CaptureHook=true" -o windows/ZephyrVlcRemote/proof-hooked
           $latin = [Text.Encoding]::GetEncoding(28591)
-          $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/release-out/ZephyrVlcRemote.exe"))
-          $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"))
-          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot') {
+          $clean = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/proof-clean/ZephyrVlcRemote.exe"))
+          $hooked = $latin.GetString([IO.File]::ReadAllBytes("windows/ZephyrVlcRemote/proof-hooked/ZephyrVlcRemote.exe"))
+          foreach ($needle in 'firewall-shape-ok','ZEPHYR_VLC_REMOTE_PAIR_CODE','window-shot','state-shot','zvr-state-','Shot Phone A') {
             $hookedHas = $false
             foreach ($enc in [Text.Encoding]::Unicode, [Text.Encoding]::ASCII) {
               $n = $latin.GetString($enc.GetBytes($needle))
@@ -167,7 +228,45 @@ jobs:
             if (-not $hookedHas) { throw "hooked exe is missing '$needle' in any encoding - wrong build published to out/" }
           }
           Write-Output 'compile-out proof: shipped exe has no CI hook strings; hooked exe has them.'
+      - name: Round-trip the uploaded helper installer and compare its bytes with the build
+        # Runs after all helper evidence and tests, even when one of them failed, so it can never skip them.
+        if: always() && steps.up_helper.outcome == 'success'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $id = '${{ steps.up_helper.outputs.artifact-id }}'
+          Write-Host "uploaded helper artifact id $id, zip digest ${{ steps.up_helper.outputs.artifact-digest }}"
+          if (-not $id) { throw 'helper upload step returned no artifact id' }
+          $dir = Join-Path $env:RUNNER_TEMP 'helper-roundtrip'
+          Remove-Item $dir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          # Download only: a 404 right after the upload can be artifact-availability lag (not proven), so retry a
+          # 404 up to 6 times, 10 s apart, logging every status. 401/403/other codes and any hash mismatch fail at once.
+          $got = $false
+          for ($try = 1; $try -le 6 -and -not $got; $try++) {
+            Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue
+            $r = Invoke-WebRequest -Uri "https://api.github.com/repos/${{ github.repository }}/actions/artifacts/$id/zip" -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' } -OutFile "$dir/a.zip" -UseBasicParsing -SkipHttpErrorCheck -PassThru
+            if (-not $r) { throw 'helper artifact download returned no response object' }
+            $code = [int]$r.StatusCode
+            Write-Host "helper artifact download attempt ${try}: HTTP $code"
+            if ($code -eq 200) { $got = $true }
+            elseif ($code -eq 404 -and $try -lt 6) { Remove-Item "$dir/a.zip" -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 10 }
+            else { throw "helper artifact download failed with HTTP $code on attempt $try" }
+          }
+          if (-not (Test-Path "$dir/a.zip") -or (Get-Item "$dir/a.zip").Length -lt 1000) { throw 'helper artifact download failed or is too small' }
+          Expand-Archive "$dir/a.zip" -DestinationPath "$dir/x"
+          $exe = @(Get-ChildItem "$dir/x" -Filter 'ZephyrVLCRemote-PC-*.exe')
+          if ($exe.Count -ne 1) { throw "expected one helper installer in the artifact, found $($exe.Count)" }
+          & scripts/assert_installer_sha.ps1 -Path $exe[0].FullName -Label 'helper-artifact-roundtrip' -Kind helper
 
+      - name: Upload helper installer hash log (after the final round trip)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Zephyr-VLC-Remote-installer-hash-log
+          path: ${{ runner.temp }}/installer-hash-log.txt
+          if-no-files-found: error
 
   windows:
     runs-on: windows-latest
