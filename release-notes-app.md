@@ -1,6 +1,10 @@
-## Zephyr 1.8.1
+## Zephyr 1.9.0
 
-The Accent color card now has eight colors. Burnt orange and teal are gone, and if you had picked one, the app goes back to orange.
+Pairing with Zephyr Player now follows the same screen as BingeMote, step by step, and the Accent color card has eight colors. Burnt orange and teal are gone, and if you had picked one, the app goes back to orange.
+
+**Improved**
+- Setting up Zephyr Player has the same install steps, PC search, code entry and result card as BingeMote, and Done appears once your PC confirms the pairing.
+- The "Phone can't connect?" tip is the same in both apps.
 
 **Fixed**
 - The Home play and pause buttons are back to your accent color and the original triangle shape.
