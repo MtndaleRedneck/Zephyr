@@ -103,7 +103,8 @@ for cls in $CLASSES; do
   adb shell am force-stop com.android.documentsui 2>/dev/null || true
   adb shell input keyevent KEYCODE_HOME
   adb logcat -c
-  adb shell am instrument -w -e class "$cls" -e wire_port "$WIRE_PORT" -e pair_code "$PAIR_CODE" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/$(basename $cls).txt"
+  RAWFLAG=""; case "$cls" in *PhonePicker*|*PhoneMovies*) RAWFLAG="-r";; esac  # raw status stream (status codes by test name) for the SAF classes only
+  adb shell am instrument -w $RAWFLAG -e class "$cls" -e wire_port "$WIRE_PORT" -e pair_code "$PAIR_CODE" "$TESTPKG/$RUNNER" 2>&1 | tee "instrument-results/$(basename $cls).txt"
   adb logcat -d -s SAFTest:I SAFTest:W >> "instrument-results/$(basename $cls).txt" 2>/dev/null || true
   sleep 2
   for f in $(adb shell ls /sdcard/zephyr-picker-*.png /sdcard/zephyr-picker-*.xml /sdcard/zephyr-autopair-*.png /sdcard/parity-saf-grant-*.png /sdcard/parity-storage-picker-*.png 2>/dev/null); do
