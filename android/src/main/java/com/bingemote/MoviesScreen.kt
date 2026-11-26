@@ -567,7 +567,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(
-            // Same bar as Home and Settings: 12dp above, 40dp row, 12dp below (64dp). Items below keep their old position via the 4dp spacer.
+            // Same bar as Home and Settings: 12dp above, 44dp row, 12dp below (68dp).
             Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {

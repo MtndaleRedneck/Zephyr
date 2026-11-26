@@ -129,7 +129,7 @@ fun SettingsScreen(
     Column(
         Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
     ) {
-        // Same bar as Home and Movies: 12dp above, 40dp row, 12dp below (64dp).
+        // Same bar as Home and Movies: 12dp above, 44dp row, 12dp below (68dp).
         Row(Modifier.heightIn(min = 44.dp).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             HeaderIconButton(onBack, haptics) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
             Spacer(Modifier.width(12.dp))
