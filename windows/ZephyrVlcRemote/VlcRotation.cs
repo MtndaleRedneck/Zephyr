@@ -208,18 +208,23 @@ internal static class VlcRotation
                 // reverse order leaves a window: an old-password VLC running at the read (disk
                 // healthy) exits and rewrites OLD before the process check. A process started
                 // after this check read the NEW password at startup, so no OLD rewrite can land
-                // between the check and the clear.
-                if (VlcSetup.VlcRunning()) return; // verify waits for quiet
+                // between the check and the clear. The clear is quiet-only, but a diverged disk
+                // must be re-opened and PERSISTED even while VLC runs: ApplyTargetUnderMutex
+                // persists the re-open before deferring the write, so no window or dialog claims
+                // the change while vlcrc holds the old password.
+                var running = VlcSetup.VlcRunning();
                 BeforeVerifyReadForTests?.Invoke();
                 var quiet = VlcSetup.ReadHealthy();
                 if (!quiet.ReadOk) return; // a read glitch is not divergence: keep the marker, retry next pass
                 if (quiet.HealthyFor(t))
                 {
+                    if (running) return; // verify waits for quiet; never clear over a live VLC
                     if (PersistFromPass(t, true, gen, setLanded: false, clearTarget: true, t))
                         Program.Log("VLC password change verified; the rotation is complete.");
                     return;
                 }
-                // Diverged under quiet: record (the grant re-arm edge) and repair through the one shared path.
+                // Diverged: record (the grant re-arm edge) and repair/re-open through the one
+                // shared path whether or not VLC is running - it defers the write until quiet.
                 RecordDivergence(quiet.Password);
                 if (ApplyTargetUnderMutex(t, landed, gen, quiet) == ApplyOutcome.Landed)
                     Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
