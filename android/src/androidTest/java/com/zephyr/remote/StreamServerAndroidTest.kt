@@ -49,7 +49,9 @@ class StreamServerAndroidTest {
     private fun get(url: String, range: String? = null): Triple<Int, Map<String, List<String>>, ByteArray> {
         val c = URL(url).openConnection() as HttpURLConnection
         if (range != null) c.setRequestProperty("Range", range)
-        val code = c.responseCode
+        val code = try { c.responseCode } catch (e: java.io.IOException) {
+            throw java.io.IOException("${e.message} [admission rejects: peerCap=${server.rejectedPeerCap.get()} noPermit=${server.rejectedNoPermit.get()} openStreams=${server.openStreams.get()}]", e)
+        }
         val body = (if (code in 200..299) c.inputStream else c.errorStream)?.use { it.readBytes() } ?: ByteArray(0)
         c.disconnect()
         return Triple(code, c.headerFields, body)
@@ -169,6 +171,101 @@ class StreamServerAndroidTest {
             android.util.Log.i("ZephyrAudit", "FD_COUNT before=$beforeFds after=$afterFds allowance=10")
             assertTrue("per-request FDs retained: before=$beforeFds after=$afterFds", afterFds <= beforeFds + 10)
         } finally { sub.delete() }
+    }
+
+    /** Waits until open streams and BOTH per-peer maps are empty; then no slot leaked or went negative. */
+    private fun awaitAdmissionDrained() {
+        val until = android.os.SystemClock.elapsedRealtime() + 15_000
+        while ((server.openStreams.get() > 0 || server.peerCountsForTest() > 0) && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(20)
+        assertEquals("open streams", 0, server.openStreams.get())
+        assertEquals("both per-peer maps empty", 0, server.peerCountsForTest())
+        assertEquals("no double or missing release", 0, server.peerUnderflow.get())
+    }
+
+    /** One raw request on a fresh socket (optionally bound to a source IP); returns the whole reply. */
+    private fun raw(host: String, port: Int, path: String, from: String? = null): String =
+        java.net.Socket().use { s ->
+            if (from != null) s.bind(java.net.InetSocketAddress(InetAddress.getByName(from), 0))
+            s.connect(java.net.InetSocketAddress(host, port))
+            s.soTimeout = 10_000
+            s.getOutputStream().write("GET $path HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())
+            s.getInputStream().readBytes().toString(Charsets.ISO_8859_1)
+        }
+
+    @Test
+    fun workersHeldAtExit_ninthRefused503_otherIpServed_countersDrain() {
+        // Deterministic: the exit gate holds 127.0.0.1 workers AFTER logical release (client socket
+        // closed, open slot freed) and BEFORE the real-exit release, which is the exact state the
+        // worker cap exists for. Requests are complete, real, served requests.
+        val gate = java.util.concurrent.CountDownLatch(1)
+        server.testExitGate = { peer -> if (peer == "127.0.0.1") while (!gate.await(50, java.util.concurrent.TimeUnit.MILLISECONDS)) { } }
+        val u = URL(movieUrl)
+        try {
+            repeat(8) { i -> assertEquals("request $i", 200, get(movieUrl).first) }
+            val until = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (server.peerOpenForTest("127.0.0.1") > 0 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(10)
+            assertEquals("open slots freed at socket close", 0, server.peerOpenForTest("127.0.0.1"))
+            assertEquals("8 workers held", 8, server.peerWorkersForTest("127.0.0.1"))
+            repeat(4) { i ->
+                // The client sends its full request before reading: it must see the 503, not a reset.
+                val head = raw(u.host, u.port, u.path)
+                assertTrue("refusal $i must be 503: $head", head.startsWith("HTTP/1.1 503") && head.contains("Retry-After: 1"))
+            }
+            assertEquals("worker-cap refusals", 4, server.rejectedWorkerCap.get())
+            assertEquals(0, server.rejectedPeerCap.get())
+            assertEquals(0, server.rejectedNoPermit.get())
+            assertEquals("refusals took no slot", 8, server.peerWorkersForTest("127.0.0.1"))
+            val other = raw(u.host, u.port, u.path, from = "127.0.0.2")
+            assertTrue("other IP gets a real 200: ${other.take(40)}", other.startsWith("HTTP/1.1 200"))
+            assertEquals("other IP took no refusal", 4, server.rejectedWorkerCap.get())
+        } finally { gate.countDown() }
+        awaitAdmissionDrained()
+    }
+
+    @Test
+    fun stopWithQueuedRefusals_closesEveryQueuedSocketPromptly() {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        server.testExitGate = { peer -> if (peer == "127.0.0.1") while (!gate.await(50, java.util.concurrent.TimeUnit.MILLISECONDS)) { } }
+        val rejectGate = java.util.concurrent.CountDownLatch(1)
+        server.testRejectGate = rejectGate // the refusal thread is busy, so refusals really queue
+        val u = URL(movieUrl)
+        val socks = ArrayList<java.net.Socket>()
+        try {
+            repeat(8) { assertEquals(200, get(movieUrl).first) } // 8 workers held: every further connection is refused
+            repeat(6) { socks.add(java.net.Socket(u.host, u.port).also { it.soTimeout = 5_000 }) }
+            val until = android.os.SystemClock.elapsedRealtime() + 5_000
+            while (server.pendingRejectsForTest() < 6 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(10)
+            assertEquals("six refusals queued behind the busy rejecter", 6, server.pendingRejectsForTest())
+            val t0 = android.os.SystemClock.elapsedRealtime()
+            server.stop()
+            assertEquals("stop closed every pending refusal socket", 0, server.pendingRejectsForTest())
+            socks.forEach { s ->
+                try { assertEquals("closed without a body", -1, s.getInputStream().read()) }
+                catch (e: java.net.SocketTimeoutException) { org.junit.Assert.fail("socket still open after stop: queued refusal leaked") }
+                catch (e: java.io.IOException) { /* reset by close: closed */ }
+            }
+            assertTrue("stop and all sockets closed within 2 s", android.os.SystemClock.elapsedRealtime() - t0 < 2_000)
+        } finally { rejectGate.countDown(); gate.countDown(); socks.forEach { runCatching { it.close() } } }
+    }
+
+    @Test
+    fun peerCapRefusal_is503_malformedRecovers_countersBalance() {
+        val u = URL(movieUrl)
+        val open = (1..4).map { java.net.Socket(u.host, u.port) }
+        try {
+            Thread.sleep(250)
+            val fifth = java.net.Socket(u.host, u.port)
+            fifth.soTimeout = 3_000
+            fifth.getOutputStream().write("GET ${u.path} HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())
+            val head = fifth.getInputStream().readBytes().toString(Charsets.ISO_8859_1)
+            fifth.close()
+            assertTrue("503 expected: $head", head.startsWith("HTTP/1.1 503") && head.contains("Retry-After: 1"))
+            assertEquals(1, server.rejectedPeerCap.get())
+        } finally { open.forEach { it.close() } }
+        // Malformed request on a fresh connection, then a good one: slots must have been returned.
+        java.net.Socket(u.host, u.port).use { s -> s.soTimeout = 5_000; s.getOutputStream().write("\u0000garbage\r\n\r\n".toByteArray()); runCatching { s.getInputStream().readBytes() } }
+        repeat(10) { assertEquals(200, get(movieUrl).first) }
+        awaitAdmissionDrained()
     }
 
     @Test
@@ -593,6 +690,59 @@ class StreamServerAndroidTest {
             assertArrayEquals(bytes, body)
         } finally {
             server.stop(); writers.forEach { runCatching { it.close() } }; stalled.join(5000)
+        }
+    }
+
+    /** P1: the probe's provider close BLOCKS (a parked SAF/FUSE close). The deadline must still abandon the REQUEST
+     *  (socket closed, openStreams 0) while the close is parked, the copy must never start, and the budget permit
+     *  stays held until the close returns, then returns exactly once (baseline-relative, never baseline+1).
+     *  Logical abandonment only: the blocked close thread is NOT physically finished by the server. */
+    @Test fun blockedProbeClose_requestAbandonedLogically_copyNeverStarts_permitReturnsOnceAfterClose() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val writers = java.util.concurrent.CopyOnWriteArrayList<android.os.ParcelFileDescriptor>()
+        val opened = java.util.concurrent.atomic.AtomicInteger()
+        val closeEntered = java.util.concurrent.CountDownLatch(1)
+        val releaseClose = java.util.concurrent.CountDownLatch(1)
+        server.stop()
+        val baseline = StreamServer.providerBudget.availablePermits()
+        server = StreamServer(context, InetAddress.getByName("127.0.0.1"), 0, openDescriptor = { _, _ ->
+            opened.incrementAndGet()
+            val p = android.os.ParcelFileDescriptor.createPipe().also { writers.add(it[1]) }[0]
+            object : android.os.ParcelFileDescriptor(p) {
+                override fun close() {
+                    closeEntered.countDown()
+                    releaseClose.await(30, java.util.concurrent.TimeUnit.SECONDS)
+                    super.close()
+                }
+            }
+        })
+        server.providerDeadlineMs = 1000
+        val handlerExited = java.util.concurrent.CountDownLatch(1)
+        server.testExitGate = { _ -> handlerExited.countDown() } // runs when the request handler has returned
+        server.start()
+        val url = server.addMovie(Uri.parse("content://synthetic-pipe/blockedclose"), "blocked.mkv")
+        val sock = java.net.Socket()
+        try {
+            val u = URL(url)
+            sock.connect(java.net.InetSocketAddress(u.host, u.port))
+            sock.soTimeout = 30_000
+            sock.getOutputStream().write("GET ${u.path} HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray())
+            assertTrue("probe close entered", closeEntered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            val until = android.os.SystemClock.elapsedRealtime() + 15_000
+            while (server.openStreams.get() > 0 && android.os.SystemClock.elapsedRealtime() < until) Thread.sleep(50)
+            assertEquals("request abandoned while the close is still parked", 0, server.openStreams.get())
+            assertEquals("server closed the client socket", -1, sock.getInputStream().read())
+            assertEquals("the copy never started", 1, opened.get())
+            assertEquals("permit held while the close is parked", baseline - 1, StreamServer.providerBudget.availablePermits())
+            releaseClose.countDown()
+            val settle = android.os.SystemClock.elapsedRealtime() + 10_000
+            while (StreamServer.providerBudget.availablePermits() < baseline && android.os.SystemClock.elapsedRealtime() < settle) Thread.sleep(50)
+            assertTrue("the request handler returned after the close (signal, not a sleep)", handlerExited.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertEquals("permit returned exactly once after the close returned", baseline, StreamServer.providerBudget.availablePermits())
+            assertEquals("the copy never started (checked AFTER the close returned, so the isActive check after the probe close is what stops it)", 1, opened.get())
+            assertEquals("still no open request", 0, server.openStreams.get())
+        } finally {
+            releaseClose.countDown(); server.stop(); writers.forEach { runCatching { it.close() } }; runCatching { sock.close() }
         }
     }
 }

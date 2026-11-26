@@ -45,21 +45,39 @@ object StreamCoordinator {
         val conn = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
                 val b = binder as? StreamService.Binder
-                    ?: return cont.resumeWithException(IllegalStateException("bad binder"))
-                val server = b.server()
-                if (server == null) {
-                    // Service started, server not up yet (Wi-Fi lookup in flight):
-                    // the Movies wiring retries on the main thread; fail fast here.
-                    cont.resumeWithException(IllegalStateException("server not ready"))
-                } else {
-                    cont.resume(Bound(server, this))
+                    ?: return failAndUnbind(IllegalStateException("bad binder"))
+                // The bind can complete before onStartCommand has created the server (cold
+                // start): re-check with posted callbacks (never blocking the main thread),
+                // then give up with "server not ready" (also what no Wi-Fi looks like).
+                val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                val conn = this
+                var tries = 0
+                fun check() {
+                    if (!cont.isActive) return
+                    val server = b.server()
+                    if (server != null) cont.resume(Bound(server, conn))
+                    else if (b.refused()) failAndUnbind(IllegalStateException("foreground start refused")) // this instance is stopping: fail now, not after the 10 s wait
+                    else if (++tries >= 100) failAndUnbind(IllegalStateException("server not ready"))
+                    else handler.postDelayed({ check() }, 100)
                 }
+                check()
+            }
+            // Every failure path drops the connection, so a failed bind never keeps the service alive.
+            fun failAndUnbind(e: Exception) {
+                runCatching { app.unbindService(this) }
+                if (cont.isActive) cont.resumeWithException(e)
             }
             override fun onServiceDisconnected(name: ComponentName?) {}
         }
         val intent = Intent(app, StreamService::class.java)
-        app.startForegroundService(intent)
+        // A plain start, not startForegroundService: the service promotes itself in onCreate, and if that is refused it
+        // stops WITHOUT having owed the platform a startForeground (a stop while still owing one crashes the process;
+        // seen on API 34 in run 45768611736). A start the platform rejects fails here, before anything is bound.
+        try { app.startService(intent) }
+        catch (e: IllegalStateException) { if (cont.isActive) cont.resumeWithException(IllegalStateException("stream service could not start")); return@suspendCancellableCoroutine }
         if (!app.bindService(intent, conn, Context.BIND_AUTO_CREATE)) {
+            runCatching { app.unbindService(conn) }
+            app.stopService(intent)
             cont.resumeWithException(IllegalStateException("stream service bind failed"))
         }
         cont.invokeOnCancellation { runCatching { app.unbindService(conn) } }

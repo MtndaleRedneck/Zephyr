@@ -36,10 +36,14 @@ class StreamService : Service() {
 
     inner class Binder : android.os.Binder() {
         fun server(): StreamServer? = this@StreamService.server
+        /** True when THIS instance's foreground start was refused; the instance is stopping and must not serve. */
+        fun refused(): Boolean = this@StreamService.fgRefused
     }
     private val binder = Binder()
 
     private var server: StreamServer? = null
+    /** Instance-local (no static state to reset): the foreground start was refused in onCreate. */
+    @Volatile private var fgRefused = false
     private var wifiLock: WifiManager.WifiLock? = null
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile private var watchdogStop = false
@@ -65,7 +69,10 @@ class StreamService : Service() {
             .addAction(0, "Stop", stopIntent)
             .setOngoing(true)
             .build()
-        startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) // type under verification
+        try {
+            if (com.bingemote.BuildConfig.DEBUG && testForegroundRefusal) throw IllegalStateException("test: foreground start refused")
+            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) // type under verification
+        } catch (e: Exception) { android.util.Log.e("ZephyrStream", "startForeground refused, stopping service", e); fgRefused = true; ev("created-refused"); stopSelf() } // foreground start refused: end the service instead of crashing
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -74,7 +81,10 @@ class StreamService : Service() {
         // with servedAny false and no target, so the watchdog could never arm (N1).
         // NOT_STICKY keeps every stop rule for REAL streams exactly as settled; it
         // only ends the zero-state zombie.
+        ev("start-command")
         if (intent == null) { stopSelf(); return START_NOT_STICKY }
+        // Refused foreground start: never build the server, locks or watchdog for this instance.
+        if (fgRefused) { ev("start-guard-refused"); stopSelf(); return START_NOT_STICKY }
         if (intent.action == ACTION_STOP || server != null) {
             if (intent.action == ACTION_STOP) stopSelf()
             return START_NOT_STICKY
@@ -85,8 +95,9 @@ class StreamService : Service() {
         // (hooked up when the Movies screen wiring lands); subtitles get /sub/<n> URLs.
         StreamCoordinator.servedReceivers.clear()
         StreamCoordinator.servedTarget = null
-        srv.start()
+        try { srv.start() } catch (e: Exception) { runCatching { srv.stop() }; stopSelf(); return START_NOT_STICKY }
         server = srv
+        ev("server-built")
 
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         wifiLock = if (Build.VERSION.SDK_INT >= 29)
@@ -97,8 +108,10 @@ class StreamService : Service() {
         wifiLock?.acquire()
         wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "zephyr:stream")
-            .also { it.acquire() }
+            .also { it.acquire(6 * 60 * 60 * 1000L) } // safety net; stop paths release it sooner
+        ev("locks-acquired")
         startWatchdog(srv)
+        ev("watchdog-started")
         return START_NOT_STICKY
     }
 
@@ -144,6 +157,7 @@ class StreamService : Service() {
         runCatching { wifiLock?.release() }
         runCatching { wakeLock?.release() }
         // StreamServer drains owned provider/copy workers before deleting its cache.
+        ev("destroyed")
         super.onDestroy()
     }
 
@@ -161,5 +175,10 @@ class StreamService : Service() {
         const val CHANNEL = "stream"
         const val NOTIF_ID = 4101
         const val ACTION_STOP = "com.zephyr.remote.STOP_STREAM"
+        /** Debug-build test seam ONLY (BuildConfig.DEBUG gate at the use): the instrumented test sets and resets it. Not production state. */
+        @Volatile internal var testForegroundRefusal = false
+        /** Debug-build test seam ONLY: lifecycle events so a test can prove what a refused instance did NOT build. */
+        internal val testEvents = java.util.concurrent.CopyOnWriteArrayList<String>()
+        internal fun ev(s: String) { if (com.bingemote.BuildConfig.DEBUG) testEvents.add(s) }
     }
 }

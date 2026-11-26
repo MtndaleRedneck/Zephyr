@@ -48,6 +48,20 @@ shoot movies-phone
 shoot movies
 shoot main-connected main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok
 shoot helper-code-entry setup --ez pairdemo true --ez pairdemoselect true
+# Same setup page opened from Settings (Cancel button present): the title must not squeeze Cancel into a column.
+shoot setup-cancel setup --ez pairdemo true --ez setupcancel true
+shoot banner-unreachable main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-g
+shoot banner-helper-note main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-e
+shoot banner-unpaired-note main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-unpaired
+# Settings scrolled to the Feedback card so its forward arrow is in frame.
+adb shell am force-stop $PKG
+adb shell am start -n $PKG/com.bingemote.MainActivity --es screen settings >/dev/null
+sleep 8
+for i in 1 2 3 4; do adb shell input swipe 540 1900 540 700 300; sleep 1; done
+sleep 2
+adb exec-out screencap -p > screenshots/settings-feedback-card.png
+shoot feedback feedback
+shoot update-offer update
 adb shell wm size reset
 adb shell wm density reset
 

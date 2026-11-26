@@ -7,13 +7,15 @@ plugins {
 android {
     namespace = "com.bingemote"
     compileSdk = 35
+    // -PsignedUpgradeTest: build the instrumentation APK against the signed release build (CI signed-upgrade job only).
+    testBuildType = if (providers.gradleProperty("signedUpgradeTest").isPresent) "release" else "debug"
 
     defaultConfig {
         applicationId = "com.zephyr.remote"
         minSdk = 31
         targetSdk = 34
-        versionCode = 26
-        versionName = "1.5.0"
+        versionCode = 28
+        versionName = "1.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

@@ -30,10 +30,11 @@ internal class SelectedPlayback(private val store: Store) {
         else ZephyrClient.resume(host, port, secret)
     }
     fun skip(delta: Int) {
+        // VLC has a real relative seek: no status read to wait on or fail with.
+        if (source == Source.VLC) { checkTarget(); Vlc.skip(host, port, secret, delta); return }
         val st = status(); checkTarget()
         // Length 0/unknown must not pin the target to 0 (a jump to the start).
         val next = (st.timeSec + delta).let { if (st.lengthSec > 0) it.coerceIn(0, st.lengthSec) else it.coerceAtLeast(0) }
-        if (source == Source.ZEPHYR) ZephyrClient.seek(host, port, secret, next)
-        else Vlc.seekTo(host, port, secret, next)
+        ZephyrClient.seek(host, port, secret, next)
     }
 }

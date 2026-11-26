@@ -77,12 +77,12 @@ class ModernizationUiTest {
         // Swipe until the top section is really gone: a fixed swipe count raced slow
         // emulator frames (run 45349472226), which is a test gap, not a product signal.
         val scrollDeadline = System.currentTimeMillis() + 15000
-        while (device.hasObject(By.text("Connected Sources")) && System.currentTimeMillis() < scrollDeadline) {
+        while (FreshUi.has("Connected Sources") && System.currentTimeMillis() < scrollDeadline) {
             device.swipe(device.displayWidth/2, device.displayHeight*4/5, device.displayWidth/2, device.displayHeight/4, 25)
             Thread.sleep(300)
         }
-        if (device.hasObject(By.text("Connected Sources"))) Triage.tree("settings never scrolled")
-        assertFalse("test must really scroll away from the top", device.hasObject(By.text("Connected Sources")))
+        if (FreshUi.has("Connected Sources")) { Triage.tree("settings never scrolled"); Triage.freshProbe("settings scroll", "Feel") }
+        assertFalse("test must really scroll away from the top", FreshUi.has("Connected Sources"))
         device.pressBack()
         device.wait(Until.findObject(By.desc("Settings")), 10000).click()
         assertTrue("Settings must reopen at the top", device.wait(Until.hasObject(By.text("Connected Sources")), 10000))

@@ -14,6 +14,17 @@ import java.util.concurrent.TimeUnit
 /** Drive the real Compose code field, actual HTTP pairing and secure persistence.
  * A green protocol test alone does not prove sixth-digit submission. */
 class ZephyrAutoPairTest {
+    /** The pairing screen is a scrolling column: a node can exist below the fold. Wait, then scroll up to 4 times, waiting after each. */
+    private fun findScrolling(device: UiDevice, sel: androidx.test.uiautomator.BySelector, firstWaitMs: Long): androidx.test.uiautomator.UiObject2? {
+        var node = device.wait(Until.findObject(sel), firstWaitMs)
+        var swipes = 0
+        while (node == null && swipes++ < 4) {
+            device.swipe(device.displayWidth * 19 / 20, device.displayHeight * 3 / 4, device.displayWidth * 19 / 20, device.displayHeight / 4, 20)
+            node = device.wait(Until.findObject(sel), 1500)
+        }
+        return node
+    }
+
     @Test fun sixthDigitPairsExactlyOnceWithoutButtonTap() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
@@ -31,7 +42,14 @@ class ZephyrAutoPairTest {
             context.startActivity(Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra("screen", "settings-pair-2"))
-            assertNotNull("pair form absent", device.wait(Until.findObject(By.text("6-digit code")), 15000))
+            // BingeMote flow: choose the PC first (typed address -> "Use this address"), then the code card appears.
+            val addr = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000)
+            assertNotNull("address field absent", addr)
+            addr!!.text = "127.0.0.1:${server.port}"
+            val use = device.wait(Until.findObject(By.text("Use this address")), 5000)
+            assertNotNull("Use this address missing", use)
+            use!!.click()
+            assertNotNull("code field absent", findScrolling(device, By.text("Code from your PC"), 8000))
             val fields = device.findObjects(By.clazz("android.widget.EditText"))
             assertEquals("address and code fields expected", 2, fields.size)
             fields[1].text = "12345"
@@ -46,7 +64,19 @@ class ZephyrAutoPairTest {
             val deadline = System.currentTimeMillis() + 8000
             while (store.zephyrToken != "autopair-test-token" && System.currentTimeMillis() < deadline) Thread.sleep(100)
             assertEquals("successful token not saved", "autopair-test-token", store.zephyrToken)
-            assertNotNull("successful pairing did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
+            // BingeMote flow: the success card sits under the form with Continue; it does not jump away.
+            // The card sits under the form in a scrolling column: scroll down until it is on screen.
+            var card = device.wait(Until.findObject(By.textContains("Paired with")), 3000)
+            var swipes = 0
+            while (card == null && swipes++ < 4) {
+                device.swipe(device.displayWidth * 19 / 20, device.displayHeight * 3 / 4, device.displayWidth * 19 / 20, device.displayHeight / 4, 20)
+                card = device.wait(Until.findObject(By.textContains("Paired with")), 1500)
+            }
+            assertNotNull("success card did not appear", card)
+            val cont = findScrolling(device, By.text("Continue"), 3000)
+            assertNotNull("Continue button missing", cont)
+            cont!!.click()
+            assertNotNull("Continue did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
             device.executeShellCommand("screencap -p /sdcard/zephyr-autopair-success.png")
             Thread.sleep(700)
             assertEquals("one entry must create exactly one pairing request", 1, server.requestCount)

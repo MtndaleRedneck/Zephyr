@@ -75,13 +75,15 @@ class SubtitleSheetTest {
         assertTrue(device.hasObject(By.text("English")))
         // After the drop: everything below Off must go, including the stale tracks
         // the last status still carries.
-        assertTrue(device.wait(Until.gone(By.text("Movie.en")), 30000))
+        val dropped = FreshUi.waitGone("Movie.en", 30000)
+        if (!dropped) { Triage.tree("sheet still shows Movie.en after connection drop"); Triage.freshProbe("sheet drop", "Movie.en") }
+        assertTrue(dropped)
         Thread.sleep(1000)
         assertTrue(device.hasObject(By.text("Off")))
-        assertFalse(device.hasObject(By.text("Movie.en")))
-        assertFalse(device.hasObject(By.text("Movie.es")))
-        assertFalse(device.hasObject(By.text("English")))
-        assertFalse(device.hasObject(By.text("Spanish")))
+        assertFalse(FreshUi.has("Movie.en"))
+        assertFalse(FreshUi.has("Movie.es"))
+        assertFalse(FreshUi.has("English"))
+        assertFalse(FreshUi.has("Spanish"))
         assertFalse(device.hasObject(By.textContains("Folder subtitles")))
         assertFalse(device.hasObject(By.text("Retry")))
         assertFalse(device.hasObject(By.text("Checking subtitle files...")))

@@ -15,9 +15,17 @@ object StreamTarget {
     fun play(s: Store, url: String, subs: List<String>) = play(capture(s), url, subs)
     fun play(target: Target, url: String, subs: List<String>) {
         // Capture ownership even if the final response is lost. UNKNOWN never authorizes stop.
-        StreamCoordinator.servedReceivers.add(target)
+        val addedReceiver = StreamCoordinator.servedReceivers.add(target)
+        val previousServed = StreamCoordinator.servedTarget
         StreamCoordinator.servedTarget = if (target.source == Source.ZEPHYR) StreamCoordinator.ServedTarget.ZEPHYR else StreamCoordinator.ServedTarget.VLC
-        if (target.source == Source.ZEPHYR) ZephyrClient.play(target.host, target.port, target.credential, url, subs)
-        else Vlc.playUri(target.host, target.port, target.credential, url, subs)
+        if (target.source == Source.ZEPHYR) {
+            try { ZephyrClient.play(target.host, target.port, target.credential, url, subs) }
+            catch (e: ZephyrClient.ScreenWoke) {
+                // Nothing started: undo only what THIS call added, so an earlier real stream keeps its watchdog state.
+                if (addedReceiver) StreamCoordinator.servedReceivers.remove(target)
+                StreamCoordinator.servedTarget = previousServed
+                throw e
+            }
+        } else Vlc.playUri(target.host, target.port, target.credential, url, subs)
     }
 }

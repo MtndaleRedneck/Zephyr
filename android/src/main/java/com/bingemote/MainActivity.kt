@@ -142,10 +142,22 @@ class MainActivity : ComponentActivity() {
             // re-entered at the top (each navigation into it resets settingsScroll).
             val settingsScroll = rememberScrollState(initial = if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) Int.MAX_VALUE else 0)
             val navigationScope = rememberCoroutineScope()
-            fun openSettings() {
+            // Pairing opened from the Home "not paired" card returns to Home, not to Settings.
+            var pairFromHome by remember { mutableStateOf(false) }
+            // Any way back to Home or Settings (system Back included) clears the pairing-origin flag.
+            LaunchedEffect(current.value) { if (current.value == "main" || current.value == "settings") pairFromHome = false }
+            fun openSettings(resetScroll: Boolean = false) {
                 navigationScope.launch {
-                    settingsScroll.scrollTo(0)
+                    if (resetScroll) settingsScroll.scrollTo(0)
                     current.value = "settings"
+                }
+            }
+            // Fresh entry into a sub-page starts at the top (same pattern as openSettings(resetScroll)). Back to Settings is
+            // unchanged: it keeps its position (openSettings() without reset).
+            fun openFromTop(route: String, scroll: androidx.compose.foundation.ScrollState) {
+                navigationScope.launch {
+                    scroll.scrollTo(0)
+                    current.value = route
                 }
             }
             if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) {
@@ -164,8 +176,8 @@ class MainActivity : ComponentActivity() {
                     "setup" -> SetupScreen(
                         remote,
                         setupScroll,
-                        onDone = { store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
-                        onCancel = if (store.setupDone) ({ openSettings() }) else null,
+                        onDone = { pairFromHome = false; store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
+                        onCancel = if (store.setupDone || (BuildConfig.DEBUG && intent.hasExtra("setupcancel"))) ({ if (pairFromHome) { pairFromHome = false; current.value = "main" } else openSettings() }) else null,
                         demoVlcPending = BuildConfig.DEBUG && intent.hasExtra("vlcpending"),
                         demoPair = BuildConfig.DEBUG && intent.hasExtra("pairdemo"),
                         demoPreselect = BuildConfig.DEBUG && intent.hasExtra("pairdemoselect"),
@@ -177,7 +189,7 @@ class MainActivity : ComponentActivity() {
                         remote,
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
-                        onSettings = { openSettings() },
+                        onSettings = { openSettings(resetScroll = true) },
                         startSubtitlesOpen = true,
                     )
                     "movies" -> MoviesScreen(remote, moviesListState, onBack = { current.value = "main" }, demoResumeAsk = BuildConfig.DEBUG && intent.hasExtra("resumeask"))
@@ -190,8 +202,8 @@ class MainActivity : ComponentActivity() {
                         settingsScroll,
                         pickerListState,
                         onBack = { current.value = "main" },
-                        onRepair = { current.value = "yourpc" },
-                        onFeedback = { current.value = "feedback" },
+                        onRepair = { openFromTop("yourpc", yourpcScroll) },
+                        onFeedback = { openFromTop("feedback", feedbackScroll) },
                         onZephyrSetup = { current.value = "setup-zephyr" },
                     )
                     // Zephyr Player pairing is its OWN screen: separate
@@ -204,9 +216,10 @@ class MainActivity : ComponentActivity() {
                                 store.selectedSource = Source.ZEPHYR
                                 remote.start()
                                 current.value = "main"
-                            } else current.value = "settings"
+                            } else if (pairFromHome) { pairFromHome = false; current.value = "main" }
+                            else current.value = "settings"
                         },
-                        onCancel = { current.value = "settings" },
+                        onCancel = { if (pairFromHome) { pairFromHome = false; current.value = "main" } else current.value = "settings" },
                     )
                     // CI screenshot state (debug builds only): the Zephyr setup screen,
                     // captured under the historical "settings-pair" shot name.
@@ -240,14 +253,20 @@ class MainActivity : ComponentActivity() {
                         remote,
                         yourpcScroll,
                         onBack = { openSettings() },
-                        onPairAgain = { current.value = "setup" },
+                        onPairAgain = { openFromTop("setup", setupScroll) },
                     )
                     "feedback" -> FeedbackScreen(remote, feedbackScroll) { openSettings() }
                     else -> MainScreen(
                         remote,
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
-                        onSettings = { openSettings() },
+                        onSettings = { openSettings(resetScroll = true) },
+                        // The unpaired card goes straight to the selected source's pairing screen.
+                        onPairSelected = {
+                            pairFromHome = true
+                            if (store.selectedSource == Source.ZEPHYR) current.value = "setup-zephyr"
+                            else openFromTop("setup", setupScroll)
+                        },
                     )
                 }
                 UpdateHost(store)

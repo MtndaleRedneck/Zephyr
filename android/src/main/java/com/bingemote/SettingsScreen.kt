@@ -127,15 +127,11 @@ fun SettingsScreen(
         return
     }
     Column(
-        Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(16.dp),
+        Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            HeaderIconButton(onBack, haptics) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
-            Spacer(Modifier.width(12.dp))
-            Text("Settings", color = TextC, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        }
+        // Same bar as Home and Movies: 12dp above, 44dp row, 12dp below (68dp).
+        ScreenHeader("Settings", hapticsOn = haptics, edge = 0.dp, onBack = onBack)
         if (store.secureStoreBroken) {
-            Spacer(Modifier.height(10.dp))
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
                     "Your saved sign-ins couldn't be opened this time (secure storage problem). Nothing was deleted. Close and reopen the app; new pairings can't be saved until this clears.",
@@ -143,7 +139,7 @@ fun SettingsScreen(
                 )
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 6.dp))
         BackHandler { onBack() }
 
         // "Connected Sources" card: the orange source labels ARE the
@@ -347,7 +343,7 @@ fun SettingsScreen(
                 Spacer(Modifier.width(8.dp))
                 Icon(
                     Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null, tint = Muted, modifier = Modifier.size(24.dp),
+                    contentDescription = null, tint = TextC, modifier = Modifier.size(28.dp),
                 )
             }
         }
@@ -418,9 +414,9 @@ fun SettingsScreen(
 }
 
 @Composable
-fun fieldColors() = OutlinedTextFieldDefaults.colors(
+fun fieldColors(outline: Color = TrackGray) = OutlinedTextFieldDefaults.colors(
     focusedTextColor = TextC, unfocusedTextColor = TextC,
-    focusedBorderColor = Orange, unfocusedBorderColor = TrackGray,
+    focusedBorderColor = Orange, unfocusedBorderColor = outline,
     cursorColor = Orange,
 )
 
@@ -547,63 +543,6 @@ fun ChoiceRow(options: List<Pair<Int, String>>, selected: Int, haptics: Boolean,
     }
 }
 
-
-/** Source label (orange, tappable pairing entry point) + state value row for the
- * approved Connected Sources card. */
-/** Zephyr Player pairing form, opened from the Zephyr PC source label. Trades the
- * on-screen 6-digit code for the pairing token (protocol.md Pairing). */
-@Composable
-fun ZephyrPairCard(
-    host: String, onHost: (String) -> Unit,
-    code: String, onCode: (String) -> Unit,
-    busy: Boolean, error: String?, onPair: () -> Unit,
-    finding: Boolean, findNote: String?, found: List<DiscoveredHelper>,
-    onFind: () -> Unit, onPick: (DiscoveredHelper) -> Unit,
-) {
-    Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardGradient).padding(16.dp),
-    ) {
-        Text("Pair with the Zephyr Player", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text("Type a name in Settings > Paired phones on the PC, tap Pair, then enter the code here.", color = Muted, fontSize = 13.sp)
-        Spacer(Modifier.height(10.dp))
-        // Same automated discovery as the helper setup ("Find my PC").
-        OrangeButton(if (finding) "Looking\u2026" else "Find my PC", enabled = !finding, onClick = onFind)
-        if (findNote != null) {
-            Spacer(Modifier.height(6.dp))
-            Text(findNote, color = Muted, fontSize = 13.sp)
-        }
-        if (found.size > 1) {
-            Spacer(Modifier.height(6.dp))
-            for (pc in found) {
-                Text("${pc.name} (${pc.host})", color = Orange, fontSize = 14.sp,
-                    modifier = Modifier.padding(vertical = 4.dp).clickable { onPick(pc) })
-            }
-        }
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(
-            value = host, onValueChange = onHost, singleLine = true,
-            label = { Text("PC address") }, colors = fieldColors(),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(
-            value = code, onValueChange = onCode, singleLine = true,
-            label = { Text("6-digit code") }, colors = fieldColors(),
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        if (error != null) {
-            Spacer(Modifier.height(8.dp))
-            Text(error, color = ErrorRed, fontSize = 13.sp)
-        }
-        Spacer(Modifier.height(10.dp))
-        androidx.compose.runtime.LaunchedEffect(code) {
-            if (code.length == 6 && code.all { it.isDigit() } && host.isNotBlank() && !busy) onPair()
-        }
-        OrangeButton(if (busy) "Pairing\u2026" else "Pair", enabled = !busy && code.trim().length == 6 && host.isNotBlank(), onClick = onPair)
-    }
-}
 
 /** SAF tree URI -> the friendly path the user recognizes (shows
  * /storage/emulated/0/Movies). Unknown roots show their decoded document id. */

@@ -67,7 +67,7 @@ object ZephyrClient {
                 val fallback = when (resp.code) {
                     403 -> "Wrong code - check the code on the player screen."
                     410 -> "That code expired - use the code showing on the PC screen now."
-                    429 -> "Too many wrong codes. Wait a few minutes, then try the fresh code on the PC screen."
+                    429 -> "Too many wrong codes. On the PC, press Pair for a new code, then enter it here."
                     409 -> "This PC already has too many phones paired - remove one first."
                     else -> "Player returned ${resp.code}"
                 }
@@ -198,8 +198,14 @@ object ZephyrClient {
         playClient.newCall(req).execute().use { resp ->
             if (resp.code == 401) throw BadToken()
             if (!resp.isSuccessful) throw java.io.IOException("Player returned ${resp.code}")
+            // Dark PC screen: the player only woke the screen and did NOT start the movie.
+            val woke = try { JSONObject(resp.body?.string().orEmpty()).optBoolean("woke", false) } catch (_: Exception) { false }
+            if (woke) throw ScreenWoke()
         }
     }
+
+    /** The PC screen was off: the tap only woke it and nothing started. */
+    class ScreenWoke : java.io.IOException("The PC screen was off, so that tap only woke it. Tap the movie again.")
 
     /** /control/status's subtitle track list (PC 1.2+); empty from older players. */
     fun parseSpuTracks(json: JSONObject): List<com.bingemote.SubTrack> {

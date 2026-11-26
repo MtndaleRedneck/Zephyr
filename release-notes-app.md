@@ -1,3 +1,23 @@
+## Zephyr 1.5.0
+
+Zephyr now has the same updated foundations as BingeMote 1.14: the same screens, controls and playback, with Zephyr's own icon, name and PC connection.
+
+**Improved**
+- Rebuilt on current Android foundations; unused code is stripped, so the app is smaller.
+- Movies: when the PC's movies folder changes, the phone follows the PC's setting instead of keeping a stale copy.
+- Movies and the reconnect banner refill by themselves once the PC answers again.
+- Settings and subtitle sheets keep their place and state when revisited.
+- Mouse movement is smoother and subtitles load reliably with Zephyr Player and VLC.
+- Switching between Zephyr and VLC keeps each one's own connection and subtitles.
+
+**Fixed**
+- Pairing saves all at once and rolls back if anything fails, so you can't end up half-paired. Existing Zephyr pairings and settings are kept.
+- Connection and pairing handling on unstable Wi-Fi; play and pause no longer miss after reconnecting.
+
+Zephyr no longer imports pairings from BingeMote. A fresh install pairs on its own: open Setup and pair once.
+
+This update can't be installed from inside Zephyr 1.4.0. Install it once manually; later updates work in the app.
+
 ## Zephyr 1.2.0
 
 - The PC helper is now Zephyr VLC Remote: your pairings carry over on the PC, and the phone retargets itself once. If mouse, keyboard or PC volume stop answering after the update, open Setup and pair once more.

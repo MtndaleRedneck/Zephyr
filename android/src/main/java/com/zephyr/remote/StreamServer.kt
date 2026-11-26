@@ -41,12 +41,54 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
 
     private val random = SecureRandom()
     private val token: String = ByteArray(18).also(random::nextBytes).joinToString("") { "%02x".format(it) }
-    private val entries = LinkedHashMap<String, Entry>()
+    private val entries = java.util.concurrent.ConcurrentHashMap<String, Entry>()
     private var socket: ServerSocket? = null
     private val pool = Executors.newCachedThreadPool()
     private val permits = java.util.concurrent.Semaphore(24)
+    /** Connections closed without a response by admission (diagnostics). */
+    val rejectedPeerCap = java.util.concurrent.atomic.AtomicInteger(0)
+    val rejectedNoPermit = java.util.concurrent.atomic.AtomicInteger(0)
     private val mediaPermits = java.util.concurrent.Semaphore(8)
-    private val perPeer = java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
+    /** Per-peer counts, never negative, entry removed at zero. OPEN = client connections not yet
+     *  closed (cap 4, released once at logical release = socket close). WORKERS = request workers
+     *  not yet exited (cap 8, released once at the worker's real exit, after read and provider
+     *  close). One IP can therefore pin at most 8 of the 24 global permits, whatever its sockets do. */
+    private val openPerPeer = java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
+    private val workersPerPeer = java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>()
+    private fun inc(m: java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>, peer: String): Int {
+        var n = 0
+        m.compute(peer) { _, c -> (c ?: java.util.concurrent.atomic.AtomicInteger(0)).also { n = it.incrementAndGet() } }
+        return n
+    }
+    val peerUnderflow = java.util.concurrent.atomic.AtomicInteger(0)
+    private fun dec(m: java.util.concurrent.ConcurrentHashMap<String,java.util.concurrent.atomic.AtomicInteger>, peer: String) {
+        var found = false
+        m.computeIfPresent(peer) { _, c ->
+            found = true
+            val n = c.decrementAndGet()
+            if (n < 0) peerUnderflow.incrementAndGet()
+            if (n <= 0) null else c
+        }
+        if (!found) peerUnderflow.incrementAndGet()
+    }
+    internal var maxOpenPerPeer = 4
+    internal var maxWorkersPerPeer = 8
+    internal fun peerOpenForTest(peer: String) = openPerPeer[peer]?.get() ?: 0
+    internal fun peerWorkersForTest(peer: String) = workersPerPeer[peer]?.get() ?: 0
+    /** Refused sockets queued or being written; stop() closes them (shutdownNow alone would drop them). */
+    /** Test hook: runs on the worker after logical release and before the real-exit release, so a test can hold workers there. */
+    /** Test hooks: hold the refusal thread busy so refusals queue; count refused sockets not yet closed. */
+    internal var testRejectGate: java.util.concurrent.CountDownLatch? = null
+    internal fun pendingRejectsForTest() = pendingRejects.size
+    internal var testExitGate: ((String) -> Unit)? = null
+    private val pendingRejects = java.util.concurrent.ConcurrentHashMap.newKeySet<Socket>()
+    /** Test hook: total of both per-peer maps (must return to 0 when all requests are done). */
+    internal fun peerCountsForTest(): Int = openPerPeer.values.sumOf { it.get() } + workersPerPeer.values.sumOf { it.get() }
+    val rejectedWorkerCap = java.util.concurrent.atomic.AtomicInteger(0)
+    /** Refusals are written by ONE thread with a bounded queue: when it is busy or wedged the
+     *  refused socket is just closed, so the accept loop never blocks and threads stay bounded. */
+    private val rejecter = java.util.concurrent.ThreadPoolExecutor(1, 1, 0L, java.util.concurrent.TimeUnit.MILLISECONDS,
+        java.util.concurrent.ArrayBlockingQueue<Runnable>(16)) { r -> Thread(r, "stream-reject").also { it.isDaemon = true } }
     private val cancellations = java.util.concurrent.ConcurrentHashMap.newKeySet<android.os.CancellationSignal>()
     private val providers = java.util.concurrent.ConcurrentHashMap.newKeySet<Guarded<*>>()
     private val clientDeadlines = java.util.concurrent.ConcurrentHashMap<Socket, Long>()
@@ -156,8 +198,10 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
 
     val baseUrl: String get() = "http://${wifiAddr.hostAddress}:${socket?.localPort ?: port}/s/$token"
 
+    private val nextId = java.util.concurrent.atomic.AtomicInteger(0)
+
     fun addMovie(uri: Uri, name: String, subtitles: List<Uri> = emptyList()): String {
-        val id = (entries.size + 1).toString()
+        val id = nextId.incrementAndGet().toString()
         entries[id] = Entry(uri, name, subtitles)
         return "$baseUrl/$id"
     }
@@ -168,7 +212,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         val srv = ServerSocket(port, 8, wifiAddr)
         socket = srv
         running = true
-        watchdog.scheduleWithFixedDelay({
+        watchdog.scheduleWithFixedDelay({ try {
             val now = android.os.SystemClock.elapsedRealtime()
             // Client sockets close inline: Socket.close never blocks.
             clientDeadlines.forEach { (client, at) -> if (now >= at && clientDeadlines.remove(client, at)) runCatching { client.close() } }
@@ -186,59 +230,89 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                     queueClose(res)
                 }
             }
-        }, 1, 1, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (t: Throwable) { android.util.Log.e("StreamServer", "watchdog tick failed", t) } }, 1, 1, java.util.concurrent.TimeUnit.SECONDS)
         pool.execute {
             while (running) {
                 val client = runCatching { srv.accept() }.getOrNull() ?: break
                 val peer = client.inetAddress.hostAddress.orEmpty()
-                var count = 0
-                perPeer.compute(peer) { _, current -> (current ?: java.util.concurrent.atomic.AtomicInteger(0)).also { count = it.incrementAndGet() } }
-                if (count > 4) { releasePeer(peer); runCatching { client.close() }; continue }
-                if (!permits.tryAcquire()) { releasePeer(peer); runCatching { client.close() }; continue }
+                if (inc(openPerPeer, peer) > maxOpenPerPeer) { rejectedPeerCap.incrementAndGet(); dec(openPerPeer, peer); rejectBusy(client); continue }
+                if (inc(workersPerPeer, peer) > maxWorkersPerPeer) { rejectedWorkerCap.incrementAndGet(); dec(workersPerPeer, peer); dec(openPerPeer, peer); rejectBusy(client); continue }
+                if (!permits.tryAcquire()) { rejectedNoPermit.incrementAndGet(); dec(workersPerPeer, peer); dec(openPerPeer, peer); rejectBusy(client); continue }
                 // A stalled client must not hold a worker forever (teardown C12).
                 runCatching { client.soTimeout = 60_000 }
-                clients.add(client)
                 openStreams.incrementAndGet()
-                val req = RequestState(client, peer, ::releaseLogical)
-                requests.add(req)
+                var admitted: RequestState? = null
                 try {
+                    val req = RequestState(client, peer, ::releaseLogical)
+                    admitted = req
+                    clients.add(client)
+                    requests.add(req)
                     pool.execute {
                         // Logical release is once-only (a deadline/stop abandonment
                         // wins over finish); the resource release below is also
                         // exactly once - here, at the worker's real exit.
                         try { runCatching { handle(client, req) } }
-                        finally { req.finish(); releaseResources(req); requests.remove(req) }
+                        finally { req.finish(); runCatching { testExitGate?.invoke(req.peer) }; releaseResources(req); requests.remove(req) }
                     }
-                } catch (e: java.util.concurrent.RejectedExecutionException) {
-                    req.finish(); releaseResources(req); requests.remove(req)
+                } catch (e: Throwable) {
+                    // Any failure between admission and the worker taking over (pool rejection, or
+                    // anything thrown by the bookkeeping above) returns every slot taken, once.
+                    val r = admitted
+                    if (r != null) { r.finish(); releaseResources(r); requests.remove(r) }
+                    else { openStreams.decrementAndGet(); dec(openPerPeer, peer); dec(workersPerPeer, peer); permits.release(); runCatching { client.close() } }
                 }
             }
         }
     }
 
-    private fun releasePeer(peer: String) {
-        perPeer.computeIfPresent(peer) { _, count -> if (count.decrementAndGet() == 0) null else count }
+    /** Admission refusal. Never runs on the accept thread: a bounded single-thread queue writes one
+     *  fixed 503, the socket is registered with the watchdog (clientDeadlines, 1 s) so a write that
+     *  would block is cut by closing the socket (SO_TIMEOUT bounds reads only, not writes). A full
+     *  queue or a refused task just closes the socket. */
+    private fun rejectBusy(client: Socket) {
+        pendingRejects.add(client)
+        // Bounds queue wait AND write: the watchdog closes the socket 2 s after queueing even if its
+        // task has not started or its write is stuck (SO_TIMEOUT bounds reads only, not writes).
+        clientDeadlines[client] = android.os.SystemClock.elapsedRealtime() + 2_000
+        try {
+            rejecter.execute {
+                try {
+                    testRejectGate?.let { g -> while (!g.await(50, java.util.concurrent.TimeUnit.MILLISECONDS)) { } }
+                    client.getOutputStream().apply {
+                        write("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".toByteArray())
+                        flush()
+                    }
+                    // A client that already sent its request must see the 503, not a reset: stop
+                    // sending, then read (bounded by SO_TIMEOUT) what it sent before closing.
+                    client.shutdownOutput()
+                    client.soTimeout = 200
+                    client.getInputStream().read(ByteArray(2048))
+                } catch (_: Exception) {
+                } finally { clientDeadlines.remove(client); pendingRejects.remove(client); runCatching { client.close() } }
+            }
+        } catch (e: java.util.concurrent.RejectedExecutionException) { clientDeadlines.remove(client); pendingRejects.remove(client); runCatching { client.close() } }
     }
 
     /** The once-only LOGICAL request release (M1): client socket, open-stream
      *  count (the count the idle policy - and so the service locks - follows),
      *  deadline bookkeeping. Runs on whichever side wins the arbitration - worker
      *  end, provider deadline, or stop - and never waits on a provider guard.
-     *  Deliberately does NOT release the admission permit/peer slot: those stay
+     *  Deliberately does NOT release the admission permit or the per-peer worker slot: those stay
      *  held until the worker's real read AND provider close return. */
     private fun releaseLogical(req: RequestState) {
         clients.remove(req.client)
         clientDeadlines.remove(req.client)
+        dec(openPerPeer, req.peer) // socket closed: the 4-open-connections cap frees here, once
         openStreams.decrementAndGet()
         runCatching { req.client.close() }
     }
 
-    /** Resource release: admission permit + peer slot. Exactly once per request,
+    /** Resource release: admission permit + per-peer worker slot. Exactly once per request,
      *  at the worker's real exit (its read AND its provider close have returned) -
      *  never at abandonment, so a parked provider keeps holding what it pins and
      *  admission cannot over-subscribe real resources. */
     private fun releaseResources(req: RequestState) {
-        releasePeer(req.peer)
+        dec(workersPerPeer, req.peer) // worker really exited (read and provider close returned), once
         permits.release()
     }
 
@@ -249,6 +323,15 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
      *  teardown race), just unregister - stop()'s own close pass and the
      *  worker's exit close are the owners then; a provider whose read never
      *  returns stays parked, budget-bounded (declared residual). */
+    /** Close FIRST (the guard stays registered, so the watchdog still sees a close that blocks and
+     *  abandons the request logically), then disarm the deadline so a close that merely ran long
+     *  cannot abandon a request that goes on, then unregister. Logical abandonment only: a parked
+     *  provider read/close is not physically finished by this, and its budget permit returns only
+     *  when the close completes. The disarm narrows, but does not remove, the watchdog check/act window. */
+    private fun closeThenRemove(res: Guarded<*>) {
+        try { res.close() } finally { res.deadlineAt = Long.MAX_VALUE; providers.remove(res) }
+    }
+
     private fun queueClose(res: Guarded<*>) {
         if (!res.closeQueued.compareAndSet(false, true)) return
         try { pool.execute { providers.remove(res); res.close() } }
@@ -270,6 +353,8 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
         // tasks still run under an orderly shutdown; shutdownNow would discard
         // them and cannot interrupt a parked SAF/FUSE read anyway).
         providers.forEach { queueClose(it) }
+        rejecter.shutdownNow() // discards queued tasks: their sockets are closed explicitly next
+        pendingRejects.forEach { runCatching { it.close() } }; pendingRejects.clear()
         pool.shutdown()
         kotlin.concurrent.thread(name = "stream-drain", isDaemon = true) {
             // The drain thread only WAITS - the deadline is computed FIRST and no
@@ -427,7 +512,9 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                 // This descriptor is only the seekability probe: close it BEFORE the
                 // copy and the cached serve. Holding a pipe provider open while nobody
                 // reads it can stall the provider's writer. The copy owns its own descriptor.
-                providers.remove(guarded); guarded.close()
+                closeThenRemove(guarded)
+                // A deadline that fired during a long probe close abandoned the request; do not start the copy.
+                if (!req.isActive) return
                 // Non-seekable provider: copy once into cache, then serve the copy.
                 // Teardown C12: the copy lands under a temp name and is renamed only when
                 // COMPLETE, so a cut-off copy is never reused; oversized copies are capped.
@@ -491,7 +578,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
                                                 }
                                                 throw java.io.InterruptedIOException()
                                             }
-                                            override fun close() { providers.remove(ginput); ginput.close() }
+                                            override fun close() { closeThenRemove(ginput) }
                                         }
                                     },
                                     tmp = tmp, final = cached,
@@ -530,7 +617,7 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
             servedAny = true
             serveChannel(client, guarded, size, range, guessMime(uri), req)
         }
-        } finally { providers.remove(guarded); guarded.close() }
+        } finally { closeThenRemove(guarded) }
     }
 
     private fun serveChannel(client: Socket, guarded: Guarded<ParcelFileDescriptor>, size: Long, range: LongRange?, mime: String, req: RequestState) {
@@ -634,5 +721,5 @@ class StreamServer(private val context: Context, private val wifiAddr: InetAddre
     }
 
     private fun guessMime(uri: Uri): String =
-        context.contentResolver.getType(uri) ?: "video/*"
+        (context.contentResolver.getType(uri) ?: "video/*").let { m -> if (Regex("[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+*-]+").matches(m)) m else "video/*" }
 }

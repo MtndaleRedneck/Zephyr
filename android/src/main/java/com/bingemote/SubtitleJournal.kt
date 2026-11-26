@@ -82,6 +82,7 @@ internal class SubtitleJournal(context: Context) {
     fun entries(pair:String):List<Entry> = synchronized(lock){reconciled().filter{it.pair==pair}}
     fun begin(pair:String,media:String?,folderLoad:Boolean=false):String = synchronized(lock){
         try {
+            check(media.orEmpty().length<=64){"Media id too long for the journal"}
             val entries=reconciled()
             if(folderLoad)check(pair !in degradedPairs && entries.none{it.pair==pair && (it.media.isEmpty() || it.media==media)}){"A previous file load is still unconfirmed"}
             check(entries.count{it.pair==pair && it.phase=="pending"}<16){"Subtitle requests still pending"}

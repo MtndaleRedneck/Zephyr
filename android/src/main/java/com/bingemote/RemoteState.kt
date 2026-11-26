@@ -10,7 +10,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -33,6 +32,14 @@ class RemoteState(
 
     /** Either service answering proves the PC is reachable, independently of VLC playback. */
     val pcReachable: Boolean get() = !unreachable || (store.helperToken.isNotBlank() && !helperDown)
+
+    /** Status as the home screen presents it. The raw status is the last good poll and
+     *  survives a dropped connection so a blip loses nothing; but once the player is
+     *  unreachable (or VLC itself is gone/refused) the seek bar, times and play glyph
+     *  read zero/play instead of stale playback. The cached status stays for an instant
+     *  recovery when the connection returns (BingeMote 1.15 parity). */
+    val shownStatus: VlcStatus?
+        get() = if (unreachable || vlcClosed || vlcRefused) null else status
 
     /** VLC didn't answer but the helper did: the PC is fine, VLC just isn't open. */
     var vlcClosed by mutableStateOf(false)
@@ -442,25 +449,15 @@ class RemoteState(
     // Taps carry their time: a play/pause/skip/seek queued more than about 2 s (a dead
     // PC, a stalled request) is a tap he no longer expects, so it is dropped - and a
     // burst of volume steps folds into the newest one.
-    private class Cmd(val kind: String, val ts: Long, val subtitleGeneration: Int = -1, val block: () -> Unit)
-    private val cmds = Channel<Cmd>(Channel.UNLIMITED)
-    @Volatile private var pushback: Cmd? = null // one non-volume command held while volume folds
+    private val cmds = CommandQueue(
+        currentSubtitleGeneration = { subtitleRequest },
+        onVolumeCoalesced = { Diag.volumeCoalesced.incrementAndGet() },
+        onExpired = { Diag.cmdsExpired.incrementAndGet(); if (it.kind == "sub") scope.launch { subtitleMutationLoading = false } },
+    )
     init {
         scope.launch(Dispatchers.IO) {
             while (isActive) {
-                var c = pushback?.also { pushback = null } ?: cmds.receive()
-                if (c.kind == "sub" && c.subtitleGeneration != subtitleRequest) continue
-                if (c.kind == "volume") {
-                    while (true) {
-                        val nxt = cmds.tryReceive().getOrNull() ?: break
-                        if (nxt.kind == "volume") { Diag.volumeCoalesced.incrementAndGet(); c = nxt }
-                        else { pushback = nxt; break }
-                    }
-                } else if (c.kind != "mute" && c.kind != "sub" && System.currentTimeMillis() - c.ts > CmdPolicy.EXPIRY_MS) {
-                    Diag.cmdsExpired.incrementAndGet()
-                    if (c.kind == "sub") scope.launch { subtitleMutationLoading = false }
-                    continue
-                }
+                val c = cmds.next()
                 try { c.block() }
                 catch (e: ZephyrClient.BadToken) {
                     // A revoked pairing is not a PC outage (N2): say "pair again".
@@ -478,7 +475,14 @@ class RemoteState(
         }
     }
 
+    /** Every non-subtitle command. Subtitle commands must go through [fireSubtitle], which requires
+     *  the generation, so a missed caller cannot silently default to a value that is always dropped. */
     private fun fire(kind: String, block: () -> Unit) {
+        require(kind != "sub") { "subtitle commands must use fireSubtitle(generation)" }
+        enqueue(kind, NO_GENERATION, block)
+    }
+    private fun fireSubtitle(generation: Int, block: () -> Unit) = enqueue("sub", generation, block)
+    private fun enqueue(kind: String, subtitleGeneration: Int, block: () -> Unit) {
         // An unpaired source drops taps quietly - they are not PC failures
         // and must not feed the unreachable counter.
         if (!store.isPaired(store.selectedSource)) return
@@ -495,7 +499,7 @@ class RemoteState(
                 }
             }
         }
-        cmds.trySend(Cmd(kind, System.currentTimeMillis(), block = gated))
+        cmds.trySend(Cmd(kind, System.currentTimeMillis(), subtitleGeneration, gated))
     }
 
     fun togglePause() {
@@ -826,7 +830,7 @@ class RemoteState(
     fun pickSubtitle(trackId: Int) {
         if (store.selectedSource == Source.ZEPHYR) {
             pickedSubtitle = trackId
-            fire("sub") { ZephyrClient.captions(zephyrHost(), store.zephyrPort, store.zephyrToken, trackId) }
+            fireSubtitle(subtitleRequest) { ZephyrClient.captions(zephyrHost(), store.zephyrPort, store.zephyrToken, trackId) }
             return
         }
         reconcileSubtitleWarnings()
@@ -899,3 +903,6 @@ class RemoteState(
         })
     }
 }
+
+private const val NO_GENERATION = Int.MIN_VALUE
+private typealias Cmd = CommandQueue.Cmd

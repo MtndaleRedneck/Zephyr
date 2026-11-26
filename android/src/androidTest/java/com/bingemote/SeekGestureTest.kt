@@ -9,6 +9,7 @@ import androidx.test.uiautomator.Until
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
 import kotlin.concurrent.thread
 
@@ -30,6 +31,7 @@ import kotlin.concurrent.thread
  * pipeline (runs 39955727138/39956293965), freezing every later tree query.
  */
 class SeekGestureTest {
+    @get:Rule val failureDump = FailureDumpRule()
     @Test
     fun continuousHoldThenSlide() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

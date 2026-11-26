@@ -60,6 +60,7 @@ fun MainScreen(
     onMovies: () -> Unit,
     onSettings: () -> Unit,
     startSubtitlesOpen: Boolean = false,
+    onPairSelected: () -> Unit = onSettings,
 ) {
     val s = remote.status
     val flashAll = remote.store.buttonFlash == 1
@@ -97,7 +98,7 @@ fun MainScreen(
                 // Probe pass: the true non-gap content height in dp (seed margins
                 // only affect width; the +14dp is the fixed bottom margin).
                 val probe = subcompose("probe") {
-                    HomeContent(remote, flashAll, 12f, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings)
+                    HomeContent(remote, flashAll, 12f, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings, onPairSelected = onPairSelected)
                 }.map { it.measure(loose) }
                 val gapCount = (probe.size - 1).coerceAtLeast(1)
                 val contentDp = probe.sumOf { it.height } / d + 14f
@@ -125,7 +126,7 @@ fun MainScreen(
                 val scaled = Density(d * uniform, fs)
                 val placeables = subcompose("main") {
                     CompositionLocalProvider(LocalDensity provides scaled) {
-                        HomeContent(remote, flashAll, shareContent, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings)
+                        HomeContent(remote, flashAll, shareContent, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings, onPairSelected = onPairSelected)
                     }
                 }.map { it.measure(loose) }
                 val bottomPx = 14f * d * uniform
@@ -172,6 +173,7 @@ private fun HomeContent(
     onMovies: () -> Unit,
     onMouse: () -> Unit,
     onSettings: () -> Unit,
+    onPairSelected: () -> Unit,
 ) {
     val s = remote.status
     // Now playing
@@ -193,17 +195,24 @@ private fun HomeContent(
             .then(
                 if (unpairedSource) Modifier.clickable(
                     role = androidx.compose.ui.semantics.Role.Button,
-                    onClickLabel = "Go to Settings to pair",
-                ) { onSettings() } else Modifier
+                    onClickLabel = "Pair this source",
+                ) { onPairSelected() } else Modifier
             )
             .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {
         Column {
             if (unpairedSource) {
+                // Same two-line hero as every other state (title + 14sp line), so the card keeps
+                // its size and look; the whole card still opens Settings. Source switching stays
+                // in the header selector.
                 Text(
-                    "Go to Settings to pair to PC",
+                    if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC isn't paired" else "VLC PC isn't paired",
                     color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2,
+                )
+                Text(
+                    "Tap here to open Settings and pair it",
+                    color = Color(0xFF3D2A12), fontSize = 14.sp,
                 )
             } else {
             Text(
@@ -360,7 +369,7 @@ private fun SeekDrag.trackCircle(finger: Offset, rampPx: Float, insetPx: Float, 
  * the whole time - inside the circle too. */
 @Composable
 private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
-    val s = remote.status
+    val s = remote.shownStatus
     val length = s?.lengthSec ?: 0
     val position = if (length > 0) (s?.timeSec ?: 0).toFloat() / length else 0f
 
@@ -651,7 +660,7 @@ private fun VolumeRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scal
 @Composable
 private fun SkipRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scale: Float = 1f, seekDrag: SeekDrag? = null) {
     val label = formatSkip(remote.store.skipMainSec)
-    val playing = remote.status?.playing == true
+    val playing = remote.shownStatus?.playing == true
     Row(
         Modifier.fillMaxWidth().padding(horizontal = gapDp.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -814,8 +823,16 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
                 androidx.compose.runtime.snapshotFlow { remote.subtitleFolder?.files?.isNotEmpty() == true }
                     .first { v -> v }
                 MainActivity.previewLostRigArmed = false
+                android.util.Log.e("ZephyrTriage", "rig: connected rows composed, dropping in 2.5s")
                 kotlinx.coroutines.delay(2500)
                 remote.debugForceStatus(unreachable = true, helperDown = true)
+                android.util.Log.e("ZephyrTriage", "rig: forced unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                repeat(9) {
+                    kotlinx.coroutines.delay(3000)
+                    android.util.Log.e("ZephyrTriage", "rig: +${(it + 1) * 3}s unreachable=${remote.unreachable} helperDown=${remote.helperDown} unpaired=${remote.unpaired}")
+                }
+            } else {
+                android.util.Log.e("ZephyrTriage", "rig: not armed when the sheet composed")
             }
         }
     }
@@ -861,6 +878,7 @@ private fun SubtitleSheet(remote: RemoteState, onClose: () -> Unit) {
             // stopped answering - every shippable helper serves /volume/get, and an
             // older helper that lacks folder subtitles still answers it, so it keeps
             // helperDown=false and its working embedded rows are untouched.
+            if (BuildConfig.DEBUG) android.util.Log.e("ZephyrTriage", "sheet body composed unreachable=${remote.unreachable} helperDown=${remote.helperDown} rows=${folder?.files?.size}")
             if (!remote.unreachable && !remote.helperDown) {
                 val showEmptyNotice = tracks.isEmpty() && folder != null && folder.files.isEmpty() && !remote.subtitleFilesLoading && remote.subtitleFileError == null
                 // Dividers only when there is actually something below them to separate
@@ -947,10 +965,10 @@ fun SourceSelector(remote: RemoteState) {
             ) { expanded = true },
             verticalAlignment = Alignment.CenterVertically) {
             Text(if (selected == Source.ZEPHYR) "Zephyr PC" else "VLC PC", color = TextC,
-                fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, // same size and weight as BingeMote's header title
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false))
-            Text(" ▾", color = Muted, fontSize = 14.sp)
+            Text(" ▾", color = Muted, fontSize = 16.sp)
         }
         androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             listOf(Source.VLC to "VLC PC", Source.ZEPHYR to "Zephyr PC").forEach { (source, label) ->

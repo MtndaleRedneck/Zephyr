@@ -45,7 +45,7 @@ class UpgradeConnectionTest {
                     if(request!=null) {
                         val headers=java.util.LinkedHashMap<String,String>()
                         while(true) { val h=reader.readLine() ?: break; if(h.isEmpty()) break; val ci=jindexOf(h,':'); headers[if(ci>=0) h.substring(0,ci).toLowerCase(java.util.Locale.ROOT) else h.toLowerCase(java.util.Locale.ROOT)]=if(ci>=0) jtrim(h.substring(ci+1)) else "" }
-                        val good=if(i==0) headers["x-bingemote-token"]==token else headers["authorization"]=="Basic "+android.util.Base64.encodeToString(utf8(":"+password),android.util.Base64.NO_WRAP)
+                        val good=if(i==0) headers["x-zephyr-vlc-remote-token"]==token else headers["authorization"]=="Basic "+android.util.Base64.encodeToString(utf8(":"+password),android.util.Base64.NO_WRAP)
                         val body=if(!good) "{}" else if(i==0) {
                             helper.incrementAndGet(); if(jindexOf(request,"/volume/get")>=0) """{"volume":50,"mute":false}""" else """{"ok":true}"""
                         } else { vlc.incrementAndGet(); """{"time":30,"length":3600,"volume":128,"state":"playing","information":{"category":{"meta":{"filename":"fixture.mkv"}}}}""" }
