@@ -98,7 +98,7 @@ fun MainScreen(
                 // Probe pass: the true non-gap content height in dp (seed margins
                 // only affect width; the +14dp is the fixed bottom margin).
                 val probe = subcompose("probe") {
-                    HomeContent(remote, flashAll, 12f, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings)
+                    HomeContent(remote, flashAll, 12f, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings, onPairSelected = onPairSelected)
                 }.map { it.measure(loose) }
                 val gapCount = (probe.size - 1).coerceAtLeast(1)
                 val contentDp = probe.sumOf { it.height } / d + 14f
@@ -126,7 +126,7 @@ fun MainScreen(
                 val scaled = Density(d * uniform, fs)
                 val placeables = subcompose("main") {
                     CompositionLocalProvider(LocalDensity provides scaled) {
-                        HomeContent(remote, flashAll, shareContent, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings)
+                        HomeContent(remote, flashAll, shareContent, onSubtitles = { subtitlesOpen = true }, onMovies = onMovies, onMouse = onMouse, onSettings = onSettings, onPairSelected = onPairSelected)
                     }
                 }.map { it.measure(loose) }
                 val bottomPx = 14f * d * uniform
@@ -173,6 +173,7 @@ private fun HomeContent(
     onMovies: () -> Unit,
     onMouse: () -> Unit,
     onSettings: () -> Unit,
+    onPairSelected: () -> Unit,
 ) {
     val s = remote.status
     // Now playing

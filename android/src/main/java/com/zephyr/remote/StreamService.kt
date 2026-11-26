@@ -67,7 +67,7 @@ class StreamService : Service() {
             .build()
         try {
             startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) // type under verification
-        } catch (e: Exception) { stopSelf() } // foreground start refused: end the service instead of crashing
+        } catch (e: Exception) { android.util.Log.e("ZephyrStream", "startForeground refused, stopping service", e); stopSelf() } // foreground start refused: end the service instead of crashing
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

@@ -37,7 +37,6 @@ class UnpairedCardRoutingTest {
         s.zephyrToken = saved[2] as String
         s.host = saved[3] as String
         s.vlcPassword = saved[4] as String
-        device.executeShellCommand("am force-stop ${context.packageName}")
     }
 
     private fun home() {
