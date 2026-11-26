@@ -147,6 +147,33 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void ExitRewriteAfterTheQuietCheckNeverClearsTheTarget()
+    {
+        // Pins the verify-clear ORDERING at its last defensible boundary: the no-VLC-running check
+        // comes FIRST, the vlcrc read the clear is decided from comes SECOND, so even a rewrite
+        // landing at the latest possible moment (after the quiet check, before the read - the
+        // seam fires exactly there) is SEEN and repaired, never cleared over. With the reverse
+        // order this fixture's rewrite lands after the read and the target would be cleared over
+        // an old-password disk: the permanent lost-repair class.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-10");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                                  // lands NEW; rotation is landed
+        Assert.True(VlcRotation.Landed);
+        VlcRotation.BeforeVerifyReadForTests = () =>             // one-shot: fires once, then disarms
+        {
+            VlcRotation.BeforeVerifyReadForTests = null;
+            WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        };
+        VlcRotation.PassOnce();                                  // quiet check passed; rewrite lands before the read
+        Assert.True(VlcRotation.Landed);                         // re-opened and re-landed, NEVER cleared
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-10")); // repaired in the same pass
+        VlcRotation.PassOnce();                                  // NOW an undisturbed quiet verify clears
+        Assert.Null(VlcRotation.TargetValue);
+    }
+
+    [Fact]
     public void ExitRewriteBetweenObserveAndVerifyNeverClearsTheTarget()
     {
         // The verify-clear race, exercised at its real window: a landed rotation's pass reads
