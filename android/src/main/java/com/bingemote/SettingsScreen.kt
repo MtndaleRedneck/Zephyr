@@ -41,6 +41,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -60,6 +62,7 @@ private val ThumbDark = Color(0xFF1B1B1E)
 private val PillGradient = OrangeGradient
 private val SegmentOnGradient = OrangeGradient
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsScreen(
     remote: RemoteState,
@@ -147,7 +150,7 @@ fun SettingsScreen(
         // pairing entry points (locked design; the standalone repair button is removed).
         // Each label opens that source's OWN setup screen -
         // never an inline expansion.
-        SettingsSection("Connected Sources", modifier = Modifier.testTag("first_card")) {
+        SettingsSection("Connected Sources", modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("first_card")) {
             // A cancelled setup can leave a helper token with no finished pairing: only a
             // COMPLETE setup shows the PC name (teardown A2 edge).
             SourceRow("VLC PC", if (store.isConfigured) store.pcName.ifBlank { store.host } else "Not paired", hapticsOn = haptics, onLabelClick = onRepair)
