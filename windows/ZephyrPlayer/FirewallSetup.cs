@@ -602,9 +602,9 @@ namespace ZephyrPlayer
         {
             // CP4 item 84: the 2.0 theme (Settings surface #0E0E11, #F5F5F7 text, the .btn /
             // .btn.or buttons with the shared hover/pressed layers). Behaviour is unchanged.
-            var bg = Frozen(new SolidColorBrush(Color.FromRgb(0x0E, 0x0E, 0x11)));
-            var fg = Frozen(new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)));
-            var body = Frozen(new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEB)));
+            var bg = Frozen(new SolidColorBrush(Color.FromRgb(0x0B, 0x0D, 0x10)));
+            var fg = Frozen(new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5)));
+            var body = Frozen(new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5)));
             var dlg = new Window
             {
                 Title = "Zephyr Player",
@@ -644,7 +644,7 @@ namespace ZephyrPlayer
                     FontSize = 13,
                     FontWeight = primary ? FontWeights.SemiBold : FontWeights.Medium,
                     Background = primary ? AccentGradient : Frozen(new SolidColorBrush(Color.FromArgb(0x0E, 0xFF, 0xFF, 0xFF))),
-                    Foreground = primary ? Frozen(new SolidColorBrush(Color.FromRgb(0x14, 0x14, 0x16))) : Frozen(new SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xEB))),
+                    Foreground = primary ? Frozen(new SolidColorBrush(Color.FromRgb(0x0B, 0x0D, 0x10))) : Frozen(new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5))),
                     BorderThickness = new Thickness(1),
                     BorderBrush = primary ? Brushes.Transparent : Frozen(new SolidColorBrush(Color.FromArgb(0x0F, 0xFF, 0xFF, 0xFF))),
                     Cursor = System.Windows.Input.Cursors.Hand,
@@ -690,13 +690,7 @@ namespace ZephyrPlayer
             return answer;
         }
 
-        private static readonly LinearGradientBrush AccentGradient = MakeAccent();
-        private static LinearGradientBrush MakeAccent()
-        {
-            var g = new LinearGradientBrush(Color.FromRgb(0xFB, 0x9E, 0x2E), Color.FromRgb(0xF9, 0x7C, 0x02), 90);
-            g.Freeze();
-            return g;
-        }
+        private static readonly SolidColorBrush AccentGradient = Frozen(new SolidColorBrush(Color.FromRgb(0xF9, 0x7C, 0x02)));
         private static T Frozen<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
 #if PAIR_CODE_HOOK
