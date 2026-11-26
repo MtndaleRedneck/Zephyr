@@ -82,25 +82,37 @@ foreign_anr_in_log() { # $1 = result name
   done <<< "$lines"
   return 1
 }
+# Focus must be exactly ONE ANR dialog (any package), that dialog must be an exact allowlisted package, and no window of the
+# app under test may be in focus next to it. Input: the full mCurrentFocus capture. Output (stdout): "<pkg> <window id>".
+# Anything else (two dialogs, an unknown dialog, an app window alongside) returns 1: no choosing one of several.
+single_allowed_dialog() { # $1 = focus capture
+  local all n id pkg p ok=0
+  case "$1" in *"$PKG"*) return 1;; esac
+  all=$(printf '%s\n' "$1" | grep -o 'Window{[0-9a-f]* u0 Application Not Responding: [^} ]*}' | sort -u)
+  [ -n "$all" ] || return 1
+  n=$(printf '%s\n' "$all" | wc -l)
+  [ "$n" = 1 ] || return 1
+  id=$(printf '%s\n' "$all" | sed -n 's/^Window{\([0-9a-f]*\) u0 .*/\1/p')
+  pkg=$(printf '%s\n' "$all" | sed -n 's/.*Application Not Responding: \([^} ]*\)}.*/\1/p')
+  for p in $ANR_ALLOW; do [ "$pkg" = "$p" ] && ok=1; done
+  [ "$ok" = 1 ] && [ -n "$id" ] || return 1
+  printf '%s %s\n' "$pkg" "$id"
+}
 # Same-window evidence for the case where the ANR happened before the first run's log was cleared (emulator boot), so no run
-# log holds an "ANR in" line while the dialog still owns focus. Requires BOTH: the dialog in focus NOW is an exact
-# allowlisted package (same ANR_ALLOW), AND the system's own input_focus event for that very window id and package is in THIS
-# job's seed run log (the seed run always precedes verify, so the event is older than the failure). Different window id,
-# different package or no logged event: no. The matched line is printed (and added to the job summary) as the record.
+# log holds an "ANR in" line while the dialog still owns focus. Requires ALL: the seed run's log is clean of app/unknown ANR
+# and crash (fails closed), focus is exactly one allowlisted dialog with no app window next to it, AND the system's own
+# input_focus event for that very window id and package is in THIS job's seed run log only (the seed run precedes verify).
 focused_dialog_logged_in_job() {
-  local focus pkg id ids seed="instrument-results/seed-rawlog.txt" hit
+  local focus pp pkg id seed="instrument-results/seed-rawlog.txt" hit
   [ -s "$seed" ] || return 1
+  if app_failure_in_log seed; then echo "NOTE: seed log shows an app-owned or unknown ANR/crash or is unusable: no window-only retry"; return 1; fi
   focus=$(adb shell dumpsys window | grep "mCurrentFocus")
-  for pkg in $ANR_ALLOW; do
-    ids=$(printf '%s\n' "$focus" | sed -n "s/.*Window{\([0-9a-f][0-9a-f]*\) u0 Application Not Responding: ${pkg//./\\.}}.*/\1/p")
-    for id in $ids; do
-      hit=$(grep -m1 -E "input_focus: \[Focus (request|entering) $id Application Not Responding: ${pkg//./\\.}[ ,]" "$seed") || continue
-      echo "NOTE: allowlisted ANR dialog package=$pkg window=$id seen earlier in seed-rawlog.txt: $hit"
-      [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf 'upgrade-prior: allowlisted ANR dialog package=%s window=%s was in the seed run log before verify: %s\n' "$pkg" "$id" "$hit" >> "$GITHUB_STEP_SUMMARY"
-      return 0
-    done
-  done
-  return 1
+  pp=$(single_allowed_dialog "$focus") || return 1
+  pkg=${pp% *}; id=${pp#* }
+  hit=$(grep -m1 -E "input_focus: \[Focus (request|entering) $id Application Not Responding: ${pkg//./\\.}[ ,]" "$seed") || return 1
+  echo "NOTE: allowlisted ANR dialog package=$pkg window=$id seen earlier in seed-rawlog.txt: $hit"
+  [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf 'upgrade-prior: allowlisted ANR dialog package=%s window=%s was in the seed run log before verify: %s\n' "$pkg" "$id" "$hit" >> "$GITHUB_STEP_SUMMARY"
+  return 0
 }
 # A green instrument result is only trusted when its own log is clean: no app or unknown ANR/crash, usable capture.
 green_must_be_clean() { # $1 = result name, $2 = label
@@ -117,9 +129,7 @@ dismiss_foreign_anr() { # $1 = label for the saved evidence
   printf '%s\n' "$focus" > "instrument-results/$1-focus.txt"
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml "instrument-results/$1-ui.xml" >/dev/null 2>&1
   adb logcat -d | grep -E "ANR in|Application Not Responding" | tail -20 > "instrument-results/$1-anr-log.txt"
-  for pkg in $ANR_ALLOW; do
-    case "$focus" in *"Application Not Responding: $pkg}"*) ok=1;; esac
-  done
+  single_allowed_dialog "$focus" >/dev/null && ok=1
   [ "$ok" = 1 ] || return 1
   echo "NOTE: allowlisted non-app ANR dialog in focus: $focus"
   local B X1 Y1 X2 Y2
