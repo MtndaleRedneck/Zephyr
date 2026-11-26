@@ -24,4 +24,4 @@ $engineMetadata=(Get-Item $engine).VersionInfo
 Get-ItemProperty 'HKLM:/Software/Microsoft/Windows/CurrentVersion/Uninstall/*','HKLM:/Software/WOW6432Node/Microsoft/Windows/CurrentVersion/Uninstall/*' -ErrorAction SilentlyContinue | Where-Object DisplayName -like 'Inno Setup*' | ForEach-Object {"REGISTRY_DIAGNOSTIC name=$($_.DisplayName) DisplayVersion=$($_.DisplayVersion)"}
 $isccHash | Set-Content (Join-Path $env:RUNNER_TEMP 'zephyr-iscc-sha256.txt')
 $engineHash | Set-Content (Join-Path $env:RUNNER_TEMP 'zephyr-compiler-engine-sha256.txt')
-"PINNED_PAYLOAD_INSTALLED officialPayloadSHA256=$hash ISCC_SHA256=$isccHash ENGINE_SHA256=$engineHash; actual6.6.1enginegateoccursinbothsuccessfulartifactcompilelogs"
+"PINNED_PAYLOAD_INSTALLED officialPayloadSHA256=$hash ISCC_SHA256=$isccHash ENGINE_SHA256=$engineHash"
