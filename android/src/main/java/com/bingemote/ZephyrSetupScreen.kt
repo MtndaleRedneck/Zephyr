@@ -152,7 +152,7 @@ fun ZephyrSetupScreen(
                     Spacer(Modifier.height(8.dp))
                     val isSel = chosen?.host == h.host
                     PressTile(
-                        onTap = { chosen = DiscoveredHelper(h.host, store.zephyrPort, h.name); manualHost = ""; code = ""; pairedName = null; error = null },
+                        onTap = { chosen = DiscoveredHelper(h.host, h.port, h.name); manualHost = ""; code = ""; pairedName = null; error = null },
                         background = if (isSel) OrangeGradient else CardGradient,
                         modifier = Modifier.fillMaxWidth().height(52.dp)
                             .then(if (isSel) Modifier else Modifier.border(1.dp, Orange, androidx.compose.foundation.shape.RoundedCornerShape(18.dp))),

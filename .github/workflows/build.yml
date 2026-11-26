@@ -313,21 +313,21 @@ jobs:
           # The file the emulator proof installed is /tmp/up/new-app.apk: it must still be the bytes recorded after the build.
           (cd /tmp/up && sha256sum -c new-app.sha256)
           mkdir -p /tmp/pub
-          cp /tmp/up/new-app.apk /tmp/pub/Zephyr-Android-1.6.1.apk
+          cp /tmp/up/new-app.apk /tmp/pub/Zephyr-Android-1.7.0.apk
           want=$(cut -d' ' -f1 /tmp/up/new-app.sha256)
-          have=$(sha256sum /tmp/pub/Zephyr-Android-1.6.1.apk | cut -d' ' -f1)
+          have=$(sha256sum /tmp/pub/Zephyr-Android-1.7.0.apk | cut -d' ' -f1)
           [ "$want" = "$have" ] || { echo "ASSERT FAIL: staged copy differs from the tested APK"; exit 1; }
           # Full output is read into a variable (no head/grep -m1 on a pipe), so pipefail cannot report a SIGPIPE on a good APK.
-          badging=$("$BT/aapt2" dump badging /tmp/pub/Zephyr-Android-1.6.1.apk)
+          badging=$("$BT/aapt2" dump badging /tmp/pub/Zephyr-Android-1.7.0.apk)
           badge1=$(sed -n 1p <<<"$badging")
-          grep -q "package: name='com.zephyr.remote' versionCode='28' versionName='1.6.1'" <<<"$badge1" || { echo "ASSERT FAIL: unexpected package/version: $badge1"; exit 1; }
-          certs=$("$BT/apksigner" verify --print-certs /tmp/pub/Zephyr-Android-1.6.1.apk)
+          grep -q "package: name='com.zephyr.remote' versionCode='28' versionName='1.7.0'" <<<"$badge1" || { echo "ASSERT FAIL: unexpected package/version: $badge1"; exit 1; }
+          certs=$("$BT/apksigner" verify --print-certs /tmp/pub/Zephyr-Android-1.7.0.apk)
           signer=$(awk '/certificate SHA-256 digest/{print $NF; exit}' <<<"$certs")
           [ "$signer" = "$(sed -n 1p /tmp/signers.txt)" ] || { echo "ASSERT FAIL: signer differs from the verified one"; exit 1; }
           {
             echo "source_sha=$GITHUB_SHA"
             echo "run_id=$GITHUB_RUN_ID"
-            echo "apk=Zephyr-Android-1.6.1.apk"
+            echo "apk=Zephyr-Android-1.7.0.apk"
             echo "apk_sha256=$have"
             echo "signer_sha256=$signer"
             echo "badging=$badge1"
@@ -337,7 +337,7 @@ jobs:
         with:
           name: zephyr-android-release-candidate
           path: |
-            /tmp/pub/Zephyr-Android-1.6.1.apk
+            /tmp/pub/Zephyr-Android-1.7.0.apk
             /tmp/pub/provenance.txt
           retention-days: 1
           if-no-files-found: error
