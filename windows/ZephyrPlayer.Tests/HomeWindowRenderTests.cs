@@ -103,8 +103,30 @@ namespace ZephyrPlayer.Tests
                     {
                         var el = (FrameworkElement)w.FindName(name)!;
                         var r = el.TransformToAncestor(root).TransformBounds(new Rect(0, 0, el.ActualWidth, el.ActualHeight));
-                        Assert.True(r.Right <= root.ActualWidth + 0.5, name + $" overflows the window: right edge {r.Right:F1} > {root.ActualWidth:F1}");
+                        // Pinned viewport: the literal arrange width, never a content-grown root.
+                        Assert.True(r.Right <= 940 + 0.5, name + $" overflows the 940px viewport: right edge {r.Right:F1}");
                     }
+
+                    // Long END segment: a library root whose own name is 40 chars, one file inside.
+                    var libLong = Path.Combine(dir, "A very long library folder name 0123456789AB");
+                    Directory.CreateDirectory(libLong);
+                    File.WriteAllBytes(Path.Combine(libLong, "Clip.mp4"), new byte[] { 1, 2, 3 });
+                    var settings3 = new PlayerSettings(Path.Combine(dir, "settings3.json")) { LibraryFolder = libLong };
+                    var w3 = new HomeWindow(settings3, store, _ => { }, () => { }, loadDurations: false,
+                        history: new PlaybackHistory(Path.Combine(dir, "history3.json")));
+                    w3.Show(); w3.Hide();
+                    var root3 = (FrameworkElement)w3.Content;
+                    root3.Measure(new Size(940, 700));
+                    root3.Arrange(new Rect(0, 0, 940, 700));
+                    root3.UpdateLayout();
+                    foreach (var name in new[] { "CommandRight", "PhoneCard" })
+                    {
+                        var el = (FrameworkElement)w3.FindName(name)!;
+                        var r = el.TransformToAncestor(root3).TransformBounds(new Rect(0, 0, el.ActualWidth, el.ActualHeight));
+                        Assert.True(r.Right <= 940 + 0.5, name + $" overflows the 940px viewport with a long end segment: right edge {r.Right:F1}");
+                    }
+                    Assert.True(w3.DurationWork.Wait(10000), "duration worker did not finish");
+                    w3.Close();
                     // Finish native metadata work before tearing down its owning STA.
                     Assert.True(w.DurationWork.Wait(10000), "duration worker did not finish");
                     w.Close();
