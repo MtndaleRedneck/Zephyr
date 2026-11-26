@@ -51,7 +51,19 @@ class ZephyrLeaveWiringTest {
             // wait for the check to finish (a result card replaces Checking)
             val resultSel = if (statusCode == 401) By.text("Pair again") else if (statusCode == 200) By.text("Done") else By.text("Try again")
             assertNotNull("check result not shown", scrollFind(device, resultSel))
-            if (useBack) device.pressBack() else scrollFind(device, By.text("Cancel"))!!.click()
+            if (useBack) {
+                // First-run Back from the pair step first walks back to the install step (existing behavior); a second Back leaves.
+                device.pressBack(); Thread.sleep(700)
+                if (device.findObject(By.text("Zephyr Player is running")) != null) { device.pressBack() }
+            } else {
+                // Cancel sits at the top of the scrolling column: scroll up until it is on screen.
+                var cancel = device.findObject(By.text("Cancel")); var up = 0
+                while (cancel == null && up++ < 8) {
+                    device.swipe(device.displayWidth * 19 / 20, device.displayHeight / 4, device.displayWidth * 19 / 20, device.displayHeight * 3 / 4, 20)
+                    cancel = device.wait(Until.findObject(By.text("Cancel")), 1000)
+                }
+                assertNotNull("Cancel button not found", cancel); cancel!!.click()
+            }
             Thread.sleep(1500)
             assertEquals("setupDone after leaving", expectFinish, store.setupDone)
             if (expectFinish) {
