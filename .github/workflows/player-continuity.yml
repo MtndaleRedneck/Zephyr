@@ -67,7 +67,7 @@ jobs:
           if ($head -notmatch '^[0-9a-f]{40}$') { throw "candidate head must be a full 40-char sha" }
           if ($want -notmatch '^[0-9a-f]{64}$') { throw "candidate installer sha256 must be 64 hex chars" }
           $info = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$run" | ConvertFrom-Json
-          Write-Host "candidate run $run: workflow '$($info.name)' head_sha $($info.head_sha) conclusion $($info.conclusion)"
+          Write-Host "candidate run ${run}: workflow '$($info.name)' head_sha $($info.head_sha) conclusion $($info.conclusion)"
           if ($info.head_sha -ne $head) { throw "candidate run $run was built from $($info.head_sha), not the stated head $head" }
           if ($info.conclusion -ne 'success') { throw "candidate run $run did not conclude success (conclusion=$($info.conclusion))" }
           New-Item -ItemType Directory -Force windows/Output | Out-Null
