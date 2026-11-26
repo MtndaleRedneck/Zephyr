@@ -166,12 +166,12 @@ internal static class VlcSetup
                 Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
                 return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
             }
-            // Clear-only, never a stage: the value vlcrc already carries is the target's own value,
-            // so a pass writing it between snapshot and clear lands the SAME value - no ordering needed.
-            var exitBackup = VlcRotation.BackupTarget();
-            Program.MutateAndPersist(() => VlcRotation.ClearTargetIfMatchesUnderConfigSaveLock(password),
-                () => VlcRotation.RestoreTargetUnderConfigSaveLock(exitBackup), "the VLC setup");
+            // Nothing to write, and NOTHING to clear here: this read is unlocked and unordered,
+            // and an old-password VLC exiting in the window would rewrite OLD over a cleared,
+            // unarmed state - no target left, nothing repairs. The pass's quiet-first verify is
+            // the ONE clear path; the target stays armed and the kicked pass converges it.
             Program.Log("vlcrc already has the web remote set up - nothing to write.");
+            VlcRotation.Kick();
             return JsonSerializer.Serialize(new { ok = true });
         }
         // Stale-value guard: never stage over a NEWER truth. A live rotation target of a

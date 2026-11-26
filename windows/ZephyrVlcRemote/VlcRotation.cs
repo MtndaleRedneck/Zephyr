@@ -143,8 +143,6 @@ internal static class VlcRotation
         }
     }
     internal static void RestoreTargetUnderConfigSaveLock((string? t, bool landed, int gen) b) { lock (Gate) { _target = b.t; _landed = b.landed; _generation = b.gen; } }
-    /// <summary>/vlc/setup's "unchanged" path may clear the target only when it IS the requested value.</summary>
-    internal static void ClearTargetIfMatchesUnderConfigSaveLock(string value) { lock (Gate) { if (_target == value) { _target = null; _landed = false; } } }
 
     /// <summary>The app-owned 15 s timer (a System.Threading.Timer: its callback already runs on a
     /// pool thread, never the UI thread) plus the startup kick. Independent of any window.</summary>

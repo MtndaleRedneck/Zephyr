@@ -267,6 +267,33 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void HealthySetupLeavesTheTargetArmedForTheQuietVerify()
+    {
+        // /vlc/setup observing that vlcrc already carries the target's value must NOT clear the
+        // target: that read is unlocked and unordered, and an old-password VLC exiting in the
+        // window would rewrite OLD over a cleared, unarmed state - no target left, nothing
+        // repairs. The pass's quiet-first verify is the ONE clear path. (The pre-fix branch
+        // cleared here and fails the armed asserts below.)
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-33");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                                  // lands NEW
+        Assert.True(VlcRotation.Landed);
+        VlcSetup.VlcRunningOverride = () => true;                // an old VLC may still be open
+        using var doc = JsonDocument.Parse(VlcSetup.SetupFromPhone("new-password-33"));
+        Assert.True(doc.RootElement.GetProperty("ok").GetBoolean()); // truthful: vlcrc already carries it
+        Assert.Equal("new-password-33", VlcRotation.TargetValue);   // still armed, NOT cleared by the setup read
+        Assert.True(VlcRotation.Landed);
+        VlcRotation.PassOnce();                                  // the verify waits for quiet
+        Assert.Equal("new-password-33", VlcRotation.TargetValue);
+        VlcSetup.VlcRunningOverride = null;
+        VlcRotation.PassOnce();                                  // the one ordered clear
+        Assert.Null(VlcRotation.TargetValue);
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-33"));
+    }
+
+    [Fact]
     public void RemovalDialogDoneRequiresTheDiskToShowTheTarget()
     {
         // The removal dialog's classification, pinned against the false-done class: a refused
