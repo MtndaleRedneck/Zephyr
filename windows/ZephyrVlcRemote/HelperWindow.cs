@@ -823,58 +823,84 @@ internal sealed class HelperWindow : Form
         ApplyLayout();
     }
 
+    private bool _removing; // one removal operation at a time: the confirm dialog and the awaited transaction both leave gaps a second click could slip through
+
     private async void RemovePhone(Program.PairedPhone ph)
     {
-        if (!ConfirmDialog.Ask(this,
-                "Remove " + ph.Name + "? It stops controlling this PC through Zephyr VLC Remote right away. " +
-                "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. " +
-                "You can pair the phone again any time with a new code.",
-                "Remove")) return;
-        // Generated BEFORE the lock; the removal and the rotation persist as ONE transaction:
-        // a refused save rolls both back and nothing changed.
-        var newPassword = VlcSetup.GeneratePassword();
-        // Off the UI thread: the transaction can wait on LaunchWriteMutex for the duration of a
-        // Play inline launch. The transaction itself touches no UI; everything below continues
-        // on the UI thread after the await.
-        var (ok, gen) = await Task.Run(() => Program.RemovePhonesAndRotatePersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray(), newPassword));
-        if (!ok)
+        if (_removing) return;
+        _removing = true; // before the confirm: the dialog itself is a gap
+        try
         {
-            NoteDialog.Show(this, "Couldn't save the removal, so " + ph.Name + " is still paired. Nothing changed. Try again.");
+            if (!ConfirmDialog.Ask(this,
+                    "Remove " + ph.Name + "? It stops controlling this PC through Zephyr VLC Remote right away. " +
+                    "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. " +
+                    "You can pair the phone again any time with a new code.",
+                    "Remove")) return;
+            // Generated BEFORE the lock; the removal and the rotation persist as ONE transaction:
+            // a refused save rolls both back and nothing changed.
+            var newPassword = VlcSetup.GeneratePassword();
+            // Off the UI thread: the transaction can wait on LaunchWriteMutex for the duration of a
+            // Play inline launch. The transaction itself touches no UI; everything below continues
+            // on the UI thread after the await.
+            var (ok, gen) = await Task.Run(() => Program.RemovePhonesAndRotatePersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray(), newPassword));
+            if (!ok)
+            {
+                NoteDialog.Show(this, "Couldn't save the removal, so " + ph.Name + " is still paired. Nothing changed. Try again.");
+                RefreshPhones();
+                return;
+            }
+            Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
             RefreshPhones();
-            return;
+            if (!_windowShot)
+            {
+                try { await ShowRotationOutcomeAsync(ph.Name + " removed.", gen, allRemoved: false); }
+                catch (Exception ex) { Program.Log("The removal result could not be shown (" + ex.GetType().Name + "); the removal itself is saved."); }
+            }
         }
-        Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
-        RefreshPhones();
-        if (!_windowShot)
+        catch (Exception ex) // async void: an escape would crash the process; the list re-renders so the window tells the truth
         {
-            try { await ShowRotationOutcomeAsync(ph.Name + " removed.", gen, allRemoved: false); }
-            catch (Exception ex) { Program.Log("The removal result could not be shown (" + ex.GetType().Name + "); the removal itself is saved."); }
+            Program.Log("Phone removal failed unexpectedly (" + ex.GetType().Name + ").");
+            try { RefreshPhones(); NoteDialog.Show(this, "Something went wrong while removing " + ph.Name + " - the window shows the current state."); }
+            catch (Exception ex2) { Program.Log("The removal failure could not be shown (" + ex2.GetType().Name + ")."); }
         }
+        finally { _removing = false; }
     }
 
     private async void RemoveAllPhones()
     {
-        if (Program.PhonesCount == 0) return;
-        if (!ConfirmDialog.Ask(this,
-                "Remove all phones? Every phone stops controlling this PC through Zephyr VLC Remote right away. " +
-                "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. " +
-                "Pair them again with new codes.",
-                "Remove all")) return;
-        var newPassword = VlcSetup.GeneratePassword();
-        var (ok, gen) = await Task.Run(() => Program.RemovePhonesAndRotatePersist(all => all, newPassword));
-        if (!ok)
+        if (_removing) return;
+        _removing = true; // before the confirm: the dialog itself is a gap
+        try
         {
-            NoteDialog.Show(this, "Couldn't save the removal, so every phone is still paired. Nothing changed. Try again.");
+            if (Program.PhonesCount == 0) return;
+            if (!ConfirmDialog.Ask(this,
+                    "Remove all phones? Every phone stops controlling this PC through Zephyr VLC Remote right away. " +
+                    "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. " +
+                    "Pair them again with new codes.",
+                    "Remove all")) return;
+            var newPassword = VlcSetup.GeneratePassword();
+            var (ok, gen) = await Task.Run(() => Program.RemovePhonesAndRotatePersist(all => all, newPassword));
+            if (!ok)
+            {
+                NoteDialog.Show(this, "Couldn't save the removal, so every phone is still paired. Nothing changed. Try again.");
+                RefreshPhones();
+                return;
+            }
+            Program.Log("All phones removed.");
             RefreshPhones();
-            return;
+            if (!_windowShot)
+            {
+                try { await ShowRotationOutcomeAsync("All phones removed.", gen, allRemoved: true); }
+                catch (Exception ex) { Program.Log("The removal result could not be shown (" + ex.GetType().Name + "); the removal itself is saved."); }
+            }
         }
-        Program.Log("All phones removed.");
-        RefreshPhones();
-        if (!_windowShot)
+        catch (Exception ex) // async void: an escape would crash the process; the list re-renders so the window tells the truth
         {
-            try { await ShowRotationOutcomeAsync("All phones removed.", gen, allRemoved: true); }
-            catch (Exception ex) { Program.Log("The removal result could not be shown (" + ex.GetType().Name + "); the removal itself is saved."); }
+            Program.Log("Remove-all failed unexpectedly (" + ex.GetType().Name + ").");
+            try { RefreshPhones(); NoteDialog.Show(this, "Something went wrong while removing the phones - the window shows the current state."); }
+            catch (Exception ex2) { Program.Log("The removal failure could not be shown (" + ex2.GetType().Name + ")."); }
         }
+        finally { _removing = false; }
     }
 
     /// <summary>One honest outcome line after a removal rotates the VLC password: kick the pass,
