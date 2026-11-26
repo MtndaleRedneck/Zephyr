@@ -236,6 +236,14 @@ class MainActivity : ComponentActivity() {
                         onCancel = { current.value = "settings" },
                         initialStep = 2,
                     )
+                    "pairdemo-chosen" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "chosen")
+                    "pairdemo-code" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "code")
+                    "pairdemo-error" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "error")
+                    "pairdemo-success-ok" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-ok")
+                    "pairdemo-success-bad" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-bad")
+                    "pairdemo-success-cant" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-cant")
+                    "pairdemo-success-checking" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-checking")
+                    "icondemo" -> DebugIconDemo()
                     "settings-pair-paired" -> {
                         // Debug capture only: fake a saved pairing so re-entry with a
                         // token (plain form, Back leaves) renders. Captured LAST in the rig; demo values never ship.

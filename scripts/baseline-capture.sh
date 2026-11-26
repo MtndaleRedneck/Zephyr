@@ -27,11 +27,19 @@ lane() { # name size density fontscale
   adb shell wm size "$2"; adb shell wm density "$3"; adb shell settings put system font_scale "$4"; sleep 3
   adb shell am start -n $PKG/com.bingemote.MainActivity --es screen main >/dev/null; sleep 6
   shoot "$1" main main
+  shoot "$1" icondemo icondemo
   shoot "$1" settings settings
   shoot "$1" movies movies
   shoot "$1" yourpc yourpc
   shoot "$1" feedback feedback
   shoot "$1" pair-fresh settings-pair-2
+  shoot "$1" pairdemo-chosen pairdemo-chosen
+  shoot "$1" pairdemo-code pairdemo-code
+  shoot "$1" pairdemo-error pairdemo-error
+  shoot "$1" pairdemo-success-ok pairdemo-success-ok
+  shoot "$1" pairdemo-success-bad pairdemo-success-bad
+  shoot "$1" pairdemo-success-cant pairdemo-success-cant
+  shoot "$1" pairdemo-success-checking pairdemo-success-checking
   shoot "$1" vlc-setup-cancel setup --ez pairdemo true --ez setupcancel true
   shoot "$1" vlc-setup-chosen setup --ez pairdemo true --ez pairdemoselect true
 }

@@ -30,6 +30,7 @@ fun ZephyrSetupScreen(
     onDone: () -> Unit,
     onCancel: () -> Unit,
     initialStep: Int = 0,
+    demo: String = "", // debug capture only (MainActivity, BuildConfig.DEBUG): preset UI state, no network, no store write
 ) {
     val store = remote.store
     val scope = rememberCoroutineScope()
@@ -38,17 +39,17 @@ fun ZephyrSetupScreen(
     var step by remember { mutableStateOf(entryStep) }
     // Same shape as the BingeMote setup: a PC is chosen from Find my PC or a typed address, and only then does the code card appear.
     var manualHost by remember { mutableStateOf("") }
-    var chosen by remember { mutableStateOf<DiscoveredHelper?>(null) }
-    var code by remember { mutableStateOf("") }
+    var chosen by remember { mutableStateOf<DiscoveredHelper?>(if (demo.isNotEmpty()) DiscoveredHelper("192.168.1.50", 47800, "MY-PC") else null) }
+    var code by remember { mutableStateOf(if (demo == "code") "1234" else "") }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(if (demo == "error") "That code is wrong or expired. Check the code on your PC and try again." else null) }
     var scanning by remember { mutableStateOf(false) }
-    var scannedOnce by remember { mutableStateOf(false) }
+    var scannedOnce by remember { mutableStateOf(demo.isNotEmpty()) }
     var discoveryMessage by remember { mutableStateOf<String?>(null) }
-    var found by remember { mutableStateOf<List<DiscoveredHelper>>(emptyList()) }
-    var checkState by remember { mutableStateOf(PairCheck.None) } // post-pair status check; read-only, never touches the store
+    var found by remember { mutableStateOf<List<DiscoveredHelper>>(if (demo.isNotEmpty()) listOf(DiscoveredHelper("192.168.1.50", 47800, "MY-PC")) else emptyList()) }
+    var checkState by remember { mutableStateOf(when (demo) { "success-ok" -> PairCheck.Ok; "success-bad" -> PairCheck.BadToken; "success-cant" -> PairCheck.CouldntCheck; "success-checking" -> PairCheck.Checking; else -> PairCheck.None }) } // post-pair status check; read-only, never touches the store
     var checkGen by remember { mutableStateOf(0) }
-    var pairedName by remember { mutableStateOf<String?>(null) } // set after a pair on this screen: confirmation shows under the form
+    var pairedName by remember { mutableStateOf<String?>(if (demo.startsWith("success")) "MY-PC" else null) } // set after a pair on this screen: confirmation shows under the form
 
     fun scan() {
         scanning = true
