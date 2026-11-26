@@ -76,7 +76,7 @@ namespace ZephyrPlayer.Tests
                         }
                         // The whole path above the library root, not "C: > ... > Movies".
                         var crumbs = (ItemsControl)w.FindName("Breadcrumb")!;
-                        var texts = crumbs.Items.OfType<TextBlock>().Select(x => x.Text).Concat(crumbs.Items.OfType<Button>().Select(x => (string)x.Content)).ToList();
+                        var texts = crumbs.Items.OfType<TextBlock>().Select(x => x.Text).Concat(crumbs.Items.OfType<Button>().Select(x => x.Content is TextBlock tb ? tb.Text : (string)x.Content)).ToList(); // crumb text: last segment is a trimming TextBlock since the ellipsis cap
                         Assert.Contains("Videos", texts);
                         Assert.Contains("TestUser", texts);
                         Assert.Equal(lib, crumbs.ToolTip as string);
