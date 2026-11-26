@@ -212,7 +212,7 @@ private fun HomeContent(
                 )
                 Text(
                     "Tap here to open Settings and pair it",
-                    color = Color(0xFF3D2A12), fontSize = 14.sp,
+                    color = OnAccentSub, fontSize = 14.sp,
                 )
             } else {
             Text(
@@ -230,7 +230,7 @@ private fun HomeContent(
                     "paused" -> "Paused"
                     else -> "Stopped"
                 },
-                color = Color(0xFF3D2A12), fontSize = 14.sp,
+                color = OnAccentSub, fontSize = 14.sp,
                 // Reconnect line only: slightly tighter tracking so it fits one line (size unchanged).
                 letterSpacing = if (lost) 0.sp else TextUnit.Unspecified,
             )
@@ -241,10 +241,10 @@ private fun HomeContent(
             if (!lost) {
                 if (remote.unpaired) {
                     Spacer(Modifier.height(6.dp))
-                    Text("This phone isn't paired with the PC anymore - pair again.", color = Color(0xFF3D2A12), fontSize = 13.sp)
+                    Text("This phone isn't paired with the PC anymore - pair again.", color = OnAccentSub, fontSize = 13.sp)
                 } else if (remote.helperNotice) {
                     Spacer(Modifier.height(6.dp))
-                    Text("Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = Color(0xFF3D2A12), fontSize = 13.sp)
+                    Text("Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = OnAccentSub, fontSize = 13.sp)
                 }
             }
             // S11: the saved PC appeared at a NEW address. The saved token never
@@ -254,7 +254,7 @@ private fun HomeContent(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Found $movedName at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
-                    color = Color(0xFF3D2A12), fontSize = 13.sp,
+                    color = OnAccentSub, fontSize = 13.sp,
                 )
             }
             // S11b: the saved helper appeared at a NEW address. The helper token
@@ -264,7 +264,7 @@ private fun HomeContent(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Found Zephyr VLC Remote ($movedName) at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
-                    color = Color(0xFF3D2A12), fontSize = 13.sp,
+                    color = OnAccentSub, fontSize = 13.sp,
                 )
             }
             // One-time 1.1 -> 1.2 notice (round-3 A3): the PC helper changed.
@@ -274,7 +274,7 @@ private fun HomeContent(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "New: Zephyr VLC Remote replaces BingeMote on the PC. Your pairings carry over - if mouse, keyboard or volume stop answering, open Setup and pair once more.",
-                        color = Color(0xFF3D2A12), fontSize = 13.sp, modifier = Modifier.weight(1f),
+                        color = OnAccentSub, fontSize = 13.sp, modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
@@ -291,7 +291,7 @@ private fun HomeContent(
             // hero for the review captures. Never set outside the rig; release never shows it.
             if (BuildConfig.DEBUG && !unpairedSource) remote.mockHeroNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, color = Color(0xFF3D2A12), fontSize = 13.sp)
+                Text(it, color = OnAccentSub, fontSize = 13.sp)
             }
         }
     }

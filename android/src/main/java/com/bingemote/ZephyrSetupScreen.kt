@@ -126,7 +126,7 @@ fun ZephyrSetupScreen(
 
     // Debug capture only: demo states that show the lower cards scroll to the end so the frame contains them.
     val demoScroll = rememberScrollState()
-    LaunchedEffect(demo) { if (demo.isNotEmpty() && demo != "chosen") { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
+    LaunchedEffect(demo) { if (BuildConfig.DEBUG && demo.isNotEmpty() && demo != "chosen") { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
     // Re-entry with a saved pairing opens on the form: Back leaves (like the VLC setup). Only the first-run wizard walks 2 -> 1.
     BackHandler { if (step > 1 && entryStep == 1) { step -= 1; error = null } else onCancel() }
 
