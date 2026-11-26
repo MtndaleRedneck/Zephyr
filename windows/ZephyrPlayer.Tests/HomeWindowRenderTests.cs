@@ -68,9 +68,13 @@ namespace ZephyrPlayer.Tests
 
                     // Render offscreen as CI evidence.
                     var root = (FrameworkElement)w.Content;
-                    root.Measure(new Size(940, 700));
-                    root.Arrange(new Rect(0, 0, 940, 700));
-                    root.UpdateLayout();
+                    // Drive the 940 geometry through the window itself: a manual Measure/Arrange on
+                    // the content is undone by the next UpdateLayout, which re-lays out from the
+                    // window at its own size (on a 1024x768 runner the default 1280 window clamps to
+                    // a ~1008 client - that re-layout, not the manual 940, is what cut the right edge
+                    // off earlier renders). A real window resize fires the shipped SizeChanged refit.
+                    w.Width = 940; w.Height = 700;
+                    w.Show(); w.UpdateLayout();
                     var rtb = new RenderTargetBitmap(940, 700, 96, 96, PixelFormats.Pbgra32);
                     var bg = new DrawingVisual();
                     using (var dc = bg.RenderOpen()) dc.DrawRectangle(w.Background, null, new Rect(0, 0, 940, 700));
@@ -99,12 +103,14 @@ namespace ZephyrPlayer.Tests
                     // No horizontal overflow: a single long folder name (this fixture's 36-char
                     // temp-dir segment) must ellipsize, never push the row's right-hand controls
                     // past the window edge. Grounded in the 940px render that cut them off.
+                    // Pinned literal viewport: the root may never exceed 940 (chrome lands it ~924),
+                    // and no control may cross the actual viewport edge.
+                    Assert.True(root.ActualWidth <= 940 + 0.5, $"viewport grew past the pinned 940: {root.ActualWidth:F1}");
                     foreach (var name in new[] { "CommandRight", "PhoneCard" })
                     {
                         var el = (FrameworkElement)w.FindName(name)!;
                         var r = el.TransformToAncestor(root).TransformBounds(new Rect(0, 0, el.ActualWidth, el.ActualHeight));
-                        // Pinned viewport: the literal arrange width, never a content-grown root.
-                        Assert.True(r.Right <= 940 + 0.5, name + $" overflows the 940px viewport: right edge {r.Right:F1}");
+                        Assert.True(r.Right <= root.ActualWidth + 0.5, name + $" overflows the pinned viewport ({root.ActualWidth:F0} <= 940): right edge {r.Right:F1}");
                     }
 
                     // Long END segment: a library root whose own name is 40 chars, one file inside.
@@ -114,16 +120,15 @@ namespace ZephyrPlayer.Tests
                     var settings3 = new PlayerSettings(Path.Combine(dir, "settings3.json")) { LibraryFolder = libLong };
                     var w3 = new HomeWindow(settings3, store, _ => { }, () => { }, loadDurations: false,
                         history: new PlaybackHistory(Path.Combine(dir, "history3.json")));
-                    w3.Show(); w3.Hide();
+                    w3.Width = 940; w3.Height = 700;
+                    w3.Show(); w3.UpdateLayout(); // window-driven, same as above: no manual arrange for UpdateLayout to undo
                     var root3 = (FrameworkElement)w3.Content;
-                    root3.Measure(new Size(940, 700));
-                    root3.Arrange(new Rect(0, 0, 940, 700));
-                    root3.UpdateLayout();
+                    Assert.True(root3.ActualWidth <= 940 + 0.5, $"long-end viewport grew past the pinned 940: {root3.ActualWidth:F1}");
                     foreach (var name in new[] { "CommandRight", "PhoneCard" })
                     {
                         var el = (FrameworkElement)w3.FindName(name)!;
                         var r = el.TransformToAncestor(root3).TransformBounds(new Rect(0, 0, el.ActualWidth, el.ActualHeight));
-                        Assert.True(r.Right <= 940 + 0.5, name + $" overflows the 940px viewport with a long end segment: right edge {r.Right:F1}");
+                        Assert.True(r.Right <= root3.ActualWidth + 0.5, name + $" overflows the pinned viewport ({root3.ActualWidth:F0} <= 940) with a long end segment: right edge {r.Right:F1}");
                     }
                     Assert.True(w3.DurationWork.Wait(10000), "duration worker did not finish");
                     w3.Close();
@@ -189,8 +194,9 @@ namespace ZephyrPlayer.Tests
                     // the breadcrumb room accounting has to subtract it.
                     var countText = (TextBlock)w.FindName("CountText")!;
                     countText.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-                    Assert.True(countText.ActualWidth >= countText.DesiredSize.Width - 0.5,
-                        $"count text width squeezed at 900: actual {countText.ActualWidth} desired {countText.DesiredSize.Width}");
+                    var countFull = countText.DesiredSize.Width - countText.Margin.Left - countText.Margin.Right; // DesiredSize includes margins, ActualWidth does not
+                    Assert.True(countText.ActualWidth >= countFull - 0.5,
+                        $"count text width squeezed at 900: actual {countText.ActualWidth} full {countFull}");
                     var commandRight = (FrameworkElement)w.FindName("CommandRight")!;
                     var countRightEdge = countText.TranslatePoint(new Point(countText.ActualWidth, 0), root).X;
                     var rightLeftEdge = commandRight.TranslatePoint(new Point(0, 0), root).X;
