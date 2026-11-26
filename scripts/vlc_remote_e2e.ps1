@@ -519,7 +519,8 @@ try {
         $pendingPw = $paired3.vlcPassword
         Assert ($pendingPw.Length -ge 16) "pair hands over the pending password"
         $cfgText = Get-Content $cfg -Raw
-        Assert ($cfgText -match '"pendingVlcPassword"') "the pending write is persisted in config.json"
+        # The rotation redesign persists the pending write as vlcTarget (DPAPI-wrapped) with vlcLanded=false, not as pendingVlcPassword.
+        Assert (($cfgText -match '"vlcTarget"\s*:\s*"') -and ($cfgText -match '"vlcLanded"\s*:\s*false')) "the pending write is persisted in config.json (vlcTarget set, vlcLanded=false)"
         Stop-HelperVerified
         Stop-Process -Id $fakeVlc.Id -Force
         Start-Sleep -Seconds 1
@@ -534,7 +535,7 @@ try {
         Assert ($vlcrcText -match 'http-host=0.0.0.0') "vlcrc listens on the LAN"
         Start-Sleep -Seconds 1
         $cfgText = Get-Content $cfg -Raw
-        Assert (-not ($cfgText -match '"pendingVlcPassword":"')) "the completed pending write is cleared from config.json"
+        Assert ($cfgText -match '"vlcLanded"\s*:\s*true') "the completed pending write is recorded as landed in config.json (vlcLanded=true)"
         $r = Invoke-HelperGet '/vlc/setup-status' $token
         Assert (($r.body | ConvertFrom-Json).configured -eq $true) "setup-status attests configured after the completed write"
 
