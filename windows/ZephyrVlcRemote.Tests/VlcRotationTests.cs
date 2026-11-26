@@ -105,9 +105,51 @@ public class VlcRotationTests : IDisposable
         VlcRotation.PassOnce();
         Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
         Assert.False(kept.AdoptSpent);
-        Assert.True(VlcSetup.Pending);           // repaired but not yet verified
-        VlcRotation.PassOnce();                  // quiet healthy read: verify clears the target
+        Assert.True(VlcRotation.Landed);           // the repair wrote + read back + persisted: landed holds
+        Assert.False(VlcSetup.Pending);            // pending is exactly "a write outstanding" - none is
+        VlcRotation.PassOnce();                    // quiet healthy read: verify clears the target
         Assert.Null(VlcRotation.TargetValue);
+    }
+
+    [Fact]
+    public void StaleSetupValueNeverReplacesALandedRotationTarget()
+    {
+        // /vlc/setup with a stale password (a kept phone's late Finish carrying OLD) must not
+        // stage over the revocation: target, generation and vlcrc stay NEW, and the reply is a
+        // non-ok "password changed" so the phone re-fetches the current password through adopt.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        Program.AddPhoneAndPersist("tok-b", "Phone B");
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => x.Token == "tok-b").ToArray(), "new-password-22");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                              // lands NEW
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
+        using var doc = JsonDocument.Parse(VlcSetup.SetupFromPhone("old-password-1"));   // the stale value
+        Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("password changed", doc.RootElement.GetProperty("reason").GetString());
+        Assert.Equal("new-password-22", VlcRotation.TargetValue);   // untouched
+        Assert.Equal(gen, VlcRotation.Generation);                  // no bump
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22")); // disk untouched
+    }
+
+    [Fact]
+    public void StaleSetupValueNeverReplacesADeferredRotationTarget()
+    {
+        // Same guard mid-deferral: VLC open, NEW staged but not landed, vlcrc still OLD. A setup
+        // call carrying a THIRD value must not replace the outstanding NEW target.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        VlcSetup.VlcRunningOverride = () => true;
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        Program.AddPhoneAndPersist("tok-b", "Phone B");
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => x.Token == "tok-b").ToArray(), "new-password-22");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                              // defers: NEW staged, vlcrc still OLD
+        Assert.Equal("new-password-22", VlcRotation.TargetValue);
+        using var doc = JsonDocument.Parse(VlcSetup.SetupFromPhone("some-other-value-1"));
+        Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
+        Assert.Equal("new-password-22", VlcRotation.TargetValue);
+        Assert.Equal(gen, VlcRotation.Generation);
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("old-password-1")); // disk untouched
     }
 
     [Fact]

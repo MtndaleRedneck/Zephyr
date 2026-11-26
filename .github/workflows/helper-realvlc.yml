@@ -2,11 +2,18 @@ name: Helper RealVLC
 
 on:
   workflow_dispatch:
+  push:
+    branches: [vlc-rotation-1125]
+    paths:
+      - 'windows/ZephyrVlcRemote/**'
+      - 'windows/ZephyrVlcRemote.Tests/**'
+      - '.github/workflows/helper-realvlc.yml'
 
-# Narrow lane for the REAL-VLC rotation tests only (RealVlcRotationTests). Dispatch-only:
-# it launches real VLC processes against the helper's rotation state and is NOT part of the
-# ordinary helper lane (helper.yml runs everything except ~RealVlc). Run it on the rotation
-# branch via: Actions -> Helper RealVLC -> Run workflow -> branch vlc-rotation-1125.
+# Narrow lane for the REAL-VLC rotation tests only (RealVlcRotationTests). Manual dispatch is
+# only registered once a workflow exists on the default branch, so while the rotation lives on
+# the vlc-rotation-1125 branch the lane also runs on pushes to that branch (helper-code paths
+# only). It launches real VLC processes against the helper's rotation state and is NOT part of
+# the ordinary helper lane (helper.yml runs everything except ~RealVlc).
 
 permissions:
   contents: read

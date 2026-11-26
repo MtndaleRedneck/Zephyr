@@ -164,6 +164,30 @@ internal static class VlcSetup
             return JsonSerializer.Serialize(new { ok = true });
         }
         var prior = VlcRotation.BackupTarget();
+        // Stale-value guard: never stage over a NEWER truth. A live rotation target of a
+        // different value belongs to a newer writer (a removal rotation); a vlcrc carrying a
+        // different password is the applied credential. Either means THIS phone's value is
+        // stale (a late Finish with the old password): refuse, so the phone re-fetches the
+        // current one through adopt instead of reverting the PC to the old password. An
+        // UNREADABLE vlcrc is unknown, not empty: refuse a fresh stage then as well.
+        var liveTarget = VlcRotation.TargetValue;
+        string? applied;
+        try { applied = ReadVlcrcPasswordStrict(); }
+        catch (VlcrcUnreadableException)
+        {
+            if (liveTarget == password)
+                applied = null; // re-setting the existing target's value: the write attempt below decides
+            else
+            {
+                Program.Log("vlcrc could not be read during a phone setup - left the rotation state untouched.");
+                return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc unreadable" });
+            }
+        }
+        if ((liveTarget != null && liveTarget != password) || (!string.IsNullOrEmpty(applied) && applied != password))
+        {
+            Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
+            return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
+        }
         if (!Program.MutateAndPersist(() => VlcRotation.SetTargetUnderConfigSaveLock(password),
                 () => VlcRotation.RestoreTargetUnderConfigSaveLock(prior), "the VLC setup"))
             return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
