@@ -136,6 +136,7 @@ fun SettingsScreen(
             Text("Settings", color = TextC, fontSize = 21.sp, fontWeight = FontWeight.Bold)
         }
         if (store.secureStoreBroken) {
+            Spacer(Modifier.height(2.dp))
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
                     "Your saved sign-ins couldn't be opened this time (secure storage problem). Nothing was deleted. Close and reopen the app; new pairings can't be saved until this clears.",
@@ -143,7 +144,7 @@ fun SettingsScreen(
                 )
             }
         }
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 10.dp))
         BackHandler { onBack() }
 
         // "Connected Sources" card: the orange source labels ARE the

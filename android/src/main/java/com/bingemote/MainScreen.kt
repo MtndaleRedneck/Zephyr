@@ -957,7 +957,7 @@ fun SourceSelector(remote: RemoteState) {
     var expanded by remember { mutableStateOf(false) }
     var selected by remember { mutableStateOf(remote.store.selectedSource) }
     Box {
-        Row(Modifier.heightIn(min = 44.dp).clickable(
+        Row(Modifier.heightIn(min = 40.dp).clickable(
                 onClickLabel = "Switch PC source", // C16: talkback announces the role
                 role = androidx.compose.ui.semantics.Role.DropdownList,
             ) { expanded = true },
