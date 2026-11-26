@@ -60,6 +60,7 @@ fun MainScreen(
     onMovies: () -> Unit,
     onSettings: () -> Unit,
     startSubtitlesOpen: Boolean = false,
+    onPairSelected: () -> Unit = onSettings,
 ) {
     val s = remote.status
     val flashAll = remote.store.buttonFlash == 1
@@ -193,8 +194,8 @@ private fun HomeContent(
             .then(
                 if (unpairedSource) Modifier.clickable(
                     role = androidx.compose.ui.semantics.Role.Button,
-                    onClickLabel = "Go to Settings to pair",
-                ) { onSettings() } else Modifier
+                    onClickLabel = "Pair this source",
+                ) { onPairSelected() } else Modifier
             )
             .padding(horizontal = 18.dp, vertical = 16.dp),
     ) {

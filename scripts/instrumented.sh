@@ -47,6 +47,7 @@ com.zephyr.remote.PhonePickerStorageTest
 com.zephyr.remote.PhonePickerGrantTest
 com.zephyr.remote.PhoneMoviesAndroidTest
 com.zephyr.remote.StreamServiceLifecycleTest
+com.bingemote.UnpairedCardRoutingTest
 com.zephyr.remote.StreamServiceNoWifiTest
 com.zephyr.remote.ZephyrWireTest
 com.zephyr.remote.ZephyrDiscoveryTest

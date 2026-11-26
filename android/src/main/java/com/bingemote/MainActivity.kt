@@ -142,6 +142,8 @@ class MainActivity : ComponentActivity() {
             // re-entered at the top (each navigation into it resets settingsScroll).
             val settingsScroll = rememberScrollState(initial = if (BuildConfig.DEBUG && intent.hasExtra("updateResult")) Int.MAX_VALUE else 0)
             val navigationScope = rememberCoroutineScope()
+            // Pairing opened from the Home "not paired" card returns to Home, not to Settings.
+            var pairFromHome by remember { mutableStateOf(false) }
             fun openSettings(resetScroll: Boolean = false) {
                 navigationScope.launch {
                     if (resetScroll) settingsScroll.scrollTo(0)
@@ -172,8 +174,8 @@ class MainActivity : ComponentActivity() {
                     "setup" -> SetupScreen(
                         remote,
                         setupScroll,
-                        onDone = { store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
-                        onCancel = if (store.setupDone || (BuildConfig.DEBUG && intent.hasExtra("setupcancel"))) ({ openSettings() }) else null,
+                        onDone = { pairFromHome = false; store.selectedSource = Source.VLC; remote.start(); current.value = "main" },
+                        onCancel = if (store.setupDone || (BuildConfig.DEBUG && intent.hasExtra("setupcancel"))) ({ if (pairFromHome) { pairFromHome = false; current.value = "main" } else openSettings() }) else null,
                         demoVlcPending = BuildConfig.DEBUG && intent.hasExtra("vlcpending"),
                         demoPair = BuildConfig.DEBUG && intent.hasExtra("pairdemo"),
                         demoPreselect = BuildConfig.DEBUG && intent.hasExtra("pairdemoselect"),
@@ -212,9 +214,10 @@ class MainActivity : ComponentActivity() {
                                 store.selectedSource = Source.ZEPHYR
                                 remote.start()
                                 current.value = "main"
-                            } else current.value = "settings"
+                            } else if (pairFromHome) { pairFromHome = false; current.value = "main" }
+                            else current.value = "settings"
                         },
-                        onCancel = { current.value = "settings" },
+                        onCancel = { if (pairFromHome) { pairFromHome = false; current.value = "main" } else current.value = "settings" },
                     )
                     // CI screenshot state (debug builds only): the Zephyr setup screen,
                     // captured under the historical "settings-pair" shot name.
@@ -256,6 +259,12 @@ class MainActivity : ComponentActivity() {
                         onMouse = { current.value = "mouse" },
                         onMovies = { current.value = "movies" },
                         onSettings = { openSettings(resetScroll = true) },
+                        // The unpaired card goes straight to the selected source's pairing screen.
+                        onPairSelected = {
+                            pairFromHome = true
+                            if (store.selectedSource == Source.ZEPHYR) current.value = "setup-zephyr"
+                            else openFromTop("setup", setupScroll)
+                        },
                     )
                 }
                 UpdateHost(store)
