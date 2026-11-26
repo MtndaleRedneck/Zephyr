@@ -220,12 +220,30 @@ snap() { # $1 = label: focus, processes and timing evidence (diagnostic only)
   } > "$f" 2>&1
   cat "$f"
 }
+# Boot quiescence (harness only, pre-install only, no taps, no gate): the launcher ANR has appeared about 10-45 s after
+# sys.boot_completed while the 2-vCPU guest is saturated by post-boot work (guest CPU ~100% busy in the recorded snapshots).
+# Wait, bounded, until the guest CPU is mostly idle for 5 consecutive samples, then start the unchanged settle. If it never
+# quiets within 150 s, say so and continue into the unchanged settle (the wait can only delay, never pass or fail anything).
+quiesce_guest() {
+  local q0=$SECONDS ok=0 first=1 a1 a2 busy
+  while [ $((SECONDS - q0)) -lt 150 ]; do
+    a1=$(timeout 10 adb shell head -n 1 /proc/stat | tr -d '\r'); sleep 2; a2=$(timeout 10 adb shell head -n 1 /proc/stat | tr -d '\r')
+    busy=$(awk -v a="$a1" -v b="$a2" 'BEGIN{split(a,x," ");split(b,y," ");t1=0;t2=0;for(i=2;i<=9;i++){t1+=x[i];t2+=y[i]}; id=(y[5]+y[6])-(x[5]+x[6]); tot=t2-t1; if(tot<=0||a==""||b==""){print 100}else{printf "%d", 100-100*id/tot}}')
+    [ "$first" = 1 ] && { echo "QUIESCE first raw samples: [$a1] [$a2]"; first=0; }
+    case "$busy" in ''|*[!0-9]*) busy=100;; esac
+    echo "QUIESCE: +$((SECONDS - q0))s guest cpu busy=${busy}%"
+    if [ "$busy" -le 40 ]; then ok=$((ok+1)); [ "$ok" -ge 5 ] && { echo "QUIESCE OK: guest cpu at most 40% busy for 5 consecutive samples after $((SECONDS - q0))s"; return 0; }; else ok=0; fi
+  done
+  echo "QUIESCE NOTE: guest cpu did not stay at most 40% busy within 150s; continuing into the unchanged settle"
+}
 settle_environment() {
   mkdir -p instrument-results
   local i=0 focus pp pkg B X1 Y1 X2 Y2 clean=0 taps=0 t0=$SECONDS
   adb wait-for-device
   until [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || [ "$i" -ge 60 ]; do sleep 2; i=$((i+1)); done
   [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] || { snap settle-fail; echo "SETTLE FAIL: sys.boot_completed never became 1 (harness environment, nothing installed)"; exit 1; }
+  quiesce_guest
+  t0=$SECONDS
   adb shell input keyevent KEYCODE_WAKEUP; adb shell wm dismiss-keyguard
   snap preinstall-start
   while [ $((SECONDS - t0)) -lt 120 ]; do
