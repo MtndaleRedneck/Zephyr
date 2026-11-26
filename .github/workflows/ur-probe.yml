@@ -137,10 +137,10 @@ jobs:
           "== loopback answers (nothing sent, then a plain HTTP GET)" | Tee-Object out/10-ports.txt -Append
           foreach ($port in 9512, 9510) {
             try { $c = New-Object Net.Sockets.TcpClient('127.0.0.1', $port); $s = $c.GetStream(); $s.ReadTimeout = 3000; $buf = New-Object byte[] 256
-              try { $n = $s.Read($buf, 0, 256); "port $port speaks first: $n bytes: $([BitConverter]::ToString($buf,0,[Math]::Min($n,48)))" } catch { "port $port: server sends nothing unprompted (3 s)" }
+              try { $n = $s.Read($buf, 0, 256); "port ${port} speaks first: $n bytes: $([BitConverter]::ToString($buf,0,[Math]::Min($n,48)))" } catch { "port ${port}: server sends nothing unprompted (3 s)" }
               $req = [Text.Encoding]::ASCII.GetBytes("GET / HTTP/1.0`r`n`r`n"); $s.Write($req,0,$req.Length); $s.ReadTimeout = 3000
-              try { $n = $s.Read($buf, 0, 256); "port $port after GET: $n bytes: $([Text.Encoding]::ASCII.GetString($buf,0,[Math]::Min($n,120)) -replace '[^ -~]','.')" } catch { "port $port after GET: no answer (3 s)" }
-              $c.Close() } catch { "port $port connect failed: $($_.Exception.Message)" } } | Tee-Object out/10-ports.txt -Append
+              try { $n = $s.Read($buf, 0, 256); "port ${port} after GET: $n bytes: $([Text.Encoding]::ASCII.GetString($buf,0,[Math]::Min($n,120)) -replace '[^ -~]','.')" } catch { "port ${port} after GET: no answer (3 s)" }
+              $c.Close() } catch { "port ${port} connect failed: $($_.Exception.Message)" } } | Tee-Object out/10-ports.txt -Append
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
