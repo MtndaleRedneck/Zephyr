@@ -29,10 +29,10 @@ $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 Add-Type -AssemblyName System.Drawing, System.Windows.Forms
-$report = Join-Path $env:RUNNER_TEMP 'pub202-real-data.txt'
+$report = Join-Path $env:RUNNER_TEMP 'pubbase-real-data.txt'
 Remove-Item $report -ErrorAction SilentlyContinue
 # A stale failure image from an earlier invocation must never be mistaken for this run's evidence.
-Remove-Item (Join-Path $env:RUNNER_TEMP 'pub202-failure.png') -Force -ErrorAction SilentlyContinue
+Remove-Item (Join-Path $env:RUNNER_TEMP 'pubbase-failure.png') -Force -ErrorAction SilentlyContinue
 function Note($k, $v) { $l = "${k}: $v"; Write-Host $l; Add-Content -Path $report -Value $l }
 Add-Type -Namespace ZW -Name Inp -MemberDefinition @'
 [System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr h);
@@ -92,14 +92,14 @@ function Uninstall-Player {
 
 [Environment]::SetEnvironmentVariable('ZEPHYR_CI_CAPTURE', $null, 'Process')
 $dataDir = "$env:APPDATA\ZephyrPlayer"
-$lib = Join-Path $env:RUNNER_TEMP 'pub202lib'
+$lib = Join-Path $env:RUNNER_TEMP 'pubbaselib'
 $srv = $null
 $allAssertionsPassed = $false
 try {
     # --- clean slate, published installer, sha and version ---
     Uninstall-Player
     Remove-Item $dataDir -Recurse -Force -ErrorAction SilentlyContinue
-    $dl = Join-Path $env:RUNNER_TEMP 'pub202real'
+    $dl = Join-Path $env:RUNNER_TEMP 'pubbasereal'
     $global:LASTEXITCODE = 0
     gh release download $OldTag -p $OldAsset --dir $dl --clobber
     if ($LASTEXITCODE -ne 0) { throw "gh release download exit $LASTEXITCODE" }
@@ -113,14 +113,14 @@ try {
     $pv0 = (Get-Item $exe).VersionInfo.ProductVersion
     if ($pv0 -notlike "$OldVersion*") { throw "installed ProductVersion is $pv0" }
     Stop-Player
-    Note 'published_202_installed' "sha256 $sha, ProductVersion $pv0"
+    Note 'published_baseline_installed' "sha256 $sha, ProductVersion $pv0"
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $fw = Start-Process $exe -ArgumentList '--install-firewall', $sid -PassThru -Wait -WindowStyle Hidden
     if ($fw.ExitCode -ne 0) { throw "$OldVersion --install-firewall exit $($fw.ExitCode)" }
 
     # --- media: reuse the clip the capture step already made; else an ffmpeg already on the runner. No install. ---
     New-Item -ItemType Directory -Force $lib | Out-Null
-    $movie = Join-Path $lib 'Real202Movie.mp4'
+    $movie = Join-Path $lib 'RealBaselineMovie.mp4'
     $existingClip = Join-Path $env:RUNNER_TEMP 'clip.mp4'
     if (Test-Path $existingClip) { Copy-Item $existingClip $movie -Force }
     else {
@@ -139,7 +139,7 @@ try {
     if (-not (Wait-Server 40)) { throw "published $OldVersion control server never came up" }
     $nameBox = Wait-InProc $p.Id 'PhoneNameBox' 40
     if (-not $nameBox) { throw 'Paired phones screen (PhoneNameBox) not found through UI Automation' }
-    $nameBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Real 202 phone')
+    $nameBox.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Real baseline phone')
     $pairBtn = Find-InProc $p.Id 'PairButton'
     if (-not $pairBtn) { throw 'PairButton not found' }
     Invoke-Uia $pairBtn
@@ -160,8 +160,8 @@ try {
     $paired = Get-Content "$dataDir\paired.json" -Raw
     if ($paired -notmatch 'dpapi:' -or $paired.Contains($token)) { throw 'paired.json is not DPAPI-protected by the app' }
     $entries = @($paired | ConvertFrom-Json)
-    if ($entries.Count -ne 1 -or $entries[0].name -ne 'Real 202 phone') { throw 'paired.json does not hold the one phone the app paired' }
-    Note 'pairing_created_by_real_202' "PROVEN (paired.json written by the published app: 1 entry, DPAPI-protected, token length $($token.Length) not printed)"
+    if ($entries.Count -ne 1 -or $entries[0].name -ne 'Real baseline phone') { throw 'paired.json does not hold the one phone the app paired' }
+    Note 'pairing_created_by_real_baseline' "PROVEN (paired.json written by the published app: 1 entry, DPAPI-protected, token length $($token.Length) not printed)"
 
     # --- settings: the app's own library route and a real Settings toggle ---
     $null = Expect 'library-folder-set' 'Post' '/library/folder' $token (@{ folder = $lib } | ConvertTo-Json -Compress) 200
@@ -253,7 +253,7 @@ try {
     Start-Sleep -Seconds 1
     $s0 = Get-Content "$dataDir\settings.json" -Raw | ConvertFrom-Json
     if ($s0.ShowSpeed -ne $speedAfter -or $s0.LibraryFolder -ne $lib) { throw "settings.json does not hold the app-made values (ShowSpeed $($s0.ShowSpeed) want $speedAfter)" }
-    Note 'settings_created_by_real_202' "PROVEN (settings.json written by the published app: ShowSpeed $speedBefore -> $speedAfter, LibraryFolder set through the app's own route)"
+    Note 'settings_created_by_real_baseline' "PROVEN (settings.json written by the published app: ShowSpeed $speedBefore -> $speedAfter, LibraryFolder set through the app's own route)"
 
     # --- history: a real local library file, played and seeked through the app's own routes ---
     $srv = $null
@@ -274,14 +274,14 @@ try {
     $item0 = $h0.$key
     if (-not $item0) { throw 'history has no entry for the played library file' }
     if ([long]$item0.DurationMs -le 0 -or [long]$item0.PositionMs -lt 100000) { throw "history values are not the played ones (position $($item0.PositionMs) ms, duration $($item0.DurationMs) ms)" }
-    Note 'history_created_by_real_202' "PROVEN (playback-history.json written by the published app: PositionMs $($item0.PositionMs), DurationMs $($item0.DurationMs))"
+    Note 'history_created_by_real_baseline' "PROVEN (playback-history.json written by the published app: PositionMs $($item0.PositionMs), DurationMs $($item0.DurationMs))"
     Stop-Player
 
     # --- upgrade to the candidate and prove what carried over ---
     $files = @('paired.json', 'settings.json', 'playback-history.json')
     $before = @{}
     foreach ($f in $files) { $before[$f] = (Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash }
-    & (Join-Path $PSScriptRoot 'assert_installer_sha.ps1') -Path $Candidate -Label 'player-202-real-data-upgrade'
+    & (Join-Path $PSScriptRoot 'assert_installer_sha.ps1') -Path $Candidate -Label 'player-baseline-real-data-upgrade'
     $up = Start-Process $Candidate -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS' -PassThru
     if (-not $up.WaitForExit(150000)) { throw 'candidate installer timed out' }
     if ($up.ExitCode -ne 0) { throw "candidate installer exit $($up.ExitCode)" }

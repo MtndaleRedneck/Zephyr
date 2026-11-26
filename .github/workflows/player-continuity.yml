@@ -47,9 +47,10 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
         run: |
           New-Item -ItemType Directory -Force windows/Output | Out-Null
-          gh run download ${{ inputs.candidate_run_id }} -n Zephyr-PC-installer --dir windows/Output
+          gh run download $env:CANDIDATE_RUN_ID -n Zephyr-PC-installer --dir windows/Output
           if ($LASTEXITCODE -ne 0) { throw "candidate artifact download exit $LASTEXITCODE" }
           $f = @(Get-ChildItem windows/Output -Filter 'Zephyr-PC-*.exe')
           if ($f.Count -ne 1) { throw "expected one candidate installer, found $($f.Count)" }
@@ -63,17 +64,22 @@ jobs:
         timeout-minutes: 15
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLD_TAG: ${{ inputs.old_tag }}
+          OLD_ASSET: ${{ inputs.old_asset }}
+          OLD_VERSION: ${{ inputs.old_version }}
+          OLD_SHA256: ${{ inputs.old_sha256 }}
+          CANDIDATE_HEAD: ${{ inputs.candidate_head }}
         run: |
           $f = @(Get-ChildItem windows/Output -Filter 'Zephyr-PC-*.exe')[0]
           $v = $f.BaseName -replace '^Zephyr-PC-',''
-          ./scripts/pubbase_real_data.ps1 -OldTag '${{ inputs.old_tag }}' -OldAsset '${{ inputs.old_asset }}' -OldVersion '${{ inputs.old_version }}' -Candidate $f.FullName -OldSha256 '${{ inputs.old_sha256 }}' -ExpectedVersion $v -ExpectedHead '${{ inputs.candidate_head }}'
+          ./scripts/pubbase_real_data.ps1 -OldTag $env:OLD_TAG -OldAsset $env:OLD_ASSET -OldVersion $env:OLD_VERSION -Candidate $f.FullName -OldSha256 $env:OLD_SHA256 -ExpectedVersion $v -ExpectedHead $env:CANDIDATE_HEAD
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: player-continuity-evidence
           path: |
-            ${{ runner.temp }}/pub202-real-data.txt
-            ${{ runner.temp }}/pub202-failure.png
+            ${{ runner.temp }}/pubbase-real-data.txt
+            ${{ runner.temp }}/pubbase-failure.png
             ${{ runner.temp }}/installer-hash-log.txt
           if-no-files-found: warn
