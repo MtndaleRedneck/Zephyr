@@ -147,6 +147,32 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void InlineAttemptOnDivergedLandedReopensBeforeDeferring()
+    {
+        // The re-open lives in the ONE shared write path, so an INLINE attempt (the /vlc/setup
+        // and Movies.Play route, driven here through TryInlinePass) that observes divergence
+        // while landed also re-opens FIRST: even though the running VLC forces a deferral, the
+        // published state stops claiming completion immediately rather than waiting for a timer pass.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-22");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                              // lands NEW
+        Assert.True(VlcRotation.Landed);
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1"); // the clobber
+        VlcSetup.VlcRunningOverride = () => true;
+        var outcome = VlcRotation.TryInlinePass();           // the inline seam itself
+        Assert.Equal(VlcRotation.ApplyOutcome.Deferred, outcome); // the write waits for the running VLC
+        Assert.True(VlcSetup.Pending);                       // ...but the re-open already persisted
+        Assert.False(VlcRotation.RotationOutcomeComplete(gen));
+        Assert.Equal("old-password-1", VlcSetup.ReadVlcrcValue("http-password")); // no write attempted
+        VlcSetup.VlcRunningOverride = () => false;
+        VlcRotation.PassOnce();                              // repairs and re-lands
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
+        Assert.True(VlcRotation.RotationOutcomeComplete(gen));
+    }
+
+    [Fact]
     public void ReOpenPersistFailureAbortsTheRepairAndKeepsStateConsistent()
     {
         // If the re-open persist is refused, the rollback restores landed and the repair must
