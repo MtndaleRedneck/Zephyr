@@ -229,7 +229,7 @@ class MainActivity : ComponentActivity() {
                         onCancel = { current.value = "settings" },
                     )
                     // CI screenshot states: step 2 of the Zephyr setup screen, fresh
-                    // (find/address/code/pair) and with a saved pairing (continue/start-over).
+                    // (find/address/code/pair) and with a saved pairing (re-entry: the same plain form, no card).
                     "settings-pair-2" -> ZephyrSetupScreen(
                         remote,
                         onDone = { current.value = "settings" },
@@ -237,8 +237,8 @@ class MainActivity : ComponentActivity() {
                         initialStep = 2,
                     )
                     "settings-pair-paired" -> {
-                        // Debug capture only: fake a saved pairing so the already-paired
-                        // card renders. Captured LAST in the rig; demo values never ship.
+                        // Debug capture only: fake a saved pairing so re-entry with a
+                        // token (plain form, Back leaves) renders. Captured LAST in the rig; demo values never ship.
                         remote.store.zephyrHost = "192.168.1.50"
                         try { remote.store.zephyrToken = "demo-token" } catch (e: SecureStoreUnavailable) { }
                         remote.store.zephyrPcName = "Demo PC"

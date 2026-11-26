@@ -41,6 +41,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -146,7 +147,7 @@ fun SettingsScreen(
         // pairing entry points (locked design; the standalone repair button is removed).
         // Each label opens that source's OWN setup screen -
         // never an inline expansion.
-        SettingsSection("Connected Sources") {
+        SettingsSection("Connected Sources", modifier = Modifier.testTag("first_card")) {
             // A cancelled setup can leave a helper token with no finished pairing: only a
             // COMPLETE setup shows the PC name (teardown A2 edge).
             SourceRow("VLC PC", if (store.isConfigured) store.pcName.ifBlank { store.host } else "Not paired", hapticsOn = haptics, onLabelClick = onRepair)
@@ -421,9 +422,9 @@ fun fieldColors(outline: Color = TrackGray) = OutlinedTextFieldDefaults.colors(
 )
 
 @Composable
-fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+fun SettingsSection(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardGradient).padding(16.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardGradient).padding(16.dp),
     ) {
         if (title.isNotEmpty()) {
             Text(title, color = TextC, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
