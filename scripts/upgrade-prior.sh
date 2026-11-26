@@ -109,9 +109,11 @@ focused_dialog_logged_in_job() {
   focus=$(adb shell dumpsys window | grep "mCurrentFocus")
   pp=$(single_allowed_dialog "$focus") || return 1
   pkg=${pp% *}; id=${pp#* }
+  ACCEPTED_DIALOG=""
   hit=$(grep -m1 -E "input_focus: \[Focus (request|entering) $id Application Not Responding: ${pkg//./\\.}[ ,]" "$seed") || return 1
   echo "NOTE: allowlisted ANR dialog package=$pkg window=$id seen earlier in seed-rawlog.txt: $hit"
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf 'upgrade-prior: allowlisted ANR dialog package=%s window=%s was in the seed run log before verify: %s\n' "$pkg" "$id" "$hit" >> "$GITHUB_STEP_SUMMARY"
+  ACCEPTED_DIALOG="$pp"   # the exact "<pkg> <id>" the gate checked: dismiss_foreign_anr must see this same pair, or it does nothing
   return 0
 }
 # A green instrument result is only trusted when its own log is clean: no app or unknown ANR/crash, usable capture.
@@ -129,12 +131,14 @@ dismiss_foreign_anr() { # $1 = label for the saved evidence
   printf '%s\n' "$focus" > "instrument-results/$1-focus.txt"
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml "instrument-results/$1-ui.xml" >/dev/null 2>&1
   adb logcat -d | grep -E "ANR in|Application Not Responding" | tail -20 > "instrument-results/$1-anr-log.txt"
-  single_allowed_dialog "$focus" >/dev/null && ok=1
+  pkg=$(single_allowed_dialog "$focus") && ok=1
   [ "$ok" = 1 ] || return 1
+  if [ -n "${ACCEPTED_DIALOG:-}" ] && [ "$pkg" != "$ACCEPTED_DIALOG" ]; then echo "NOTE: the dialog in focus ($pkg) is not the one the gate accepted ($ACCEPTED_DIALOG): no tap"; return 1; fi
   echo "NOTE: allowlisted non-app ANR dialog in focus: $focus"
   local B X1 Y1 X2 Y2
-  B=$(grep -o 'text="Wait"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "instrument-results/$1-ui.xml" | grep -o "\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]" | head -1)
-  [ -n "$B" ] || { echo "NOTE: no Wait button found in the saved dump"; return 1; }
+  B=$(grep -o 'text="Wait"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' "instrument-results/$1-ui.xml" | grep -o "\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]")
+  # Exactly ONE Wait node, or no tap: with two, the first could belong to some other window.
+  [ -n "$B" ] && [ "$(printf '%s\n' "$B" | wc -l)" = 1 ] || { echo "NOTE: need exactly one Wait button in the saved dump, found: $(printf '%s' "$B" | grep -c .)"; return 1; }
   X1=$(echo $B | cut -d'[' -f2 | cut -d',' -f1); Y1=$(echo $B | cut -d'[' -f2 | cut -d',' -f2 | cut -d']' -f1)
   X2=$(echo $B | cut -d'[' -f3 | cut -d',' -f1); Y2=$(echo $B | cut -d'[' -f3 | cut -d',' -f2 | cut -d']' -f1)
   adb shell input tap $(( (X1+X2)/2 )) $(( (Y1+Y2)/2 )); sleep 2
@@ -155,6 +159,7 @@ window_fail_diag() { # $1 result name
   echo "== end window-failure diagnostic"
 }
 retry_window_only() { # $1 class#method, $2 result name
+  ACCEPTED_DIALOG=""
   grep -q "^OK (1 test)" "instrument-results/$2.txt" && return 0
   grep -q "app window never appeared after cold open" "instrument-results/$2.txt" || return 0
   grep -qE "^[0-9]+\) " "instrument-results/$2.txt" && [ "$(grep -cE '^[0-9]+\) ' "instrument-results/$2.txt")" = 1 ] || return 0
