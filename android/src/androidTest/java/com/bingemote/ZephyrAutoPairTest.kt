@@ -54,7 +54,14 @@ class ZephyrAutoPairTest {
             while (store.zephyrToken != "autopair-test-token" && System.currentTimeMillis() < deadline) Thread.sleep(100)
             assertEquals("successful token not saved", "autopair-test-token", store.zephyrToken)
             // BingeMote flow: the success card sits under the form with Continue; it does not jump away.
-            assertNotNull("success card did not appear", device.wait(Until.findObject(By.textContains("Paired with")), 8000))
+            // The card sits under the form in a scrolling column: scroll down until it is on screen.
+            var card = device.wait(Until.findObject(By.textContains("Paired with")), 3000)
+            var swipes = 0
+            while (card == null && swipes++ < 4) {
+                device.swipe(device.displayWidth / 2, device.displayHeight * 3 / 4, device.displayWidth / 2, device.displayHeight / 4, 20)
+                card = device.wait(Until.findObject(By.textContains("Paired with")), 1500)
+            }
+            assertNotNull("success card did not appear", card)
             val cont = device.wait(Until.findObject(By.text("Continue")), 3000)
             assertNotNull("Continue button missing", cont)
             cont!!.click()
