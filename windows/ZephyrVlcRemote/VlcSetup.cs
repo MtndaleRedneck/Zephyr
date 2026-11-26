@@ -189,29 +189,35 @@ internal static class VlcSetup
             Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
             return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
         }
-        var refused = false;
+        var refuseReason = (string?)null;
         var staged = false;
         (string? t2, bool l2, int g2) backup = default;
         var okPersist = Program.MutateAndPersist(() =>
             {
                 // Authoritative recheck under ConfigSaveLock: every rotation's target persists
                 // BEFORE its vlcrc write can land, and vlcrc itself is re-read here, so no
-                // interleaved rotation can be overwritten by this stage.
+                // interleaved rotation can be overwritten by this stage. Same fail-closed rule
+                // as the outer guard: an unreadable vlcrc is unknown, not empty - only a
+                // same-value re-set of the existing target may proceed to the write attempt.
                 var targetNow = VlcRotation.TargetValue;
-                if (targetNow != null && targetNow != password) { refused = true; return; }
+                if (targetNow != null && targetNow != password) { refuseReason = "password changed"; return; }
                 string? appliedNow;
                 try { appliedNow = ReadVlcrcPasswordStrict(); }
-                catch (VlcrcUnreadableException) { appliedNow = null; } // the write attempt below decides
-                if (!string.IsNullOrEmpty(appliedNow) && appliedNow != password) { refused = true; return; }
+                catch (VlcrcUnreadableException)
+                {
+                    if (targetNow == password) appliedNow = null; // the write attempt below decides
+                    else { refuseReason = "vlcrc unreadable"; return; }
+                }
+                if (!string.IsNullOrEmpty(appliedNow) && appliedNow != password) { refuseReason = "password changed"; return; }
                 backup = VlcRotation.BackupTarget(); // inside the transaction: the rollback restores THIS state
                 VlcRotation.SetTargetUnderConfigSaveLock(password);
                 staged = true;
             },
             () => { if (staged) VlcRotation.RestoreTargetUnderConfigSaveLock(backup); }, "the VLC setup");
-        if (refused)
+        if (refuseReason != null)
         {
-            Program.Log("A phone sent a stale VLC password to /vlc/setup - refused; it must fetch the current one (adopt).");
-            return JsonSerializer.Serialize(new { ok = false, reason = "password changed" });
+            Program.Log("A phone's VLC setup was refused (" + refuseReason + ") - left the rotation state untouched.");
+            return JsonSerializer.Serialize(new { ok = false, reason = refuseReason });
         }
         if (!okPersist)
             return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
