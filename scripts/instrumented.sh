@@ -43,6 +43,7 @@ com.bingemote.SeekGestureTest
 com.bingemote.CancelGestureTest
 com.bingemote.MouseCadenceTest
 com.bingemote.InputRoutingTest
+com.zephyr.remote.PhonePickerStorageTest
 com.zephyr.remote.PhonePickerGrantTest
 com.zephyr.remote.PhoneMoviesAndroidTest
 com.zephyr.remote.StreamServiceLifecycleTest
