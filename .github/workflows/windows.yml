@@ -104,8 +104,12 @@ jobs:
             # pwsh does NOT wait for a GUI-subsystem exe started with &: the stale
             # $LASTEXITCODE (publish's 0) read as success while the render was still
             # mid-flight (gate 40511800617: window.png landed AFTER the check threw).
-            $hp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru
-            if ($hp.ExitCode -ne 0) { throw "helper window-shot $($shot[0]) exit $($hp.ExitCode)" }
+            $hp = Start-Process "$PWD\windows\ZephyrVlcRemote\shot\ZephyrVlcRemote.exe" -ArgumentList '--window-shot' -Wait -PassThru -RedirectStandardError "$env:RUNNER_TEMP\shot-$($shot[0]).err"
+            if ($hp.ExitCode -ne 0) {
+              # Evidence for a crashing shot mode: stderr of the process (unhandled exception text).
+              if (Test-Path "$env:RUNNER_TEMP\shot-$($shot[0]).err") { Write-Host "---- stderr of window-shot $($shot[0]) ----"; Get-Content "$env:RUNNER_TEMP\shot-$($shot[0]).err" -Raw | Write-Host }
+              throw "helper window-shot $($shot[0]) exit $($hp.ExitCode)"
+            }
             $pngOk = $false
             foreach ($try in 1..40) { if (Test-Path "windows/ZephyrVlcRemote/$($shot[1])") { $pngOk = $true; break }; Start-Sleep -Milliseconds 250 }
             if (-not $pngOk) { Get-ChildItem windows/ZephyrVlcRemote -Filter *.png | Select-Object Name,Length; throw "helper window-shot $($shot[0]) wrote no PNG" }
