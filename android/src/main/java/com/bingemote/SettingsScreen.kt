@@ -130,11 +130,7 @@ fun SettingsScreen(
         Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
     ) {
         // Same bar as Home and Movies: 12dp above, 44dp row, 12dp below (68dp).
-        Row(Modifier.padding(vertical = 12.dp).heightIn(min = 44.dp), verticalAlignment = Alignment.CenterVertically) {
-            HeaderIconButton(onBack, haptics) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
-            Spacer(Modifier.width(12.dp))
-            Text("Settings", color = TextC, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-        }
+        ScreenHeader("Settings", hapticsOn = haptics, edge = 0.dp, onBack = onBack)
         if (store.secureStoreBroken) {
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
