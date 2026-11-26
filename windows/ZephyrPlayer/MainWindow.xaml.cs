@@ -314,6 +314,7 @@ namespace ZephyrPlayer
                     var time = _player.Time;
                     SeekBar.Value = 1000.0 * time / length;
                     ElapsedText.Text = Format(time);
+                    TotalText.Text = Format(length) + " total";
                     RemainingText.Text = "-" + Format(Math.Max(0, length - time));
                 }
             }
@@ -736,6 +737,8 @@ namespace ZephyrPlayer
                 default: priRing = priLabel = RingDefault; secRing = secLabel = Orange; play = Orange; icons = RingDefault; break;
             }
 
+            var times = Orange;
+
             SkipBackRing.Stroke = priRing;
             SkipForwardRing.Stroke = priRing;
             SkipBackArrow.Fill = priRing;
@@ -762,9 +765,10 @@ namespace ZephyrPlayer
             foreach (var child in PauseGlyph.Children)
                 if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? play : Dark;
 
-            // Settled Midnight Slate readouts: elapsed white, remaining muted, in every colour style.
-            ElapsedText.Foreground = RingDefault;
-            RemainingText.Foreground = Muted;
+            // The 2.0.2 time colours ride the colour style; the palette values are Midnight Slate.
+            ElapsedText.Foreground = times;
+            TotalText.Foreground = style == "original" ? Muted : times;
+            RemainingText.Foreground = style == "orange" ? Orange : RingDefault;
             VolumeButton.Foreground = icons;
             SpeedButton.Foreground = icons;
             SleepButton.Foreground = icons;

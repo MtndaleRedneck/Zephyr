@@ -195,7 +195,7 @@ namespace ZephyrPlayer.Tests
                         if (previous.HasValue) Assert.True(previous.Value.Right <= rect.Left + 0.5, name + " overlaps its left neighbor");
                         previous = rect;
                     }
-                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("RemainingText")!).Visibility);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("TotalText")!).Visibility);
                     foreach (var side in new[] { "Back", "Forward" })
                     {
                         var ring = (FrameworkElement)((System.Windows.Shapes.Path)w.FindName("Skip" + side + "Ring")!).Parent;

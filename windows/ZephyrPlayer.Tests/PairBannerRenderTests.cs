@@ -159,6 +159,7 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal("10s", ((TextBlock)w.FindName("SkipBackLabel")!).Text);
                     Assert.Equal("10s", ((TextBlock)w.FindName("SkipForwardLabel")!).Text);
                     Assert.Equal("0:00", ((TextBlock)w.FindName("ElapsedText")!).Text);
+                    Assert.Equal("0:00 total", ((TextBlock)w.FindName("TotalText")!).Text);
                     Assert.Equal("-0:00", ((TextBlock)w.FindName("RemainingText")!).Text);
                     foreach (var n in new[] { "VolumeButton", "PlayPauseButton", "SkipBackButton", "SkipForwardButton", "SecondarySkipBackButton", "SecondarySkipForwardButton", "CaptionsButton", "FullscreenButton", "SeekBar" })
                         Assert.Equal(Visibility.Visible, ((UIElement)w.FindName(n)!).Visibility);

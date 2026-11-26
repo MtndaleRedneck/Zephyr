@@ -304,7 +304,7 @@ namespace ZephyrPlayer
             HideError();
             // The Opening state shows the NEW start: its title and an empty timeline, never the previous movie.
             SetOpening(true);
-            SeekBar.Value = 0; ElapsedText.Text = "0:00"; RemainingText.Text = "-0:00";
+            SeekBar.Value = 0; ElapsedText.Text = "0:00"; RemainingText.Text = "-0:00"; TotalText.Text = "0:00 total";
             MovieTitle.Text = title;
             _loadingTitle.Text = title; _loadingDetail.Text = "Opening...";
             _loadingPanel.Visibility = Visibility.Visible;

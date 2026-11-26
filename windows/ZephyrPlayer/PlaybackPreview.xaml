@@ -3,6 +3,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <Grid Grid.Row="0">
                           <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
@@ -10,7 +11,8 @@
                           <Slider Style="{StaticResource PlaybackSlider}" x:Name="SeekBar" Grid.Column="1" Minimum="0" Maximum="1000" Value="0" Foreground="{StaticResource OrangeBrush}" />
                           <TextBlock x:Name="RemainingText" Grid.Column="2" Text="-0:00" Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="10,0,0,0" />
                         </Grid>
-                        <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <TextBlock x:Name="TotalText" Grid.Row="1" HorizontalAlignment="Right" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,0,0,2" Text="0:00 total" />
+                        <Grid Grid.Row="2" Margin="0,8,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
