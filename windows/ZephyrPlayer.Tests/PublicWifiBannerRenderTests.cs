@@ -28,7 +28,7 @@ namespace ZephyrPlayer.Tests
                     ConnectionState.PublicWifiName = hookPublic ? "Hooked test Wi-Fi" : null;
                     var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
                     var panel = new PairingPanel(new PairingGate(), store, _ => { });
-                    var window = new Window { Content = panel, Width = 600, Height = 700 };
+                    var window = new Window { Content = panel, Width = 600, Height = 700, Background = new SolidColorBrush(Color.FromRgb(0x0B, 0x0D, 0x10)) }; // the real window's AppBgBrush (Theme.xaml #0B0D10), so the banner is judged on its real backdrop
                     try
                     {
                         window.Show(); window.UpdateLayout();
