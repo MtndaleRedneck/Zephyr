@@ -231,6 +231,8 @@ class MainActivity : ComponentActivity() {
                                 store.setupDone = true
                                 store.selectedSource = Source.ZEPHYR
                                 remote.start()
+                                pairFromHome = false
+                                current.value = "main" // first run actually finished: land on Home like Done does
                             }
                         },
                     )

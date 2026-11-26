@@ -145,8 +145,8 @@ fun ZephyrSetupScreen(
     LaunchedEffect(demo) { if (BuildConfig.DEBUG && demo.isNotEmpty() && demo != "chosen" && demo != "found" && !demoTop) { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
     fun leave() {
         val ok = checkState == PairCheck.Ok || checkState == PairCheck.CouldntCheck
-        if (shouldFinishPlayerFirstRunOnLeave(store.setupDone, store.helperToken, store.zephyrToken, pairedName != null, ok)) onLeavePaired()
-        onCancel()
+        // Finishing first run routes to Home itself (onLeavePaired); any other leave is the plain onCancel route.
+        if (shouldFinishPlayerFirstRunOnLeave(store.setupDone, store.helperToken, store.zephyrToken, pairedName != null, ok)) onLeavePaired() else onCancel()
     }
     // Player-only rule (no VLC flag): opened with no saved Player pairing = first run, Back walks pair -> install;
     // opened with a saved pairing (re-entry) Back leaves.

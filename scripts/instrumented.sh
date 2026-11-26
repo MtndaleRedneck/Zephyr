@@ -35,6 +35,7 @@ adb forward tcp:47888 tcp:47888 || true
 # one-APK session cannot run them. The Zephyr upgrade check is a separate job (1.5.0 source -> this build).
 CLASSES="
 com.bingemote.ZephyrAutoPairTest
+com.bingemote.ZephyrLeaveWiringTest
 com.bingemote.TopBarParityTest
 com.bingemote.HeaderGeometryTest
 com.bingemote.AutoSetupCheckTest
