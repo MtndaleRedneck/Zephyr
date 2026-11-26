@@ -912,20 +912,28 @@ internal sealed class HelperWindow : Form
         var after = VlcRotation.PassStartCount; // ignore completions of passes already in flight
         VlcRotation.Kick();
         await VlcRotation.AwaitNextPassCompletion(after, TimeSpan.FromSeconds(2));
-        var done = VlcRotation.RotationOutcomeComplete(gen); // landed OR already verified+cleared: both are done
-        var foreign = VlcRotation.Generation != gen;         // a NEWER rotation superseded this dialog's pass
-        var vlcOpen = await Task.Run(() => VlcSetup.VlcRunning());
+        // ONE committed snapshot; the disk read below is bound to ITS target, so a rotation staged
+        // after the snapshot can never make a fresh read vouch for the wrong target - and one staged
+        // before it is the superseded branch.
+        var (target, landed, genNow) = VlcRotation.SnapshotCommitted();
+        var (vlcOpen, diskHealthy) = await Task.Run(() =>
+        {
+            var running = VlcSetup.VlcRunning();
+            var healthy = target != null && VlcSetup.ReadHealthy().HealthyFor(target); // unreadable is not healthy
+            return (running, healthy);
+        });
+        var outcome = VlcRotation.ClassifyRemovalOutcome(target, landed, genNow, gen, diskHealthy);
         string msg;
-        if (foreign)
+        if (outcome == VlcRotation.RemovalOutcome.Superseded)
             // Neither a changed nor an unchanged claim: any per-rotation wording here could
             // describe the wrong rotation. The window's note carries the live state.
             msg = label + " A newer VLC password change has run since this one - the window shows the current state.";
         else if (vlcOpen)
             // An open VLC keeps the password it started with, landed or not: never say done here.
-            msg = done
+            msg = outcome == VlcRotation.RemovalOutcome.Done
                 ? label + " The saved VLC password has changed - but VLC is open, and a VLC that was already open keeps the old password until it's closed. Close every VLC window that was open to finish."
                 : label + " VLC is open, so it can still control VLC until every VLC running with the old password is closed.";
-        else if (done)
+        else if (outcome == VlcRotation.RemovalOutcome.Done)
             msg = allRemoved
                 ? label + " The saved VLC password has changed."
                 : label + " Its saved VLC password has changed. Your other phones keep working.";

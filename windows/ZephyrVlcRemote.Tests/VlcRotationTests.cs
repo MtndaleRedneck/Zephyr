@@ -267,6 +267,22 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void RemovalDialogDoneRequiresTheDiskToShowTheTarget()
+    {
+        // The removal dialog's classification, pinned against the false-done class: a refused
+        // re-open persist rolls back to landed WHILE vlcrc holds OLD - that must read not-yet,
+        // never done. (ReadHealthy.HealthyFor is false on an unreadable vlcrc, so the diverged
+        // and read-glitch cases share one safe branch; a newer rotation is foreign regardless.)
+        const int gen = 7;
+        Assert.Equal(VlcRotation.RemovalOutcome.NotYet, VlcRotation.ClassifyRemovalOutcome("pw", true, gen, gen, false)); // failed re-open: landed marker, OLD disk
+        Assert.Equal(VlcRotation.RemovalOutcome.Done, VlcRotation.ClassifyRemovalOutcome("pw", true, gen, gen, true));    // landed AND the disk shows the target
+        Assert.Equal(VlcRotation.RemovalOutcome.Done, VlcRotation.ClassifyRemovalOutcome(null, false, gen, gen, false));  // verified + cleared: state-only by design
+        Assert.Equal(VlcRotation.RemovalOutcome.Superseded, VlcRotation.ClassifyRemovalOutcome("pw", true, gen + 1, gen, true));
+        Assert.Equal(VlcRotation.RemovalOutcome.Superseded, VlcRotation.ClassifyRemovalOutcome(null, false, gen + 1, gen, false));
+        Assert.Equal(VlcRotation.RemovalOutcome.NotYet, VlcRotation.ClassifyRemovalOutcome("pw", false, gen, gen, true)); // staged, not landed: wait for the persist
+    }
+
+    [Fact]
     public void ReOpenPersistFailureAbortsTheRepairAndKeepsStateConsistent()
     {
         // If the re-open persist is refused, the rollback restores landed and the repair must

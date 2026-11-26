@@ -87,6 +87,21 @@ internal static class VlcRotation
     /// failed save then rolls back - and "still paired, nothing changed" would be a lie on disk.</summary>
     internal static (string? t, bool landed, int gen) SnapshotCommitted() { lock (Program.ConfigSaveLock) return Snapshot(); }
 
+    internal enum RemovalOutcome { NotYet, Done, Superseded }
+
+    /// <summary>The removal dialog's call, from ONE committed snapshot plus a disk read bound to that
+    /// snapshot's target. Landed alone never says done: the rollback of a refused re-open persist
+    /// restores landed while vlcrc still holds OLD, so done requires the disk to actually show the
+    /// target - or the verified clear, which has no target left to check. A diverged OR unreadable
+    /// disk is not-yet: under-claiming during a read glitch is the safe side, and the retry is armed.</summary>
+    internal static RemovalOutcome ClassifyRemovalOutcome(string? target, bool landed, int snapshotGen, int removalGen, bool diskHealthy)
+    {
+        if (snapshotGen != removalGen) return RemovalOutcome.Superseded;
+        if (target == null) return RemovalOutcome.Done;      // verified and cleared: state-only by design
+        if (landed && diskHealthy) return RemovalOutcome.Done;
+        return RemovalOutcome.NotYet;
+    }
+
     /// <summary>For the removal-outcome UI: this removal's generation is complete once its pass
     /// landed - OR once the verify pass already cleared the target. The clear does NOT bump the
     /// generation, so a fully successful rotation can read back as (no target, unlanded, same
