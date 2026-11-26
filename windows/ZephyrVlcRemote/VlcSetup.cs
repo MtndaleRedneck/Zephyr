@@ -157,9 +157,9 @@ internal static class VlcSetup
             return JsonSerializer.Serialize(new { ok = false, reason = "bad password" });
         if (ReadHealthy().HealthyFor(password))
         {
-            var backup = VlcRotation.BackupTarget();
+            var exitBackup = VlcRotation.BackupTarget();
             Program.MutateAndPersist(() => VlcRotation.ClearTargetIfMatchesUnderConfigSaveLock(password),
-                () => VlcRotation.RestoreTargetUnderConfigSaveLock(backup), "the VLC setup");
+                () => VlcRotation.RestoreTargetUnderConfigSaveLock(exitBackup), "the VLC setup");
             Program.Log("vlcrc already has the web remote set up - nothing to write.");
             return JsonSerializer.Serialize(new { ok = true });
         }
