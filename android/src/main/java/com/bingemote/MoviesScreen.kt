@@ -426,7 +426,12 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         if (origin == o) return
         origin = o
         error = null
-        if (o == Origin.PHONE) loadPhone() else { loading = true; load(path) }
+        if (o == Origin.PHONE) loadPhone() else {
+            // The other origin's rows must not stay on screen while the PC list loads or when the PC can't answer (disconnected).
+            items = emptyList()
+            loading = true
+            load(path)
+        }
     }
 
     val pickTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
@@ -562,14 +567,15 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
 
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(
-            // Same 16dp top as Settings, so the header doesn't jump 4dp between screens.
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 12.dp),
+            // Same bar as Home and Settings: 12dp above, 40dp row, 12dp below (64dp). Items below keep their old position via the 4dp spacer.
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HeaderIconButton(onBack, remote.store.haptics) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
             Spacer(Modifier.width(12.dp))
             Text("Movies", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
+        Spacer(Modifier.height(4.dp))
         // The reconnect banner, verbatim from the home hero: same gradient, radius, ink,
         // sizes and strings. The Movies title and back arrow stay put above it.
         if (lost) {
@@ -592,7 +598,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         // Root breadcrumb: only rendered when there is a path to show, so the root
         // view has no blank gap under the header.
         val crumbs = prettyPath(path)
-        if (crumbs.isNotBlank()) {
+        if (origin == Origin.PC && crumbs.isNotBlank()) {
             Text(
                 crumbs,
                 color = Muted, fontSize = 13.sp,
@@ -600,14 +606,15 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
             )
             Spacer(Modifier.height(10.dp))
         }
-        Text(
-            if (origin == Origin.PHONE)
-                phoneFolderDisplay(remote.store.moviesPhoneTreeUri) + phoneStack.joinToString("") { " › " + it.second }
-            else prettyPath(path),
-            color = Muted, fontSize = 13.sp,
-            modifier = Modifier.padding(horizontal = 16.dp),
-        )
-        Spacer(Modifier.height(10.dp))
+        // The PC origin's breadcrumb is the single one above (as in BingeMote); the Phone origin shows its own folder.
+        if (origin == Origin.PHONE) {
+            Text(
+                phoneFolderDisplay(remote.store.moviesPhoneTreeUri) + phoneStack.joinToString("") { " › " + it.second },
+                color = Muted, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            Spacer(Modifier.height(10.dp))
+        }
         // Origin selector: orange = active origin (dark text), muted = inactive.
         Row(
             Modifier

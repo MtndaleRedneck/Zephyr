@@ -31,7 +31,14 @@ class ZephyrAutoPairTest {
             context.startActivity(Intent(context, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra("screen", "settings-pair-2"))
-            assertNotNull("pair form absent", device.wait(Until.findObject(By.text("Code (4 digits, or 6 on an older Player)")), 15000))
+            // BingeMote flow: choose the PC first (typed address -> "Use this address"), then the code card appears.
+            val addr = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000)
+            assertNotNull("address field absent", addr)
+            addr!!.text = "127.0.0.1:${server.port}"
+            val use = device.wait(Until.findObject(By.text("Use this address")), 5000)
+            assertNotNull("Use this address missing", use)
+            use!!.click()
+            assertNotNull("code field absent", device.wait(Until.findObject(By.text("Code from your PC")), 8000))
             val fields = device.findObjects(By.clazz("android.widget.EditText"))
             assertEquals("address and code fields expected", 2, fields.size)
             fields[1].text = "12345"

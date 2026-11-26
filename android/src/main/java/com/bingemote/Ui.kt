@@ -129,7 +129,7 @@ fun PressTile(
  * ellipsizes - Settings is always fully on screen. */
 @Composable
 fun TopBar(source: @Composable () -> Unit, pill: @Composable () -> Unit, settings: @Composable () -> Unit) {
-    Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 12.dp)) { // top +4dp only, bottom unchanged
+    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) { // same as BingeMote's home header
         androidx.compose.ui.layout.Layout(content = {
             androidx.compose.foundation.Image(
                 painter = androidx.compose.ui.res.painterResource(R.drawable.app_logo),

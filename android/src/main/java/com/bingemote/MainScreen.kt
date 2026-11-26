@@ -963,10 +963,10 @@ fun SourceSelector(remote: RemoteState) {
             ) { expanded = true },
             verticalAlignment = Alignment.CenterVertically) {
             Text(if (selected == Source.ZEPHYR) "Zephyr PC" else "VLC PC", color = TextC,
-                fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1, // same size and weight as BingeMote's header title
                 overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f, fill = false))
-            Text(" ▾", color = Muted, fontSize = 14.sp)
+            Text(" ▾", color = Muted, fontSize = 16.sp)
         }
         androidx.compose.material3.DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             listOf(Source.VLC to "VLC PC", Source.ZEPHYR to "Zephyr PC").forEach { (source, label) ->

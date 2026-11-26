@@ -75,4 +75,12 @@ class SubtitleJournalTest {
         assertTrue(SubtitleJournal(ctx).isDegraded("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))
     }
 
+    @Test fun overlongMediaIsRejectedAtBeginAndJournalStaysReadable(){
+        reset();val journal=SubtitleJournal(ctx)
+        try { journal.begin("pair","m".repeat(65)); fail("expected rejection") } catch(_:IllegalStateException){}
+        // Existing begin() contract: any non-folder-load begin failure marks the pair degraded (fail-safe). Pinned here.
+        assertTrue(journal.isDegraded("pair"))
+        val ok=journal.begin("pair","m".repeat(64));assertTrue(journal.finish(ok,false))
+        assertTrue(SubtitleJournal(ctx).entries("pair").isEmpty())
+    }
 }
