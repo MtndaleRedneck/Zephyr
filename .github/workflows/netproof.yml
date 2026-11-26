@@ -1,0 +1,26 @@
+name: Network probe proof
+on:
+  push:
+    branches: [tmp/netproof]
+permissions:
+  contents: read
+jobs:
+  proof:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.x
+      - name: Adapter state before
+        run: Get-NetConnectionProfile | Format-List Name,InterfaceAlias,NetworkCategory
+      - name: Player probe (disposable runner only)
+        env:
+          BM_NET_PROOF: "1"
+        run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --filter "FullyQualifiedName~NetProbeProofTests" --logger "console;verbosity=detailed"
+      - name: VLC Remote probe and MarkPrivate (disposable runner only)
+        if: always()
+        env:
+          BM_NET_PROOF: "1"
+        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --filter "FullyQualifiedName~NetProofTests" --logger "console;verbosity=detailed"
