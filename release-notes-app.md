@@ -1,6 +1,6 @@
 ## Zephyr 1.8.0
 
-Pick your accent color. Settings has a new Accent color card with orange as the default and eight more to choose from.
+Pick your accent color. Settings has a new Accent color card with orange as the default and nine more to choose from.
 
 **Improved**
 - Pairing follows the same steps as the VLC remote, and says plainly when a pairing can't be confirmed instead of showing a check mark.
