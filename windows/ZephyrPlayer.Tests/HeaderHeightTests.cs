@@ -116,14 +116,14 @@ namespace ZephyrPlayer.Tests
                 var w = new SettingsWindow(settings, new PairedStore(Path.Combine(dir, "pairs.json")), () => { });
                 w.Left = -20000; w.Top = -20000;
                 w.Show(); w.UpdateLayout();
-                var title = (FrameworkElement)w.FindName("SectionTitle")!;
+                var title = (FrameworkElement)w.FindName("SectionHeader")!;   // whole header container, not just the text
                 double? reference = null;
                 foreach (var name in new[] { "NavVolume", "NavSkip", "NavBar", "NavRemote", "NavFeedback", "NavUpdates" })
                 {
                     ((Button)w.FindName(name)!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     w.UpdateLayout();
                     var height = title.ActualHeight;
-                    Assert.True(height > 0, name + ": section title has no height");
+                    Assert.True(height > 0, name + ": section header has no height");
                     if (reference.HasValue) Assert.Equal(reference.Value, height); else reference = height;
                 }
                 Capture(title, "pc-header-settings-section.png");

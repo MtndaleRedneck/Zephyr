@@ -92,8 +92,10 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <TextBlock x:Name="SectionTitle" Grid.Row="0" Text="Volume" Foreground="{StaticResource TextBrush}"
-                       FontSize="17" FontWeight="SemiBold" Margin="2,2,0,12"/>
+            <Grid x:Name="SectionHeader" Grid.Row="0">
+                <TextBlock x:Name="SectionTitle" Text="Volume" Foreground="{StaticResource TextBrush}"
+                           FontSize="17" FontWeight="SemiBold" Margin="2,2,0,12"/>
+            </Grid>
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <Grid>
                     <!-- Volume -->
