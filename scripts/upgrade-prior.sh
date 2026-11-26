@@ -251,7 +251,8 @@ settle_environment() {
   snap preinstall-settled
   echo "SETTLE OK: boot completed, no ANR dialog in focus (4 consecutive reads), $taps dialog taps, $((SECONDS - t0))s"
 }
-cp /tmp/up/new-app.sha256 instrument-results/tested-apk.sha256 2>/dev/null || echo "NOTE: no /tmp/up/new-app.sha256 to record"
+mkdir -p instrument-results
+cp /tmp/up/new-app.sha256 instrument-results/tested-apk.sha256 || echo "NOTE: no /tmp/up/new-app.sha256 to record"
 settle_environment
 adb uninstall $PKG >/dev/null 2>&1; adb uninstall $TESTPKG >/dev/null 2>&1
 adb install -r /tmp/up/old-app.apk || { echo "UPGRADE FAIL: old install"; exit 1; }
