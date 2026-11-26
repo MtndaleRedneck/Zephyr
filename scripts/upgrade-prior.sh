@@ -82,6 +82,26 @@ foreign_anr_in_log() { # $1 = result name
   done <<< "$lines"
   return 1
 }
+# Same-window evidence for the case where the ANR happened before the first run's log was cleared (emulator boot), so no run
+# log holds an "ANR in" line while the dialog still owns focus. Requires BOTH: the dialog in focus NOW is an exact
+# allowlisted package (same ANR_ALLOW), AND the system's own input_focus event for that very window id and package is in THIS
+# job's seed run log (the seed run always precedes verify, so the event is older than the failure). Different window id,
+# different package or no logged event: no. The matched line is printed (and added to the job summary) as the record.
+focused_dialog_logged_in_job() {
+  local focus pkg id ids seed="instrument-results/seed-rawlog.txt" hit
+  [ -s "$seed" ] || return 1
+  focus=$(adb shell dumpsys window | grep "mCurrentFocus")
+  for pkg in $ANR_ALLOW; do
+    ids=$(printf '%s\n' "$focus" | sed -n "s/.*Window{\([0-9a-f][0-9a-f]*\) u0 Application Not Responding: ${pkg//./\\.}}.*/\1/p")
+    for id in $ids; do
+      hit=$(grep -m1 -E "input_focus: \[Focus (request|entering) $id Application Not Responding: ${pkg//./\\.}[ ,]" "$seed") || continue
+      echo "NOTE: allowlisted ANR dialog package=$pkg window=$id seen earlier in seed-rawlog.txt: $hit"
+      [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf 'upgrade-prior: allowlisted ANR dialog package=%s window=%s was in the seed run log before verify: %s\n' "$pkg" "$id" "$hit" >> "$GITHUB_STEP_SUMMARY"
+      return 0
+    done
+  done
+  return 1
+}
 # A green instrument result is only trusted when its own log is clean: no app or unknown ANR/crash, usable capture.
 green_must_be_clean() { # $1 = result name, $2 = label
   if grep -q "^OK (1 test)" "instrument-results/$1.txt" && app_failure_in_log "$1"; then
@@ -93,7 +113,7 @@ green_must_be_clean() { # $1 = result name, $2 = label
 # ONE focus capture, read once and kept: dismiss only if it names an allowlisted package exactly. Evidence is saved first.
 dismiss_foreign_anr() { # $1 = label for the saved evidence
   local focus pkg ok=0
-  focus=$(adb shell dumpsys window | grep -m1 "mCurrentFocus")
+  focus=$(adb shell dumpsys window | grep "mCurrentFocus")
   printf '%s\n' "$focus" > "instrument-results/$1-focus.txt"
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && adb pull /sdcard/ui.xml "instrument-results/$1-ui.xml" >/dev/null 2>&1
   adb logcat -d | grep -E "ANR in|Application Not Responding" | tail -20 > "instrument-results/$1-anr-log.txt"
@@ -131,7 +151,7 @@ retry_window_only() { # $1 class#method, $2 result name
   window_fail_diag "$2"
   # Gate on this run's own log first: any app-owned ANR/crash evidence, or an ANR line naming no allowlisted package, is final.
   if app_failure_in_log "$2"; then echo "NOTE: $2 saved log shows an app-owned or unknown ANR/crash: no retry (see $2-syslog.txt)"; return 0; fi
-  foreign_anr_in_log "$2" || { echo "NOTE: $2 saved log has no allowlisted ANR evidence: no retry"; return 0; }
+  foreign_anr_in_log "$2" || focused_dialog_logged_in_job || { echo "NOTE: $2 saved log has no allowlisted ANR evidence: no retry"; return 0; }
   dismiss_foreign_anr "$2" || return 0
   echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
   cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
