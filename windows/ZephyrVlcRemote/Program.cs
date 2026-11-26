@@ -672,7 +672,7 @@ internal static class Program
         }
         // A rotation in progress survives a helper restart: the app-owned pass converges it.
         var rot = _rotationFromConfig;
-        _rotationFromConfig = null;
+        _rotationFromConfig = default;
         if (rot.target != null || rot.gen != 0) VlcRotation.LoadPersisted(rot.target, rot.landed, rot.gen);
     }
 

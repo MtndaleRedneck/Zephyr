@@ -122,7 +122,7 @@ internal static class Movies
         {
             try
             {
-                var (t, landed, gen) = VlcRotation.Snapshot();
+                var (t, landed, gen) = VlcRotation.SnapshotCommitted();
                 if (t != null)
                 {
                     var obs = VlcSetup.ReadHealthy();

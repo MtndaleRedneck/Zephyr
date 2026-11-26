@@ -29,6 +29,9 @@ internal static class VlcSetup
         public string? Password;
         public bool InterfaceOn;
         public bool HostOk;
+        /// <summary>False only when vlcrc EXISTS but could not be read (a transient lock, a denied
+        /// path): callers must treat that as "unknown", never as divergence or as an empty file.</summary>
+        public bool ReadOk;
         public bool HealthyFor(string t) => Password == t && InterfaceOn && HostOk;
     }
 
@@ -41,15 +44,16 @@ internal static class VlcSetup
         try
         {
             var path = Path.Combine(VlcDir, "vlcrc");
-            if (!File.Exists(path)) return h;
+            if (!File.Exists(path)) { h.ReadOk = true; return h; } // genuinely nothing there
             var lines = File.ReadAllLines(path).ToList();
+            h.ReadOk = true;
             h.Password = FindValue(lines, "http-password");
             var extraintf = FindValue(lines, "extraintf") ?? "";
             var parts = extraintf.Split(new[] { ',', ':', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).ToList();
             h.InterfaceOn = parts.Contains("http") || parts.Contains("luahttp");
             h.HostOk = FindValue(lines, "http-host") == "0.0.0.0";
         }
-        catch { /* unreadable right now: not healthy */ }
+        catch { /* exists but unreadable right now: ReadOk stays false, health unknown */ }
         return h;
     }
 
@@ -170,8 +174,9 @@ internal static class VlcSetup
             Program.Log("VLC web remote written into vlcrc.");
             return JsonSerializer.Serialize(new { ok = true });
         }
-        if (outcome == VlcRotation.ApplyOutcome.Deferred || VlcRunning())
+        if (outcome == VlcRotation.ApplyOutcome.Deferred)
         {
+            // A running VLC holds the write (or another pass is mid-flight and converging).
             Program.Log("vlcrc write skipped - VLC is running (it rewrites vlcrc on exit). Will retry when VLC closes.");
             return JsonSerializer.Serialize(new { ok = false, reason = "vlc running" });
         }
@@ -204,27 +209,39 @@ internal static class VlcSetup
 
     internal static void ForgetCandidateForTests() { lock (Gate) _candidate = null; }
 
-    /// <summary>Carry out a plan. With vlcrc carrying a password this is READ-ONLY: pair and
-    /// adopt never touch the rotation target - a value planned from an OLD vlcrc must never
-    /// replace an outstanding NEW target mid-deferral. Only the setup exception (vlcrc has NO
-    /// password at all) stages the planned value as the target (persisted, then a kick).</summary>
+    /// <summary>Carry out a plan. STRICT read: a vlcrc that cannot be read is unknown, not "no
+    /// password" - and a read failure is read-only, never a target overwrite. With vlcrc carrying
+    /// a password this is READ-ONLY: pair and adopt never touch the rotation target - a value
+    /// planned from an OLD vlcrc must never replace an outstanding NEW target mid-deferral. Only
+    /// the genuine setup exception - no vlcrc password AND no rotation target at all - stages the
+    /// planned value as the target (persisted, then a kick). A live target is never overwritten
+    /// here even when it differs from the plan: it belongs to a newer writer (a removal rotation),
+    /// and the phone heals onto it by adoption after the landing.</summary>
     internal static string ApplyPlannedPassword(string password)
     {
-        if (!string.IsNullOrEmpty(ReadVlcrcValue("http-password")))
+        string? existing;
+        try { existing = ReadVlcrcPasswordStrict(); }
+        catch (VlcrcUnreadableException)
+        {
+            lock (Gate) { if (_candidate == password) _candidate = null; }
+            Program.Log("vlcrc could not be read while applying a plan - left the rotation state untouched.");
+            return password;
+        }
+        if (!string.IsNullOrEmpty(existing))
         {
             lock (Gate) { if (_candidate == password) _candidate = null; }
             return password;
         }
         var fresh = !File.Exists(Path.Combine(VlcDir, "vlcrc"));
-        if (VlcRotation.TargetValue != password)
+        if (VlcRotation.TargetValue == null)
         {
             var backup = VlcRotation.BackupTarget();
             Program.MutateAndPersist(() => VlcRotation.SetTargetUnderConfigSaveLock(password),
                 () => VlcRotation.RestoreTargetUnderConfigSaveLock(backup), "the VLC password setup");
+            VlcRotation.Kick();
+            if (fresh) Program.Log("VLC web-remote password generated for the phone (value never logged).");
         }
         lock (Gate) { if (_candidate == password) _candidate = null; }   // the target is the truth now
-        if (fresh) Program.Log("VLC web-remote password generated for the phone (value never logged).");
-        VlcRotation.Kick();
         return password;
     }
 

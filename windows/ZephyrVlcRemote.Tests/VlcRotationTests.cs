@@ -23,12 +23,15 @@ public class VlcRotationTests : IDisposable
         Program.StoreBroken = false;
         lock (Program.PhonesLock) { Program.Phones.Clear(); }
         VlcRotation.ResetForTests();
+        VlcRotation.BackgroundDisabledForTests = true;  // no pool pass may leak into the next test
         VlcSetup.ForgetCandidateForTests();
         VlcSetup.VlcRunningOverride = () => false;
     }
 
     public void Dispose()
     {
+        VlcRotation.BackgroundDisabledForTests = false;
+        VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5));  // drain anything already in flight
         VlcSetup.VlcDirOverride = null;
         VlcSetup.VlcRunningOverride = null;
         VlcSetup.ForgetCandidateForTests();
@@ -253,5 +256,83 @@ public class VlcRotationTests : IDisposable
         VlcRotation.PassOnce();
         Assert.Equal(served, VlcSetup.ReadVlcrcValue("http-password"));
         Assert.True(VlcSetup.ReadHealthy().HealthyFor(served));
+    }
+
+    [Fact]
+    public void UncommittedTargetIsNeverWrittenByAConcurrentPass()
+    {
+        // D1: a pass must observe only committed state. Stage a target WITHOUT saving (a writer
+        // mid-transaction holds ConfigSaveLock until SaveConfig succeeds): the concurrent pass
+        // must block on the save lock and write nothing. A save that then fails rolls the target
+        // back, and vlcrc must never have carried the uncommitted value.
+        var backup = VlcRotation.BackupTarget();
+        lock (Program.ConfigSaveLock)
+        {
+            VlcRotation.SetTargetUnderConfigSaveLock("uncommitted-123456");
+            var pass = Task.Run(() => VlcRotation.PassOnce());
+            Thread.Sleep(300);                                 // generous window for a buggy pass to write
+            Assert.False(pass.IsCompleted);                    // still waiting on the save lock
+            Assert.False(File.Exists(VlcrcPath));              // and nothing on disk
+            VlcRotation.RestoreTargetUnderConfigSaveLock(backup); // the save "failed": rollback
+        }
+        Assert.True(VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5)));
+        Thread.Sleep(200);                                     // let the released pass finish
+        Assert.True(VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5)));
+        Assert.Null(VlcRotation.TargetValue);                  // rolled back
+        Assert.False(File.Exists(VlcrcPath));                  // the uncommitted value never landed
+    }
+
+    [Fact]
+    public void ApplyPlannedPasswordNeverOverwritesALiveTarget()
+    {
+        // D2: a value planned from an OLD vlcrc (or no vlcrc) must never replace a NEW rotation
+        // target staged by a later removal.
+        var planned = VlcSetup.PlanPassword();                 // plans a candidate from an empty vlcrc
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        Program.AddPhoneAndPersist("tok-b", "Phone B");
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => x.Token == "tok-b").ToArray(), "new-password-22");
+        Assert.True(ok);
+        Assert.Equal("new-password-22", VlcRotation.TargetValue);
+        VlcSetup.ApplyPlannedPassword(planned);                // stale plan arrives late
+        Assert.Equal("new-password-22", VlcRotation.TargetValue);   // the live target survives
+    }
+
+    [Fact]
+    public void ReadGlitchDoesNotMoveTheMarker_OrReArmAGrant()
+    {
+        // A transient vlcrc read failure is unknown, not divergence: the marker must stay put,
+        // and the next healthy read must NOT re-arm a grant for a value that never diverged.
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var kept = Phone("tok-a");
+        var (ok, _) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-22");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                              // lands NEW
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
+        kept.AdoptSpent = true;                              // the kept phone fetched NEW and spent the grant
+        using (var fs = new FileStream(VlcrcPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            VlcRotation.PassOnce();                          // read denied: unknown, no divergence, no re-arm
+            Assert.True(kept.AdoptSpent);
+            Assert.Equal("new-password-22", VlcRotation.TargetValue); // the marker kept the target
+        }
+        VlcRotation.PassOnce();                              // healthy read: verify clears, still no spurious re-arm
+        Assert.True(kept.AdoptSpent);
+        Assert.Null(VlcRotation.TargetValue);
+    }
+
+    [Fact]
+    public void BackgroundKickIsDisabledInTests_AndTheSynchronousPassStillConverges()
+    {
+        // The fixture disables Kick's pool pass: staging alone must write NOTHING even after a
+        // wait, and the explicit synchronous pass does the work. Proves no background pass can
+        // leak across tests, and that the disable seam itself works.
+        var pw = "bg-disabled-12345678";
+        VlcSetup.ApplyPlannedPassword(pw);                   // stages + kicks (kick is a no-op here)
+        Assert.Equal(pw, VlcRotation.TargetValue);
+        Thread.Sleep(250);
+        Assert.False(File.Exists(VlcrcPath));                // nothing ran in the background
+        Assert.True(VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5)));
+        VlcRotation.PassOnce();
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor(pw));
     }
 }

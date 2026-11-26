@@ -21,12 +21,15 @@ public class VlcSetupTests : IDisposable
         Program.StoreBroken = false;
         lock (Program.PhonesLock) { Program.Phones.Clear(); }
         VlcRotation.ResetForTests();
+        VlcRotation.BackgroundDisabledForTests = true;  // no pool pass may leak into the next test
         VlcSetup.ForgetCandidateForTests();
         VlcSetup.VlcRunningOverride = () => false;   // the tests must not depend on a VLC open on the machine
     }
 
     public void Dispose()
     {
+        VlcRotation.BackgroundDisabledForTests = false;
+        VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5));
         VlcSetup.VlcDirOverride = null;
         VlcSetup.VlcRunningOverride = null;
         VlcSetup.AfterPlanReadForTests = null;

@@ -26,10 +26,13 @@ public class PairVlcrcFailureTests : IDisposable
         VlcSetup.VlcRunningOverride = () => false;
         VlcSetup.ForgetCandidateForTests();
         VlcRotation.ResetForTests();
+        VlcRotation.BackgroundDisabledForTests = true;  // no pool pass may leak into the next test
     }
 
     public void Dispose()
     {
+        VlcRotation.BackgroundDisabledForTests = false;
+        VlcRotation.AwaitQuiescenceForTests(TimeSpan.FromSeconds(5));
         VlcSetup.VlcDirOverride = null; VlcSetup.VlcRunningOverride = null; VlcSetup.ForgetCandidateForTests(); VlcRotation.ResetForTests();
         Program.PairCode = null; Program.StoreBroken = false;
         lock (Program.PhonesLock) { Program.Phones.Clear(); }

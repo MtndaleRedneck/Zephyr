@@ -842,7 +842,11 @@ internal sealed class HelperWindow : Form
         }
         Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
         RefreshPhones();
-        if (!_windowShot) await ShowRotationOutcomeAsync(ph.Name + " removed.", gen, allRemoved: false);
+        if (!_windowShot)
+        {
+            try { await ShowRotationOutcomeAsync(ph.Name + " removed.", gen, allRemoved: false); }
+            catch (Exception ex) { Program.Log("The removal result could not be shown (" + ex.GetType().Name + "); the removal itself is saved."); }
+        }
     }
 
     private async void RemoveAllPhones()
@@ -863,7 +867,11 @@ internal sealed class HelperWindow : Form
         }
         Program.Log("All phones removed.");
         RefreshPhones();
-        if (!_windowShot) await ShowRotationOutcomeAsync("All phones removed.", gen, allRemoved: true);
+        if (!_windowShot)
+        {
+            try { await ShowRotationOutcomeAsync("All phones removed.", gen, allRemoved: true); }
+            catch (Exception ex) { Program.Log("The removal result could not be shown (" + ex.GetType().Name + "); the removal itself is saved."); }
+        }
     }
 
     /// <summary>One honest outcome line after a removal rotates the VLC password: kick the pass,

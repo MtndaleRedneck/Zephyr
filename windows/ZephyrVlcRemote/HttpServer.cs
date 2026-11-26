@@ -273,16 +273,21 @@ internal sealed class HttpServer : IDisposable
         if (token == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
         if (ack)
         {
-            AdoptGrant.Result a;
+            AdoptGrant.Result a = null!; // assigned on every path that reaches its use (denied returns first)
             string? name = null;
+            var denied = false;
             lock (Program.ConfigSaveLock)
             {
                 Program.PairedPhone? phone;
                 lock (Program.PhonesLock) { phone = Program.Phones.FirstOrDefault(p => ConstantTimeEq(token, p.Token)); }
-                if (phone == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
-                name = phone.Name;
-                a = AdoptGrant.Ack(phone, requestId, Program.SaveConfig);
+                if (phone == null) { denied = true; }
+                else
+                {
+                    name = phone.Name;
+                    a = AdoptGrant.Ack(phone, requestId, Program.SaveConfig);
+                }
             }
+            if (denied) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; } // Reply outside the save lock: no I/O under it
             if (a.Acked)
             {
                 Program.Log("Phone \"" + name + "\" stored the VLC password; its one-time fetch is spent.");
@@ -294,26 +299,30 @@ internal sealed class HttpServer : IDisposable
         AdoptGrant.Result result;
         string? servedName = null;
         var kick = false;
+        var denied = false;
         try
         {
             lock (Program.ConfigSaveLock)
             {
                 Program.PairedPhone? phone;
                 lock (Program.PhonesLock) { phone = Program.Phones.FirstOrDefault(p => ConstantTimeEq(token, p.Token)); }
-                if (phone == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
-                servedName = phone.Name;
-                var backup = VlcRotation.BackupTarget();
-                try
+                if (phone == null) { denied = true; result = null!; }
+                else
                 {
-                    var vlcrcEmpty = string.IsNullOrEmpty(VlcSetup.ReadVlcrcValue("http-password"));
-                    result = AdoptGrant.Serve(phone, VlcSetup.ServeForAdoptInMemory, requestId, DateTime.UtcNow, Program.SaveConfig);
-                    // The setup exception staged the rotation target: it must converge now.
-                    kick = result.Served && vlcrcEmpty;
-                }
-                catch
-                {
-                    VlcRotation.RestoreTargetUnderConfigSaveLock(backup);
-                    throw;
+                    servedName = phone.Name;
+                    var backup = VlcRotation.BackupTarget();
+                    try
+                    {
+                        var vlcrcEmpty = string.IsNullOrEmpty(VlcSetup.ReadVlcrcValue("http-password"));
+                        result = AdoptGrant.Serve(phone, VlcSetup.ServeForAdoptInMemory, requestId, DateTime.UtcNow, Program.SaveConfig);
+                        // The setup exception staged the rotation target: it must converge now.
+                        kick = result.Served && vlcrcEmpty;
+                    }
+                    catch
+                    {
+                        VlcRotation.RestoreTargetUnderConfigSaveLock(backup);
+                        throw;
+                    }
                 }
             }
         }
@@ -322,6 +331,7 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 503, "{\"error\":\"vlcrc unreadable\"}");
             return;
         }
+        if (denied) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; } // Reply outside the save lock: no I/O under it
         if (result.Served)
         {
             if (!result.Replayed)
