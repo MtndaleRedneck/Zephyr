@@ -299,14 +299,14 @@ internal sealed class HttpServer : IDisposable
         AdoptGrant.Result result;
         string? servedName = null;
         var kick = false;
-        var denied = false;
+        var deniedServe = false;
         try
         {
             lock (Program.ConfigSaveLock)
             {
                 Program.PairedPhone? phone;
                 lock (Program.PhonesLock) { phone = Program.Phones.FirstOrDefault(p => ConstantTimeEq(token, p.Token)); }
-                if (phone == null) { denied = true; result = null!; }
+                if (phone == null) { deniedServe = true; result = null!; }
                 else
                 {
                     servedName = phone.Name;
@@ -331,7 +331,7 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 503, "{\"error\":\"vlcrc unreadable\"}");
             return;
         }
-        if (denied) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; } // Reply outside the save lock: no I/O under it
+        if (deniedServe) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; } // Reply outside the save lock: no I/O under it
         if (result.Served)
         {
             if (!result.Replayed)
