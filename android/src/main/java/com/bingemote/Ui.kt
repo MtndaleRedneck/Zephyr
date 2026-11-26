@@ -154,6 +154,7 @@ fun TopBar(source: @Composable () -> Unit, pill: @Composable () -> Unit, setting
             val pillP = measurables[2].measure(androidx.compose.ui.unit.Constraints(maxWidth = (middle - minTitle).coerceAtLeast(0)))
             val titleP = measurables[1].measure(androidx.compose.ui.unit.Constraints(maxWidth = (middle - pillP.width).coerceAtLeast(0)))
             val h = maxOf(logoP.height, titleP.height, pillP.height, setP.height, 44.dp.roundToPx())
+            if (BuildConfig.DEBUG) android.util.Log.i("TopBarRow", "px logo=${logoP.height} title=${titleP.height} pill=${pillP.height} settings=${setP.height} min44=${44.dp.roundToPx()} h=$h fontScale=${fontScale} density=${density}")
             layout(constraints.maxWidth, h) {
                 logoP.placeRelative(0, (h - logoP.height) / 2)
                 val titleX = logoP.width + gap

@@ -43,3 +43,4 @@ adb shell wm size 1080x2310; adb shell wm density 480; adb shell settings put sy
 shoot g2310-480-f1.0 pair-saved settings-pair-paired
 adb shell wm size reset; adb shell wm density reset; adb shell settings put system font_scale 1.0
 adb logcat -d -s AndroidRuntime:E > $OUT/crashes.txt || true
+adb logcat -d -s TopBarRow:I > $OUT/topbar-rows.txt || true
