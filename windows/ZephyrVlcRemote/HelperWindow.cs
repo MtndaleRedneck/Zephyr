@@ -894,6 +894,9 @@ internal sealed class HelperWindow : Form
             msg = allRemoved
                 ? label + " The saved VLC password has changed."
                 : label + " Its saved VLC password has changed. Your other phones keep working.";
+        else if (VlcRotation.Generation != gen)
+            // A NEWER rotation superseded this dialog's pass: claim neither changed nor unchanged.
+            msg = label + " A newer VLC password change has run since this one - the window shows the current state.";
         else
             // No cutoff claim before the landing: the helper token is gone, but OLD is still the
             // VLC password until the retry lands, and VLC's own remote answers it whenever VLC runs.

@@ -112,6 +112,39 @@ public class VlcRotationTests : IDisposable
     }
 
     [Fact]
+    public void DivergenceWhileLanded_ReopensThePendingStateUntilRepaired()
+    {
+        // After the landing, an old-password VLC clobbers vlcrc back to OLD and STAYS OPEN: the
+        // write cannot run, and the published state must stop claiming completion - the rotation
+        // re-opens (pending) until the repair lands, so no window or dialog says "changed" while
+        // the disk holds OLD. Grants and the marker must NOT move on the observation: the re-arm
+        // belongs to the re-landing.
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1");
+        Program.AddPhoneAndPersist("tok-a", "Phone A");
+        var kept = Phone("tok-a");
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => Array.Empty<Program.PairedPhone>(), "new-password-22");
+        Assert.True(ok);
+        VlcRotation.PassOnce();                              // lands NEW
+        Assert.True(VlcRotation.Landed);
+        Assert.True(VlcRotation.RotationOutcomeComplete(gen));
+        kept.AdoptSpent = true;                              // the kept phone fetched NEW and spent the grant
+        WriteVlcrc("extraintf=http", "http-host=0.0.0.0", "http-password=old-password-1"); // the clobber
+        VlcSetup.VlcRunningOverride = () => true;            // the old VLC stays open: no write allowed
+        VlcRotation.PassOnce();
+        Assert.False(VlcRotation.Landed);                    // re-opened: the disk no longer matches the target
+        Assert.True(VlcSetup.Pending);                       // the window note shows the truth
+        Assert.False(VlcRotation.RotationOutcomeComplete(gen)); // no false completion while the disk holds OLD
+        Assert.True(kept.AdoptSpent);                        // observation alone does not re-arm
+        VlcSetup.VlcRunningOverride = () => false;
+        VlcRotation.PassOnce();                              // repairs and re-lands (the landing edge re-arms)
+        Assert.True(VlcSetup.ReadHealthy().HealthyFor("new-password-22"));
+        Assert.False(kept.AdoptSpent);
+        Assert.True(VlcRotation.RotationOutcomeComplete(gen));
+        VlcRotation.PassOnce();                              // quiet verify clears
+        Assert.Null(VlcRotation.TargetValue);
+    }
+
+    [Fact]
     public void StaleSetupValueNeverReplacesALandedRotationTarget()
     {
         // /vlc/setup with a stale password (a kept phone's late Finish carrying OLD) must not

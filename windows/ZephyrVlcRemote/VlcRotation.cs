@@ -84,6 +84,21 @@ internal static class VlcRotation
     // Target mutation: only ever inside a ConfigSaveLock persist (the single-writer invariant).
     internal static (string? t, bool landed, int gen) BackupTarget() => Snapshot();
     internal static void SetTargetUnderConfigSaveLock(string t) { lock (Gate) { _target = t; _landed = false; _generation++; } }
+    /// <summary>Re-open a landed rotation after a pass OBSERVED divergence: the disk no longer
+    /// matches the target, so the persisted state must stop claiming completion (landed stays
+    /// true is a lie while vlcrc holds the old password). Target and generation are untouched
+    /// (the repair persist still compares this generation), grants and the marker are untouched
+    /// (re-arming belongs to the re-landing, not to the observation). False when the snapshot
+    /// moved on or the state is already unlanded.</summary>
+    internal static bool MarkUnlandedUnderConfigSaveLock(string expectT, int expectGen)
+    {
+        lock (Gate)
+        {
+            if (_target != expectT || _generation != expectGen || !_landed) return false;
+            _landed = false;
+            return true;
+        }
+    }
     internal static void RestoreTargetUnderConfigSaveLock((string? t, bool landed, int gen) b) { lock (Gate) { _target = b.t; _landed = b.landed; _generation = b.gen; } }
     /// <summary>/vlc/setup's "unchanged" path may clear the target only when it IS the requested value.</summary>
     internal static void ClearTargetIfMatchesUnderConfigSaveLock(string value) { lock (Gate) { if (_target == value) { _target = null; _landed = false; } } }
@@ -156,13 +171,23 @@ internal static class VlcRotation
             }
             else
             {
-                if (VlcSetup.VlcRunning()) return; // repair waits for quiet
-                // Exit-rewrite repair: an OLD-holding VLC rewrote vlcrc on exit; put the target back.
-                if (VlcSetup.TryAtomicWriteHealthy(t) && VlcSetup.ReadHealthy().HealthyFor(t))
-                {
-                    if (PersistFromPass(t, true, gen, setLanded: false, clearTarget: false, t))
-                        Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
-                }
+                // Divergence while landed: the disk no longer matches the target. Re-open the
+                // rotation FIRST (a persisted unlanding, no grant or marker action), so the
+                // published state never claims completion while vlcrc holds the old password -
+                // even while a running VLC holds the repair. Then the ordinary write path
+                // repairs and re-lands (its persist re-arms the grants on the landing edge).
+                (string? t2, bool l2, int g2) backup = default;
+                var marked = false;
+                Program.MutateAndPersist(() =>
+                    {
+                        backup = BackupTarget(); // inside the transaction
+                        marked = MarkUnlandedUnderConfigSaveLock(t, gen);
+                    },
+                    () => { if (marked) RestoreTargetUnderConfigSaveLock(backup); },
+                    "the VLC password re-open");
+                if (!marked) return; // a newer writer moved the state on, or it is already re-opened
+                if (ApplyTargetUnderMutex(t, false, gen, obs) == ApplyOutcome.Landed) // defers on a running VLC itself
+                    Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
             }
         }
     }
