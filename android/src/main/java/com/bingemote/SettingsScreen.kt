@@ -41,6 +41,11 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
@@ -53,12 +58,13 @@ import kotlinx.coroutines.launch
 // One orange everywhere: the settings components use the theme's own tokens.
 // Dark-on-orange, same as every other label on an orange surface (was 281300, a warm
 // brown variant from the Zephyr port that no other on-orange text uses).
-private val OnOrange = Color(0xFF1B1B1E)
+private val OnOrange: Color get() = OnAccent
 
 private val ThumbDark = Color(0xFF1B1B1E)
-private val PillGradient = OrangeGradient
-private val SegmentOnGradient = OrangeGradient
+private val PillGradient: Brush get() = OrangeGradient
+private val SegmentOnGradient: Brush get() = OrangeGradient
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 fun SettingsScreen(
     remote: RemoteState,
@@ -130,7 +136,7 @@ fun SettingsScreen(
         Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
     ) {
         // Same bar as Home and Movies: 12dp above, 44dp row, 12dp below (68dp).
-        ScreenHeader("Settings", hapticsOn = haptics, edge = 0.dp, onBack = onBack)
+        ScreenHeader("Settings", hapticsOn = haptics, edge = 0.dp, matchHomeRow = true, onBack = onBack)
         if (store.secureStoreBroken) {
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
@@ -139,14 +145,14 @@ fun SettingsScreen(
                 )
             }
         }
-        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 6.dp))
+        if (store.secureStoreBroken) Spacer(Modifier.height(18.dp)) // first card sits flush under the header, like Home
         BackHandler { onBack() }
 
         // "Connected Sources" card: the orange source labels ARE the
         // pairing entry points (locked design; the standalone repair button is removed).
         // Each label opens that source's OWN setup screen -
         // never an inline expansion.
-        SettingsSection("Connected Sources") {
+        SettingsSection("Connected Sources", modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("first_card")) {
             // A cancelled setup can leave a helper token with no finished pairing: only a
             // COMPLETE setup shows the PC name (teardown A2 edge).
             SourceRow("VLC PC", if (store.isConfigured) store.pcName.ifBlank { store.host } else "Not paired", hapticsOn = haptics, onLabelClick = onRepair)
@@ -232,7 +238,7 @@ fun SettingsScreen(
             ) {
                 Text(
                     "Browse PC folders",
-                    color = androidx.compose.ui.graphics.Color(0xFF1B1B1E),
+                    color = OnAccent,
                     fontSize = 14.sp, fontWeight = FontWeight.Bold,
                 )
             }
@@ -255,7 +261,7 @@ fun SettingsScreen(
             ) {
                 Text(
                     "Browse phone folders",
-                    color = androidx.compose.ui.graphics.Color(0xFF1B1B1E),
+                    color = OnAccent,
                     fontSize = 14.sp, fontWeight = FontWeight.Bold,
                 )
             }
@@ -306,6 +312,35 @@ fun SettingsScreen(
                 haptics = haptics,
             ) { flash = it; store.buttonFlash = it }
 
+        }
+        Spacer(Modifier.height(14.dp))
+
+        SettingsSection("Accent color") {
+            val accentView = androidx.compose.ui.platform.LocalView.current
+            // Saved as a colour, so the order here is free to change. 5 on top, 4 below.
+            AccentSwatches.withIndex().chunked(5).forEach { row ->
+                // Equal-width cells: the 4 below sit centered between the 5 above, half a cell in from each side.
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (row.size < 5) Spacer(Modifier.weight((5 - row.size) / 2f))
+                    row.forEach { (i, col) ->
+                        val on = AccentPrefs.accent == col
+                        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
+                            Box(
+                                Modifier.size(48.dp).clip(CircleShape)
+                                    .semantics { contentDescription = "Accent color, ${AccentNames[i]}"; selected = on }
+                                    .clickable(role = androidx.compose.ui.semantics.Role.RadioButton) { tapHaptic(accentView, haptics); AccentPrefs.choose(col) },
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                // Selected: a white ring on the card with a gap, then a smaller swatch, so the ring never sits on the swatch edge.
+                                if (on) Box(Modifier.size(46.dp).border(2.dp, TextC, CircleShape), contentAlignment = Alignment.Center) {
+                                    Box(Modifier.size(36.dp).clip(CircleShape).background(col))
+                                } else Box(Modifier.size(42.dp).clip(CircleShape).background(col))
+                            }
+                        }
+                    }
+                    if (row.size < 5) Spacer(Modifier.weight((5 - row.size) / 2f))
+                }
+            }
         }
         Spacer(Modifier.height(14.dp))
 
@@ -390,7 +425,7 @@ fun SettingsScreen(
             ) {
                 Text(
                     if (checking) "Checking\u2026" else "Check for updates",
-                    color = androidx.compose.ui.graphics.Color(0xFF1B1B1E),
+                    color = OnAccent,
                     fontSize = 14.sp, fontWeight = FontWeight.Bold,
                 )
             }
@@ -421,9 +456,9 @@ fun fieldColors(outline: Color = TrackGray) = OutlinedTextFieldDefaults.colors(
 )
 
 @Composable
-fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
+fun SettingsSection(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardGradient).padding(16.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(CardGradient).padding(16.dp),
     ) {
         if (title.isNotEmpty()) {
             Text(title, color = TextC, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)

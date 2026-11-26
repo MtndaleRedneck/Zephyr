@@ -18,32 +18,38 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private enum class PairCheck { None, Checking, Ok, BadToken, CouldntCheck }
+
 /** Pairing with the Zephyr Player is its OWN screen (separate screen for
  *  Zephyr, separate screen for VLC), shaped like the standing VLC
  *  setup flow: instructions step, then find/address + code/pair, with
- *  already-paired continue-or-start-over. Cancel/Back behave like that flow. */
+ *  a read-only check after a fresh pair. Re-entry opens the plain form; Back leaves. */
 @Composable
 fun ZephyrSetupScreen(
     remote: RemoteState,
     onDone: () -> Unit,
     onCancel: () -> Unit,
     initialStep: Int = 0,
+    demo: String = "", // debug capture only (MainActivity, BuildConfig.DEBUG): preset UI state, no network, no store write
 ) {
     val store = remote.store
     val scope = rememberCoroutineScope()
     // Re-entering with a saved pairing opens on the pair step, which offers to continue with it.
-    var step by remember { mutableStateOf(if (initialStep > 0) initialStep else if (store.zephyrToken.isBlank()) 1 else 2) }
+    val entryStep = remember { if (initialStep > 0) initialStep else if (store.zephyrToken.isBlank()) 1 else 2 }
+    var step by remember { mutableStateOf(entryStep) }
     // Same shape as the BingeMote setup: a PC is chosen from Find my PC or a typed address, and only then does the code card appear.
     var manualHost by remember { mutableStateOf("") }
-    var chosen by remember { mutableStateOf<DiscoveredHelper?>(null) }
-    var code by remember { mutableStateOf("") }
+    var chosen by remember { mutableStateOf<DiscoveredHelper?>(if (demo.isNotEmpty()) DiscoveredHelper("192.168.1.50", 47800, "MY-PC") else null) }
+    var code by remember { mutableStateOf(if (demo == "code") "1234" else "") }
     var busy by remember { mutableStateOf(false) }
-    var error by remember { mutableStateOf<String?>(null) }
+    var error by remember { mutableStateOf<String?>(if (demo == "error") "That code is wrong or expired. Check the code on your PC and try again." else null) }
     var scanning by remember { mutableStateOf(false) }
-    var scannedOnce by remember { mutableStateOf(false) }
+    var scannedOnce by remember { mutableStateOf(demo.isNotEmpty()) }
     var discoveryMessage by remember { mutableStateOf<String?>(null) }
-    var found by remember { mutableStateOf<List<DiscoveredHelper>>(emptyList()) }
-    var pairedName by remember { mutableStateOf<String?>(null) } // set after a pair on this screen: confirmation shows under the form
+    var found by remember { mutableStateOf<List<DiscoveredHelper>>(if (demo.isNotEmpty()) listOf(DiscoveredHelper("192.168.1.50", 47800, "MY-PC")) else emptyList()) }
+    var checkState by remember { mutableStateOf(when (demo) { "success-ok" -> PairCheck.Ok; "success-bad" -> PairCheck.BadToken; "success-cant" -> PairCheck.CouldntCheck; "success-checking" -> PairCheck.Checking; else -> PairCheck.None }) } // post-pair status check; read-only, never touches the store
+    var checkGen by remember { mutableStateOf(0) }
+    var pairedName by remember { mutableStateOf<String?>(if (demo.startsWith("success")) "MY-PC" else null) } // set after a pair on this screen: confirmation shows under the form
 
     fun scan() {
         scanning = true
@@ -58,6 +64,23 @@ fun ZephyrSetupScreen(
     // Auto-scan once when the pair step opens; the button re-scans on demand (BingeMote).
     LaunchedEffect(step) { if (step == 2 && !scannedOnce) { scannedOnce = true; scan() } }
 
+    // One read-only GET /control/status right after a fresh pair. Calls ZephyrClient directly (never
+    // RemoteState.pollZephyr, which writes unpaired flags). No store write and no refreshPairing on any outcome.
+    // checkGen: each check (and each new pair attempt) bumps it, so a late result from an earlier
+    // pair or an earlier Try again is dropped and cannot overwrite the current state.
+    fun checkAfterPair(h: String, port: Int, token: String) {
+        val gen = ++checkGen
+        checkState = PairCheck.Checking
+        scope.launch(Dispatchers.IO) {
+            val result = try {
+                ZephyrClient.controlStatus(h, port, token); PairCheck.Ok
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e
+            } catch (e: ZephyrClient.BadToken) { PairCheck.BadToken
+            } catch (e: Exception) { PairCheck.CouldntCheck }
+            withContext(Dispatchers.Main) { if (gen == checkGen) checkState = result }
+        }
+    }
+
     fun pair() {
         val target = chosen ?: run { error = "Select your PC first."; return }
         val c = code.trim()
@@ -66,6 +89,7 @@ fun ZephyrSetupScreen(
         busy = true
         error = null
         pairedName = null // a new attempt clears any earlier success card
+        checkGen++; checkState = PairCheck.None // ...and invalidates any earlier check
         val h = target.host
         scope.launch(Dispatchers.IO) {
             try {
@@ -81,6 +105,7 @@ fun ZephyrSetupScreen(
                         code = ""
                         remote.refreshPairing()
                         pairedName = store.zephyrPcName.ifBlank { h }
+                        checkAfterPair(h, target.port, token)
                     } catch (e: SecureStoreUnavailable) {
                         error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr Player's pairing list and pair again."
                     } catch (e: Exception) {
@@ -99,16 +124,19 @@ fun ZephyrSetupScreen(
         }
     }
 
-    BackHandler { if (step > 1) { step -= 1; error = null } else onCancel() }
+    // Debug capture only: demo states that show the lower cards scroll to the end so the frame contains them.
+    val demoScroll = rememberScrollState()
+    LaunchedEffect(demo) { if (BuildConfig.DEBUG && demo.isNotEmpty() && demo != "chosen") { kotlinx.coroutines.delay(800); demoScroll.scrollTo(Int.MAX_VALUE) } }
+    // Re-entry with a saved pairing opens on the form: Back leaves (like the VLC setup). Only the first-run wizard walks 2 -> 1.
+    BackHandler { if (step > 1 && entryStep == 1) { step -= 1; error = null } else onCancel() }
 
     Column(
-        Modifier.fillMaxSize().background(Bg).verticalScroll(rememberScrollState()).padding(16.dp), // 16dp like BingeMote's setup
+        Modifier.fillMaxSize().background(Bg).verticalScroll(demoScroll).padding(16.dp), // 16dp like BingeMote's setup
     ) {
         Spacer(Modifier.height(24.dp))
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text("Set up Zephyr Player", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.weight(1f))
-            androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = Orange) }
+            Text("Set up Zephyr Player", color = TextC, fontSize = 24.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+            androidx.compose.material3.TextButton(onClick = onCancel) { Text("Cancel", color = AccentText) }
         }
         Spacer(Modifier.height(18.dp))
 
@@ -123,23 +151,6 @@ fun ZephyrSetupScreen(
             Spacer(Modifier.height(18.dp))
             OrangeButton("Zephyr Player is open") { step = 2 }
         } else {
-            if (store.zephyrToken.isNotBlank() && pairedName == null) {
-                SetupCard {
-                    Text("Already paired with ${store.zephyrPcName.ifBlank { store.zephyrHost }}", color = TextC, fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Spacer(Modifier.height(4.dp))
-                    Text("This phone paired with your PC earlier. Continue with it, or start over to pair again with a new code.", color = Muted, fontSize = 13.sp)
-                    Spacer(Modifier.height(10.dp))
-                    OrangeButton("Continue with this PC", onClick = onDone)
-                    Spacer(Modifier.height(6.dp))
-                    androidx.compose.material3.TextButton(onClick = {
-                        // Broken secure store: nothing is persisted, so "start over" is
-                        // already true - the fail-closed write refusal is not an error here.
-                        try { store.zephyrToken = "" } catch (e: SecureStoreUnavailable) { }
-                        error = null
-                    }) { Text("Start over with a new code", color = Muted) }
-                }
-                Spacer(Modifier.height(14.dp))
-            }
             SetupCard {
                 Text("Find your PC", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(10.dp))
@@ -159,7 +170,7 @@ fun ZephyrSetupScreen(
                     ) {
                         Text(
                             "${h.name}  (${h.host})",
-                            color = if (isSel) androidx.compose.ui.graphics.Color(0xFF1B1B1E) else TextC,
+                            color = if (isSel) OnAccent else TextC,
                             fontSize = 14.sp, fontWeight = FontWeight.Bold,
                         )
                     }
@@ -225,7 +236,21 @@ fun ZephyrSetupScreen(
             if (pairedName != null) {
                 Spacer(Modifier.height(14.dp))
                 SetupCard {
-                    Text("\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    // A 401 on the first status check means the Player did not accept this token: no check mark, no "Paired" claim.
+                    Text(if (checkState == PairCheck.BadToken) "Couldn't confirm pairing with $pairedName" else "\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    when (checkState) {
+                        PairCheck.Checking -> { Spacer(Modifier.height(6.dp)); Text("Checking with your PC\u2026", color = Muted, fontSize = 13.sp) }
+                        PairCheck.BadToken -> { Spacer(Modifier.height(6.dp)); Text("Your PC didn't accept this pairing. Pair again with a new code.", color = ErrorText, fontSize = 13.sp) }
+                        PairCheck.CouldntCheck -> {
+                            Spacer(Modifier.height(6.dp))
+                            Text("Couldn't check with your PC.", color = Muted, fontSize = 13.sp)
+                            androidx.compose.material3.TextButton(onClick = {
+                                val t = store.zephyrToken
+                                if (t.isNotBlank()) checkAfterPair(store.zephyrHost, store.zephyrPort, t)
+                            }) { Text("Try again", color = AccentText) }
+                        }
+                        else -> {}
+                    }
                     Spacer(Modifier.height(10.dp))
                     OrangeButton("Continue", onClick = onDone)
                 }

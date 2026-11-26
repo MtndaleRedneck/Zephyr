@@ -64,6 +64,9 @@ class MainActivity : ComponentActivity() {
         // Test isolation: never inherit the transition rig from an earlier preview
         // Activity in the same process (interrupted test, config change).
         if (BuildConfig.DEBUG) previewLostRigArmed = false
+        AccentPrefs.init(this)
+        // Debug capture only: pick a swatch by index so a render can show it.
+        if (BuildConfig.DEBUG) intent.getIntExtra("accent", -1).let { if (it in AccentSwatches.indices) AccentPrefs.choose(AccentSwatches[it]) }
         store = Store(this)
         // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
         // Remote (port 8492) and flag the one-time "what changed" notice.
@@ -229,16 +232,24 @@ class MainActivity : ComponentActivity() {
                         onCancel = { current.value = "settings" },
                     )
                     // CI screenshot states: step 2 of the Zephyr setup screen, fresh
-                    // (find/address/code/pair) and with a saved pairing (continue/start-over).
+                    // (find/address/code/pair) and with a saved pairing (re-entry: the same plain form, no card).
                     "settings-pair-2" -> ZephyrSetupScreen(
                         remote,
                         onDone = { current.value = "settings" },
                         onCancel = { current.value = "settings" },
                         initialStep = 2,
                     )
+                    "pairdemo-chosen" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "chosen")
+                    "pairdemo-code" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "code")
+                    "pairdemo-error" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "error")
+                    "pairdemo-success-ok" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-ok")
+                    "pairdemo-success-bad" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-bad")
+                    "pairdemo-success-cant" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-cant")
+                    "pairdemo-success-checking" -> ZephyrSetupScreen(remote, onDone = { current.value = "settings" }, onCancel = { current.value = "settings" }, initialStep = 2, demo = "success-checking")
+                    "icondemo" -> DebugIconDemo()
                     "settings-pair-paired" -> {
-                        // Debug capture only: fake a saved pairing so the already-paired
-                        // card renders. Captured LAST in the rig; demo values never ship.
+                        // Debug capture only: fake a saved pairing so re-entry with a
+                        // token (plain form, Back leaves) renders. Captured LAST in the rig; demo values never ship.
                         remote.store.zephyrHost = "192.168.1.50"
                         try { remote.store.zephyrToken = "demo-token" } catch (e: SecureStoreUnavailable) { }
                         remote.store.zephyrPcName = "Demo PC"
@@ -450,7 +461,7 @@ fun UpdateHost(store: Store) {
                         }
                     }
                 },
-                confirmButton = { TextButton({ startUpdate(u.info) }) { Text("Update", color = Orange, fontWeight = FontWeight.Bold) } },
+                confirmButton = { TextButton({ startUpdate(u.info) }) { Text("Update", color = AccentText, fontWeight = FontWeight.Bold) } },
                 // Skip sits with the other choices instead of floating, indented, inside the notes.
                 dismissButton = {
                     Row {
@@ -482,7 +493,7 @@ fun UpdateHost(store: Store) {
                 containerColor = Card2,
                 title = { Text("Update not installed", color = TextC) },
                 text = { Text(u.message, color = Muted) },
-                confirmButton = { TextButton({ updateUi = null }) { Text("OK", color = Orange) } },
+                confirmButton = { TextButton({ updateUi = null }) { Text("OK", color = AccentText) } },
             )
         }
     }

@@ -1,3 +1,13 @@
+## Zephyr 1.8.0
+
+Pick your accent color. Settings has a new Accent color card with orange as the default and eight more to choose from.
+
+**Improved**
+- Pairing follows the same steps as the VLC remote, and says plainly when a pairing can't be confirmed instead of showing a check mark.
+- Settings now lines up with the Home top bar.
+- The Home play button is a clean white triangle.
+- The app icon follows your phone's icon shape.
+
 ## Zephyr 1.7.0
 
 Pairing now shows a clear message if the connection can't be saved. The top bar now matches on Home, Movies and Settings, and switching from Phone to PC no longer leaves the phone's list on screen.

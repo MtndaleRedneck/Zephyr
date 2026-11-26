@@ -207,18 +207,18 @@ private fun HomeContent(
                 // in the header selector.
                 Text(
                     if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC isn't paired" else "VLC PC isn't paired",
-                    color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                    color = OnAccent, fontSize = 21.sp, fontWeight = FontWeight.Bold,
                     maxLines = 2,
                 )
                 Text(
                     "Tap here to open Settings and pair it",
-                    color = Color(0xFF3D2A12), fontSize = 14.sp,
+                    color = OnAccentSub, fontSize = 14.sp,
                 )
             } else {
             Text(
                 if (refused) "VLC refused the password" else if (lost) "Trying to reconnect" else if (vlcOut) "VLC isn't open"
                 else s?.title?.let { displayName(it).ifBlank { "Nothing playing" } } ?: "Nothing playing",
-                color = Color(0xFF1B1B1E), fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                color = OnAccent, fontSize = 21.sp, fontWeight = FontWeight.Bold,
                 maxLines = 2,
             )
             Text(
@@ -230,7 +230,7 @@ private fun HomeContent(
                     "paused" -> "Paused"
                     else -> "Stopped"
                 },
-                color = Color(0xFF3D2A12), fontSize = 14.sp,
+                color = OnAccentSub, fontSize = 14.sp,
                 // Reconnect line only: slightly tighter tracking so it fits one line (size unchanged).
                 letterSpacing = if (lost) 0.sp else TextUnit.Unspecified,
             )
@@ -241,10 +241,10 @@ private fun HomeContent(
             if (!lost) {
                 if (remote.unpaired) {
                     Spacer(Modifier.height(6.dp))
-                    Text("This phone isn't paired with the PC anymore - pair again.", color = Color(0xFF3D2A12), fontSize = 13.sp)
+                    Text("This phone isn't paired with the PC anymore - pair again.", color = OnAccentSub, fontSize = 13.sp)
                 } else if (remote.helperNotice) {
                     Spacer(Modifier.height(6.dp))
-                    Text("Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = Color(0xFF3D2A12), fontSize = 13.sp)
+                    Text("Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume.", color = OnAccentSub, fontSize = 13.sp)
                 }
             }
             // S11: the saved PC appeared at a NEW address. The saved token never
@@ -254,7 +254,7 @@ private fun HomeContent(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Found $movedName at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
-                    color = Color(0xFF3D2A12), fontSize = 13.sp,
+                    color = OnAccentSub, fontSize = 13.sp,
                 )
             }
             // S11b: the saved helper appeared at a NEW address. The helper token
@@ -264,7 +264,7 @@ private fun HomeContent(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Found Zephyr VLC Remote ($movedName) at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
-                    color = Color(0xFF3D2A12), fontSize = 13.sp,
+                    color = OnAccentSub, fontSize = 13.sp,
                 )
             }
             // One-time 1.1 -> 1.2 notice (round-3 A3): the PC helper changed.
@@ -274,12 +274,12 @@ private fun HomeContent(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "New: Zephyr VLC Remote replaces BingeMote on the PC. Your pairings carry over - if mouse, keyboard or volume stop answering, open Setup and pair once more.",
-                        color = Color(0xFF3D2A12), fontSize = 13.sp, modifier = Modifier.weight(1f),
+                        color = OnAccentSub, fontSize = 13.sp, modifier = Modifier.weight(1f),
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
                         "Got it",
-                        color = Orange, fontSize = 13.sp,
+                        color = AccentText, fontSize = 13.sp,
                         modifier = Modifier.clickable {
                             remote.store.vlcRemoteNoticePending = false
                             showVlcRemoteNotice = false
@@ -291,7 +291,7 @@ private fun HomeContent(
             // hero for the review captures. Never set outside the rig; release never shows it.
             if (BuildConfig.DEBUG && !unpairedSource) remote.mockHeroNote?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, color = Color(0xFF3D2A12), fontSize = 13.sp)
+                Text(it, color = OnAccentSub, fontSize = 13.sp)
             }
         }
     }
@@ -306,7 +306,7 @@ private fun HomeContent(
 
 /** The connection state, top right: a quiet dot + word. An indicator only - not tappable. */
 @Composable
-private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier = Modifier) {
+internal fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier = Modifier) {
     Row(
         modifier
             .clip(RoundedCornerShape(24.dp))
@@ -443,7 +443,7 @@ private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
             // exists - no new bubble. Live everywhere, inside the circle too.
             val previewSec = dragPos?.takeIf { length > 0 }?.let { (it * length).toLong() } ?: s?.timeSec ?: 0
             val previewRemain = (length - previewSec).coerceAtLeast(0)
-            Text(formatTime(previewSec), color = Orange, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, style = tight)
+            Text(formatTime(previewSec), color = AccentText, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, style = tight)
             Spacer(Modifier.weight(1f))
             Text("-${formatTime(previewRemain)}", color = TextC, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, style = tight)
         }
@@ -573,7 +573,7 @@ private fun SeekBlock(remote: RemoteState, marginDp: Float, drag: SeekDrag) {
         Row(Modifier.fillMaxWidth()) {
             Text(
                 if (unlocked) "Unlocked. Locks again in a few seconds" else "Hold the bar to unlock seeking",
-                color = if (unlocked) Orange else Muted, fontSize = 12.sp,
+                color = if (unlocked) AccentText else Muted, fontSize = 12.sp,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, style = tight,
                 modifier = Modifier.weight(1f),
             )
@@ -624,7 +624,7 @@ private fun VolumeRow(remote: RemoteState, flashAll: Boolean, gapDp: Float, scal
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.offset(y = 3.dp)) {
                     Text(
                         if (muted) "0%" else "${remote.winVolume ?: (s?.volumePct ?: 0)}%",
-                        color = if (muted) Dimmed else if (pressed && flashAll) Orange else TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                        color = if (muted) Dimmed else if (pressed && flashAll) AccentText else TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold,
                     )
                     Text(
                         if (muted) "MUTED" else "VOL",
@@ -722,7 +722,7 @@ private fun PlayPauseButton(remote: RemoteState, playing: Boolean, flashAll: Boo
                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
                     drawCircle(if (pressed && flashAll) TextC else Orange, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3.dp.toPx()))
                 }
-                if (playing) PauseIcon(Orange, 40.dp) else PlayIcon(Orange, 40.dp)
+                if (playing) PauseIcon(TextC, 40.dp) else PlayIcon(TextC, 40.dp, equilateral = true) // Home button only
             }
         }
     }
@@ -732,7 +732,7 @@ private fun PlayPauseButton(remote: RemoteState, playing: Boolean, flashAll: Boo
 @Composable
 private fun CancelCircleContent(drag: SeekDrag) {
     val p = drag.proximity
-    val dark = Color(0xFF1B1B1E)
+    val dark = OnAccent
     val ringColor = androidx.compose.ui.graphics.lerp(Orange, OrangeLight, p)
     val labelColor = androidx.compose.ui.graphics.lerp(Orange, dark, (p * 3f).coerceAtMost(1f))
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -947,7 +947,7 @@ private fun SubtitleRow(name: String, checked: Boolean, hapticsOn: Boolean, onCl
         } else {
             Spacer(Modifier.width(26.dp))
         }
-        Text(name, color = if (checked) Orange else TextC, fontSize = 16.sp, fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal)
+        Text(name, color = if (checked) AccentText else TextC, fontSize = 16.sp, fontWeight = if (checked) FontWeight.Bold else FontWeight.Normal)
     }
 }
 
