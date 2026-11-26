@@ -997,6 +997,12 @@ internal static class Program
                 shot.HookRefreshPhones();
                 DriveModal(trigger, null, DialogResult.OK);
                 var want = all ? 0 : 1;
+                // The handler completes the removal OFF the UI thread by design (Task.Run, so the
+                // confirm never freezes the window while the transaction waits on LaunchWriteMutex):
+                // a returned DriveModal no longer means the removal finished. Pump the loop until it
+                // settles. A settle that never comes is the assert failure below, never a hang.
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                while (PhonesCount != want && DateTime.UtcNow < deadline) { Application.DoEvents(); System.Threading.Thread.Sleep(20); }
                 if (PhonesCount != want) Fail(tag + " confirm left " + PhonesCount);
                 state.AppendLine(tag + "_confirm_left=" + PhonesCount);
                 if (Reloaded() != want) Fail(tag + " confirm was not saved to the file");
