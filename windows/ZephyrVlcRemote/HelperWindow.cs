@@ -883,9 +883,14 @@ internal sealed class HelperWindow : Form
         VlcRotation.Kick();
         await VlcRotation.AwaitNextPassCompletion(TimeSpan.FromSeconds(2));
         var done = VlcRotation.RotationOutcomeComplete(gen); // landed OR already verified+cleared: both are done
+        var foreign = VlcRotation.Generation != gen;         // a NEWER rotation superseded this dialog's pass
         var vlcOpen = await Task.Run(() => VlcSetup.VlcRunning());
         string msg;
-        if (vlcOpen)
+        if (foreign)
+            // Neither a changed nor an unchanged claim: any per-rotation wording here could
+            // describe the wrong rotation. The window's note carries the live state.
+            msg = label + " A newer VLC password change has run since this one - the window shows the current state.";
+        else if (vlcOpen)
             // An open VLC keeps the password it started with, landed or not: never say done here.
             msg = done
                 ? label + " The saved VLC password has changed - but VLC is open, and a VLC that was already open keeps the old password until it's closed. Close every VLC window that was open to finish."
@@ -894,9 +899,6 @@ internal sealed class HelperWindow : Form
             msg = allRemoved
                 ? label + " The saved VLC password has changed."
                 : label + " Its saved VLC password has changed. Your other phones keep working.";
-        else if (VlcRotation.Generation != gen)
-            // A NEWER rotation superseded this dialog's pass: claim neither changed nor unchanged.
-            msg = label + " A newer VLC password change has run since this one - the window shows the current state.";
         else
             // No cutoff claim before the landing: the helper token is gone, but OLD is still the
             // VLC password until the retry lands, and VLC's own remote answers it whenever VLC runs.

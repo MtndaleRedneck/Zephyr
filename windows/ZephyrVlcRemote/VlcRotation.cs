@@ -162,48 +162,54 @@ internal static class VlcRotation
         lock (LaunchWriteMutex)
         {
             VlcSetup.SweepTemp(); // under the mutex AND skipping fresh temps: never deletes Play's in-flight temp
-            if (!landed) { ApplyTargetUnderMutex(t, landed, gen, obs); return; }
-            if (obs.HealthyFor(t))
+            if (landed && obs.HealthyFor(t))
             {
                 if (VlcSetup.VlcRunning()) return; // verify waits for quiet
                 if (PersistFromPass(t, true, gen, setLanded: false, clearTarget: true, t))
                     Program.Log("VLC password change verified; the rotation is complete.");
+                return;
             }
-            else
-            {
-                // Divergence while landed: the disk no longer matches the target. Re-open the
-                // rotation FIRST (a persisted unlanding, no grant or marker action), so the
-                // published state never claims completion while vlcrc holds the old password -
-                // even while a running VLC holds the repair. Then the ordinary write path
-                // repairs and re-lands (its persist re-arms the grants on the landing edge).
-                (string? t2, bool l2, int g2) backup = default;
-                var marked = false;
-                var reopened = Program.MutateAndPersist(() =>
-                    {
-                        backup = BackupTarget(); // inside the transaction
-                        marked = MarkUnlandedUnderConfigSaveLock(t, gen);
-                    },
-                    () => { if (marked) RestoreTargetUnderConfigSaveLock(backup); },
-                    "the VLC password re-open");
-                // !marked: a newer writer moved the state on, or it is already re-opened.
-                // !reopened: the persist FAILED and rolled back (landed restored, disk OLD) -
-                // stop here: a repair write now would land vlcrc NEW on disk while its persist
-                // abandons, and the grant re-arm would roll back - the verify pass would then
-                // clear the target with spent OLD grants and lock the kept phones out. The next
-                // pass retries the re-open.
-                if (!marked || !reopened) return;
-                if (ApplyTargetUnderMutex(t, false, gen, obs) == ApplyOutcome.Landed) // defers on a running VLC itself
-                    Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
-            }
+            // Unlanded, or landed-but-divergent: ApplyTargetUnderMutex re-opens a diverged landed
+            // rotation (persisted) before repairing - the same rule for every caller.
+            if (ApplyTargetUnderMutex(t, landed, gen, obs) == ApplyOutcome.Landed && landed)
+                Program.Log("VLC password change re-applied after a VLC exit rewrote vlcrc.");
         }
     }
 
+    /// <summary>Divergence while landed: the disk no longer matches the target, so the persisted
+    /// state must stop claiming completion BEFORE any repair is attempted (a running VLC can hold
+    /// the repair for hours). A persisted unlanding only: target and generation untouched (the
+    /// repair persist still compares this generation), grants and marker untouched (the re-arm
+    /// belongs to the re-landing). False when the state moved on or the persist failed (rolled
+    /// back) - the caller must then NOT attempt a write, or vlcrc could land NEW while the grant
+    /// re-arm rolls back, locking kept phones out after the verify.</summary>
+    private static bool ReopenLandedUnderMutex(string t, int gen)
+    {
+        (string? t2, bool l2, int g2) backup = default;
+        var marked = false;
+        var reopened = Program.MutateAndPersist(() =>
+            {
+                backup = BackupTarget(); // inside the transaction
+                marked = MarkUnlandedUnderConfigSaveLock(t, gen);
+            },
+            () => { if (marked) RestoreTargetUnderConfigSaveLock(backup); },
+            "the VLC password re-open");
+        return marked && reopened;
+    }
+
     /// <summary>The shared write step (the pass, Movies.Play's inline attempt, /vlc/setup's inline
-    /// attempt): landed-by-observation first, defer on a process, else write the FULL healthy config
+    /// attempt): a landed-but-diverged rotation is RE-OPENED first (persisted, so no caller can
+    /// leave the published state claiming completion while the disk holds the old password),
+    /// landed-by-observation first, defer on a process, else write the FULL healthy config
     /// + readback, then the SAME persist. The caller holds LaunchWriteMutex.</summary>
     internal static ApplyOutcome ApplyTargetUnderMutex(string t, bool landed, int gen, VlcSetup.VlcrcHealth obs)
     {
         if (!obs.ReadOk) return ApplyOutcome.WriteFailed; // never write over a vlcrc we could not read
+        if (landed && !obs.HealthyFor(t))
+        {
+            if (!ReopenLandedUnderMutex(t, gen)) return ApplyOutcome.WriteFailed; // moved on, or persist refused and rolled back
+            landed = false;
+        }
         if (obs.HealthyFor(t))
         {
             return PersistFromPass(t, landed, gen, setLanded: true, clearTarget: false, t)
