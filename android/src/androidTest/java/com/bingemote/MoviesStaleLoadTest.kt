@@ -6,6 +6,8 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.*
+import org.junit.After
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import java.io.BufferedReader
@@ -31,6 +33,32 @@ class MoviesStaleLoadTest {
     private val inst = InstrumentationRegistry.getInstrumentation()
     private val ctx get() = inst.targetContext
     private val device = UiDevice.getInstance(inst)
+    private var savedPrefs: Map<String, Any?>? = null
+
+    // Leave no trace for the next class: this test seeds the shared "settings" prefs and leaves MainActivity on
+    // the Movies screen. Restore the prefs exactly as found and take the app off screen (not force-stop: that
+    // would kill this instrumentation process).
+    @Before fun snapshotPrefs() {
+        savedPrefs = ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).all.toMap()
+    }
+
+    @After fun restorePrefsAndLeaveApp() {
+        val snap = savedPrefs
+        if (snap != null) {
+            val e = ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit().clear()
+            for ((k, v) in snap) when (v) {
+                is Boolean -> e.putBoolean(k, v)
+                is Int -> e.putInt(k, v)
+                is Long -> e.putLong(k, v)
+                is Float -> e.putFloat(k, v)
+                is String -> e.putString(k, v)
+                is Set<*> -> e.putStringSet(k, v.filterIsInstance<String>().toSet())
+            }
+            e.commit()
+        }
+        repeat(3) { device.pressBack() }
+        device.pressHome()
+    }
 
     private class TwoRequestVlc(val releaseA: CountDownLatch) : AutoCloseable {
         private val running = AtomicBoolean(true)
