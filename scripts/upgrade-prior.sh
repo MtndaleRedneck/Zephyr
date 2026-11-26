@@ -112,10 +112,23 @@ dismiss_foreign_anr() { # $1 = label for the saved evidence
 }
 # Retry ONLY the known window-assertion failure, and only when an allowlisted non-app ANR dialog was in focus.
 # Any other failed assertion (state, port, token, prefs, process death) is never retried.
+# Diagnostic only: prints what the run's own raw log says about ANR dialogs, the app launch and main-thread stalls when the
+# window assertion failed. Never changes a verdict, an allowlist or a retry decision.
+window_fail_diag() { # $1 result name
+  local raw="instrument-results/$1-rawlog.txt"
+  echo "== window-failure diagnostic ($1, diagnostic only)"
+  echo "-- ANR / not responding / input dispatch lines in this run's log"; grep -nE "ANR in |Not Responding|am_anr|Input dispatching timed out" "$raw" | cut -c1-260 | head -30 || true
+  echo "-- app launch lines"; grep -nE "am_proc_start.*$PKG|am_create_activity.*$PKG|am_on_resume.*$PKG|Displayed $PKG|START u0.*$PKG|Start proc.*$PKG" "$raw" | cut -c1-260 | head -20 || true
+  echo "-- skipped frames / slow main thread / strict mode"; grep -nE "Skipped [0-9]+ frames|Davey|Slow (operation|Looper)|StrictMode" "$raw" | cut -c1-260 | head -20 || true
+  echo "-- memory pressure and GC"; grep -nE "lowmemorykiller|Low on memory|am_low_memory|am_kill" "$raw" | cut -c1-200 | tail -10 || true
+  echo "-- focus now"; adb shell dumpsys window | grep -m2 mCurrentFocus || true
+  echo "== end window-failure diagnostic"
+}
 retry_window_only() { # $1 class#method, $2 result name
   grep -q "^OK (1 test)" "instrument-results/$2.txt" && return 0
   grep -q "app window never appeared after cold open" "instrument-results/$2.txt" || return 0
   grep -qE "^[0-9]+\) " "instrument-results/$2.txt" && [ "$(grep -cE '^[0-9]+\) ' "instrument-results/$2.txt")" = 1 ] || return 0
+  window_fail_diag "$2"
   # Gate on this run's own log first: any app-owned ANR/crash evidence, or an ANR line naming no allowlisted package, is final.
   if app_failure_in_log "$2"; then echo "NOTE: $2 saved log shows an app-owned or unknown ANR/crash: no retry (see $2-syslog.txt)"; return 0; fi
   foreign_anr_in_log "$2" || { echo "NOTE: $2 saved log has no allowlisted ANR evidence: no retry"; return 0; }
