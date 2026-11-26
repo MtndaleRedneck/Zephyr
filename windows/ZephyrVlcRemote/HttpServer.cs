@@ -142,12 +142,13 @@ internal sealed class HttpServer : IDisposable
                     return;
 
                 // The phone's Finish step hands over the VLC web-remote password (T36):
-                // write it into vlcrc so a hand-opened VLC has the remote too.
+                // the full setup drives the rotation target and replies truthfully - ok only
+                // after the write landed, "vlc running" while a process holds the write.
                 case "/vlc/setup":
                     if (!Authorized(req)) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
                     {
                         var pw = JsonDocument.Parse(ReadBody(req)).RootElement.GetProperty("password").GetString() ?? "";
-                        Reply(res, 200, VlcSetup.WriteVlcrc(pw));
+                        Reply(res, 200, VlcSetup.SetupFromPhone(pw));
                     }
                     return;
 
@@ -162,9 +163,7 @@ internal sealed class HttpServer : IDisposable
                 // password (or never finished setup) may fetch it exactly once, by request ID.
                 case "/vlc/adopt":
                     {
-                        var phone = FindPhone(req);
-                        if (phone == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
-                        HandleAdopt(req, res, phone);
+                        HandleAdopt(req, res);
                     }
                     return;
 
@@ -232,8 +231,7 @@ internal sealed class HttpServer : IDisposable
                             Program.MoviesFolder ?? "",
                             rr.GetProperty("path").GetString() ?? "",
                             rr.TryGetProperty("httpPort", out var hp) ? hp.GetInt32() : 8080,
-                            VlcSetup.EffectivePassword()
-                                ?? (rr.TryGetProperty("httpPassword", out var pw) ? pw.GetString() ?? "" : ""),
+                            rr.TryGetProperty("httpPassword", out var pw) ? pw.GetString() : null,
                             rr.TryGetProperty("fullscreen", out var fs) && fs.GetBoolean(),
                             req.LocalEndPoint.Address,
                             rr.TryGetProperty("resume", out var rs) ? rs.GetBoolean() : (bool?)null);
@@ -260,39 +258,74 @@ internal sealed class HttpServer : IDisposable
         lock (Program.PhonesLock) { return Program.Phones.Any(p => ConstantTimeEq(token, p.Token)); }
     }
 
-    private static Program.PairedPhone? FindPhone(HttpListenerRequest req)
+    /// <summary>POST /vlc/adopt: {requestId} fetches the PC's VLC password once per paired
+    /// phone; {requestId, ack:true} confirms the phone stored it and spends the grant. The phone
+    /// is re-resolved FROM THE TOKEN inside the lock, so a phone the window removed mid-request
+    /// gets 401 and marks nothing; replies go out after the lock is released; a failed serve
+    /// rolls the staged rotation target back (reverse order with the grant's own restore).</summary>
+    private static void HandleAdopt(HttpListenerRequest req, HttpListenerResponse res)
     {
         var token = req.Headers["X-Zephyr-VLC-Remote-Token"];
-        if (token == null) return null;
-        lock (Program.PhonesLock) { return Program.Phones.FirstOrDefault(p => ConstantTimeEq(token, p.Token)); }
-    }
-
-    /// <summary>POST /vlc/adopt: {requestId} fetches the PC's VLC password once per paired
-    /// phone; {requestId, ack:true} confirms the phone stored it and spends the grant.</summary>
-    private static void HandleAdopt(HttpListenerRequest req, HttpListenerResponse res, Program.PairedPhone phone)
-    {
         using var doc = JsonDocument.Parse(ReadBody(req));
         var r = doc.RootElement;
         var requestId = r.TryGetProperty("requestId", out var ri) ? ri.GetString() ?? "" : "";
         var ack = r.TryGetProperty("ack", out var ak) && ak.GetBoolean();
+        if (token == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
         if (ack)
         {
             AdoptGrant.Result a;
-            lock (Program.ConfigSaveLock) { a = AdoptGrant.Ack(phone, requestId, Program.SaveConfig); }
+            string? name = null;
+            lock (Program.ConfigSaveLock)
+            {
+                Program.PairedPhone? phone;
+                lock (Program.PhonesLock) { phone = Program.Phones.FirstOrDefault(p => ConstantTimeEq(token, p.Token)); }
+                if (phone == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                name = phone.Name;
+                a = AdoptGrant.Ack(phone, requestId, Program.SaveConfig);
+            }
             if (a.Acked)
             {
-                Program.Log("Phone \"" + phone.Name + "\" stored the VLC password; its one-time fetch is spent.");
+                Program.Log("Phone \"" + name + "\" stored the VLC password; its one-time fetch is spent.");
                 Reply(res, 200, "{\"ok\":true}");
             }
             else Reply(res, 409, "{\"error\":\"nothing to ack\"}");
             return;
         }
         AdoptGrant.Result result;
-        lock (Program.ConfigSaveLock) { result = AdoptGrant.Serve(phone, VlcSetup.ReadOrCreatePassword, requestId, DateTime.UtcNow, Program.SaveConfig); }
+        string? servedName = null;
+        var kick = false;
+        try
+        {
+            lock (Program.ConfigSaveLock)
+            {
+                Program.PairedPhone? phone;
+                lock (Program.PhonesLock) { phone = Program.Phones.FirstOrDefault(p => ConstantTimeEq(token, p.Token)); }
+                if (phone == null) { Reply(res, 401, "{\"error\":\"bad token\"}"); return; }
+                servedName = phone.Name;
+                var backup = VlcRotation.BackupTarget();
+                try
+                {
+                    var vlcrcEmpty = string.IsNullOrEmpty(VlcSetup.ReadVlcrcValue("http-password"));
+                    result = AdoptGrant.Serve(phone, VlcSetup.ServeForAdoptInMemory, requestId, DateTime.UtcNow, Program.SaveConfig);
+                    // The setup exception staged the rotation target: it must converge now.
+                    kick = result.Served && vlcrcEmpty;
+                }
+                catch
+                {
+                    VlcRotation.RestoreTargetUnderConfigSaveLock(backup);
+                    throw;
+                }
+            }
+        }
+        catch (VlcrcUnreadableException)
+        {
+            Reply(res, 503, "{\"error\":\"vlcrc unreadable\"}");
+            return;
+        }
         if (result.Served)
         {
             if (!result.Replayed)
-                Program.Log("Phone \"" + phone.Name + "\" fetched the VLC password (one-time; value never logged).");
+                Program.Log("Phone \"" + servedName + "\" fetched the VLC password (one-time; value never logged).");
             Reply(res, 200, JsonSerializer.Serialize(new { password = result.Password }));
         }
         else if (result.Conflict)
@@ -301,6 +334,7 @@ internal sealed class HttpServer : IDisposable
             Reply(res, 410, "{\"error\":\"adopt spent\",\"detail\":\"This phone already fetched its VLC password. Re-pair or set the password by hand.\"}");
         else
             Reply(res, 400, "{\"error\":\"bad request\"}");
+        if (kick) VlcRotation.Kick(); // outside the lock: Kick takes Gate and queues a worker
     }
 
     /// <summary>UI pairing mutations (Start/Cancel/expiry name restore) take this too,

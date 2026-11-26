@@ -70,6 +70,10 @@ internal sealed class HelperWindow : Form
     private readonly System.Windows.Forms.Timer? _wifiTimer;
     private readonly Dictionary<Control, int> _baseTops = new();
     private int _baseHeight;
+    private readonly bool _windowShot;
+    private readonly Label _vlcNote;
+    private const int VlcNoteH = 30;
+    private bool _vlcNoteShown = true;
     private bool _downloading;
     // Layout blocks that come and go: the first-run line (measured, it may wrap) and the
     // pairing code block (only while a code exists, i.e. after Pair is tapped).
@@ -86,6 +90,7 @@ internal sealed class HelperWindow : Form
         // Scale every control, font and position with the screen's DPI, or fixed-pixel
         // layouts clip text and buttons on scaled displays.
         AutoScaleMode = AutoScaleMode.Dpi;
+        _windowShot = windowShot;
         Text = "Zephyr VLC Remote";
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -194,7 +199,15 @@ internal sealed class HelperWindow : Form
         _removeAll = MakeButton("Remove all phones...", margin, y, FitWidth("Remove all phones...", new Font("Segoe UI", 8.5f), 150));
         _removeAll.Height = 32;
         _removeAll.Click += (_, _) => RemoveAllPhones();
-        y += 32 + 24;
+        y += 32 + 8;
+        // The rotation's published pending state, in plain words, under the list.
+        _vlcNote = new Label
+        {
+            Text = "VLC password change pending - it completes when every VLC running with the old password is closed.",
+            Font = new Font("Segoe UI", 8f),
+            AutoSize = false, Left = margin, Top = y, Width = contentW, Height = VlcNoteH,
+        };
+        y += VlcNoteH + 8;
 
         _aboutHeader = Header("About", margin, y); y += 20 + 12;
         _feedbackCard = new RoundedPanel { Left = margin, Top = y, Width = contentW, Height = 48, Radius = 8 };
@@ -285,7 +298,7 @@ internal sealed class HelperWindow : Form
         {
             _wifiBorder,
             _pairHeader, _firstRun, _nameBoxPanel, _pair, _codeCaption, _code, _cancelPair, _codeNote,
-            _phonesHeader, _phoneList, _removeAll,
+            _phonesHeader, _phoneList, _removeAll, _vlcNote,
             _aboutHeader, _feedbackCard, _updatesCard,
         });
         foreach (Control c in Controls) _baseTops[c] = c.Top;
@@ -362,10 +375,8 @@ internal sealed class HelperWindow : Form
         RefreshPhones();
         TickStatus(); // sync the code block (hidden until there is a code)
 
-        // A vlcrc write that lost to a running VLC retries once VLC closes.
-        var vlcrcRetry = new System.Windows.Forms.Timer { Interval = 15000 };
-        vlcrcRetry.Tick += (_, _) => { try { VlcSetup.RetryPending(); } catch { } };
-        vlcrcRetry.Start();
+        // The rotation pass is app-owned (VlcRotation.Start in Program.Main): a 15 s timer and
+        // kicks converge an outstanding password change whether or not this window exists.
 
         // Every ES_CONTINUOUS hold/release must run on this thread (execution state is
         // per-thread); PowerWake marshals calls from the listener's pool threads here.
@@ -418,10 +429,12 @@ internal sealed class HelperWindow : Form
         // then it scrolls), and with no phones "Remove all phones..." leaves no gap behind.
         var listDy = _listH - ListBaseH;
         var removeDy = _removeAllShown ? 0 : -(8 + _removeAll.Height);
+        var vlcDy = _vlcNoteShown ? 0 : -(8 + VlcNoteH);
         var frTop = _baseTops[_firstRun];
         var codeEnd = _baseTops[_codeNote];
         var listTop = _baseTops[_phoneList];
         var removeTop = _baseTops[_removeAll];
+        var vlcTop = _baseTops[_vlcNote];
         foreach (Control c in Controls)
         {
             if (c == _wifiBorder) { c.Top = _baseTops[c]; continue; }
@@ -430,10 +443,11 @@ internal sealed class HelperWindow : Form
             if (_baseTops[c] > codeEnd) dy += codeDy;
             if (_baseTops[c] > listTop) dy += listDy;
             if (_baseTops[c] > removeTop) dy += removeDy;
+            if (_baseTops[c] > vlcTop) dy += vlcDy;
             c.Top = _baseTops[c] + dy;
         }
         _phoneList.Height = _listH;
-        ClientSize = new Size(490, _baseHeight + stripDy + firstRunDy + codeDy + listDy + removeDy);
+        ClientSize = new Size(490, _baseHeight + stripDy + firstRunDy + codeDy + listDy + removeDy + vlcDy);
     }
 
     // Called from the HTTP listener thread when SendInput starts (or stops) coming back
@@ -715,6 +729,7 @@ internal sealed class HelperWindow : Form
             _codeNote.Text = "Enter this code in the Zephyr app on your phone. Works once.";
             ApplyLayout();
         }
+        UpdateVlcNote();
     }
 
     /// <summary>Cancel drops the code and goes back to step one, keeping the typed name.</summary>
@@ -726,6 +741,17 @@ internal sealed class HelperWindow : Form
         if (!string.IsNullOrEmpty(name) && _nameBox.Text.Trim().Length == 0) _nameBox.Text = name;
         Program.Log("Pairing canceled from the window.");
         TickStatus();
+    }
+
+    /// <summary>The rotation's published pending state under the phone list, in plain words.</summary>
+    private void UpdateVlcNote()
+    {
+        _vlcNote.ForeColor = IsDarkMode() ? DarkMuted : LightMuted;
+        var shown = VlcSetup.Pending;
+        if (shown == _vlcNoteShown && _vlcNote.Visible == shown) return;
+        _vlcNoteShown = shown;
+        _vlcNote.Visible = shown;
+        ApplyLayout();
     }
 
     /// <summary>Rebuild the paired-phones list from the current config. Each phone is one
@@ -793,17 +819,22 @@ internal sealed class HelperWindow : Form
         _removeAll.Visible = _removeAllShown;
         _firstRunShown = true;
         _firstRun.Visible = true;
+        UpdateVlcNote();
         ApplyLayout();
     }
 
-    private void RemovePhone(Program.PairedPhone ph)
+    private async void RemovePhone(Program.PairedPhone ph)
     {
         if (!ConfirmDialog.Ask(this,
                 "Remove " + ph.Name + "? It stops controlling this PC through Zephyr VLC Remote right away. " +
                 "One thing stays: VLC's own remote (port 8080) uses one shared password, so this phone could still reach VLC directly until the VLC password changes. " +
                 "You can pair the phone again any time with a new code.",
                 "Remove")) return;
-        if (!Program.RemovePhonesAndPersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray()))
+        // Generated BEFORE the lock; the removal and the rotation persist as ONE transaction:
+        // a refused save rolls both back and nothing changed.
+        var newPassword = VlcSetup.GeneratePassword();
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all.Where(x => ReferenceEquals(x, ph)).ToArray(), newPassword);
+        if (!ok)
         {
             NoteDialog.Show(this, "Couldn't save the removal, so " + ph.Name + " is still paired. Nothing changed. Try again.");
             RefreshPhones();
@@ -811,9 +842,10 @@ internal sealed class HelperWindow : Form
         }
         Program.Log("Phone removed: " + ph.Name + " (" + Program.PhonesCount + " left).");
         RefreshPhones();
+        if (!_windowShot) await ShowRotationOutcomeAsync(ph.Name + " removed.", gen, allRemoved: false);
     }
 
-    private void RemoveAllPhones()
+    private async void RemoveAllPhones()
     {
         if (Program.PhonesCount == 0) return;
         if (!ConfirmDialog.Ask(this,
@@ -821,7 +853,9 @@ internal sealed class HelperWindow : Form
                 "One thing stays: VLC's own remote (port 8080) uses one shared password, so a phone could still reach VLC directly until the VLC password changes. " +
                 "Pair them again with new codes.",
                 "Remove all")) return;
-        if (!Program.RemovePhonesAndPersist(all => all))
+        var newPassword = VlcSetup.GeneratePassword();
+        var (ok, gen) = Program.RemovePhonesAndRotatePersist(all => all, newPassword);
+        if (!ok)
         {
             NoteDialog.Show(this, "Couldn't save the removal, so every phone is still paired. Nothing changed. Try again.");
             RefreshPhones();
@@ -829,6 +863,29 @@ internal sealed class HelperWindow : Form
         }
         Program.Log("All phones removed.");
         RefreshPhones();
+        if (!_windowShot) await ShowRotationOutcomeAsync("All phones removed.", gen, allRemoved: true);
+    }
+
+    /// <summary>One honest outcome line after a removal rotates the VLC password: kick the pass,
+    /// give one inline pass a short window, then read the PERSISTED state (and the process check
+    /// off the UI thread) and say exactly that. Never a guarantee: an old-password VLC can still
+    /// be open, and rotation is confirmed complete only when every one of them has closed.</summary>
+    private async Task ShowRotationOutcomeAsync(string label, int gen, bool allRemoved)
+    {
+        VlcRotation.Kick();
+        await VlcRotation.AwaitNextPassCompletion(TimeSpan.FromSeconds(2));
+        var (_, landed, g) = VlcRotation.Snapshot();
+        var vlcOpen = await Task.Run(() => VlcSetup.VlcRunning());
+        string msg;
+        if (g == gen && landed)
+            msg = allRemoved
+                ? label + " The saved VLC password has changed."
+                : label + " Its saved VLC password has changed. Your other phones keep working.";
+        else if (g == gen && vlcOpen)
+            msg = label + " VLC is open, so it can still control VLC until every VLC running with the old password is closed.";
+        else
+            msg = label + " It can't control this PC anymore. The VLC password change completes when VLC is closed or on the next automatic retry - the window shows its state.";
+        NoteDialog.Show(this, msg);
     }
 
     /// <summary>Type the phone's name, tap Pair, and the code for it appears below.</summary>

@@ -1,7 +1,8 @@
 // VLC's web remote, configured for him: the phone's Finish step hands the chosen password
 // to the PC, and the PC writes extraintf=http + http-password into vlcrc, so a VLC opened
-// by hand has the remote too. Written only while VLC is closed - a running VLC rewrites
-// vlcrc on exit and would lose the change.
+// by hand has the remote too. All vlcrc writes now go through the rotation pass
+// (VlcRotation): this file owns vlcrc knowledge (reads, the healthy-config shape, the
+// atomic write), the setup entry points, and the read-only credential accessors.
 using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -16,103 +17,101 @@ internal static class VlcSetup
     private static string VlcDir => VlcDirOverride ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "vlc");
 
     /// <summary>Test seam only: lets tests decide "is VLC running" instead of depending on the machine.
-    /// Null in production, where the real process check runs.</summary>
+    /// Null in production, where the real process check runs. GetProcessesByName sees processes
+    /// machine-wide (every session), which is the cross-session enumeration the rotation needs.</summary>
     internal static Func<bool>? VlcRunningOverride;
-    private static bool VlcRunning() => VlcRunningOverride?.Invoke() ?? Process.GetProcessesByName("vlc").Length > 0;
+    internal static bool VlcRunning() => VlcRunningOverride?.Invoke() ?? Process.GetProcessesByName("vlc").Length > 0;
 
-    private static bool _writeFaultLogged;
-
-    /// <summary>Writes the web-remote setup into vlcrc. A file-system failure (locked file, no permission,
-    /// unwritable profile) is not an exception for the caller: the password is kept as the pending write, which
-    /// the retry timer completes when the disk allows, and the answer is the same "not on disk yet" shape the
-    /// phone already understands (vlcPending). The log line is fixed text plus the exception type, once per fault.</summary>
-    public static string WriteVlcrc(string password)
+    /// <summary>The three-part healthy vlcrc: the password, the web interface enabled, and a
+    /// bind the phone can reach. Password equality alone is never enough.</summary>
+    internal sealed class VlcrcHealth
     {
-        try { return WriteVlcrcCore(password); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            lock (Program.ConfigSaveLock)
-            {
-                bool changed;
-                lock (Gate) { changed = _pendingPassword != password; _pendingPassword = password; }
-                if (changed) { try { Program.SaveConfig(); } catch (Exception) { Program.Log("Could not save the deferred vlcrc write."); } }
-            }
-            if (!_writeFaultLogged) { _writeFaultLogged = true; Program.Log("vlcrc could not be written (" + ex.GetType().Name + ") - the setup stays pending and will be retried."); }
-            return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
-        }
+        public string? Password;
+        public bool InterfaceOn;
+        public bool HostOk;
+        public bool HealthyFor(string t) => Password == t && InterfaceOn && HostOk;
     }
 
-    private static string WriteVlcrcCore(string password)
+    /// <summary>Read vlcrc's health (the tag's own three conditions): password value, extraintf
+    /// merged containing http (or its old name luahttp), and http-host == 0.0.0.0. An unreadable
+    /// or missing file reports not-healthy; callers treat that as "write the full config".</summary>
+    internal static VlcrcHealth ReadHealthy()
     {
-        // Round-5: the generated password is 96 bits; refuse to arm the LAN-facing web
-        // remote with anything weak (12+ chars).
-        if (password.Length < 12 || password.Length > 200 || password.Contains('\r') || password.Contains('\n'))
-            return JsonSerializer.Serialize(new { ok = false, reason = "bad password" });
+        var h = new VlcrcHealth();
+        try
+        {
+            var path = Path.Combine(VlcDir, "vlcrc");
+            if (!File.Exists(path)) return h;
+            var lines = File.ReadAllLines(path).ToList();
+            h.Password = FindValue(lines, "http-password");
+            var extraintf = FindValue(lines, "extraintf") ?? "";
+            var parts = extraintf.Split(new[] { ',', ':', ' ' }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()).ToList();
+            h.InterfaceOn = parts.Contains("http") || parts.Contains("luahttp");
+            h.HostOk = FindValue(lines, "http-host") == "0.0.0.0";
+        }
+        catch { /* unreadable right now: not healthy */ }
+        return h;
+    }
+
+    /// <summary>The rotation pass's atomic write: temp + rename in the vlc dir, so no partial
+    /// vlcrc is ever readable, and the FULL healthy config every time - merge-upsert extraintf
+    /// (another interface already there is never dropped), the password, and the 0.0.0.0 bind.
+    /// Never a password-only line.</summary>
+    internal static bool TryAtomicWriteHealthy(string password)
+    {
         var dir = VlcDir;
         Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, "vlcrc");
         var lines = File.Exists(path) ? File.ReadAllLines(path).ToList() : new List<string>();
-        // Unchanged settings need no write - and no deferral: a running VLC read exactly
-        // this vlcrc at startup, so control already works now. Saying "pending" here would
-        // falsely tell the user a reopen is required. Any older pending value is stale:
-        // the newest request is already on disk. This check must come BEFORE the
-        // VLC-running deferral, or it can never fire when VLC is up.
-        if (FindValue(lines, "http-password") == password
-            && (FindValue(lines, "extraintf") ?? "") == MergeValue(FindValue(lines, "extraintf"), "http")
-            && FindValue(lines, "http-host") == "0.0.0.0")
-        {
-            bool hadPending;
-            lock (Program.ConfigSaveLock)
-            {
-                lock (Gate) { hadPending = _pendingPassword != null; _pendingPassword = null; }
-                if (hadPending) { try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save: " + ex.Message); } }
-            }
-            _writeFaultLogged = false;
-            Program.Log("vlcrc already has the web remote set up - nothing to write.");
-            return JsonSerializer.Serialize(new { ok = true });
-        }
-        if (VlcRunning())
-        {
-            lock (Program.ConfigSaveLock)
-            {
-                lock (Gate) _pendingPassword = password;
-                try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save the deferred vlcrc write: " + ex.Message); } // the deferred write must survive a helper restart
-            }
-            Program.Log("vlcrc write skipped - VLC is running (it rewrites vlcrc on exit). Will retry when VLC closes.");
-            return JsonSerializer.Serialize(new { ok = false, reason = "vlc running" });
-        }
-        // Merge, don't overwrite: another interface may already sit in extraintf.
         Upsert(lines, "extraintf", MergeValue(FindValue(lines, "extraintf"), "http"));
         Upsert(lines, "http-password", password);
         // Listen on every address (not just localhost) so a hand-opened VLC takes the phone
         // too; the password and the Private-only firewall rule guard it.
         Upsert(lines, "http-host", "0.0.0.0");
-        File.WriteAllLines(path, lines);
-        _writeFaultLogged = false;
-        lock (Program.ConfigSaveLock)
+        var tmp = Path.Combine(dir, "vlcrc.zephyr-tmp-" + Guid.NewGuid().ToString("N"));
+        File.WriteAllLines(tmp, lines);
+        try
         {
-            lock (Gate) _pendingPassword = null;
-            try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save: " + ex.Message); } // clear any persisted deferred write
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
         }
-        Program.Log("VLC web remote written into vlcrc.");
-        return JsonSerializer.Serialize(new { ok = true });
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
+        return true;
+    }
+
+    /// <summary>Leftover temp files from interrupted writes. Runs under the launch/write mutex
+    /// AND skips fresh files, so a concurrent writer's in-flight temp is never deleted.</summary>
+    internal static void SweepTemp()
+    {
+        try
+        {
+            var dir = VlcDir;
+            if (!Directory.Exists(dir)) return;
+            foreach (var f in Directory.GetFiles(dir, "vlcrc.zephyr-tmp-*"))
+                try
+                {
+                    if (DateTime.UtcNow - File.GetLastWriteTimeUtc(f) > TimeSpan.FromSeconds(10)) File.Delete(f);
+                }
+                catch { }
+        }
+        catch { }
     }
 
     private static readonly object Gate = new();
-    private static string? _pendingPassword;
+    private static string? _candidate;
 
-    /// <summary>VLC was open, so the write was skipped; retry when VLC closes.</summary>
-    public static bool Pending => _pendingPassword != null;
-
-    /// <summary>The deferred value itself (for config.json; vlcrc is plain text anyway).
-    /// Null when nothing waits.</summary>
-    public static string? PendingValue { get { lock (Gate) return _pendingPassword; } }
+    /// <summary>Pending is the rotation's published state: a write genuinely outstanding
+    /// (target set, not yet landed). Phones already handle exactly this shape from setup deferrals.</summary>
+    public static bool Pending => VlcRotation.PendingPublished;
 
     /// <summary>The PC's attestation for the phone's setup check: vlcrc right now carries
     /// everything phone control needs - the web interface enabled (extraintf=http), a bind
     /// the phone can reach (http-host set and not loopback-only), and a live password - and
-    /// no write is still waiting. A running VLC that has not reloaded yet reports Pending
-    /// instead. Password equality alone is never enough.</summary>
+    /// no write is still waiting. Password equality alone is never enough.</summary>
     public static bool Configured
     {
         get
@@ -129,94 +128,122 @@ internal static class VlcSetup
         }
     }
 
-    /// <summary>Re-arm a deferred write after a helper restart: VLC still running keeps it
-    /// waiting for the retry timer; VLC already closed completes it immediately.</summary>
-    public static void RestorePending(string password)
-    {
-        if (VlcRunning())
-        {
-            lock (Program.ConfigSaveLock)
-            {
-                lock (Gate) _pendingPassword = password;
-                try { Program.SaveConfig(); } catch (Exception ex) { Program.Log("Could not save the restored deferred write: " + ex.Message); }
-            }
-            Program.Log("Restored the vlcrc write deferred before the restart - it completes when VLC closes.");
-            return;
-        }
-        Program.Log("VLC closed while Zephyr VLC Remote was off - completing the deferred vlcrc write now.");
-        WriteVlcrc(password);
-    }
-
-    /// <summary>Called on a timer: if an earlier write lost to a running VLC and VLC has
-    /// since closed, write now. True while a write is still waiting.</summary>
-    public static bool RetryPending()
-    {
-        string? pw;
-        lock (Gate) pw = _pendingPassword;
-        if (pw == null) return false;
-        if (VlcRunning()) return true;
-        Program.Log("VLC closed - writing the skipped vlcrc web-remote setup now.");
-        using var doc = JsonDocument.Parse(WriteVlcrc(pw));
-        return doc.RootElement.GetProperty("ok").GetBoolean() == false;
-    }
-
-    /// <summary>The password the phone must use right now: a deferred write wins over
-    /// vlcrc (it becomes vlcrc the moment VLC closes), and vlcrc is re-read every call so
-    /// a hand edit on the PC is picked up. null when nothing is configured yet.</summary>
+    /// <summary>APPLIED: vlcrc's password, re-read every call so a hand edit on the PC is picked
+    /// up. Sole exception: vlcrc has NO password value at all (fresh install before any setup) ->
+    /// the rotation target, which is served and used exactly like today's pending value.</summary>
     public static string? EffectivePassword()
     {
-        lock (Gate) { if (_pendingPassword != null) return _pendingPassword; }
-        return ReadVlcrcValue("http-password");
+        var pw = ReadVlcrcValue("http-password");
+        if (!string.IsNullOrEmpty(pw)) return pw;
+        return VlcRotation.TargetValue;
     }
 
-    /// <summary>The automatic-first setup: the PC picks the password. Reuses the one
-    /// already configured (including a write still waiting for VLC to close); generates a
-    /// fresh one only when nothing exists. The value is never logged.</summary>
-    public static string ReadOrCreatePassword() => ApplyPlannedPassword(PlanPassword());
+    /// <summary>The 96-bit generator every password in the product shares. Never logged.</summary>
+    internal static string GeneratePassword() => Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
 
-    /// <summary>Decide the VLC password for a phone WITHOUT changing anything: the pending value, else the one
-    /// in vlcrc (read once), else a fresh candidate (not stored, not written, not logged). Throws
-    /// VlcrcUnreadableException when vlcrc exists but cannot be read, so an existing password is never replaced.
-    /// The pair endpoint calls this BEFORE it saves the phone or spends the code.</summary>
+    /// <summary>The phone's Finish step: validate, then drive the rotation target. When vlcrc
+    /// already carries exactly this healthy config there is nothing to do (and only a target
+    /// for THIS value may clear). Otherwise the target persists first (survives a restart), the
+    /// pass is kicked, and one synchronous inline attempt decides the truthful reply: ok only
+    /// after an actual landing, "vlc running" while a process blocks the write.</summary>
+    public static string SetupFromPhone(string password)
+    {
+        // The generated password is 96 bits; refuse to arm the LAN-facing web remote with anything weak.
+        if (password.Length < 12 || password.Length > 200 || password.Contains('\r') || password.Contains('\n'))
+            return JsonSerializer.Serialize(new { ok = false, reason = "bad password" });
+        if (ReadHealthy().HealthyFor(password))
+        {
+            var backup = VlcRotation.BackupTarget();
+            Program.MutateAndPersist(() => VlcRotation.ClearTargetIfMatchesUnderConfigSaveLock(password),
+                () => VlcRotation.RestoreTargetUnderConfigSaveLock(backup), "the VLC setup");
+            Program.Log("vlcrc already has the web remote set up - nothing to write.");
+            return JsonSerializer.Serialize(new { ok = true });
+        }
+        var prior = VlcRotation.BackupTarget();
+        if (!Program.MutateAndPersist(() => VlcRotation.SetTargetUnderConfigSaveLock(password),
+                () => VlcRotation.RestoreTargetUnderConfigSaveLock(prior), "the VLC setup"))
+            return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
+        VlcRotation.Kick();
+        var outcome = VlcRotation.TryInlinePass();
+        if (outcome == VlcRotation.ApplyOutcome.Landed || ReadHealthy().HealthyFor(password))
+        {
+            Program.Log("VLC web remote written into vlcrc.");
+            return JsonSerializer.Serialize(new { ok = true });
+        }
+        if (outcome == VlcRotation.ApplyOutcome.Deferred || VlcRunning())
+        {
+            Program.Log("vlcrc write skipped - VLC is running (it rewrites vlcrc on exit). Will retry when VLC closes.");
+            return JsonSerializer.Serialize(new { ok = false, reason = "vlc running" });
+        }
+        Program.Log("vlcrc could not be written - the change stays pending and will be retried.");
+        return JsonSerializer.Serialize(new { ok = false, reason = "vlcrc write failed" });
+    }
+
+    /// <summary>Decide the VLC password for a phone WITHOUT changing anything: vlcrc FIRST (the
+    /// APPLIED credential is the truth), else - the setup exception only - the rotation target,
+    /// else one shared in-memory candidate (not stored, not written, not logged). Throws
+    /// VlcrcUnreadableException when vlcrc exists but cannot be read, so an existing password is
+    /// never replaced. The pair endpoint calls this BEFORE it saves the phone or spends the code.</summary>
     internal static string PlanPassword()
     {
-        // ONE Gate hold covers the pending check, the single vlcrc read AND the candidate allocation. Another caller
-        // (adopt) that plans, writes and clears between a read and an allocation would otherwise leave this caller
-        // allocating a second password from a stale "nothing configured" read. Gate is a leaf lock here: the only
-        // work inside it is a file read, and no code takes any other lock while holding Gate and then asks for it.
+        // ONE Gate hold covers the single vlcrc read AND the candidate allocation, so two
+        // callers can never allocate different passwords from the same "nothing configured" read.
         lock (Gate)
         {
-            string? existing = _pendingPassword;
-            if (string.IsNullOrEmpty(existing)) existing = ReadVlcrcPasswordStrict();
+            string? existing = ReadVlcrcPasswordStrict();
             AfterPlanReadForTests?.Invoke();
             if (!string.IsNullOrEmpty(existing)) return existing;
-            // Nothing configured yet. Every caller (pair, adopt) gets the SAME in-memory candidate until one of them
-            // applies it. Memory only: not saved, not written, not pending.
-            return _candidate ??= Convert.ToHexString(RandomNumberGenerator.GetBytes(12)).ToLowerInvariant();
+            var t = VlcRotation.TargetValue;
+            if (!string.IsNullOrEmpty(t)) return t;
+            return _candidate ??= GeneratePassword();
         }
     }
 
     /// <summary>Test hook, null in production: runs inside PlanPassword after the vlcrc read, before allocation.</summary>
     internal static Action? AfterPlanReadForTests;
 
-    private static string? _candidate;
     internal static void ForgetCandidateForTests() { lock (Gate) _candidate = null; }
-    /// <summary>Test fixtures only (never called by the product): forget a deferred vlcrc password a previous test left behind.</summary>
-    internal static void ForgetPendingForTests() { lock (Gate) _pendingPassword = null; }
 
-    /// <summary>Carry out a plan: the idempotent write (also for an existing password, since a vlcrc can carry
-    /// one with the web interface off). A write that cannot happen now stays pending (WriteVlcrc does not throw
-    /// for file-system faults), so this returns the password either way.</summary>
+    /// <summary>Carry out a plan. With vlcrc carrying a password this is READ-ONLY: pair and
+    /// adopt never touch the rotation target - a value planned from an OLD vlcrc must never
+    /// replace an outstanding NEW target mid-deferral. Only the setup exception (vlcrc has NO
+    /// password at all) stages the planned value as the target (persisted, then a kick).</summary>
     internal static string ApplyPlannedPassword(string password)
     {
-        bool fresh = string.IsNullOrEmpty(ReadPendingOrNull()) && !File.Exists(Path.Combine(VlcDir, "vlcrc"));
-        WriteVlcrc(password);
-        lock (Gate) { if (_candidate == password) _candidate = null; }   // now on disk or pending: those are the truth
+        if (!string.IsNullOrEmpty(ReadVlcrcValue("http-password")))
+        {
+            lock (Gate) { if (_candidate == password) _candidate = null; }
+            return password;
+        }
+        var fresh = !File.Exists(Path.Combine(VlcDir, "vlcrc"));
+        if (VlcRotation.TargetValue != password)
+        {
+            var backup = VlcRotation.BackupTarget();
+            Program.MutateAndPersist(() => VlcRotation.SetTargetUnderConfigSaveLock(password),
+                () => VlcRotation.RestoreTargetUnderConfigSaveLock(backup), "the VLC password setup");
+        }
+        lock (Gate) { if (_candidate == password) _candidate = null; }   // the target is the truth now
         if (fresh) Program.Log("VLC web-remote password generated for the phone (value never logged).");
+        VlcRotation.Kick();
         return password;
     }
 
-    private static string? ReadPendingOrNull() { lock (Gate) return _pendingPassword; }
+    /// <summary>Adopt serving: READ-ONLY whenever vlcrc carries a password (never a write, never
+    /// a candidate, never a target mutation). Only the setup exception (vlcrc has NO password)
+    /// plans the shared candidate and stages it as the rotation target; the caller's own
+    /// ConfigSaveLock persist saves it (one save with the grant markers) and kicks after the lock.</summary>
+    internal static string ServeForAdoptInMemory()
+    {
+        var existing = ReadVlcrcPasswordStrict(); // throws VlcrcUnreadableException on an unreadable vlcrc
+        if (!string.IsNullOrEmpty(existing)) return existing;
+        lock (Gate)
+        {
+            var t = VlcRotation.TargetValue;
+            if (string.IsNullOrEmpty(t)) t = _candidate ??= GeneratePassword();
+            if (VlcRotation.TargetValue != t) VlcRotation.SetTargetUnderConfigSaveLock(t);
+            return t;
+        }
+    }
 
     /// <summary>The configured http-password, read ONCE. Missing file or no password line is null (nothing
     /// configured, a new one may be generated). Anything else that stops the read (a lock, a denied or untraversable path, a
