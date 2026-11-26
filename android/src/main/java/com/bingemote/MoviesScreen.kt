@@ -568,14 +568,13 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     Column(Modifier.fillMaxSize().background(Bg)) {
         Row(
             // Same bar as Home and Settings: 12dp above, 40dp row, 12dp below (64dp). Items below keep their old position via the 4dp spacer.
-            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+            Modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             HeaderIconButton(onBack, remote.store.haptics) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
             Spacer(Modifier.width(12.dp))
             Text("Movies", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold)
         }
-        Spacer(Modifier.height(4.dp))
         // The reconnect banner, verbatim from the home hero: same gradient, radius, ink,
         // sizes and strings. The Movies title and back arrow stay put above it.
         if (lost) {

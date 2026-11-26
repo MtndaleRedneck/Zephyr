@@ -130,13 +130,12 @@ fun SettingsScreen(
         Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
     ) {
         // Same bar as Home and Movies: 12dp above, 40dp row, 12dp below (64dp).
-        Row(Modifier.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.heightIn(min = 44.dp).padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             HeaderIconButton(onBack, haptics) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
             Spacer(Modifier.width(12.dp))
             Text("Settings", color = TextC, fontSize = 21.sp, fontWeight = FontWeight.Bold)
         }
         if (store.secureStoreBroken) {
-            Spacer(Modifier.height(2.dp))
             Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Card2).padding(horizontal = 16.dp, vertical = 12.dp)) {
                 Text(
                     "Your saved sign-ins couldn't be opened this time (secure storage problem). Nothing was deleted. Close and reopen the app; new pairings can't be saved until this clears.",
@@ -144,7 +143,7 @@ fun SettingsScreen(
                 )
             }
         }
-        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 10.dp))
+        Spacer(Modifier.height(if (store.secureStoreBroken) 18.dp else 6.dp))
         BackHandler { onBack() }
 
         // "Connected Sources" card: the orange source labels ARE the
