@@ -52,3 +52,19 @@ shoot g2310-480-f1.0 pair-saved settings-pair-paired
 adb shell wm size reset; adb shell wm density reset; adb shell settings put system font_scale 1.0
 adb logcat -d -s AndroidRuntime:E > $OUT/crashes.txt || true
 adb logcat -d -s TopBarRow:I > $OUT/topbar-rows.txt || true
+# Run the real instrumentation tests per lane (zero-tolerance header and first-card assertions).
+adb install -r android/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk > $OUT/install-test.txt 2>&1 || true
+TESTPKG=$(adb shell pm list instrumentation | grep -o 'com[^/]*/[^ ]*' | head -1)
+echo "instrumentation: $TESTPKG" > $OUT/instrument.txt
+runlane() { # name size density fontscale
+  adb shell wm size "$2"; adb shell wm density "$3"; adb shell settings put system font_scale "$4"; sleep 3
+  for t in settingsHeaderEqualsHomeHeaderZeroTolerance settingsFirstCardTopEqualsHeaderBottom; do
+    echo "=== $1 $t" >> $OUT/instrument.txt
+    timeout 240 adb shell am instrument -w -e class com.bingemote.HeaderGeometryTest#$t $TESTPKG >> $OUT/instrument.txt 2>&1 || true
+  done
+}
+runlane g2310-480-f1.0 1080x2310 480 1.0
+runlane g2340-440-f1.0 1080x2340 440 1.0
+runlane g2340-440-f1.3 1080x2340 440 1.3
+adb shell wm size reset; adb shell wm density reset; adb shell settings put system font_scale 1.0
+adb logcat -d -s HeaderGeom:I > $OUT/headergeom-log.txt || true
