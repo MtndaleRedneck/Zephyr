@@ -279,6 +279,13 @@ jobs:
               "$BT/dexdump" -d "$d" 2>/dev/null | awk '/\(in L[^;]*ZephyrUpgradeFixtureTest[^;]*;\)/{on=1;next} /\(in L/{on=0} on && /invoke-/{print $NF}' 
             done | sort | uniq -c | sort -rn || true
           done
+      - name: Runner memory preflight for the 4096M AVD experiment (environment check, before any emulator starts)
+        run: |
+          echo "nproc=$(nproc)"; free -m; df -h / | tail -1; uptime
+          tot=$(awk '/^MemTotal:/{print $2}' /proc/meminfo); avail=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+          echo "MemTotal_kB=$tot MemAvailable_kB=$avail"
+          # A 4096M guest needs real headroom; stop the experiment rather than add contention on a small or loaded runner.
+          [ "$tot" -ge 12000000 ] && [ "$avail" -ge 8000000 ] || { echo "PREFLIGHT STOP: runner memory too small or loaded for the 4096M AVD experiment (need MemTotal >= 12000000 kB and MemAvailable >= 8000000 kB)"; exit 1; }
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -290,6 +297,7 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_6
+          ram-size: 4096M
           disable-animations: true
           working-directory: new
           script: (cd /tmp/up && sha256sum -c new-app.sha256) && UPGRADE_PKG=com.zephyr.remote bash scripts/upgrade-prior.sh
@@ -307,6 +315,7 @@ jobs:
           arch: x86_64
           target: google_apis
           profile: pixel_6
+          ram-size: 4096M
           disable-animations: true
           working-directory: new
           script: (cd /tmp/up && sha256sum -c new-app.sha256) && UPGRADE_PKG=com.zephyr.remote bash scripts/upgrade-prior.sh

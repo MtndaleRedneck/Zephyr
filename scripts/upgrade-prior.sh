@@ -208,6 +208,14 @@ snap() { # $1 = label: focus, processes and timing evidence (diagnostic only)
     echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r') bootanim=$(adb shell getprop init.svc.bootanim | tr -d '\r')"
     adb shell dumpsys window | grep -E "mCurrentFocus|mFocusedApp|isKeyguardShowing" | head -6
     adb shell ps -A 2>/dev/null | grep -E "nexuslauncher|com.android.systemui|$PKG" | head -8
+    # Passive resource and ANR evidence (diagnostic only; read-only commands, no gate or assertion reads these).
+    echo "-- runner: nproc=$(nproc) loadavg=$(cut -d' ' -f1-3 /proc/loadavg) $(grep -E 'MemTotal|MemAvailable' /proc/meminfo | tr -s ' ' | tr '\n' ' ')"
+    echo "-- avd config: $(grep -hE '^hw.ramSize|^hw.cpu.ncore|^vm.heapSize' "$HOME"/.android/avd/*.avd/config.ini 2>/dev/null | tr '\n' ' ')"
+    echo "-- guest: loadavg=$(adb shell cat /proc/loadavg | tr -d '\r') $(adb shell grep -E 'MemTotal|MemAvailable' /proc/meminfo | tr -s ' ' | tr '\r\n' '  ')"
+    echo "-- guest top:"; adb shell top -b -n 1 -m 8 2>&1 | head -14 || true
+    echo "-- guest anr dir (may be unreadable without root):"; adb shell ls /data/anr 2>&1 | head -5 || true
+    echo "-- guest logcat ANR/slow-launcher lines (cap 25):"
+    adb logcat -b all -d -v threadtime 2>&1 | grep -E "ANR in|am_anr|Input dispatching timed out|Slow (operation|Looper)|nexuslauncher.*(Skipped [0-9]+ frames|Davey)" | tail -25 || true
   } > "$f" 2>&1
   cat "$f"
 }
