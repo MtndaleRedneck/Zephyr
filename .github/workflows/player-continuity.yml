@@ -2,7 +2,7 @@ name: Player continuity (published baseline)
 
 # Private evidence only: installs the PUBLISHED baseline player release, lets that real app create its own
 # pairing, settings and history, then runs THIS candidate's installer (taken from an existing Windows run's
-# artifact, no rebuild) over the data and proves the data survives. Dispatch, or a push to this branch (defaults = the Player 3.1.0 candidate run/head). No release, no tag, no main.
+# artifact, no rebuild) over the data and proves the data survives. Dispatch (explicit run, head, installer sha), or a push to this branch (uses ci/player-continuity-candidate.env). No release, no tag, no main.
 on:
   push:
     branches: [player-continuity-1125]
@@ -14,6 +14,10 @@ on:
         type: string
       candidate_head:
         description: 'Full 40-char commit sha that run built'
+        required: true
+        type: string
+      candidate_installer_sha256:
+        description: 'Expected sha256 of the Zephyr-PC installer in that run (from its hash log)'
         required: true
         type: string
       old_tag:
@@ -45,20 +49,37 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - name: Candidate installer from the Windows run artifact
+      - name: Bind the candidate (explicit run, head and installer sha; fail closed)
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id || '45756793630' }}
+          IN_RUN: ${{ inputs.candidate_run_id }}
+          IN_HEAD: ${{ inputs.candidate_head }}
+          IN_SHA: ${{ inputs.candidate_installer_sha256 }}
         run: |
+          # Dispatch inputs win; a push uses ci/player-continuity-candidate.env. No hidden defaults.
+          $kv = @{}
+          Get-Content ci/player-continuity-candidate.env | Where-Object { $_ -match '^[A-Z0-9_]+=' } | ForEach-Object { $k,$v = $_ -split '=',2; $kv[$k] = $v.Trim() }
+          $run  = if ($env:IN_RUN)  { $env:IN_RUN }  else { $kv['CANDIDATE_RUN_ID'] }
+          $head = if ($env:IN_HEAD) { $env:IN_HEAD } else { $kv['CANDIDATE_HEAD'] }
+          $want = if ($env:IN_SHA)  { $env:IN_SHA }  else { $kv['CANDIDATE_INSTALLER_SHA256'] }
+          if ($run -notmatch '^\d+$') { throw "candidate run id missing or malformed" }
+          if ($head -notmatch '^[0-9a-f]{40}$') { throw "candidate head must be a full 40-char sha" }
+          if ($want -notmatch '^[0-9a-f]{64}$') { throw "candidate installer sha256 must be 64 hex chars" }
+          $info = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$run" | ConvertFrom-Json
+          Write-Host "candidate run $run: workflow '$($info.name)' head_sha $($info.head_sha) conclusion $($info.conclusion)"
+          if ($info.head_sha -ne $head) { throw "candidate run $run was built from $($info.head_sha), not the stated head $head" }
+          if ($info.conclusion -ne 'success') { throw "candidate run $run did not conclude success (conclusion=$($info.conclusion))" }
           New-Item -ItemType Directory -Force windows/Output | Out-Null
-          gh run download $env:CANDIDATE_RUN_ID -n Zephyr-PC-installer --dir windows/Output
+          gh run download $run -n Zephyr-PC-installer --dir windows/Output
           if ($LASTEXITCODE -ne 0) { throw "candidate artifact download exit $LASTEXITCODE" }
           $f = @(Get-ChildItem windows/Output -Filter 'Zephyr-PC-*.exe')
           if ($f.Count -ne 1) { throw "expected one candidate installer, found $($f.Count)" }
           $h = (Get-FileHash $f[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           Write-Host "candidate installer $($f[0].Name) sha256 $h"
+          if ($h -ne $want) { throw "candidate installer sha256 $h does not match the stated $want" }
           $h | Set-Content "$env:RUNNER_TEMP/player-installer-built-sha256.txt"
+          "$head" | Set-Content "$env:RUNNER_TEMP/candidate-head.txt"
       - name: ffmpeg fixture
         run: choco install ffmpeg --no-progress -y
       - name: Published baseline real app-created data -> candidate
@@ -70,11 +91,10 @@ jobs:
           OLD_ASSET: ${{ inputs.old_asset || 'Zephyr-PC-3.0.0.exe' }}
           OLD_VERSION: ${{ inputs.old_version || '3.0.0' }}
           OLD_SHA256: ${{ inputs.old_sha256 || '18e715d9f8235bca82de2183c6f62dd6707409451561da92817bcefbf47e6822' }}
-          CANDIDATE_HEAD: ${{ inputs.candidate_head || '55b935ba9ba622037c5fd12085df928171fa9d1a' }}
         run: |
           $f = @(Get-ChildItem windows/Output -Filter 'Zephyr-PC-*.exe')[0]
           $v = $f.BaseName -replace '^Zephyr-PC-',''
-          ./scripts/pubbase_real_data.ps1 -OldTag $env:OLD_TAG -OldAsset $env:OLD_ASSET -OldVersion $env:OLD_VERSION -Candidate $f.FullName -OldSha256 $env:OLD_SHA256 -ExpectedVersion $v -ExpectedHead $env:CANDIDATE_HEAD
+          ./scripts/pubbase_real_data.ps1 -OldTag $env:OLD_TAG -OldAsset $env:OLD_ASSET -OldVersion $env:OLD_VERSION -Candidate $f.FullName -OldSha256 $env:OLD_SHA256 -ExpectedVersion $v -ExpectedHead (Get-Content "$env:RUNNER_TEMP/candidate-head.txt" -Raw).Trim()
       - name: Evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
