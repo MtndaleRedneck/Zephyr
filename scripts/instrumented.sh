@@ -29,6 +29,7 @@ PAIR_CODE=$(grep -oP 'PAIRCODE \K\d+' /tmp/wire-host.log 2>/dev/null || true)
 # direction AND makes adbd hold device port 47888 -> EADDRINUSE in the test.)
 adb forward tcp:47888 tcp:47888 || true
 
+# New classes that seed prefs / press Home (MoviesStaleLoadTest, StreamServiceBackgroundBindAndroidTest) run LAST: in run 45768614879 SeekGestureTest and CancelGestureTest failed right after MoviesStaleLoadTest ("seeded demo seek block did not appear"); cause unproven, so they no longer precede the gesture rigs.
 # UpgradeConnectionTest and RecoveryBridgeTest are NOT in this list on purpose: they need a previously
 # installed release (seed, replace the package, verify) and BingeMote-only package ids, so a plain
 # one-APK session cannot run them. The Zephyr upgrade check is a separate job (1.5.0 source -> this build).
@@ -41,8 +42,6 @@ com.bingemote.StoreMigrationTest
 com.bingemote.NoticeTokenResetTest
 com.zephyr.remote.StreamServerAndroidTest
 com.zephyr.remote.StreamServiceRefusalAndroidTest
-com.zephyr.remote.StreamServiceBackgroundBindAndroidTest
-com.bingemote.MoviesStaleLoadTest
 com.bingemote.SeekGestureTest
 com.bingemote.CancelGestureTest
 com.bingemote.MouseCadenceTest
@@ -58,6 +57,8 @@ com.zephyr.remote.ZephyrDiscoveryTest
 com.bingemote.StreamTargetTest
 com.bingemote.SubtitleClientTest
 com.bingemote.SourceSwitchSubtitleTest
+com.zephyr.remote.StreamServiceBackgroundBindAndroidTest
+com.bingemote.MoviesStaleLoadTest
 com.bingemote.SubtitleJournalTest
 com.bingemote.ZephyrCaptionDeliveryTest
 com.bingemote.SubtitleSheetTest
