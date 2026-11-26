@@ -3,13 +3,13 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
 >
     <UserControl.Resources>
-        <SolidColorBrush x:Key="CardBrush" Color="#26262D"/>
+        <SolidColorBrush x:Key="CardBrush" Color="#1E232B"/>
         <SolidColorBrush x:Key="OrangeBrush" Color="#F97C02"/>
-        <SolidColorBrush x:Key="TextBrush" Color="#F5F5F7"/>
-        <SolidColorBrush x:Key="MutedBrush" Color="#9696A0"/>
+        <SolidColorBrush x:Key="TextBrush" Color="#F0F2F5"/>
+        <SolidColorBrush x:Key="MutedBrush" Color="#A7AFBC"/>
         <Style x:Key="OrangeButton" TargetType="Button">
             <Setter Property="Background" Value="{StaticResource OrangeBrush}"/>
-            <Setter Property="Foreground" Value="#1B1B1E"/>
+            <Setter Property="Foreground" Value="#0B0D10"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Padding" Value="12,6"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -39,14 +39,14 @@
                  ToolTip="Don't include passwords, pairing codes, or other secrets."/>
         <Border Grid.Row="2" Background="{StaticResource CardBrush}" CornerRadius="12" Padding="12,8" Margin="0,12,0,12">
             <StackPanel>
-                <TextBlock Text="Exactly what gets sent:" Foreground="{StaticResource OrangeBrush}" FontSize="11" FontWeight="SemiBold"/>
-                <TextBlock Text="Reports may become public - don't include passwords, pairing codes, or other secrets." Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
-                <TextBlock x:Name="PreviewText" Foreground="{StaticResource MutedBrush}" FontSize="11" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                <TextBlock Text="Exactly what gets sent:" Foreground="{StaticResource OrangeBrush}" FontSize="12" FontWeight="SemiBold"/>
+                <TextBlock Text="Reports may become public - don't include passwords, pairing codes, or other secrets." Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                <TextBlock x:Name="PreviewText" Foreground="{StaticResource MutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
             </StackPanel>
         </Border>
         <WrapPanel Grid.Row="3" HorizontalAlignment="Right">
             <TextBlock x:Name="FormNote" Text="The feedback form is being linked - use the GitHub issue for now."
-                       Foreground="{StaticResource MutedBrush}" FontSize="11" VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}" FontSize="12" VerticalAlignment="Center"
                        Visibility="Collapsed" Margin="0,0,10,0"/>
             <Button x:Name="FormButton" Style="{StaticResource OrangeButton}" Content="Open feedback form" Click="OnForm" Margin="0,0,10,0"/>
             <Button Style="{StaticResource OrangeButton}" Content="Open GitHub issue" Click="OnIssue"/>

@@ -15,9 +15,9 @@ namespace ZephyrPlayer
     /// One pop-up is open at a time, anchored above its own button.</summary>
     public partial class MainWindow
     {
-        private static readonly SolidColorBrush PopupCardBrush = Frozen(Color.FromArgb(0xF0, 0x16, 0x16, 0x1A));
-        private static readonly SolidColorBrush PopupLineBrush = Frozen(Color.FromArgb(0x17, 0xFF, 0xFF, 0xFF));
-        private static readonly SolidColorBrush ChipBrush = Frozen(Color.FromRgb(0x3A, 0x3A, 0x44));
+        private static readonly SolidColorBrush PopupCardBrush = Frozen(Color.FromArgb(0xF0, 0x1E, 0x23, 0x2B));
+        private static readonly SolidColorBrush PopupLineBrush = Frozen(Color.FromArgb(0x1F, 0xFF, 0xFF, 0xFF));
+        private static readonly SolidColorBrush ChipBrush = Frozen(Color.FromRgb(0x26, 0x2C, 0x36));
         private static readonly SolidColorBrush ChipOnBrush = Frozen(Color.FromArgb(0x33, 0xF9, 0x7C, 0x02));
         private static readonly SolidColorBrush RowOnBrush = Frozen(Color.FromArgb(0x12, 0xFF, 0xFF, 0xFF));
         private static SolidColorBrush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
@@ -58,7 +58,7 @@ namespace ZephyrPlayer
         private static TextBlock Label(string text, double size = 13, bool bold = false, Brush? fg = null) => new()
         {
             Text = text, FontSize = size, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal,
-            Foreground = fg ?? (Brush)new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)), VerticalAlignment = VerticalAlignment.Center,
+            Foreground = fg ?? (Brush)new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5)), VerticalAlignment = VerticalAlignment.Center,
         };
 
         private static Border PopupCard(double width, string name, UIElement content) => new Border
@@ -72,7 +72,7 @@ namespace ZephyrPlayer
         private Button Chip(string text, RoutedEventHandler click, double width = double.NaN, double height = 26)
         {
             var b = new Button { Content = text, Height = height, MinWidth = 36, Padding = new Thickness(10, 0, 10, 0), Cursor = Cursors.Hand,
-                Background = ChipBrush, Foreground = (Brush)new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7)), BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent };
+                Background = ChipBrush, Foreground = (Brush)new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5)), BorderThickness = new Thickness(1), BorderBrush = Brushes.Transparent };
             if (!double.IsNaN(width)) b.Width = width;
             b.Click += click; b.Focusable = false;
             return b;
@@ -82,7 +82,7 @@ namespace ZephyrPlayer
         {
             b.Tag = on ? "on" : "";
             b.Background = on ? ChipOnBrush : ChipBrush;
-            b.Foreground = on ? Orange : new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7));
+            b.Foreground = on ? Orange : new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5));
             b.BorderBrush = on ? Orange : Brushes.Transparent;
         }
 
@@ -166,12 +166,12 @@ namespace ZephyrPlayer
             sg.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             sg.ColumnDefinitions.Add(new ColumnDefinition());
             sg.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            sg.Children.Add(Label("0.25x", 12, false, new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x98))));
+            sg.Children.Add(Label("0.25x", 12, false, new SolidColorBrush(Color.FromRgb(0xA7, 0xAF, 0xBC))));
             _speedSlider = new Slider { Minimum = 0.25, Maximum = 4, Value = 1, TickFrequency = 0.05, SmallChange = 0.05, LargeChange = 0.25, Margin = new Thickness(10, 0, 10, 0), Foreground = Orange };
             if (TryFindResource("PlaybackSlider") is Style ps) _speedSlider.Style = ps;
             _speedSlider.ValueChanged += (_, e) => { if (!_speedSync) SetRate(e.NewValue); };
             Grid.SetColumn(_speedSlider, 1); sg.Children.Add(_speedSlider);
-            var four = Label("4x", 12, false, new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x98))); Grid.SetColumn(four, 2); sg.Children.Add(four);
+            var four = Label("4x", 12, false, new SolidColorBrush(Color.FromRgb(0xA7, 0xAF, 0xBC))); Grid.SetColumn(four, 2); sg.Children.Add(four);
             sp.Children.Add(sg);
             _speedPopup = PopupCard(330, "SpeedPopup", sp);
 
@@ -181,7 +181,7 @@ namespace ZephyrPlayer
             _sleepRows = new StackPanel();
             sl.Children.Add(_sleepRows);
             sl.Children.Add(Sep());
-            sl.Children.Add(Label("Pauses the movie when time is up", 12, false, new SolidColorBrush(Color.FromRgb(0x8E, 0x8E, 0x98))));
+            sl.Children.Add(Label("Pauses the movie when time is up", 12, false, new SolidColorBrush(Color.FromRgb(0xA7, 0xAF, 0xBC))));
             ((FrameworkElement)sl.Children[sl.Children.Count - 1]).Margin = new Thickness(6, 4, 6, 2);
             _sleepPopup = PopupCard(290, "SleepPopup", sl);
 
@@ -382,8 +382,10 @@ namespace ZephyrPlayer
             for (var i = 0; i < _speedChips.Children.Count; i++)
                 if (_speedChips.Children[i] is Button b) SetChipOn(b, i == chip);
             _speedSync = true; _speedSlider.Value = _rate; _speedSync = false;
-            SpeedLabel.Text = normal ? "" : label;
-            SpeedLabel.Visibility = normal ? Visibility.Collapsed : Visibility.Visible;
+            // The speed value is always on the bar: muted at 1×, orange when the rate is off normal.
+            SpeedLabel.Text = label;
+            SpeedLabel.Visibility = Visibility.Visible;
+            SpeedLabel.Foreground = normal ? Muted : Orange;
             var brush = normal ? IconBrushNow() : Orange;
             SpeedButton.Foreground = brush; ApplyGlyphBrush(SpeedButton, brush);
             SpeedButton.ToolTip = normal ? "Playback speed" : "Playback speed (" + label + ")";

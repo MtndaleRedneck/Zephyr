@@ -66,15 +66,15 @@ namespace ZephyrPlayer
             _settings.SaveFailed += (_, __) => Dispatcher.InvokeAsync(() => ShowSettingsWarning("Your settings could not be saved. The settings file could not be written (the disk may be full or the folder not writable). Zephyr Player keeps working; changes may not be kept after you quit.", "Settings could not be saved"));
             var spinner = new System.Windows.Shapes.Path { Data = Geometry.Parse("M12,3 A9,9 0 1 1 3,12"), Stroke = Orange, StrokeThickness = 3, StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, Width = 44, Height = 44, Stretch = Stretch.Uniform, RenderTransformOrigin = new Point(0.5, 0.5), RenderTransform = _spinnerTurn, HorizontalAlignment = HorizontalAlignment.Center };
             _loadingTitle = Label("", 15, true); _loadingTitle.HorizontalAlignment = HorizontalAlignment.Center; _loadingTitle.Margin = new Thickness(0, 14, 0, 0);
-            _loadingDetail = Label("Opening...", 13, false, new SolidColorBrush(Color.FromRgb(0x96, 0x96, 0xA0))); _loadingDetail.HorizontalAlignment = HorizontalAlignment.Center; _loadingDetail.Margin = new Thickness(0, 4, 0, 0);
+            _loadingDetail = Label("Opening...", 13, false, new SolidColorBrush(Color.FromRgb(0xA7, 0xAF, 0xBC))); _loadingDetail.HorizontalAlignment = HorizontalAlignment.Center; _loadingDetail.Margin = new Thickness(0, 4, 0, 0);
             var lp = new StackPanel(); lp.Children.Add(spinner); lp.Children.Add(_loadingTitle); lp.Children.Add(_loadingDetail);
             _loadingPanel = new Border { Child = lp, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, Visibility = Visibility.Collapsed, IsHitTestVisible = false, Padding = new Thickness(24) };
             System.Windows.Automation.AutomationProperties.SetAutomationId(_loadingPanel, "LoadingPanel");
 
             _errorTitle = Label("", 16, true); _errorTitle.HorizontalAlignment = HorizontalAlignment.Center; _errorTitle.TextAlignment = TextAlignment.Center; _errorTitle.TextWrapping = TextWrapping.Wrap;
-            _errorMessage = Label("", 13, false, new SolidColorBrush(Color.FromRgb(0x96, 0x96, 0xA0))); _errorMessage.HorizontalAlignment = HorizontalAlignment.Center; _errorMessage.TextAlignment = TextAlignment.Center; _errorMessage.TextWrapping = TextWrapping.Wrap; _errorMessage.Margin = new Thickness(0, 8, 0, 16);
+            _errorMessage = Label("", 13, false, new SolidColorBrush(Color.FromRgb(0xA7, 0xAF, 0xBC))); _errorMessage.HorizontalAlignment = HorizontalAlignment.Center; _errorMessage.TextAlignment = TextAlignment.Center; _errorMessage.TextWrapping = TextWrapping.Wrap; _errorMessage.Margin = new Thickness(0, 8, 0, 16);
             _errorRetry = Chip("Try again", (_, __) => _ = RetryLastStartAsync(), double.NaN, 34); _errorRetry.Padding = new Thickness(18, 0, 18, 0);
-            _errorRetry.Background = Orange; _errorRetry.Foreground = new SolidColorBrush(Color.FromRgb(0x1B, 0x1B, 0x1E));
+            _errorRetry.Background = Orange; _errorRetry.Foreground = new SolidColorBrush(Color.FromRgb(0x0B, 0x0D, 0x10));
             _errorBack = Chip("Back", (_, __) => { HomeRequested?.Invoke(); }, double.NaN, 34); _errorBack.Padding = new Thickness(18, 0, 18, 0); _errorBack.Margin = new Thickness(10, 0, 0, 0);
             System.Windows.Automation.AutomationProperties.SetAutomationId(_errorRetry, "ErrorRetryButton");
             System.Windows.Automation.AutomationProperties.SetAutomationId(_errorBack, "ErrorBackButton");
@@ -304,7 +304,7 @@ namespace ZephyrPlayer
             HideError();
             // The Opening state shows the NEW start: its title and an empty timeline, never the previous movie.
             SetOpening(true);
-            SeekBar.Value = 0; ElapsedText.Text = "0:00"; RemainingText.Text = "-0:00"; TotalText.Text = "0:00 total";
+            SeekBar.Value = 0; ElapsedText.Text = "0:00"; RemainingText.Text = "-0:00";
             MovieTitle.Text = title;
             _loadingTitle.Text = title; _loadingDetail.Text = "Opening...";
             _loadingPanel.Visibility = Visibility.Visible;

@@ -5,7 +5,7 @@ namespace ZephyrPlayer {
  public partial class PlaybackPreview : UserControl {
   public PlaybackPreview(PlayerSettings settings) { InitializeComponent(); Update(settings); }
   public void Update(PlayerSettings settings) {
-   var orange = new SolidColorBrush(Brand.Orange); var white = new SolidColorBrush(Color.FromRgb(0xF5, 0xF5, 0xF7));
+   var orange = new SolidColorBrush(Brand.Orange); var white = new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5));
    var ring = settings.BarColorStyle is "orange" or "twotone" ? orange : white;
    var glyph = settings.BarColorStyle is "orange" or "inverse" ? orange : white;
    SkipBackRing.Stroke = SkipForwardRing.Stroke = ring; SkipBackArrow.Fill = SkipForwardArrow.Fill = ring;
@@ -17,7 +17,7 @@ namespace ZephyrPlayer {
    PlayGlyph.Fill = settings.IconStyle == "filled" ? Brushes.Black : ring;
    VolumeButton.Foreground = SpeedButton.Foreground = SleepButton.Foreground = CaptionsButton.Foreground = FullscreenButton.Foreground = glyph;
    SpeedButton.Visibility = settings.ShowSpeed ? Visibility.Visible : Visibility.Collapsed; SleepButton.Visibility = settings.ShowSleepTimer ? Visibility.Visible : Visibility.Collapsed;
-   ElapsedText.Text = "0:41:12"; RemainingText.Text = "-1:00:56"; TotalText.Text = "1:42:08 total"; SeekBar.Value = 400; VolumeSlider.Value = 62;
+   ElapsedText.Text = "0:41:12"; RemainingText.Text = "-1:00:56"; SeekBar.Value = 400; VolumeSlider.Value = 62;
   }
  }
 }

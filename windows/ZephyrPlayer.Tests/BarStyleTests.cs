@@ -67,7 +67,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(0, Grid.GetColumn(volumeStack));
                 // Unset default is "original" (2.0.2): the primary rings take the default ring colour, not orange.
                 Assert.Equal("original", settings.BarColorStyle);
-                Assert.Equal(Color.FromRgb(0xF5, 0xF5, 0xF7), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
+                Assert.Equal(Color.FromRgb(0xF0, 0xF2, 0xF5), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!));
                 // 2.0.2 "original": orange secondary arrows and labels, orange Play ring with the 10 % tint.
                 Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipBackIcon")!));
                 Assert.Equal(Color.FromRgb(0xF9, 0x7C, 0x02), StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipForwardIcon")!));
@@ -118,7 +118,7 @@ namespace ZephyrPlayer.Tests
                 Color Ring() => StrokeOf((System.Windows.Shapes.Shape)w.FindName("SkipBackRing")!);
                 Color Label() => ((SolidColorBrush)((TextBlock)w.FindName("SkipBackLabel")!).Foreground).Color;
                 Color Sec() => StrokeOf((System.Windows.Shapes.Shape)w.FindName("SecondarySkipBackIcon")!);
-                var orange = Color.FromRgb(0xF9, 0x7C, 0x02); var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
+                var orange = Color.FromRgb(0xF9, 0x7C, 0x02); var white = Color.FromRgb(0xF0, 0xF2, 0xF5);
                 void Pick(string style) { settings.BarColorStyle = style; w.Dispatcher.Invoke(new Action(() => { }), System.Windows.Threading.DispatcherPriority.SystemIdle); }
                 Pick("orange"); Assert.Equal(orange, Ring()); Assert.Equal(orange, Label()); Assert.Equal(orange, Sec());
                 Pick("white"); Assert.Equal(white, Ring()); Assert.Equal(white, Label()); Assert.Equal(white, Sec());

@@ -2,7 +2,7 @@ name: Player
 on:
   workflow_dispatch:
   push:
-    branches: [player-rebuild-1124]
+    branches: [player-rebuild-1124, player-redesign-1125]
     paths:
       - 'windows/ZephyrPlayer/**'
       - 'windows/ZephyrPlayer.Tests/**'

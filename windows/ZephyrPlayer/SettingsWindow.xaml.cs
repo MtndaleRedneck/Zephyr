@@ -60,7 +60,6 @@ namespace ZephyrPlayer
 
         private void WireSections()
         {
-            _sections["movies"] = (NavMovies, SectionMovies, "Movies folder");
             _sections["volume"] = (NavVolume, SectionVolume, "Volume");
             _sections["skip"] = (NavSkip, SkipSettingsCard, "Playback");
             _sections["bar"] = (NavBar, SectionBar, "Controls");
@@ -103,7 +102,6 @@ namespace ZephyrPlayer
 
         private void Refresh()
         {
-            FolderText.Text = _settings.LibraryFolder.Length > 0 ? _settings.LibraryFolder : "Not set";
             BuildChoices(BoostPanel, PlayerSettings.BoostChoices, v => v + "%", () => _settings.VolumeBoostMaxPct, v => _settings.VolumeBoostMaxPct = v, "boost");
             BuildChoices(PrimarySkipPanel, PlayerSettings.PrimarySkipChoices, SkipLabel, () => _settings.PrimarySkipSeconds, v => _settings.PrimarySkipSeconds = v, "primaryskip");
             BuildChoices(SecondarySkipPanel, PlayerSettings.SecondarySkipChoices, SkipLabel, () => _settings.SecondarySkipSeconds, v => _settings.SecondarySkipSeconds = v, "secondaryskip");
@@ -153,20 +151,6 @@ namespace ZephyrPlayer
         {
             _settings.ShowSpeed = SpeedToggle.IsChecked == true;
             _settings.ShowSleepTimer = SleepToggle.IsChecked == true;
-        }
-
-        private void OnBrowse(object sender, RoutedEventArgs e)
-        {
-            var dlg = new Microsoft.Win32.OpenFolderDialog
-            {
-                Title = "Pick your designated movies folder",
-                InitialDirectory = _settings.LibraryFolder,
-            };
-            if (dlg.ShowDialog(this) == true)
-            {
-                _settings.LibraryFolder = dlg.FolderName;
-                Refresh();
-            }
         }
 
         private void OnPair(object sender, RoutedEventArgs e)

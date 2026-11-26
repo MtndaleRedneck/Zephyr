@@ -3,9 +3,10 @@ using System.Windows;
 
 namespace ZephyrPlayer
 {
-    /// <summary>2.0.2 narrow-width reflow, measured against the 3.0 bar: the volume group and the speed/sleep badges give
-    /// way in steps (no % label, a shorter track, speaker only, no badges) so the side groups never run into the centre
-    /// cluster and Play stays on the centre line. The bar geometry itself is the accepted 3.0 one.</summary>
+    /// <summary>Midnight Slate reflow: the bar is one fixed-width pill, so the only squeeze is a
+    /// narrow window. Two levels, and no control ever hides: 0 = full volume group and spacing,
+    /// 1 = compact (shorter volume track, no % label, tighter play margins) below the compact
+    /// threshold. Speed/sleep state readouts are owned by RefreshSpeedUi/RefreshSleepUi.</summary>
     public partial class MainWindow
     {
         private int _reflowLevel;
@@ -14,17 +15,12 @@ namespace ZephyrPlayer
 
         private void OnBarSizeChanged(object sender, SizeChangedEventArgs e) => Reflow();
 
-        private static readonly Size Unbounded = new(double.PositiveInfinity, double.PositiveInfinity);
-
         private void ApplyReflowLevel(int level)
         {
-            VolumeLabel.Visibility = level >= 1 ? Visibility.Collapsed : Visibility.Visible;
-            VolumeSlider.Width = level >= 2 ? 56 : 110;
-            VolumeSlider.Visibility = level >= 3 ? Visibility.Collapsed : Visibility.Visible;
-            var speedOn = !PlayerBarLogic.IsNormalRate(_rate) && level < 4;
-            var sleepOn = _sleepTimer.IsActive && level < 4;
-            SpeedLabel.Visibility = speedOn ? Visibility.Visible : Visibility.Collapsed;
-            SleepLabel.Visibility = sleepOn ? Visibility.Visible : Visibility.Collapsed;
+            var compact = level >= 1;
+            VolumeLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+            VolumeSlider.Width = compact ? 56 : 110;
+            PlayPauseButton.Margin = new Thickness(compact ? 4 : 10, 0, compact ? 4 : 10, 0);
         }
 
         internal void Reflow()
@@ -34,18 +30,8 @@ namespace ZephyrPlayer
             try
             {
                 var inner = ControlBar.ActualWidth - ControlBar.Padding.Left - ControlBar.Padding.Right - 2;
-                CenterPlaybackControls.Measure(Unbounded);
-                var center = CenterPlaybackControls.DesiredSize.Width;
-                var side = (inner - center) / 2;
-                var chosen = 5;
-                for (var level = 0; level <= 4; level++)
-                {
-                    ApplyReflowLevel(level);
-                    LeftGroup.Measure(Unbounded);
-                    RightGroup.Measure(Unbounded);
-                    if (LeftGroup.DesiredSize.Width <= side + 0.5 && RightGroup.DesiredSize.Width <= side + 0.5) { chosen = level; break; }
-                }
-                if (chosen == 5) ApplyReflowLevel(4);
+                var chosen = PlayerBarLogic.ReflowLevel(inner);
+                ApplyReflowLevel(chosen);
                 _reflowLevel = chosen;
             }
             finally { _reflowing = false; }

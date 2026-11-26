@@ -378,7 +378,7 @@ namespace ZephyrPlayer.Tests
                 // 1. An old movie playing, with real time and duration on the bar.
                 var first = view.PlayFromUrlAsync(ClipUrl, 2, Array.Empty<string>());
                 PumpUntil(() => first.IsCompleted && player.State == VLCState.Playing && !view.IsLoadingShown, "clip did not play");
-                PumpUntil(() => El<TextBlock>(view, "TotalText").Text == "0:06 total" && El<TextBlock>(view, "ElapsedText").Text != "0:00", "bar never showed the clip's time");
+                PumpUntil(() => El<TextBlock>(view, "RemainingText").Text == "-0:06" && El<TextBlock>(view, "ElapsedText").Text != "0:00", "bar never showed the clip's time");
                 var oldTitle = view.CurrentMovieTitle;
                 // 2. A new phone start opens (held in preparation; the old movie keeps playing).
                 var next = view.PlayFromUrlAsync(phoneUrl, null, Array.Empty<string>());
@@ -387,10 +387,10 @@ namespace ZephyrPlayer.Tests
                 Assert.True(view.IsLoadingShown);
                 Assert.Equal("0:00", El<TextBlock>(view, "ElapsedText").Text);
                 Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
-                Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
+                Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
                 Assert.Equal(0.0, El<Slider>(view, "SeekBar").Value);
                 Assert.Equal("Movie from your phone", view.CurrentMovieTitle);
-                var opening = $"old=[{oldTitle}] opening: elapsed={El<TextBlock>(view, "ElapsedText").Text} total=[{El<TextBlock>(view, "TotalText").Text}] title=[{view.CurrentMovieTitle}]";
+                var opening = $"old=[{oldTitle}] opening: elapsed={El<TextBlock>(view, "ElapsedText").Text} title=[{view.CurrentMovieTitle}]";
                 gate.Set();
                 PumpUntil(() => next.IsCompleted, "held start never completed");
                 // 3. A failed start shows the error state; the next start's Opening shows
@@ -406,7 +406,7 @@ namespace ZephyrPlayer.Tests
                 Assert.False(view.IsLoadingErrorShown);
                 Assert.Equal("clip", view.CurrentMovieTitle);
                 Assert.Equal("clip", El<TextBlock>(view, "MovieTitle").Text);
-                Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
+                Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
                 gate.Set();
                 PumpUntil(() => local.IsCompleted && player.State == VLCState.Playing, "local start after failure did not play");
                 Note("opening-reset", opening + $"; after failure the local Opening showed title=[clip] error=False");
@@ -460,12 +460,11 @@ namespace ZephyrPlayer.Tests
         [Fact]
         public void Bar_Reflows_InSteps_AtNarrowWidths()
         {
-            // centre cluster 302 px, right group 164 px (+ badges 50).
-            Assert.Equal(0, PlayerBarLogic.ReflowLevel(1000, 302, 214, 164));
-            Assert.Equal(1, PlayerBarLogic.ReflowLevel(302 + 2 * 170, 302, 164, 164));
-            Assert.Equal(2, PlayerBarLogic.ReflowLevel(302 + 2 * 120, 302, 104, 104));
-            Assert.Equal(3, PlayerBarLogic.ReflowLevel(302 + 2 * 60, 302, 50, 50));
-            Assert.Equal(4, PlayerBarLogic.ReflowLevel(302 + 2 * 170, 302, 214, 164));
+            // Midnight Slate: two levels, nothing hides. Full layout at 700+ inner, compact below.
+            Assert.Equal(0, PlayerBarLogic.ReflowLevel(714));
+            Assert.Equal(0, PlayerBarLogic.ReflowLevel(PlayerBarLogic.CompactInnerWidth));
+            Assert.Equal(1, PlayerBarLogic.ReflowLevel(PlayerBarLogic.CompactInnerWidth - 1));
+            Assert.Equal(1, PlayerBarLogic.ReflowLevel(400));
         }
 
         // 2.0.2 Cp2PlayerTests.FullscreenPill_780IsAMax_ClampedToTheScreen, original assertions on the
@@ -541,7 +540,7 @@ namespace ZephyrPlayer.Tests
                 // 1. The OLD movie plays, with its own time and duration on the bar.
                 var first = view.PlayFromUrlAsync(ClipUrl, null, Array.Empty<string>());
                 PumpUntil(() => first.IsCompleted && player.State == VLCState.Playing && !view.IsLoadingShown, "old clip did not play");
-                PumpUntil(() => El<TextBlock>(view, "TotalText").Text == "0:06 total", "bar never showed the old clip's duration");
+                PumpUntil(() => El<TextBlock>(view, "RemainingText").Text == "-0:06", "bar never showed the old clip's duration");
                 Assert.True(view.SeekBarEnabled);
                 var oldMedia = view.CurrentMedia;
                 // 2. A new phone start opens and is held in preparation: the old movie keeps
@@ -580,18 +579,18 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(0, seek.Value);
                 Assert.Equal("0:00", El<TextBlock>(view, "ElapsedText").Text);
                 Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
-                Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
+                Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
                 Assert.Equal("Movie from your phone", view.CurrentMovieTitle);
                 Assert.Equal("Movie from your phone", El<TextBlock>(view, "MovieTitle").Text);
                 Assert.True(view.IsOpening);
-                var during = $"opening held over the playing old clip: old time {before} ms -> {after} ms after a 75 % track press/release, a value-0 press/release, skip +10 s, skip -10 s, skip +30 s and phone seek 5 s; last_seek_fraction={view.LastSeekFraction}; seek bar enabled={view.SeekBarEnabled}; bar elapsed/remaining/total=[{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}] [{El<TextBlock>(view, "TotalText").Text}] value={seek.Value}; title=[{view.CurrentMovieTitle}]; old media still playing={ReferenceEquals(oldMedia, view.CurrentMedia) && player.State == VLCState.Playing}";
+                var during = $"opening held over the playing old clip: old time {before} ms -> {after} ms after a 75 % track press/release, a value-0 press/release, skip +10 s, skip -10 s, skip +30 s and phone seek 5 s; last_seek_fraction={view.LastSeekFraction}; seek bar enabled={view.SeekBarEnabled}; bar elapsed/remaining=[{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}] value={seek.Value}; title=[{view.CurrentMovieTitle}]; old media still playing={ReferenceEquals(oldMedia, view.CurrentMedia) && player.State == VLCState.Playing}";
                 // 4. Release the new start: it plays, the bar takes input again, and the SAME
                 //    event path now seeks the new movie.
                 gate.Set();
                 PumpUntil(() => next.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "held start never played", 15000);
                 Assert.NotSame(oldMedia, view.CurrentMedia);
                 Assert.True(view.SeekBarEnabled);
-                PumpUntil(() => El<TextBlock>(view, "TotalText").Text == "0:06 total", "bar never showed the new clip's duration");
+                PumpUntil(() => El<TextBlock>(view, "RemainingText").Text == "-0:06", "bar never showed the new clip's duration");
                 Press(seek, UIElement.PreviewMouseDownEvent);
                 seek.Value = 750;
                 Press(seek, UIElement.PreviewMouseUpEvent);
@@ -753,7 +752,7 @@ namespace ZephyrPlayer.Tests
                     Assert.Equal(0.0, El<Slider>(view, "SeekBar").Value);
                     Assert.Equal("0:00", El<TextBlock>(view, "ElapsedText").Text);
                     Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
-                    Assert.Equal("0:00 total", El<TextBlock>(view, "TotalText").Text);
+                    Assert.Equal("-0:00", El<TextBlock>(view, "RemainingText").Text);
                 }
                 string Glyph() => El<FrameworkElement>(view, "PauseGlyph").Visibility == Visibility.Visible ? "pause" : "play";
 
@@ -783,7 +782,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(handed0, view.PlayPauseHandedCount); // nothing handed to libVLC
                 Assert.Equal(refused0 + 3, view.PlayPauseRefusedCount);
                 AssertNewTitleAndZeroTimeline();
-                log.AppendLine($"A. old clip PLAYING, phone start held (opening={view.IsOpening}): button, Space (handled={space.Handled}), phone Pause -> old state {player.State}, old time {tA0} -> {tA1} ms (still advancing), same old media={ReferenceEquals(oldMedia, view.CurrentMedia)}, handed to libVLC {view.PlayPauseHandedCount - handed0}, refused {view.PlayPauseRefusedCount - refused0}; title [{view.CurrentMovieTitle}], bar [{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}] [{El<TextBlock>(view, "TotalText").Text}] thumb {El<Slider>(view, "SeekBar").Value}; play/pause glyph shows [{Glyph()}]");
+                log.AppendLine($"A. old clip PLAYING, phone start held (opening={view.IsOpening}): button, Space (handled={space.Handled}), phone Pause -> old state {player.State}, old time {tA0} -> {tA1} ms (still advancing), same old media={ReferenceEquals(oldMedia, view.CurrentMedia)}, handed to libVLC {view.PlayPauseHandedCount - handed0}, refused {view.PlayPauseRefusedCount - refused0}; title [{view.CurrentMovieTitle}], bar [{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}] thumb {El<Slider>(view, "SeekBar").Value}; play/pause glyph shows [{Glyph()}]");
 
                 // Release: the new movie plays and nothing pressed during Opening is applied
                 // to it (three presses would leave it paused if any had been queued).
@@ -835,7 +834,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal(handedB, view.PlayPauseHandedCount);
                 Assert.Equal(refusedB + 3, view.PlayPauseRefusedCount);
                 AssertNewTitleAndZeroTimeline();
-                log.AppendLine($"B. old clip PAUSED, phone start held: button, Space, phone Resume -> old state {player.State}, old time {tB0} -> {tB1} ms, same old media={ReferenceEquals(oldMediaB, view.CurrentMedia)}, handed to libVLC {view.PlayPauseHandedCount - handedB}, refused {view.PlayPauseRefusedCount - refusedB}; title [{view.CurrentMovieTitle}], bar [{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "TotalText").Text}]; glyph [{Glyph()}]");
+                log.AppendLine($"B. old clip PAUSED, phone start held: button, Space, phone Resume -> old state {player.State}, old time {tB0} -> {tB1} ms, same old media={ReferenceEquals(oldMediaB, view.CurrentMedia)}, handed to libVLC {view.PlayPauseHandedCount - handedB}, refused {view.PlayPauseRefusedCount - refusedB}; title [{view.CurrentMovieTitle}], bar [{El<TextBlock>(view, "ElapsedText").Text}] [{El<TextBlock>(view, "RemainingText").Text}]; glyph [{Glyph()}]");
                 gate2.Set();
                 PumpUntil(() => next2.IsCompleted && player.State == VLCState.Playing && !view.IsOpening, "held start 2 never played", 15000);
                 var handedAt2 = view.PlayPauseHandedCount;

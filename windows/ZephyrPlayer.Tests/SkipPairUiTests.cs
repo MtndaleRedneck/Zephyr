@@ -126,12 +126,13 @@ namespace ZephyrPlayer.Tests
                 var mutedShape = ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString();
                 window.SetMuteTied(false);
                 Assert.NotEqual(mutedShape, ((System.Windows.Shapes.Path)window.FindName("VolumeGlyph")!).Data.ToString());
-                Assert.Equal(MainWindow.FullscreenBarWidth(window.ActualWidth > 0 ? window.ActualWidth : System.Windows.SystemParameters.PrimaryScreenWidth), window.ControlBar.MaxWidth); // floating bar: about half the window width
+                // Midnight Slate: one centered fixed-width pill in both modes.
+                Assert.Equal(MainWindow.BarWidth(window.ActualWidth > 0 ? window.ActualWidth : System.Windows.SystemParameters.PrimaryScreenWidth), window.ControlBar.Width);
                 Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.ControlBar.Opacity=1;
                 ((FrameworkElement)window.FindName("PlayGlyph")!).Visibility = Visibility.Collapsed; // fixture: show only the pause state, not both glyphs stacked
-                Capture(window.ControlBar,(int)window.ControlBar.MaxWidth,"pc-redesign-fullscreen-pill.png");
-                window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Stretch,window.ControlBar.HorizontalAlignment);
+                Capture(window.ControlBar,(int)window.ControlBar.Width,"pc-redesign-fullscreen-pill.png");
+                window.SetFullscreen(false); Assert.Equal(HorizontalAlignment.Center,window.ControlBar.HorizontalAlignment);
                 window.Close();
             });
         }
@@ -194,7 +195,7 @@ namespace ZephyrPlayer.Tests
                         if (previous.HasValue) Assert.True(previous.Value.Right <= rect.Left + 0.5, name + " overlaps its left neighbor");
                         previous = rect;
                     }
-                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("TotalText")!).Visibility);
+                    Assert.Equal(Visibility.Visible, ((TextBlock)w.FindName("RemainingText")!).Visibility);
                     foreach (var side in new[] { "Back", "Forward" })
                     {
                         var ring = (FrameworkElement)((System.Windows.Shapes.Path)w.FindName("Skip" + side + "Ring")!).Parent;

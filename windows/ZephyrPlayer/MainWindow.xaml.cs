@@ -13,13 +13,13 @@ namespace ZephyrPlayer
 {
     public partial class MainWindow : Window
     {
-        private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF5, 0xF5, 0xF7));
+        private static readonly SolidColorBrush RingDefault = new(Color.FromRgb(0xF0, 0xF2, 0xF5));
         private static readonly SolidColorBrush Orange = new(Brand.Orange);
         private static readonly SolidColorBrush OrangeTint = new(Color.FromArgb(0x1A, 0xF9, 0x7C, 0x02));
-        private static readonly SolidColorBrush WhiteTint = new(Color.FromArgb(0x1A, 0xF5, 0xF5, 0xF7));
+        private static readonly SolidColorBrush WhiteTint = new(Color.FromArgb(0x1A, 0xF0, 0xF2, 0xF5));
         private static readonly SolidColorBrush Gold = new(Color.FromRgb(0xF0, 0xC2, 0x3E));
-        private static readonly SolidColorBrush Muted = new(Color.FromRgb(0x96, 0x96, 0xA0));
-        private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x1B, 0x1B, 0x1E));
+        private static readonly SolidColorBrush Muted = new(Color.FromRgb(0xA7, 0xAF, 0xBC));
+        private static readonly SolidColorBrush Dark = new(Color.FromRgb(0x0B, 0x0D, 0x10));
 
         // Brushes are shared app-wide; Freeze makes them safe to touch from any
         // thread (each test case runs on its own STA thread - unfrozen statics
@@ -64,13 +64,13 @@ namespace ZephyrPlayer
         protected override void OnRenderSizeChanged(SizeChangedInfo sizeInfo)
         {
             base.OnRenderSizeChanged(sizeInfo);
-            if (IsFullscreen) ControlBar.MaxWidth = FullscreenBarWidth(sizeInfo.NewSize.Width);
+            ControlBar.Width = BarWidth(sizeInfo.NewSize.Width);
         }
 
-        /// <summary>Half the window's current width, clamped to 760..1100, but never wider than the
-        /// available width minus margins (a narrow or secondary monitor must not clip the bar).</summary>
-        internal static double FullscreenBarWidth(double available) =>
-            Math.Max(0, Math.Min(Math.Clamp(available * 0.5, 760, 1100), available - 40));
+        /// <summary>One centered pill in both windowed and fullscreen: the window width minus
+        /// side margins, capped at 760 and never wider than the window minus those margins.</summary>
+        internal static double BarWidth(double available) =>
+            Math.Max(0, Math.Min(760, available - 40));
 
         private void OnHome(object sender, RoutedEventArgs e) => HomeRequested?.Invoke();
 
@@ -314,7 +314,6 @@ namespace ZephyrPlayer
                     var time = _player.Time;
                     SeekBar.Value = 1000.0 * time / length;
                     ElapsedText.Text = Format(time);
-                    TotalText.Text = Format(length) + " total";
                     RemainingText.Text = "-" + Format(Math.Max(0, length - time));
                 }
             }
@@ -408,10 +407,35 @@ namespace ZephyrPlayer
             if (!ControlBar.IsMouseOver) { SetFullscreen(!IsFullscreen); e.Handled = true; }
         }
 
-        private void OnSeekDown(object sender, RoutedEventArgs e)
+        /// <summary>Seek lands where the click lands: a press jumps to that fraction of the track and
+        /// grabs the mouse, so dragging off the press scrubs instead of stepping by LargeChange.</summary>
+        private void OnSeekDown(object sender, MouseButtonEventArgs e)
         {
             if (_opening) { _seeking = false; return; } // Opening: no seek reaches the old movie (2.0.2)
+            if (e.ChangedButton != MouseButton.Left) return;
             _seeking = true;
+            SeekToPointer(e);
+            SeekBar.CaptureMouse();
+            e.Handled = true; // the template's repeat buttons must not apply their page step
+        }
+
+        private void OnSeekMove(object sender, MouseEventArgs e)
+        {
+            if (!_seeking || !SeekBar.IsMouseCaptured) return;
+            SeekToPointer(e);
+        }
+
+        private void SeekToPointer(MouseEventArgs e)
+        {
+            var width = SeekBar.ActualWidth;
+            if (width <= 0) return;
+            var frac = Math.Clamp(e.GetPosition(SeekBar).X / width, 0, 1);
+            SeekBar.Value = frac * 1000.0;
+            if (!_opening && _player.Length > 0)
+            {
+                LastSeekFraction = frac;
+                _player.Position = (float)frac;
+            }
         }
 
         /// <summary>While the thumb is held the elapsed label previews where it will land; during Opening the new start's timeline stays at zero (2.0.2).</summary>
@@ -422,8 +446,9 @@ namespace ZephyrPlayer
             ElapsedText.Text = Format((long)(SeekBar.Value / 1000.0 * _player.Length));
         }
 
-        private void OnSeekUp(object sender, RoutedEventArgs e)
+        private void OnSeekUp(object sender, MouseButtonEventArgs e)
         {
+            if (SeekBar.IsMouseCaptured) SeekBar.ReleaseMouseCapture();
             _seeking = false;
             if (!_opening && _player.Length > 0)
             {
@@ -667,8 +692,8 @@ namespace ZephyrPlayer
         public void SetFullscreen(bool on)
         {
             if (on == IsFullscreen) return;
-            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; ControlBar.MaxWidth = FullscreenBarWidth(ActualWidth > 0 ? ActualWidth : SystemParameters.PrimaryScreenWidth); ControlBar.HorizontalAlignment = HorizontalAlignment.Center; ControlBar.CornerRadius = new CornerRadius(22); ControlBar.Margin = new Thickness(20, 20, 20, 44); }
-            else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; ControlBar.MaxWidth = double.PositiveInfinity; ControlBar.HorizontalAlignment = HorizontalAlignment.Stretch; ControlBar.CornerRadius = new CornerRadius(16); ControlBar.Margin = new Thickness(20); }
+            if (on) { _previousState = WindowState; WindowState = WindowState.Normal; WindowStyle = WindowStyle.None; WindowState = WindowState.Maximized; }
+            else { WindowState = WindowState.Normal; WindowStyle = WindowStyle.SingleBorderWindow; WindowState = _previousState; }
             // The bar must be reachable right after the chrome switch (reported
             // missing-bar bug): show it once, then the idle timer owns hiding.
             ControlBar.BeginAnimation(OpacityProperty, null);
@@ -710,7 +735,6 @@ namespace ZephyrPlayer
                 case "inverse": priRing = secRing = RingDefault; priLabel = secLabel = Orange; play = Orange; icons = Orange; break;
                 default: priRing = priLabel = RingDefault; secRing = secLabel = Orange; play = Orange; icons = RingDefault; break;
             }
-            var times = Orange;
 
             SkipBackRing.Stroke = priRing;
             SkipForwardRing.Stroke = priRing;
@@ -738,9 +762,9 @@ namespace ZephyrPlayer
             foreach (var child in PauseGlyph.Children)
                 if (child is System.Windows.Shapes.Rectangle r) r.Fill = hollow ? play : Dark;
 
-            ElapsedText.Foreground = times;
-            TotalText.Foreground = style == "original" ? Muted : times;
-            RemainingText.Foreground = style == "orange" ? Orange : RingDefault;
+            // Settled Midnight Slate readouts: elapsed white, remaining muted, in every colour style.
+            ElapsedText.Foreground = RingDefault;
+            RemainingText.Foreground = Muted;
             VolumeButton.Foreground = icons;
             SpeedButton.Foreground = icons;
             SleepButton.Foreground = icons;

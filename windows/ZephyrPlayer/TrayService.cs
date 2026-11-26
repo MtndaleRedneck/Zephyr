@@ -136,8 +136,8 @@ namespace ZephyrPlayer
             var template = new ControlTemplate(typeof(ContextMenu));
             var border = new FrameworkElementFactory(typeof(Border));
             border.SetValue(Border.CornerRadiusProperty, new CornerRadius(8));
-            border.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x2B, 0x2B, 0x2B)));
-            border.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x3F, 0x3F, 0x46)));
+            border.SetValue(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x1E, 0x23, 0x2B)));
+            border.SetValue(Border.BorderBrushProperty, new SolidColorBrush(Color.FromRgb(0x34, 0x3B, 0x46)));
             border.SetValue(Border.BorderThicknessProperty, new Thickness(1));
             border.SetValue(Border.PaddingProperty, new Thickness(4));
             // Round-3 P9: room for the shadow inside the popup so it is not
@@ -156,7 +156,7 @@ namespace ZephyrPlayer
         private static Style ItemStyle()
         {
             var style = new Style(typeof(MenuItem));
-            style.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Color.FromRgb(0xEA, 0xEA, 0xEA))));
+            style.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Color.FromRgb(0xF0, 0xF2, 0xF5))));
             style.Setters.Add(new Setter(Control.FontFamilyProperty, new FontFamily("Segoe UI Variable Text, Segoe UI")));
             style.Setters.Add(new Setter(Control.FontSizeProperty, 13.0));
             style.Setters.Add(new Setter(Control.PaddingProperty, new Thickness(12, 7, 12, 7)));
@@ -172,10 +172,10 @@ namespace ZephyrPlayer
             bg.AppendChild(content);
             template.VisualTree = bg;
             var hover = new Trigger { Property = MenuItem.IsHighlightedProperty, Value = true };
-            hover.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x3D, 0x3D, 0x44)), "Bg"));
+            hover.Setters.Add(new Setter(Border.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x2A, 0x30, 0x3A)), "Bg"));
             template.Triggers.Add(hover);
             var disabled = new Trigger { Property = UIElement.IsEnabledProperty, Value = false };
-            disabled.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Color.FromRgb(0x6E, 0x6E, 0x73))));
+            disabled.Setters.Add(new Setter(Control.ForegroundProperty, new SolidColorBrush(Color.FromRgb(0xA7, 0xAF, 0xBC))));
             template.Triggers.Add(disabled);
             style.Setters.Add(new Setter(Control.TemplateProperty, template));
             style.Seal();
@@ -187,7 +187,7 @@ namespace ZephyrPlayer
             var style = new Style(typeof(Separator));
             style.Setters.Add(new Setter(FrameworkElement.HeightProperty, 1.0));
             style.Setters.Add(new Setter(FrameworkElement.MarginProperty, new Thickness(8, 4, 8, 4)));
-            style.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x3F, 0x3F, 0x46))));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, new SolidColorBrush(Color.FromRgb(0x34, 0x3B, 0x46))));
             style.Seal();
             return style;
         }

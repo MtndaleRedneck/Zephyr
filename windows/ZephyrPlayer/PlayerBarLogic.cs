@@ -36,31 +36,20 @@ namespace ZephyrPlayer
 
         // ---------- fullscreen pill (render 03, Instinct U2) ----------
 
-        /// <summary>The pill: at most 780 px wide, never wider than the screen minus a 24 px
-        /// gap each side. 2.0.1: laid out at that width and drawn at 1:1. 2.0.0 laid it out
-        /// at 1000 px and shrank it to 0.78, which drew 12 px text at ~9 px.
-        /// Same footprint, crisp text and glyphs.</summary>
-        public const double PillScale = 1.0, PillLayoutMax = 780, PillSideGap = 24, PillBottom = 28;
+        /// <summary>The pill: at most 760 px wide, 28 px above the bottom, never wider than the
+        /// window minus a 20 px gap each side. Laid out and drawn at 1:1 in both modes.</summary>
+        public const double PillScale = 1.0, PillLayoutMax = 760, PillSideGap = 20, PillBottom = 28;
         public static double PillDrawnWidth(double viewport) => Math.Max(0, Math.Min(PillLayoutMax * PillScale, viewport - 2 * PillSideGap));
         public static double PillLayoutWidth(double viewport) => PillDrawnWidth(viewport) / PillScale;
 
         // ---------- bar reflow at narrow widths ----------
 
-        /// <summary>Width of the volume group at each reflow level: 0 = speaker + 92 px
-        /// track + "62%" (render 02), 1 = no % label, 2 = 56 px track, 3 = speaker only.</summary>
-        public static readonly double[] VolumeGroupWidths = { 38 + 10 + 92 + 10 + 36, 38 + 10 + 92, 38 + 10 + 56, 38 };
+        /// <summary>Below this inner width the bar switches to its compact layout: shorter volume
+        /// track, no % label, tighter play margins. No control ever hides (Midnight Slate).</summary>
+        public const double CompactInnerWidth = 700;
 
-        /// <summary>The smallest reflow that fits: each side column of the 3-column bar
-        /// gets (inner - centre) / 2. Level 4 also drops the speed/sleep badges (the icons
-        /// stay orange); 5 = nothing more to give.</summary>
-        public static int ReflowLevel(double inner, double center, double right, double rightWithoutBadges)
-        {
-            var side = (inner - center) / 2;
-            for (var level = 0; level < VolumeGroupWidths.Length; level++)
-                if (VolumeGroupWidths[level] <= side + 0.5 && right <= side + 0.5) return level;
-            if (VolumeGroupWidths[3] <= side + 0.5 && rightWithoutBadges <= side + 0.5) return 4;
-            return 5;
-        }
+        /// <summary>0 = full layout, 1 = compact. The fixed-width pill leaves nothing else to give.</summary>
+        public static int ReflowLevel(double inner) => inner < CompactInnerWidth ? 1 : 0;
 
         // ---------- top overlay meta (render 02: "2012 · 1h 42m") ----------
 

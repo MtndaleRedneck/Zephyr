@@ -10,7 +10,7 @@ namespace ZephyrPlayer.Tests
 {
     /// <summary>
     /// Carried from 2.0.2 RedesignRender (Settings_Nav_Titles_Version, Settings_LivePreview_FollowsSettings),
-    /// adapted to the 3.0 Settings (section titles of the 3.0 nav, Movies folder section kept, "v3.0.0" version line,
+    /// adapted to the 3.0 Settings (section titles of the 3.0 nav (dormant Movies folder section removed in the Midnight Slate rebuild; the folder picker lives on Home), "v3.0.0" version line,
     /// PlaybackPreview as the live preview). Same intent: every nav entry shows its title, the version line is the
     /// real assembly version, an unknown section does not switch, and the preview follows each setting.
     /// </summary>
@@ -48,7 +48,7 @@ namespace ZephyrPlayer.Tests
                 Assert.Equal("Zephyr Settings", window.Title);   // 2.0.2 title assert, 3.0 window
                 var titles = new System.Collections.Generic.Dictionary<string, string>
                 {
-                    { "movies", "Movies folder" }, { "volume", "Volume" }, { "skip", "Playback" }, { "bar", "Controls" },
+                    { "volume", "Volume" }, { "skip", "Playback" }, { "bar", "Controls" },
                     { "remote", "Phones" }, { "feedback", "Feedback & bugs" }, { "updates", "Updates" },
                 };
                 foreach (var kv in titles)
@@ -78,7 +78,7 @@ namespace ZephyrPlayer.Tests
                 var preview = (PlaybackPreview)((ContentControl)window.FindName("BarPreview")!).Content;
                 string Text(string name) => ((TextBlock)preview.FindName(name)!).Text;
                 Color Ring(string name) => ((SolidColorBrush)((System.Windows.Shapes.Shape)preview.FindName(name)!).Stroke).Color;
-                var white = Color.FromRgb(0xF5, 0xF5, 0xF7);
+                var white = Color.FromRgb(0xF0, 0xF2, 0xF5);
                 Assert.Equal("10s", Text("SkipBackLabel"));
                 Assert.Equal("30s", Text("SecondarySkipBackLabel"));
                 Assert.Equal(white, Ring("SkipBackRing"));
