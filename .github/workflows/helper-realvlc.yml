@@ -34,7 +34,7 @@ jobs:
         run: |
           ffmpeg -y -f lavfi -i testsrc=duration=30:size=640x360:rate=24 -f lavfi -i sine=frequency=440:duration=30 -shortest "$env:RUNNER_TEMP\realvlc-fixture.mp4"
           "fixture: $env:RUNNER_TEMP\realvlc-fixture.mp4"
-      - name: Real VLC rotation tests
+      - name: Real VLC tests (rotation and subtitle sidecar)
         env:
           BINGEMOTE_SUBTITLE_VIDEO: ${{ runner.temp }}\realvlc-fixture.mp4
-        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --filter 'FullyQualifiedName~RealVlcRotation' --logger 'console;verbosity=detailed'
+        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --filter 'FullyQualifiedName~RealVlc' --logger 'console;verbosity=detailed'
