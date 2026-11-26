@@ -236,7 +236,8 @@ fun ZephyrSetupScreen(
             if (pairedName != null) {
                 Spacer(Modifier.height(14.dp))
                 SetupCard {
-                    Text("\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                    // A 401 on the first status check means the Player did not accept this token: no check mark, no "Paired" claim.
+                    Text(if (checkState == PairCheck.BadToken) "Couldn't confirm pairing with $pairedName" else "\u2713 Paired with $pairedName", color = TextC, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     when (checkState) {
                         PairCheck.Checking -> { Spacer(Modifier.height(6.dp)); Text("Checking with your PC\u2026", color = Muted, fontSize = 13.sp) }
                         PairCheck.BadToken -> { Spacer(Modifier.height(6.dp)); Text("Your PC didn't accept this pairing. Pair again with a new code.", color = ErrorRed, fontSize = 13.sp) }
