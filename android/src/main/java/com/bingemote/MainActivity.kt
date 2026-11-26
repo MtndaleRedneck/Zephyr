@@ -64,6 +64,7 @@ class MainActivity : ComponentActivity() {
         // Test isolation: never inherit the transition rig from an earlier preview
         // Activity in the same process (interrupted test, config change).
         if (BuildConfig.DEBUG) previewLostRigArmed = false
+        AccentPrefs.init(this)
         store = Store(this)
         // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
         // Remote (port 8492) and flag the one-time "what changed" notice.
