@@ -306,7 +306,7 @@ private fun HomeContent(
 
 /** The connection state, top right: a quiet dot + word. An indicator only - not tappable. */
 @Composable
-private fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier = Modifier) {
+internal fun StatusPill(paired: Boolean, connected: Boolean, modifier: Modifier = Modifier) {
     Row(
         modifier
             .clip(RoundedCornerShape(24.dp))

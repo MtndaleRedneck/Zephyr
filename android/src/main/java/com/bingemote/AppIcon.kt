@@ -12,8 +12,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.clipPath
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
@@ -95,7 +96,7 @@ fun DebugIconDemo() {
                     moveTo(50f * k, 0f); cubicTo(10f * k, 0f, 0f, 10f * k, 0f, 50f * k); cubicTo(0f, 90f * k, 10f * k, 100f * k, 50f * k, 100f * k)
                     cubicTo(90f * k, 100f * k, 100f * k, 90f * k, 100f * k, 50f * k); cubicTo(100f * k, 10f * k, 90f * k, 0f, 50f * k, 0f); close()
                 }
-                androidx.compose.ui.graphics.drawscope.clipPath(path) {
+                clipPath(path) {
                     drawIntoCanvas { c ->
                         val full = (s * 108f / 72f).toInt(); val off = ((full - s) / 2f).toInt()
                         ad.background?.setBounds(-off, -off, -off + full, -off + full); ad.background?.draw(c.nativeCanvas)
