@@ -2,7 +2,7 @@ name: Windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, windows-lineage-test-1127]
     paths:
       - 'windows/**'
       - 'scripts/pc_desktop_capture.ps1'
