@@ -875,7 +875,7 @@ jobs:
 
       - name: Published 2.0.2 -> candidate upgrade smoke with seeded settings and history (real published asset)
         id: pub202_seeded
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        if: always() && ((github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration) || github.ref == 'refs/heads/windows-lineage-test-1127')
         timeout-minutes: 12
         shell: pwsh
         env:
@@ -953,7 +953,7 @@ jobs:
 
       - name: Published 2.0.2 REAL app-created data -> candidate (production pair, settings and history paths)
         id: pub202_real
-        if: always() && github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration
+        if: always() && ((github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration) || github.ref == 'refs/heads/windows-lineage-test-1127')
         timeout-minutes: 15
         shell: pwsh
         env:
@@ -1263,7 +1263,7 @@ jobs:
           Write-Host "Evidence steps run unconditionally; a green job requires tests green too."
           # Migration opt-in gate: when this run asked for the published 2.0.2 migration, both migration steps must
           # have EXECUTED and succeeded. A skipped step is not green evidence.
-          $migrationRequested = '${{ github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration }}'
+          $migrationRequested = '${{ (github.event_name == 'workflow_dispatch' && inputs.run_published_202_migration) || github.ref == 'refs/heads/windows-lineage-test-1127' }}'
           Write-Host "PUBLISHED 2.0.2 MIGRATION REQUESTED: $migrationRequested"
           Write-Host "PUBLISHED 2.0.2 SEEDED OUTCOME: ${{ steps.pub202_seeded.outcome }}"
           Write-Host "PUBLISHED 2.0.2 REAL-DATA OUTCOME: ${{ steps.pub202_real.outcome }}"
