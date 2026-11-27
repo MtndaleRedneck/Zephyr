@@ -1,3 +1,5 @@
+if ($PSVersionTable.PSVersion.Major -lt 7) { throw "PowerShell 7 required (SkipHttpErrorCheck, HttpClient pin); got $($PSVersionTable.PSVersion)" }
+Write-Output "pinned-https helper running under PowerShell $($PSVersionTable.PSVersion)"
 # Secure mode is HTTPS only (no plaintext fallback). The setup step above created the Player's own identity in the machine store.
 # Requests go over HTTPS to 127.0.0.1 and accept ONLY the certificate whose thumbprint is that stored identity (a pin, not "skip validation").
 # Status 0 means no HTTP answer at all (connect or TLS failure) and never satisfies a check below.
