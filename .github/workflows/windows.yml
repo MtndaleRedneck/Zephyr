@@ -675,7 +675,17 @@ jobs:
           Write-Output "post-upgrade setup exit $($fwUp.ExitCode)"; Write-Output "--- setup stderr ---"; Get-Content $fwErr -ErrorAction SilentlyContinue; Write-Output "--- setup stdout ---"; Get-Content $fwOut -ErrorAction SilentlyContinue
           Write-Output "--- after post-upgrade setup: urlacl 47823 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
           Write-Output "--- after post-upgrade setup: sslcert 47823 ---"; netsh http show sslcert ipport=0.0.0.0:47823 | Out-String
-          if ($fwUp.ExitCode -ne 0) { throw "post-upgrade firewall migration exit $($fwUp.ExitCode)" }
+          if ($fwUp.ExitCode -ne 0) {
+            # Diagnostic only (disposable runner), failure path only: the setup copy swallows netsh output, so repeat its exact https reservation command here with output and exit visible, record the state, remove only what this probe added, then fail as before.
+            Write-Output "--- diagnostic probe: the setup's https listen-permission command, output captured ---"
+            $probe = (netsh http add urlacl url=https://+:47823/ sddl="D:(A;;GX;;;$sidUp)") 2>&1 | Out-String
+            Write-Output "probe netsh add https urlacl exit $LASTEXITCODE"; Write-Output $probe
+            $probeAdded = ($LASTEXITCODE -eq 0)
+            Write-Output "--- diagnostic probe: urlacl 47823 after probe ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+            if ($probeAdded) { netsh http delete urlacl url=https://+:47823/ | Out-Null }
+            Write-Output "--- firewall rules after the failed setup ---"; netsh advfirewall firewall show rule name="Zephyr Player" | Out-String; netsh advfirewall firewall show rule name="Zephyr Player Discovery" | Out-String
+            throw "post-upgrade firewall migration exit $($fwUp.ExitCode)"
+          }
           $acc = Start-Process $hooked -ArgumentList '--firewall-shape-ok', ('"' + $installed + '"') -Wait -PassThru
           if ($acc.ExitCode -ne 0) { throw "Player unelevated check did not ACCEPT the migrated shape (exit $($acc.ExitCode))" }
           # The migration must leave the CURRENT shape, not 1.1.0's: TCP System + 47823 +
