@@ -18,6 +18,9 @@ public class HelperTlsTests
     [Fact] public void ExactIdentityAndBothBindingsIsReady()
         => Assert.Equal(TlsAction.Ready, TlsPlanner.Plan(Obs(M)).Action);
 
+    [Fact] public void MarkerWrittenForAnotherPortFailsClosed()
+        => Assert.Equal(TlsAction.FailClosed, TlsPlanner.Plan(Obs(M) with { MarkerPortMismatch = true }).Action);
+
     [Fact] public void RuntimeNeverBindsOrRegeneratesEvenWhenSomethingIsMissing()
     {
         Assert.Equal(TlsAction.FailClosed, TlsPlanner.Plan(Obs(M, v6: BindingState.Absent)).Action);

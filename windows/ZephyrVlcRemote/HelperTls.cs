@@ -35,7 +35,8 @@ internal sealed record TlsObservation(
     bool RenewalDue,
     bool ExplicitSetup,
     bool Ipv6Capable = true,
-    string Diag = "");
+    string Diag = "",
+    bool MarkerPortMismatch = false);
 
 /// <summary>PROPOSAL, default strict (both families required). If ever approved, set true: with no IPv6 stack, a missing [::] binding is not required. It never applies to a present-but-wrong binding. http.sys behavior with IPv6 disabled is UNVERIFIED.</summary>
 internal static class TlsPolicy
@@ -65,6 +66,7 @@ internal static class TlsPlanner
     public static TlsPlan Plan(TlsObservation o)
     {
         if (o.Marker == MarkerState.Corrupt) return Fail("the identity marker is unreadable or corrupt; the identity is not regenerated");
+        if (o.MarkerPortMismatch) return Fail("the identity marker was written for a different port than the one being checked");
         if (o.V4 == BindingState.Foreign || o.V6 == BindingState.Foreign) return Fail("a binding on the port is not provably this install's" + (o.Diag.Length > 0 ? ": " + o.Diag : ""));
         if (o.V4 == BindingState.Unknown || o.V6 == BindingState.Unknown) return Fail("the binding state could not be read");
         if (o.Cert == CertState.AccessError) return Fail("the certificate store or key could not be read");
@@ -477,7 +479,7 @@ internal static class TlsInspector
         if (elevated && all == null) { v4 = v4 == BindingState.ExactExpected ? v4 : BindingState.Unknown; v6 = v6 == BindingState.ExactExpected ? v6 : BindingState.Unknown; }
         bool orphan = ms == MarkerState.Absent && HasOrphanOurCert();
         bool due = c != null && TlsLifetime.IsRenewalDue(new DateTimeOffset(c.NotAfter), DateTimeOffset.UtcNow);
-        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag);
+        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && marker.Port != port);
     }
 
     /// <summary>Precise, non-secret reason a binding is not treated as ours. Never leads to deletion: an app-id match alone is not ownership, and a binding naming a certificate that is gone stays untouched.</summary>
