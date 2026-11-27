@@ -121,7 +121,7 @@ internal static class Program
     internal static string? PendingPhoneName;
     /// <summary>The window re-reads the phone list on the UI thread when this fires (any thread).</summary>
     internal static Action? PhonesChanged;
-    /// <summary>Wi-Fi names where he chose "Not now" on the public-network prompt; not asked again.</summary>
+    /// <summary>Wi-Fi names where "Not now" was chosen on the public-network prompt; not asked again.</summary>
     internal static readonly List<string> DeclinedNetworks = new();
     /// <summary>Wi-Fi names he marked as home. A home network is never buried by "Not now":
     /// if it shows as Public again, it is asked about again.</summary>
