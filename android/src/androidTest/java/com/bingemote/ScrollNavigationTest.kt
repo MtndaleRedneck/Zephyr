@@ -73,17 +73,25 @@ class ScrollNavigationTest {
         ZephyrTestSeed.clear(Store(context))
         launchWith("main", mapOf("pcdemo" to true, "demopaired" to true, "demostatus" to true, "statuscase" to "cur-ok", "manymovies" to true))
         val movies = device.wait(Until.findObject(By.desc("Movies")), 12000); assertNotNull("Home Movies tile", movies); movies!!.click()
-        val listShown = device.wait(Until.findObject(By.textContains("The Big Example Movie")), 12000)
+        val listShown = waitRow("The Big Example Movie", 12000)
         shot("hg-sn-movies-1-after-tap")
         assertNotNull("demo list did not appear", listShown)
-        assertNotNull("top of the list: first folder row", device.findObject(By.text("Documentaries")))
+        assertNotNull("top of the list: first folder row", row("Documentaries"))
         swipeUp(4)
         shot("hg-sn-movies-2-after-swipe")
-        assertNull("list did not scroll (first folder row still visible): the test would prove nothing", device.findObject(By.text("Documentaries")))
+        assertNull("list did not scroll (first folder row still visible): the test would prove nothing", row("Documentaries"))
         device.pressBack() // Back to Home
         val again = device.wait(Until.findObject(By.desc("Movies")), 8000); assertNotNull("Home Movies tile after Back", again); again!!.click()
         shot("hg-sn-movies-3-reentered")
-        assertNotNull("Movies reopened but is not at the top (first folder row missing)", device.wait(Until.findObject(By.text("Documentaries")), 8000))
+        assertNotNull("Movies reopened but is not at the top (first folder row missing)", waitRow("Documentaries", 8000))
+    }
+
+    /** A list row by its visible name. Rows are merged clickable nodes, so the name can sit in text or in content description; match either, as a substring. */
+    private fun row(name: String) = device.findObject(By.textContains(name)) ?: device.findObject(By.descContains(name))
+    private fun waitRow(name: String, ms: Long): androidx.test.uiautomator.UiObject2? {
+        val end = System.currentTimeMillis() + ms
+        while (System.currentTimeMillis() < end) { row(name)?.let { return it }; Thread.sleep(250) }
+        return null
     }
 
     /** Evidence picture pulled by ui-evidence.sh (hg-*.png on /sdcard). */
