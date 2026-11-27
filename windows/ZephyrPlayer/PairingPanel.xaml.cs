@@ -145,12 +145,18 @@ namespace ZephyrPlayer
             }
             if (left.Value <= TimeSpan.FromSeconds(2))
             {
-                // Renew just BEFORE the old one dies, so the phone never meets a dead code.
-                Mint();
-                left = _gate.CodeTimeLeft;
+                // A Pair session lasts one code lifetime (10 minutes): it closes by itself, so guessing is
+                // never left open for hours. Pressing Pair again (a person) starts a new session.
+                _gate.CancelCode();
+                PhoneNameBox.IsReadOnly = false;
+                _codeShowing = false;
+                CodePanel.Visibility = Visibility.Collapsed;
+                PairButton.Visibility = Visibility.Visible;
+                RefreshStatus();
+                return;
             }
             var t = left ?? TimeSpan.Zero;
-            ExpiresText.Text = $"New code in {(int)t.TotalMinutes}:{t.Seconds:00}";
+            ExpiresText.Text = $"Code expires in {(int)t.TotalMinutes}:{t.Seconds:00}";
         }
 
         private void ShowCode()
@@ -162,7 +168,7 @@ namespace ZephyrPlayer
             // panel reads as broken, so it hides until the code is gone (round-3 P5).
             PairButton.Visibility = Visibility.Collapsed;
             var left = _gate.CodeTimeLeft ?? TimeSpan.FromMinutes(10);
-            ExpiresText.Text = $"New code in {(int)left.TotalMinutes}:{left.Seconds:00}";
+            ExpiresText.Text = $"Code expires in {(int)left.TotalMinutes}:{left.Seconds:00}";
             RefreshStatus();
         }
 

@@ -1,0 +1,42 @@
+name: securelan-app-prep
+on:
+  push:
+    branches: ['prep/secure-tls-*']
+    paths: ['windows/ZephyrVlcRemote/**', 'windows/ZephyrVlcRemote.Tests/**', 'windows/ZephyrPlayer/**', 'windows/ZephyrPlayer.Tests/**', 'windows/SecureLan/**', '.github/workflows/securelan-app.yml']
+permissions:
+  contents: read
+jobs:
+  helper:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: helper build (compile is the gate)
+        run: dotnet build windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release
+      - name: helper unit tests
+        run: dotnet test windows/ZephyrVlcRemote.Tests/ZephyrVlcRemote.Tests.csproj -c Release --no-build --filter "FullyQualifiedName!~RealVlc" --logger "trx;LogFileName=helper.trx" --results-directory out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: helper-test-results
+          path: out/*.trx
+  player:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: player build (compile is the gate)
+        run: dotnet build windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release
+      - name: player unit tests
+        run: dotnet test windows/ZephyrPlayer.Tests/ZephyrPlayer.Tests.csproj -c Release --no-build --blame-hang --blame-hang-timeout 120s --logger "trx;LogFileName=player.trx" --results-directory out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: player-test-results
+          path: out/*.trx

@@ -140,6 +140,9 @@ internal static class Program
     /// <summary>"Show volume on PC screen" - the small pop-up on each phone volume change. Default ON.</summary>
     internal static bool VolumeOsdEnabled = true;
     internal static string? PairCode;
+    /// <summary>When the on-screen code was made. A Pair session lasts PairSessionLifetime, then closes by itself.</summary>
+    internal static DateTime PairCodeIssuedUtc = DateTime.MinValue;
+    internal static readonly TimeSpan PairSessionLifetime = TimeSpan.FromMinutes(10);
     /// <summary>The version that last ran; a change means an upgrade just landed.</summary>
     internal static string? LastRunVersion;
     /// <summary>A newer published helper version, found by the background update check.</summary>
@@ -442,6 +445,7 @@ internal static class Program
         if (overrideCode is { Length: 4 } && overrideCode.All(char.IsDigit))
         {
             PairCode = overrideCode;
+            PairCodeIssuedUtc = DateTime.UtcNow;
         }
 
         using var http = new HttpServer();

@@ -21,7 +21,7 @@ public class PairVlcrcFailureTests : IDisposable
         Program.RedirectDataDirForTests(_dir);
         Program.StoreBroken = false;
         lock (Program.PhonesLock) { Program.Phones.Clear(); }
-        Program.PairCode = "1234"; Program.PairFailures = 0; Program.PendingPhoneName = null;
+        Program.PairCode = "1234"; Program.PairCodeIssuedUtc = DateTime.UtcNow; Program.PairFailures = 0; Program.PendingPhoneName = null;
         VlcSetup.VlcDirOverride = VlcDirPath;
         VlcSetup.VlcRunningOverride = () => false;
         VlcSetup.ForgetCandidateForTests();

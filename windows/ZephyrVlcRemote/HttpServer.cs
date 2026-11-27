@@ -366,6 +366,20 @@ internal sealed class HttpServer : IDisposable
             return name;
         }
     }
+    /// <summary>Closes the Pair session when its code is older than PairSessionLifetime. Same lock as /pair.
+    /// Returns true when a code was closed. A closed session needs the user to press Pair again.</summary>
+    internal static bool ExpirePairCodeIfStale(DateTime nowUtc)
+    {
+        lock (PairLock)
+        {
+            if (Program.PairCode == null) return false;
+            if (nowUtc - Program.PairCodeIssuedUtc < Program.PairSessionLifetime) return false;
+            Program.PairCode = null;
+            Program.PendingPhoneName = null;
+            Program.Log("Pairing session closed after 10 minutes.");
+            return true;
+        }
+    }
     private void HandlePair(HttpListenerRequest req, HttpListenerResponse res)
     {
         // Read the request body BEFORE taking the lock: a slow or stalled client must never
@@ -384,6 +398,7 @@ internal sealed class HttpServer : IDisposable
         // Snapshot the pairing state ONCE under the lock: the UI thread also writes it
         // (Start/Cancel/expiry), and a null landing between the check and the compare
         // would turn into an exception instead of an answer (round-7 review C).
+        ExpirePairCodeIfStale(DateTime.UtcNow);
         var pairCode = Program.PairCode;
         // No code on screen: guesses here must not count toward the lock, or anyone on the
         // Wi-Fi could lock pairing while he is not even pairing.
@@ -393,7 +408,7 @@ internal sealed class HttpServer : IDisposable
             return;
         }
         var code = JsonDocument.Parse(body).RootElement.GetProperty("code").GetString() ?? "";
-        // One-shot and rate-limited, but never timed: the code stays valid until it pairs or is canceled.
+        // One-shot, rate-limited, and closes after the 10-minute Pair session.
         var valid = pairCode != null
                     && ConstantTimeEq(code, pairCode);
         if (!valid)

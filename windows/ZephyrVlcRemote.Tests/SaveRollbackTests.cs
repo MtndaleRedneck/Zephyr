@@ -124,7 +124,7 @@ public class CancelPairingOrderTests
     [Fact]
     public void CancelWaitsForAnInFlightPairAndNothingCompletesAfterItReturns()
     {
-        Program.PairCode = "1234"; Program.PendingPhoneName = "Phone";
+        Program.PairCode = "1234"; Program.PairCodeIssuedUtc = DateTime.UtcNow; Program.PendingPhoneName = "Phone";
         var inFlightHasLock = new ManualResetEventSlim();
         var pairedAt = 0L; var canceledAt = 0L; var clock = 0L;
         var pair = new Thread(() =>
