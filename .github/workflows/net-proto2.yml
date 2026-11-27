@@ -23,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [nlm, tls, nonadmin, secondip, hyperv]
+        part: [nlm, tls, nonadmin, hyperv]
     runs-on: windows-latest
     timeout-minutes: 8
     steps:

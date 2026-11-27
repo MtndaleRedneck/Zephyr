@@ -50,10 +50,14 @@ if ($Part -eq 'nlm') {
 
 if ($Part -eq 'tls') {
   # admin-run http.sys HTTPS with sslcert binding, pin accept/reject, plaintext to TLS port, coexistence
-  $cert = New-SelfSignedCertificate -Subject 'CN=netproto' -KeyAlgorithm ECDSA_nistP256 -CurveExport CngNamedCurve -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddDays(2)
-  $thumb = $cert.Thumbprint
-  $spki = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($cert.PublicKey.ExportSubjectPublicKeyInfo())).ToLower()
-  Log ('cert ' + $thumb + ' spki ' + $spki)
+  $mk = & $proto mkcert | Out-String
+  Log $mk
+  $thumb = ([regex]::Match($mk, 'THUMB (\S+)')).Groups[1].Value
+  $spki = ([regex]::Match($mk, 'SPKI (\S+)')).Groups[1].Value
+  $kn = ([regex]::Match($mk, 'KEYNAME (\S+)')).Groups[1].Value
+  Log ('thumb ' + $thumb + ' spki ' + $spki + ' keyname ' + $kn)
+  $kf = Get-ChildItem 'C:\ProgramData\Microsoft\Crypto' -Recurse -Filter ($kn + '*') -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($kf) { Log ('key file ' + $kf.FullName); Log ((icacls $kf.FullName | Out-String)) } else { Log 'key file not found' }
   $app = 'appid={12345678-1234-1234-1234-123456789abc}'
   Step 'sslcert v4' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
   Step 'sslcert v6' { netsh http add sslcert 'ipport=[::]:48443' certhash=$thumb $app }
@@ -78,9 +82,14 @@ if ($Part -eq 'tls') {
 
 if ($Part -eq 'nonadmin') {
   # same serve, but as a non-admin local user via a bounded .NET process start with credentials
-  $cert = New-SelfSignedCertificate -Subject 'CN=netproto' -KeyAlgorithm ECDSA_nistP256 -CurveExport CngNamedCurve -CertStoreLocation Cert:\LocalMachine\My -NotAfter (Get-Date).AddDays(2)
-  $thumb = $cert.Thumbprint
-  $spki = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($cert.PublicKey.ExportSubjectPublicKeyInfo())).ToLower()
+  $mk = & $proto mkcert | Out-String
+  Log $mk
+  $thumb = ([regex]::Match($mk, 'THUMB (\S+)')).Groups[1].Value
+  $spki = ([regex]::Match($mk, 'SPKI (\S+)')).Groups[1].Value
+  $kn = ([regex]::Match($mk, 'KEYNAME (\S+)')).Groups[1].Value
+  Log ('thumb ' + $thumb + ' spki ' + $spki + ' keyname ' + $kn)
+  $kf = Get-ChildItem 'C:\ProgramData\Microsoft\Crypto' -Recurse -Filter ($kn + '*') -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($kf) { Log ('key file ' + $kf.FullName); Log ((icacls $kf.FullName | Out-String)) } else { Log 'key file not found' }
   $app = 'appid={12345678-1234-1234-1234-123456789abc}'
   Step 'sslcert v4' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
   $pw = [Guid]::NewGuid().ToString('N') + 'aA1!'
@@ -114,14 +123,6 @@ if ($Part -eq 'nonadmin') {
   Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete urlacl url=https://+:48443/; Remove-LocalUser -Name protouser -ErrorAction SilentlyContinue }
 }
 
-if ($Part -eq 'secondip') {
-  # second address on the same adapter, last because it changes adapter config
-  Step 'add 10.77.0.2' { New-NetIPAddress -InterfaceIndex $idx -IPAddress 10.77.0.2 -PrefixLength 24 | Out-String }
-  Bounded 'nlm with secondary address' $proto 'nlm' 60
-  Bounded 'udp to secondary' $proto 'udp 10.77.0.2 48501' 30
-  Step 'remove 10.77.0.2' { Remove-NetIPAddress -IPAddress 10.77.0.2 -Confirm:$false }
-}
-
 if ($Part -eq 'hyperv') {
   if (Get-Command New-VMSwitch -ErrorAction SilentlyContinue) {
     Step 'create internal switch' { New-VMSwitch -Name protoswitch -SwitchType Internal | Out-String }
@@ -133,8 +134,24 @@ if ($Part -eq 'hyperv') {
       Start-Sleep -Seconds 5
       Step 'profiles' { Get-NetConnectionProfile | Format-List Name, InterfaceAlias, InterfaceIndex, NetworkCategory | Out-String }
       Bounded 'nlm two adapters' $proto 'nlm' 60
+      $mk = & $proto mkcert | Out-String
+      $thumb = ([regex]::Match($mk, 'THUMB (\S+)')).Groups[1].Value
+      $spki = ([regex]::Match($mk, 'SPKI (\S+)')).Groups[1].Value
+      $app = 'appid={12345678-1234-1234-1234-123456789abc}'
+      Step 'sslcert' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
+      Step 'urlacl' { netsh http add urlacl url=https://+:48443/ user=Everyone }
+      $so = Join-Path $env:TEMP 'serve.out'
+      $sp = Start-Process -FilePath $proto -ArgumentList 'serve https 48443 70' -NoNewWindow -PassThru -RedirectStandardOutput $so -RedirectStandardError ($so + '.err')
+      Start-Sleep -Seconds 6
+      Bounded 'request via primary address' $proto ('client https://' + $ethIp + ':48443/ ' + $spki) 20
+      Bounded 'request via switch address' $proto ('client https://10.88.0.2:48443/ ' + $spki) 20
       Step 'flip only switch adapter to Private' { Set-NetConnectionProfile -InterfaceIndex $vn.ifIndex -NetworkCategory Private }
+      Start-Sleep -Seconds 2
+      Bounded 'request via primary address after flip' $proto ('client https://' + $ethIp + ':48443/ ' + $spki) 20
+      Bounded 'request via switch address after flip' $proto ('client https://10.88.0.2:48443/ ' + $spki) 20
       Bounded 'nlm after flipping only switch adapter' $proto 'nlm' 60
+      Log ('server out: ' + (Get-Content $so -Raw -ErrorAction SilentlyContinue))
+      & taskkill.exe /F /T /PID $sp.Id | Out-Null
     } else { Log 'switch adapter not found' }
     Step 'remove switch' { Remove-VMSwitch -Name protoswitch -Force }
   } else { Log 'no Hyper-V cmdlets on this runner' }

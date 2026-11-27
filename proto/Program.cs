@@ -3,6 +3,8 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Runtime.InteropServices;
+using System.Security.Cryptography.X509Certificates;
 
 // Feasibility prototype only, not product code.
 static class P
@@ -28,17 +30,28 @@ static class P
             }
             if (adapterGuid == null) return "local=" + local + " adapter=none";
             string net = "nlm=unmatched";
-            var t = Type.GetTypeFromCLSID(new Guid("DCB00C01-570F-4A9B-8D69-199FDBA5723B"));
-            dynamic nlm = Activator.CreateInstance(t);
-            foreach (dynamic n in (System.Collections.IEnumerable)nlm.GetNetworks(1))
+            var mgr = (INetworkListManager)new NetworkListManagerClass();
+            var en = mgr.GetNetworks(1);
+            while (true)
             {
-                foreach (dynamic c in (System.Collections.IEnumerable)n.GetNetworkConnections())
+                INetwork n;
+                uint got;
+                int hr = en.Next(1, out n, out got);
+                if (hr != 0 || got == 0) break;
+                var ce = n.GetNetworkConnections();
+                while (true)
                 {
-                    Guid aid = c.GetAdapterId();
+                    INetworkConnection c;
+                    uint g2;
+                    int hr2 = ce.Next(1, out c, out g2);
+                    if (hr2 != 0 || g2 == 0) break;
+                    Guid aid;
+                    c.GetAdapterId(out aid);
                     if (string.Equals(aid.ToString("B"), adapterGuid, StringComparison.OrdinalIgnoreCase))
                     {
-                        Guid nid = n.GetNetworkId();
-                        net = "networkId=" + nid + " category=" + (int)n.GetCategory() + " name=" + (string)n.GetName();
+                        Guid nid;
+                        n.GetNetworkId(out nid);
+                        net = "networkId=" + nid + " category=" + (int)n.GetCategory() + " (0=Public,1=Private,2=Domain) name=" + n.GetName();
                     }
                 }
             }
@@ -53,6 +66,22 @@ static class P
     static int Main(string[] a)
     {
         string mode = a.Length > 0 ? a[0] : "";
+        if (mode == "mkcert")
+        {
+            using var ec = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+            var req = new CertificateRequest("CN=netproto", ec, HashAlgorithmName.SHA256);
+            using var c0 = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(5));
+            var pfx = c0.Export(X509ContentType.Pfx, "x");
+            var c1 = new X509Certificate2(pfx, "x", X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet | X509KeyStorageFlags.Exportable);
+            var st = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            st.Open(OpenFlags.ReadWrite); st.Add(c1); st.Close();
+            string key = "";
+            try { key = ((ECDsaCng)c1.GetECDsaPrivateKey()).Key.UniqueName; } catch (Exception e) { key = "keyname-failed " + e.Message; }
+            Console.WriteLine("THUMB " + c1.Thumbprint);
+            Console.WriteLine("SPKI " + Convert.ToHexString(SHA256.HashData(c1.PublicKey.ExportSubjectPublicKeyInfo())).ToLowerInvariant());
+            Console.WriteLine("KEYNAME " + key);
+            return 0;
+        }
         if (mode == "nlm")
         {
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
@@ -145,4 +174,63 @@ static class P
         Console.WriteLine("modes: nlm serve client udp coexist");
         return 1;
     }
+}
+
+[ComImport, Guid("DCB00C01-570F-4A9B-8D69-199FDBA5723B")] class NetworkListManagerClass { }
+[ComImport, Guid("DCB00000-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+interface INetworkListManager
+{
+    IEnumNetworks GetNetworks(int flags);
+    INetwork GetNetwork(Guid id);
+    IEnumNetworkConnections GetNetworkConnections();
+    INetworkConnection GetNetworkConnection(Guid id);
+    bool IsConnectedToInternet { get; }
+    bool IsConnected { get; }
+    int GetConnectivity();
+}
+[ComImport, Guid("DCB00003-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+interface IEnumNetworks
+{
+    [return: MarshalAs(UnmanagedType.IUnknown)] object NewEnum();
+    [PreserveSig] int Next(uint celt, out INetwork n, out uint fetched);
+    void Skip(uint celt);
+    void Reset();
+    IEnumNetworks Clone();
+}
+[ComImport, Guid("DCB00006-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+interface IEnumNetworkConnections
+{
+    [return: MarshalAs(UnmanagedType.IUnknown)] object NewEnum();
+    [PreserveSig] int Next(uint celt, out INetworkConnection n, out uint fetched);
+    void Skip(uint celt);
+    void Reset();
+    IEnumNetworkConnections Clone();
+}
+[ComImport, Guid("DCB00002-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+interface INetwork
+{
+    [return: MarshalAs(UnmanagedType.BStr)] string GetName();
+    void SetName([MarshalAs(UnmanagedType.BStr)] string s);
+    [return: MarshalAs(UnmanagedType.BStr)] string GetDescription();
+    void SetDescription([MarshalAs(UnmanagedType.BStr)] string s);
+    void GetNetworkId(out Guid id);
+    int GetDomainType();
+    IEnumNetworkConnections GetNetworkConnections();
+    void GetTimeCreatedAndConnected(out uint a, out uint b, out uint c, out uint d, out uint e, out uint f, out uint g, out uint h);
+    bool IsConnectedToInternet { get; }
+    bool IsConnected { get; }
+    int GetConnectivity();
+    int GetCategory();
+    void SetCategory(int c);
+}
+[ComImport, Guid("DCB00005-570F-4A9B-8D69-199FDBA5723B"), InterfaceType(ComInterfaceType.InterfaceIsDual)]
+interface INetworkConnection
+{
+    INetwork GetNetwork();
+    bool IsConnectedToInternet { get; }
+    bool IsConnected { get; }
+    int GetConnectivity();
+    void GetConnectionId(out Guid id);
+    void GetAdapterId(out Guid id);
+    int GetDomainType();
 }
