@@ -73,14 +73,21 @@ class ScrollNavigationTest {
         ZephyrTestSeed.clear(Store(context))
         launchWith("main", mapOf("pcdemo" to true, "demopaired" to true, "demostatus" to true, "statuscase" to "cur-ok", "manymovies" to true))
         val movies = device.wait(Until.findObject(By.desc("Movies")), 12000); assertNotNull("Home Movies tile", movies); movies!!.click()
-        assertNotNull("demo list did not appear", device.wait(Until.findObject(By.textContains("The Big Example Movie")), 12000))
+        val listShown = device.wait(Until.findObject(By.textContains("The Big Example Movie")), 12000)
+        shot("hg-sn-movies-1-after-tap")
+        assertNotNull("demo list did not appear", listShown)
         assertNotNull("top of the list: first folder row", device.findObject(By.text("Documentaries")))
         swipeUp(4)
+        shot("hg-sn-movies-2-after-swipe")
         assertNull("list did not scroll (first folder row still visible): the test would prove nothing", device.findObject(By.text("Documentaries")))
         device.pressBack() // Back to Home
         val again = device.wait(Until.findObject(By.desc("Movies")), 8000); assertNotNull("Home Movies tile after Back", again); again!!.click()
+        shot("hg-sn-movies-3-reentered")
         assertNotNull("Movies reopened but is not at the top (first folder row missing)", device.wait(Until.findObject(By.text("Documentaries")), 8000))
     }
+
+    /** Evidence picture pulled by ui-evidence.sh (hg-*.png on /sdcard). */
+    private fun shot(name: String) { device.executeShellCommand("screencap -p /sdcard/$name.png") }
 
     /** Same as launch(), with demo extras. No force-stop: this test runs inside the app's own process, so stopping the package would kill the instrumentation. */
     private fun launchWith(screen: String, extras: Map<String, Any>) {
