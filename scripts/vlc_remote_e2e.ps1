@@ -643,8 +643,13 @@ try {
     Assert (($r.body | ConvertFrom-Json).entries[0].name -eq 'inner.mkv') "subfolder lists"
     $r = Invoke-HelperGet '/movies/list?path=..' $token
     Assert ($r.code -eq 404) "list outside the folder is refused (got $($r.code))"
-    $r = Invoke-Helper '/movies/play' '{"path":"../Windows/win.ini"}' $token
-    Assert ($r.code -eq 400) "play outside the folder is refused (got $($r.code))"
+    # A dark/unknown display answers 200 {"woke":true} BEFORE the path is parsed (a wake tap, no denial yet). Play-Movie
+    # re-taps bounded until a real answer arrives (or throws), so the denial asserted below is the helper's own Jail
+    # answer, never a wake-swallow. The 200 is NOT accepted as a pass: code, body and the absence of any launch are asserted.
+    $r = Play-Movie '{"path":"../Windows/win.ini"}' $token 'play outside the folder'
+    Assert ($r.code -eq 400) "play outside the folder is refused (got $($r.code); body: $(Safe-Body $r.body))"
+    Assert ($r.body -match '"error"\s*:\s*"not found"') "the outside-folder play is denied by the path jail (body: $(Safe-Body $r.body))"
+    Assert (-not (Get-Process vlc -ErrorAction SilentlyContinue)) "the outside-folder play launched nothing"
     $r = Play-Movie '{"path":"clip.mkv"}' $token 'first play'
     Assert ($r.code -eq 200) "play starts VLC: $(Safe-Body $r.body)"
     $vlcUp = $false
