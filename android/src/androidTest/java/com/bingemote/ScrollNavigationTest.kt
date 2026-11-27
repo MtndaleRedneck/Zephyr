@@ -71,7 +71,7 @@ class ScrollNavigationTest {
     /** Movies scrolled, to Home and in again: opens at the top. Demo Movies list of 43 rows (extra "manymovies", debug only), Home paired demo. */
     @Test fun freshEntryIntoMoviesStartsAtTheTop() {
         ZephyrTestSeed.clear(Store(context))
-        launchWith("main", "--ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok --ez manymovies true")
+        launchWith("main", mapOf("pcdemo" to true, "demopaired" to true, "demostatus" to true, "statuscase" to "cur-ok", "manymovies" to true))
         val movies = device.wait(Until.findObject(By.desc("Movies")), 12000); assertNotNull("Home Movies tile", movies); movies!!.click()
         assertNotNull("demo list did not appear", device.wait(Until.findObject(By.textContains("The Big Example Movie")), 12000))
         assertNotNull("top of the list: first folder row", device.findObject(By.text("Documentaries")))
@@ -82,10 +82,14 @@ class ScrollNavigationTest {
         assertNotNull("Movies reopened but is not at the top (first folder row missing)", device.wait(Until.findObject(By.text("Documentaries")), 8000))
     }
 
-    private fun launchWith(screen: String, extras: String) {
+    /** Same as launch(), with demo extras. No force-stop: this test runs inside the app's own process, so stopping the package would kill the instrumentation. */
+    private fun launchWith(screen: String, extras: Map<String, Any>) {
         device.wakeUp()
         device.executeShellCommand("wm dismiss-keyguard")
-        device.executeShellCommand("am force-stop ${context.packageName}")
-        device.executeShellCommand("am start -n ${context.packageName}/com.bingemote.MainActivity --es screen $screen $extras")
+        val i = Intent(context, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            .putExtra("screen", screen)
+        extras.forEach { (k, v) -> when (v) { is Boolean -> i.putExtra(k, v); is String -> i.putExtra(k, v) } }
+        context.startActivity(i)
     }
 }
