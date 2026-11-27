@@ -12,7 +12,7 @@ namespace ZephyrPlayer.Tests;
 public class LiveUrlAclTests
 {
     private static string Sid => WindowsIdentity.GetCurrent().User!.Value;
-    private const string Url = "http://+:47823/"; // PlaybackServer.DefaultPort
+    private const string Url = "https://+:47823/"; // PlaybackServer.DefaultPort
 
     private static void Netsh(string args, bool assertExit = true)
     {

@@ -563,7 +563,7 @@ namespace ZephyrPlayer
             if (!Explain(
                 "One Windows permission, then setup is done. " +
                 "Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. " +
-                "It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection.",
+                "It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection. It also creates this PC's private security certificate, so the connection between your phone and this PC is encrypted.",
                 "Continue"))
             {
                 Note("No problem - setup will be offered again next time you open Zephyr Player.");
