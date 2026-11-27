@@ -27,7 +27,15 @@ jobs:
           keytool -exportcert -alias t -keystore k.p12 -storepass changeit -file c.der
           openssl x509 -inform der -in c.der -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -hex | sed 's/^.* //' > pin.txt
           cat pin.txt
+          cp k.p12 k2.p12
+          keytool -selfcert -alias t -validity 3650 -storetype PKCS12 -keystore k2.p12 -storepass changeit -keypass changeit
+          keytool -exportcert -alias t -keystore k2.p12 -storepass changeit -file c2.der
+          openssl x509 -inform der -in c2.der -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -hex | sed 's/^.* //' > pin2.txt
+          { echo "date now: $(date -u)"; for f in c c2; do echo "== $f.der"; openssl x509 -inform der -in $f.der -noout -subject -dates -ext subjectAltName; echo "spki sha256: $(openssl x509 -inform der -in $f.der -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -hex | sed 's/^.* //')"; done; } > out/cert.txt
+          cat out/cert.txt
+          test "$(cat pin.txt)" = "$(cat pin2.txt)"
           nohup java jpin/PinTest.java k.p12 changeit "$(cat pin.txt)" 48443 serve > out/server.txt 2>&1 &
+          nohup java jpin/PinTest.java k2.p12 changeit "$(cat pin.txt)" 48444 serve > out/server2.txt 2>&1 &
           sleep 8
           cat out/server.txt
       - name: build
@@ -44,6 +52,7 @@ jobs:
             adb logcat -c
             gradle --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.pin=$(cat ../pin.txt) || true
             adb logcat -d -s PINT:I > ../out/android.txt
+            cat ../out/android.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

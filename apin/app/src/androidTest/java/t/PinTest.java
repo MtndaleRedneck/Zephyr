@@ -25,6 +25,7 @@ public class PinTest {
         public void checkServerTrusted(X509Certificate[] c, String a) throws java.security.cert.CertificateException {
             try {
                 String got = hex(MessageDigest.getInstance("SHA-256").digest(c[0].getPublicKey().getEncoded()));
+                Log.i(TAG, "  presented leaf: notBefore=" + c[0].getNotBefore() + " notAfter=" + c[0].getNotAfter() + " now=" + new java.util.Date() + " spkiSha256=" + got + " configuredPin=" + pin + " match=" + got.equals(pin));
                 if (!got.equals(pin)) throw new java.security.cert.CertificateException("pin mismatch");
             } catch (java.security.NoSuchAlgorithmException e) { throw new RuntimeException(e); }
         }
@@ -78,6 +79,27 @@ public class PinTest {
             c.setConnectTimeout(5000); c.setReadTimeout(5000);
             log("9 cleartext http (usesCleartextTraffic=false): status=" + c.getResponseCode() + " (BAD if status)");
         } catch (Exception e) { log("9 cleartext http (usesCleartextTraffic=false): blocked " + e.getClass().getSimpleName() + ": " + e.getMessage()); }
+    }
+
+    static String okDefault(String url) {
+        try { okhttp3.Response r = new OkHttpClient.Builder().callTimeout(10, TimeUnit.SECONDS).build().newCall(new Request.Builder().url(url).build()).execute(); return "status=" + r.code() + " (BAD)"; }
+        catch (Exception e) { return "rejected " + e.getClass().getSimpleName(); }
+    }
+
+    @Test
+    public void renewal() throws Exception {
+        String pin = InstrumentationRegistry.getArguments().getString("pin");
+        String base2 = "https://" + HOST + ":48444/";
+        String base1 = "https://" + HOST + ":" + PORT + "/";
+        log("R0 sdk " + android.os.Build.VERSION.SDK_INT + " old-cert pin " + pin);
+        log("R1 same-key RENEWED cert (new dates, same SPKI), old pin, scoped verifier: " + urlGet(base2, factory(new PinTm(pin)), true));
+        log("R2 old expired cert, old pin: " + urlGet(base1, factory(new PinTm(pin)), true));
+        log("R3 default HttpsURLConnection AFTER pinned use, expired port: " + urlGet(base1, null, false));
+        log("R4 default HttpsURLConnection AFTER pinned use, renewed port: " + urlGet(base2, null, false));
+        log("R5 default OkHttp client AFTER pinned use, expired port: " + okDefault(base1));
+        log("R6 default OkHttp client AFTER pinned use, renewed port: " + okDefault(base2));
+        log("R7 default HttpsURLConnection to a normal public site (isolation sanity): " + urlGet("https://www.google.com/", null, false));
+        log("R8 wrong pin on renewed cert: " + urlGet(base2, factory(new PinTm("0000000000000000000000000000000000000000000000000000000000000000")), true));
     }
 
     static void log(String s) { Log.i(TAG, s); }
