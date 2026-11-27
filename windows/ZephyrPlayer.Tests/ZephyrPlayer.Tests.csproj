@@ -13,6 +13,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ZephyrPlayer\ZephyrPlayer.csproj" />
+    <ProjectReference Include="..\SecureLan\SecureLan.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="fixtures\**">

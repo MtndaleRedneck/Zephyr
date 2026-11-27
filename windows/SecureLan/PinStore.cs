@@ -35,6 +35,8 @@ public sealed class PinStore
         }
     }
 
+    public bool Has(string pcId) { lock (_lock) return _pins.ContainsKey(pcId); }
+
     /// <summary>Explicit local re-pair: the only way to drop a remembered key.</summary>
     public bool Forget(string pcId) { lock (_lock) return _pins.Remove(pcId); }
 }
