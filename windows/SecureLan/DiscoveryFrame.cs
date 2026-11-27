@@ -34,12 +34,12 @@ public static class DiscoveryFrame
     }
 
     /// <summary>Accepts only an exact-length reply with the expected magic, version, echoed nonce and a nonzero port.</summary>
-    public static bool TryParseReply(ReadOnlySpan<byte> packet, ReadOnlySpan<byte> replyMagic, ReadOnlySpan<byte> expectedNonce, out ushort port)
+    public static bool TryParseReply(ReadOnlySpan<byte> packet, ReadOnlySpan<byte> replyMagic, ReadOnlySpan<byte> expectedNonce, ushort expectedPort, out ushort port)
     {
         port = 0;
         if (packet.Length != ReplyLen || !packet[..4].SequenceEqual(replyMagic) || packet[4] != Version) return false;
         if (!packet.Slice(5, NonceLen).SequenceEqual(expectedNonce)) return false;
         port = (ushort)((packet[21] << 8) | packet[22]);
-        return port != 0;
+        return port != 0 && port == expectedPort;   // only the app's compiled port is accepted
     }
 }

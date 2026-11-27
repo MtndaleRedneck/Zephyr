@@ -55,5 +55,14 @@ public sealed class SourceLimiter
         }
     }
 
+    /// <summary>A verified success (valid token or completed pairing) clears that source's failure state.</summary>
+    public void RecordSuccess(string key)
+    {
+        lock (_lock)
+        {
+            if (_map.Remove(key, out var e) && e.Node != null) _lru.Remove(e.Node);
+        }
+    }
+
     public int Tracked { get { lock (_lock) return _map.Count; } }
 }

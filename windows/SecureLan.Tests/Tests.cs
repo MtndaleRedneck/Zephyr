@@ -126,13 +126,40 @@ public class DiscoveryFrameTests
         Assert.False(DiscoveryFrame.TryParseProbe(probe.Append((byte)0).ToArray(), Magic, out _));
         var bad = (byte[])probe.Clone(); bad[4] = 2;
         Assert.False(DiscoveryFrame.TryParseProbe(bad, Magic, out _));
-        Assert.True(DiscoveryFrame.TryParseReply(reply, RMagic, nonce, out var port)); Assert.Equal(48443, port);
-        Assert.False(DiscoveryFrame.TryParseReply(reply, RMagic, RandomNumberGenerator.GetBytes(16), out _));
-        Assert.False(DiscoveryFrame.TryParseReply(DiscoveryFrame.BuildReply(RMagic, nonce, 0), RMagic, nonce, out _));
+        Assert.True(DiscoveryFrame.TryParseReply(reply, RMagic, nonce, 48443, out var port)); Assert.Equal(48443, port);
+        Assert.False(DiscoveryFrame.TryParseReply(reply, RMagic, RandomNumberGenerator.GetBytes(16), 48443, out _));
+        Assert.False(DiscoveryFrame.TryParseReply(DiscoveryFrame.BuildReply(RMagic, nonce, 4444), RMagic, nonce, 48443, out _));   // wrong port refused
+        Assert.False(DiscoveryFrame.TryParseReply(DiscoveryFrame.BuildReply(RMagic, nonce, 0), RMagic, nonce, 48443, out _));
+    }
+}
+
+public class LimiterSuccessTests
+{
+    [Fact]
+    public void SuccessClearsSourceFailures()
+    {
+        var now = new DateTimeOffset(2026, 11, 26, 20, 0, 0, TimeSpan.Zero);
+        var l = new SourceLimiter(() => now);
+        for (int i = 0; i < 5; i++) l.RecordFailure("a");
+        Assert.False(l.IsAllowed("a"));
+        l.RecordSuccess("a");
+        Assert.True(l.IsAllowed("a"));
     }
 }
 
 public class ReplyBudgetTests
+{
+    [Fact]
+    public void TableCapRefusesNewSourcesWithinTheSecond()
+    {
+        var now = new DateTimeOffset(2026, 11, 26, 20, 0, 0, TimeSpan.Zero);
+        var b = new ReplyBudget(() => now, perSourceMax: 2, globalMax: 1000, tableMax: 256);
+        int granted = 0;
+        for (int i = 0; i < 1000; i++) if (b.TryTake("s" + i)) granted++;
+        Assert.Equal(256, granted);                 // saturation: bounded memory, extra sources get nothing this second
+        Assert.True(b.TryTake("s0"));               // an already-tracked source still has its second reply
+    }
+
 {
     [Fact]
     public void PerSourceTwoGlobalTwentyPerSecond_ResetsNextSecond()
