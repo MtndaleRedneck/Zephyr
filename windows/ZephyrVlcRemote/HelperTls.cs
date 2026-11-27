@@ -153,6 +153,21 @@ internal static class UrlAclMigrationPlanner
         FirewallSetup.AclOwnership.Foreign => Action.LeaveForeign,
         _ => Action.None,
     };
+
+    /// <summary>Adds the https:// listen permission. Observed on the 1.1.0 upgrade path (run 46073822526): while the old http:// reservation for the same port exists, the https add fails with error 183. Only then, and only when the old reservation is positively ours or legacy (an unreadable one classifies as Foreign, and a classifier exception also means no deletion), it is removed and the add is retried ONCE.
+    /// There is no rollback: if the retry still fails the old http reservation stays removed (plain http is retired, nothing serves it) and the caller returns its failure exit; the setup is re-runnable and the next run starts from "no reservation".</summary>
+    internal static int AddHttpsReservation(System.Func<int> addHttps, System.Func<FirewallSetup.AclOwnership> classifyOldHttp, System.Action deleteOldHttp, out bool oldHttpDeleted)
+    {
+        oldHttpDeleted = false;
+        var rc = addHttps();
+        if (rc == 0) return 0;
+        FirewallSetup.AclOwnership old;
+        try { old = classifyOldHttp(); } catch { return rc; }
+        if (PlanOld(old) != Action.DeleteOldHttpReservation) return rc;
+        deleteOldHttp();
+        oldHttpDeleted = true;
+        return addHttps();
+    }
 }
 
 /// <summary>Files written only by the elevated side: atomic replace, then a DACL of SYSTEM and Administrators full control, Users read-only.</summary>

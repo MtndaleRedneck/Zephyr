@@ -162,6 +162,53 @@ SSL Certificate bindings:
     public void OldHttpReservationIsOnlyPlannedForRemovalWhenOwned(string owner, string expected)
         => Assert.Equal(expected, UrlAclMigrationPlanner.PlanOld(Enum.Parse<FirewallSetup.AclOwnership>(owner)).ToString());
 
+    // The 1.1.0 upgrade collision (add https fails 183 while the old http reservation exists): drive the SAME function both setups call, with fakes for netsh and the classifier.
+    private static (int rc, int adds, int deletes, bool gone) Migrate(int[] addResults, FirewallSetup.AclOwnership old, bool classifierThrows = false)
+    {
+        int adds = 0, deletes = 0;
+        var rc = UrlAclMigrationPlanner.AddHttpsReservation(
+            () => addResults[Math.Min(adds++, addResults.Length - 1)],
+            () => classifierThrows ? throw new InvalidOperationException("unreadable") : old,
+            () => deletes++, out var gone);
+        return (rc, adds, deletes, gone);
+    }
+
+    [Theory]
+    [InlineData("Ours")]
+    [InlineData("Legacy")]
+    public void CollisionWithOurOrLegacyOldHttp_RemovesItOnceAndRetriesOnce(string owner)
+    {
+        var r = Migrate(new[] { 1, 0 }, Enum.Parse<FirewallSetup.AclOwnership>(owner));
+        Assert.Equal((0, 2, 1, true), (r.rc, r.adds, r.deletes, r.gone));
+    }
+
+    [Theory]
+    [InlineData(FirewallSetup.AclOwnership.Foreign)]   // also what an unreadable reservation classifies as
+    [InlineData(FirewallSetup.AclOwnership.None)]
+    public void CollisionWithForeignOrAbsentOldHttp_NeverDeletesAndKeepsTheFailure(FirewallSetup.AclOwnership owner)
+    {
+        var r = Migrate(new[] { 1 }, owner);
+        Assert.Equal((1, 1, 0, false), (r.rc, r.adds, r.deletes, r.gone));
+    }
+
+    [Fact] public void ClassifierFailureMeansNoDeletion()
+    {
+        var r = Migrate(new[] { 1 }, FirewallSetup.AclOwnership.Ours, classifierThrows: true);
+        Assert.Equal((1, 1, 0, false), (r.rc, r.adds, r.deletes, r.gone));
+    }
+
+    [Fact] public void RetryFailureIsReportedTruthfully_AndNothingIsRolledBack()
+    {
+        var r = Migrate(new[] { 1, 183 }, FirewallSetup.AclOwnership.Ours);
+        Assert.Equal((183, 2, 1, true), (r.rc, r.adds, r.deletes, r.gone));   // the second failure is returned; the old reservation stays removed; no third try
+    }
+
+    [Fact] public void FirstAddSuccess_TouchesNothingElse()
+    {
+        var r = Migrate(new[] { 0 }, FirewallSetup.AclOwnership.Ours);
+        Assert.Equal((0, 1, 0, false), (r.rc, r.adds, r.deletes, r.gone));
+    }
+
     [Fact] public void StaleOwnedBindingNeedsExplicitSetupAndBecomesAnUpdate()
     {
         Assert.Equal(TlsAction.FailClosed, TlsPlanner.Plan(Obs(M, v4: BindingState.StaleOwned, v6: BindingState.StaleOwned)).Action);

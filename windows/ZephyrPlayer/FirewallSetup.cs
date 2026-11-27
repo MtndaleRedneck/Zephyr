@@ -433,8 +433,12 @@ namespace ZephyrPlayer
                     case AclOwnership.None:
                     case AclOwnership.Legacy:
                         Run("netsh", "http delete urlacl url=https://+:" + PlaybackServer.DefaultPort + "/");
-                        var acl = Run("netsh", "http add urlacl url=https://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
-                        if (acl.ExitCode != 0 || !UrlAclExists()) return 3;
+                        var aclExit = UrlAclMigrationPlanner.AddHttpsReservation(
+                            () => Run("netsh", "http add urlacl url=https://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")").ExitCode,
+                            () => ClassifyOldHttpUrlAcl(sid),
+                            () => Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/"),
+                            out _);
+                        if (aclExit != 0 || !UrlAclExists()) return 3;
                         break;
                 }
                 // Verify the reservation really names the intended user, not just the port.

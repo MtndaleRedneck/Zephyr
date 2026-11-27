@@ -133,7 +133,12 @@ internal static class FirewallSetup
                 case AclOwnership.None:
                 case AclOwnership.Legacy:
                     Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
-                    var acl = Run("netsh", "http add urlacl url=https://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
+                    var acl = UrlAclMigrationPlanner.AddHttpsReservation(
+                        () => Run("netsh", "http add urlacl url=https://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")"),
+                        () => ClassifyOldHttpUrlAcl(sid),
+                        () => Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/"),
+                        out var oldHttpGone);
+                    if (oldHttpGone) Program.Log("firewall setup: the https listen permission collided with the old http reservation (positively ours or legacy); the old one was removed and the add retried (result exit " + acl + ").");
                     if (acl != 0 || !UrlAclExists())
                     {
                         Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
