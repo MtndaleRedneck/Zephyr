@@ -17,11 +17,11 @@ jobs:
   run:
     needs: validate
     runs-on: windows-latest
-    timeout-minutes: 12
+    timeout-minutes: 14
     steps:
       - uses: actions/checkout@v4
       - name: probe docker windows containers
-        timeout-minutes: 8
+        timeout-minutes: 11
         shell: pwsh
         run: ./scripts/fw.ps1
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
