@@ -160,7 +160,6 @@ public class ReplyBudgetTests
         Assert.True(b.TryTake("s0"));               // an already-tracked source still has its second reply
     }
 
-{
     [Fact]
     public void PerSourceTwoGlobalTwentyPerSecond_ResetsNextSecond()
     {
