@@ -350,6 +350,9 @@ finally {
     $ec3 = $LASTEXITCODE
     Note 'cleanup_native_exit_codes' "firewall rule 1 = $ec1, firewall rule 2 = $ec2, urlacl = $ec3"
     Note 'script_state_at_exit' "all assertions passed = $allAssertionsPassed; LASTEXITCODE before reset (reflects the last cleanup netsh call only) = $LASTEXITCODE"
+    # Read-only evidence, no deletes (after the exit-code notes above so it cannot alter them): what the candidate's own uninstall left of its https listen permission and binding.
+    Write-Output '--- post-uninstall state (read-only): https urlacl 47823 ---'; (netsh http show urlacl url=https://+:47823/ 2>&1 | Out-String)
+    Write-Output '--- post-uninstall state (read-only): sslcert 0.0.0.0:47823 ---'; (netsh http show sslcert ipport=0.0.0.0:47823 2>&1 | Out-String)
     # Only a script whose every assertion passed may drop the leaked native status of the cleanup commands. A failure
     # (throw) is never reset: it still propagates out of this finally block.
     if ($allAssertionsPassed) { $global:LASTEXITCODE = 0 }
