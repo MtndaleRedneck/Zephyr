@@ -740,8 +740,15 @@ jobs:
           # a BLIND "netsh http delete urlacl" with no ownership check. Plant a FOREIGN
           # reservation on 47823, run the post-upgrade uninstaller, and require the
           # reservation to survive; the log is printed either way for inspection.
-          # The setup that just ran created OUR https reservation on this disposable runner. http:// and https:// reservations for one port collide (error 183, observed), so remove only that one first, then plant the foreign reservation on the old http:// URL the 1.1.0 blind delete targeted, and prove the plant.
-          netsh http delete urlacl url=https://+:47823/ | Out-Null
+          # http:// and https:// reservations for one port collide (error 183, observed), so the foreign http reservation can only be planted once our https one is gone. Ownership is verified, not assumed: delete the https reservation only when its parsed descriptor is exactly the one this smoke's own setup creates for $sidUp (the migration step above already passed, so it exists). Absent is fine; anything different is not ours, is never deleted, and fails the fixture.
+          $httpsNow = (netsh http show urlacl url=https://+:47823/) | Out-String
+          $httpsSddl = [regex]::Match($httpsNow, 'SDDL:\s*(\S+)')
+          if ($httpsSddl.Success) {
+            $httpsActual = (New-Object System.Security.AccessControl.RawSecurityDescriptor($httpsSddl.Groups[1].Value)).GetSddlForm('All')
+            $httpsOurs = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sidUp)")).GetSddlForm('All')
+            if ($httpsActual -ne $httpsOurs) { throw 'N-10 fixture: the https 47823 reservation is not the one this smoke setup created; refusing to delete it' }
+            netsh http delete urlacl url=https://+:47823/ | Out-Null
+          }
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
           $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
