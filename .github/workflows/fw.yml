@@ -1,0 +1,31 @@
+name: fw
+on:
+  push:
+    branches: [tmp/fw]
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: parse
+        shell: pwsh
+        run: |
+          $errs = $null; $tokens = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/fw.ps1).Path, [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs.Count -gt 0) { $errs | ForEach-Object { $_.ToString() }; exit 1 }
+  run:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: probe docker windows containers
+        timeout-minutes: 8
+        shell: pwsh
+        run: ./scripts/fw.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: fw
+          path: out/*.txt
