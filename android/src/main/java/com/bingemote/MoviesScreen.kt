@@ -621,7 +621,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     BackHandler(enabled = !insideFolder && !insidePhoneFolder) { onBack() }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        ScreenHeader("Movies", hapticsOn = remote.store.haptics, onBack = onBack)
+        ScreenHeader("Movies", hapticsOn = remote.store.haptics, matchHomeRow = true, onBack = onBack)
         // The reconnect banner, verbatim from the home hero: same gradient, radius, ink,
         // sizes and strings. The Movies title and back arrow stay put above it.
         if (lost) {

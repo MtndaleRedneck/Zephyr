@@ -118,13 +118,10 @@ fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> 
         )
     }
     fun open(url: String) = ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
-    Column(Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            HeaderIconButton(onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextC) }
-            Spacer(Modifier.width(12.dp))
-            Text("Feedback", color = TextC, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        }
-        Spacer(Modifier.height(18.dp))
+    Column(Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
+        // Same bar as Home, Settings and Movies: 12dp above, 44dp row, 12dp below (68dp); the content below keeps its old position.
+        ScreenHeader("Feedback", edge = 0.dp, matchHomeRow = true, onBack = onBack)
+        Spacer(Modifier.height(10.dp))
         BackHandler { onBack() }
 
         SettingsSection("") {
