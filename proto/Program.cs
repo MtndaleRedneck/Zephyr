@@ -82,6 +82,37 @@ static class P
             Console.WriteLine("KEYNAME " + key);
             return 0;
         }
+        if (mode == "keyread")
+        {
+            var st = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            st.Open(OpenFlags.ReadOnly);
+            var found = st.Certificates.Find(X509FindType.FindByThumbprint, a[1], false);
+            Console.WriteLine("KEYREAD as " + Environment.UserName + " certFound=" + found.Count);
+            if (found.Count > 0)
+            {
+                try { var k = found[0].GetECDsaPrivateKey(); Console.WriteLine("KEYREAD privateKeyObject=" + (k != null)); if (k != null) { k.SignData(new byte[] { 1 }, HashAlgorithmName.SHA256); Console.WriteLine("KEYREAD sign OK (key readable)"); } }
+                catch (Exception e) { Console.WriteLine("KEYREAD DENIED " + e.GetType().Name + ": " + e.Message); }
+            }
+            return 0;
+        }
+        if (mode == "renew")
+        {
+            var st = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            st.Open(OpenFlags.ReadWrite);
+            var found = st.Certificates.Find(X509FindType.FindByThumbprint, a[1], false);
+            var old = found[0];
+            var key = old.GetECDsaPrivateKey();
+            var req = new CertificateRequest("CN=netproto-renewed", key, HashAlgorithmName.SHA256);
+            var nc = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(5));
+            var withKey = new X509Certificate2(nc.Export(X509ContentType.Cert));
+            // associate the existing key container with the new cert
+            var c2 = ECDsaCertificateExtensions.CopyWithPrivateKey(withKey, key);
+            st.Add(c2); st.Close();
+            Console.WriteLine("RENEW oldThumb=" + old.Thumbprint + " newThumb=" + c2.Thumbprint);
+            Console.WriteLine("RENEW oldSpki=" + Convert.ToHexString(SHA256.HashData(old.PublicKey.ExportSubjectPublicKeyInfo())).ToLowerInvariant());
+            Console.WriteLine("RENEW newSpki=" + Convert.ToHexString(SHA256.HashData(c2.PublicKey.ExportSubjectPublicKeyInfo())).ToLowerInvariant());
+            return 0;
+        }
         if (mode == "nlm")
         {
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())

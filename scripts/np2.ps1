@@ -123,6 +123,44 @@ if ($Part -eq 'nonadmin') {
   Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete urlacl url=https://+:48443/; Remove-LocalUser -Name protouser -ErrorAction SilentlyContinue }
 }
 
+if ($Part -eq 'upgrade') {
+  $mk = & $proto mkcert | Out-String
+  $thumb = ([regex]::Match($mk, 'THUMB (\S+)')).Groups[1].Value
+  $spki = ([regex]::Match($mk, 'SPKI (\S+)')).Groups[1].Value
+  Log ('initial thumb ' + $thumb + ' spki ' + $spki)
+  $app = 'appid={12345678-1234-1234-1234-123456789abc}'
+  Step 'sslcert' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
+  Step 'urlacl' { netsh http add urlacl url=https://+:48443/ user=Everyone }
+  # simulate an upgrade: replace the app binary, leave the machine store and http.sys state alone
+  Copy-Item C:\proto\proto.exe C:\proto\proto-new.exe -Force
+  $so = Join-Path $env:TEMP 'serve.out'
+  $sp = Start-Process -FilePath 'C:\proto\proto-new.exe' -ArgumentList 'serve https 48443 40' -NoNewWindow -PassThru -RedirectStandardOutput $so -RedirectStandardError ($so + '.err')
+  Start-Sleep -Seconds 6
+  Bounded 'old pin vs upgraded binary' $proto ('client https://127.0.0.1:48443/ ' + $spki) 20
+  & taskkill.exe /F /T /PID $sp.Id | Out-Null
+  # renewal with the same key: new cert, same SPKI, rebind
+  Bounded 'renew with same key' $proto ('renew ' + $thumb) 30
+  $mk2 = Get-Content ($logf) -Raw
+  $nt = ([regex]::Match($mk2, 'newThumb=(\S+)')).Groups[1].Value
+  Log ('new thumb ' + $nt)
+  Step 'rebind' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http add sslcert ipport=0.0.0.0:48443 certhash=$nt $app }
+  $sp = Start-Process -FilePath $proto -ArgumentList 'serve https 48443 30' -NoNewWindow -PassThru -RedirectStandardOutput $so -RedirectStandardError ($so + '.err')
+  Start-Sleep -Seconds 5
+  Bounded 'OLD pin vs renewed cert' $proto ('client https://127.0.0.1:48443/ ' + $spki) 20
+  & taskkill.exe /F /T /PID $sp.Id | Out-Null
+  # direct key read as a non-admin user
+  $pw = [Guid]::NewGuid().ToString('N') + 'aA1!'
+  $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+  New-LocalUser -Name protouser -Password $sec -PasswordNeverExpires | Out-Null
+  $psi = New-Object Diagnostics.ProcessStartInfo
+  $psi.FileName = $proto; $psi.Arguments = ('keyread ' + $thumb); $psi.UserName = 'protouser'; $psi.Password = $sec; $psi.Domain = '.'
+  $psi.UseShellExecute = $false; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; $psi.WorkingDirectory = 'C:\proto'
+  $pr = [Diagnostics.Process]::Start($psi)
+  if ($pr.WaitForExit(20000)) { Log ($pr.StandardOutput.ReadToEnd() + $pr.StandardError.ReadToEnd()) } else { taskkill /F /T /PID $pr.Id | Out-Null; Log 'keyread timeout' }
+  Bounded 'keyread as admin (control)' $proto ('keyread ' + $thumb) 20
+  Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete urlacl url=https://+:48443/; Remove-LocalUser -Name protouser -ErrorAction SilentlyContinue }
+}
+
 if ($Part -eq 'hyperv') {
   if (Get-Command New-VMSwitch -ErrorAction SilentlyContinue) {
     Step 'create internal switch' { New-VMSwitch -Name protoswitch -SwitchType Internal | Out-String }
