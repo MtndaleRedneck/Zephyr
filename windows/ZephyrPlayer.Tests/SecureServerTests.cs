@@ -84,7 +84,7 @@ namespace ZephyrPlayer.Tests
             using var good = Bound.Make(port, k1);
             int tokenChecks = 0;
             using var server = new PlaybackServer((u, p, s) => Task.CompletedTask, t => { tokenChecks++; return t == "tok-1"; }, port, loopbackOnly: true,
-                onPair: code => code == "1234" ? (PairOutcome.Ok, "tok-1") : (PairOutcome.BadCode, null), secure: true);
+                onPair: (code, source) => code == "1234" ? (PairOutcome.Ok, "tok-1") : (PairOutcome.BadCode, null), secure: true);
             server.Start();
             var url = $"https://127.0.0.1:{port}";
 

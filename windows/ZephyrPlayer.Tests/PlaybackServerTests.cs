@@ -40,12 +40,12 @@ namespace ZephyrPlayer.Tests
                 validateToken: t => t == GoodToken || (withPairing && t == MintedToken),
                 port: TestPort, loopbackOnly: true,
                 onPair: withPairing
-                    ? (code =>
+                    ? ((code, source) =>
                     {
-                        var outcome = gate!.TryPair(code, phoneCount, () => MintedToken, out var token);
+                        var outcome = gate!.TryPair(code, phoneCount, () => MintedToken, out var token, source);
                         return (outcome, token);
                     })
-                    : (Func<string, (PairOutcome, string?)>?)null);
+                    : (Func<string, string, (PairOutcome, string?)>?)null);
             server.Start();
             return (server, gate);
         }
@@ -187,20 +187,19 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
-        public async Task Pair_FiveWrongCodes_LocksForFiveMinutes()
+        public async Task Pair_FiveWrongCodes_BackOffThatSourceForSeconds()
         {
             var (server, _) = GateStart(out _, withPairing: true, out var code);
             using (server)
             {
                 for (var i = 0; i < PairingGate.MaxFailures; i++)
                     Assert.Equal(HttpStatusCode.Forbidden, (await Pair(Client(null), "000000")).StatusCode);
-                // Locked: even the RIGHT code now gets 429 until the lock runs out
-                // (1.2.0: time-based - the phone says "try again in a few minutes",
-                // never "restart the PC").
+                // That address (and only it) is backed off: even the RIGHT code gets 429 for
+                // a few seconds; the phone says "wait a moment", never "restart the PC".
                 Assert.Equal((HttpStatusCode)429, (await Pair(Client(null), "000000")).StatusCode);
                 Assert.Equal((HttpStatusCode)429, (await Pair(Client(null), code!)).StatusCode);
                 var body = await (await Pair(Client(null), code!)).Content.ReadAsStringAsync();
-                Assert.Contains("Press Pair", body);
+                Assert.Contains("Wait a few seconds", body);
                 Assert.DoesNotContain("Restart", body);
             }
         }
@@ -216,9 +215,9 @@ namespace ZephyrPlayer.Tests
                 onPlay: (u, p, s) => Task.CompletedTask,
                 validateToken: t => false,
                 port: TestPort, loopbackOnly: true,
-                onPair: code =>
+                onPair: (code, source) =>
                 {
-                    var outcome = gate.TryPair(code, 0, () => MintedToken, out var token);
+                    var outcome = gate.TryPair(code, 0, () => MintedToken, out var token, source);
                     return (outcome, token);
                 });
             using (server)

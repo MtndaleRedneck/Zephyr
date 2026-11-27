@@ -271,7 +271,7 @@ namespace ZephyrPlayer
                     return false;
                 },
                 isPaired: t => store.IsPaired(t),
-                onPair: code =>
+                onPair: (code, source) =>
                 {
                     // Fail-closed store: no code is consumed and the phone gets a
                     // plain answer instead of a 500 (round-3 P4).
@@ -288,7 +288,7 @@ namespace ZephyrPlayer
                             store.Add(t, _pendingPhoneName ?? "My phone");
                             _pendingPhoneName = null;
                             return t;
-                        }, out token);
+                        }, out token, source);
                     }
                     catch (InvalidOperationException)
                     {

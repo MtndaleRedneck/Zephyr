@@ -56,6 +56,9 @@
         "dependencies": {
           "H.GeneratedIcons.System.Drawing": "2.1.4"
         }
+      },
+      "securelan": {
+        "type": "Project"
       }
     },
     "net10.0-windows7.0/win-x64": {}

@@ -33,7 +33,6 @@ namespace ZephyrPlayer.Tests
                 var outcome = gate.TryPair(code, 0, () => "t", out _);
                 Assert.True(outcome is PairOutcome.CodeExpired or PairOutcome.NoCode);
             }
-            Assert.False(gate.Locked);
         }
 
         [Fact]
@@ -70,25 +69,57 @@ namespace ZephyrPlayer.Tests
             gate.NewCode();
             now += TimeSpan.FromSeconds(31);
             Assert.Equal(PairOutcome.BadCode, gate.TryPair(first, 1, () => "t", out _));
-            Assert.False(gate.Locked); // one wrong guess counts, but a single one never locks
         }
 
         [Fact]
-        public void Lock_Runs_Out_After_LockDuration()
+        public void One_Source_Backs_Off_Alone_And_Another_Source_Still_Pairs()
         {
             var now = DateTime.UtcNow;
             var gate = new PairingGate(() => now);
             var code = gate.NewCode();
             for (var i = 0; i < PairingGate.MaxFailures; i++)
-                Assert.Equal(PairOutcome.BadCode, gate.TryPair("000000", 0, () => "t", out _));
-            Assert.True(gate.Locked);
-            Assert.Equal(PairOutcome.Locked, gate.TryPair(code, 0, () => "t", out _));
-            // One second before the lock ends: still locked. After: the RIGHT code pairs.
-            now += PairingGate.LockDuration - TimeSpan.FromSeconds(1);
-            Assert.Equal(PairOutcome.Locked, gate.TryPair(code, 0, () => "t", out _));
-            now += TimeSpan.FromSeconds(2);
-            Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out var token));
+                Assert.Equal(PairOutcome.BadCode, gate.TryPair("000000", 0, () => "t", out _, "127.0.0.1"));
+            // The attacker is refused, even with the right code, for its own backoff only.
+            Assert.Equal(PairOutcome.Locked, gate.TryPair(code, 0, () => "t", out _, "127.0.0.1"));
+            // The victim at another address pairs at once, while the attacker is still backed off.
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out var token, "127.0.0.2"));
             Assert.Equal("minted", token);
+        }
+
+        [Fact]
+        public void Source_Backoff_Is_Short_And_Self_Heals()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            var code = gate.NewCode();
+            for (var round = 0; round < 12; round++)
+            {
+                for (var i = 0; i < PairingGate.MaxFailures; i++) gate.TryPair("000000", 0, () => "t", out _, "10.0.0.9");
+                now += TimeSpan.FromSeconds(31); // longer than the largest backoff step (30 s)
+            }
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out _, "10.0.0.9"));
+        }
+
+        [Fact]
+        public void Wrong_Guesses_Of_Many_Sources_Never_Lock_The_Right_Code_Out()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            var code = gate.NewCode();
+            for (var s = 0; s < 3000; s++) // more sources than the limiter tracks: memory stays bounded, nobody else is refused
+                gate.TryPair("000000", 0, () => "t", out _, "172.16." + (s / 250) + "." + (s % 250));
+            Assert.True(gate.TrackedSources <= 1024);
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out _, "192.168.1.50"));
+        }
+
+        [Fact]
+        public void Guesses_With_No_Code_Or_An_Expired_Code_Do_Not_Advance_A_Source()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            for (var i = 0; i < 20; i++) Assert.Equal(PairOutcome.NoCode, gate.TryPair("000000", 0, () => "t", out _, "10.1.1.1"));
+            var code = gate.NewCode();
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out _, "10.1.1.1"));
         }
 
         [Fact]
@@ -111,23 +142,6 @@ namespace ZephyrPlayer.Tests
             Assert.Equal(PairingGate.CodeLifetime, gate.CodeTimeLeft);
             now += TimeSpan.FromMinutes(1);
             Assert.Equal(PairingGate.CodeLifetime - TimeSpan.FromMinutes(1), gate.CodeTimeLeft);
-        }
-
-        [Fact]
-        public void UserStartedCode_ClearsLock_RenewalDoesNot()
-        {
-            var now = DateTime.UtcNow;
-            var gate = new PairingGate(() => now);
-            gate.NewCode();
-            for (var i = 0; i < PairingGate.MaxFailures; i++)
-                Assert.Equal(PairOutcome.BadCode, gate.TryPair("000000", 0, () => "t", out _));
-            Assert.True(gate.Locked);
-            gate.NewCode(); // automatic renewal: the lock stays
-            Assert.True(gate.Locked);
-            var fresh = gate.NewCode(userStarted: true); // the user pressed Pair
-            Assert.False(gate.Locked);
-            Assert.Equal(PairOutcome.Ok, gate.TryPair(fresh, 0, () => "minted", out var token));
-            Assert.Equal("minted", token);
         }
 
         [Fact]

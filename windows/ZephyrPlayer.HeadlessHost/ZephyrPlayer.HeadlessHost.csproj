@@ -8,8 +8,10 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <AssemblyName>ZephyrHeadlessHost</AssemblyName>
+    <DefineConstants>$(DefineConstants);HEADLESS_HOST</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\SecureLan\SecureLan.csproj" />
     <Compile Include="..\ZephyrPlayer\PlaybackServer.cs" Link="PlaybackServer.cs" />
     <Compile Include="..\ZephyrPlayer\PlaybackSourcePolicy.cs" Link="PlaybackSourcePolicy.cs" />
     <Compile Include="..\ZephyrPlayer\Library.cs" Link="Library.cs" />

@@ -25,14 +25,14 @@ using var server = new PlaybackServer(
     onPlay: (url, pos, subs) => stub.PlayAsync(url, pos, subs),
     validateToken: tokens.Contains,
     port: port,
-    onPair: tryCode =>
+    onPair: (tryCode, source) =>
     {
         var outcome = gate.TryPair(tryCode, tokens.Count, () =>
         {
             var t = Guid.NewGuid().ToString("N");
             lock (tokens) tokens.Add(t);
             return t;
-        }, out var token);
+        }, out var token, source);
         return (outcome, token);
     },
     settings: new PlayerSettings("/tmp/zephyr-wire-settings.json") { LibraryFolder = library },

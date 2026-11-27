@@ -1,4 +1,5 @@
 using System;
+using SecureLan;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -26,7 +27,7 @@ namespace ZephyrPlayer
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private readonly Func<string, long?, string[], Task> _onPlay;
         private readonly Func<string, bool> _validateToken;
-        private readonly Func<string, (PairOutcome outcome, string? token)>? _onPair;
+        private readonly Func<string, string, (PairOutcome outcome, string? token)>? _onPair;
         private readonly PlayerSettings _settings;
         private readonly IInputSink? _input;
         private readonly IPlaybackControl? _control;
@@ -56,7 +57,7 @@ namespace ZephyrPlayer
         /// loopback harness can run without pairing; production wires it.</param>
         public PlaybackServer(Func<string, long?, string[], Task> onPlay, Func<string, bool> validateToken,
             int port = DefaultPort, bool loopbackOnly = false,
-            Func<string, (PairOutcome outcome, string? token)>? onPair = null,
+            Func<string, string, (PairOutcome outcome, string? token)>? onPair = null,
             PlayerSettings? settings = null,
             IInputSink? input = null,
             IPlaybackControl? control = null,
@@ -83,12 +84,15 @@ namespace ZephyrPlayer
         public void Start()
         {
             // Secure mode is HTTPS only: if the identity, key or either binding is not exactly as setup left it, nothing listens (no plaintext fallback).
+#if !HEADLESS_HOST // the Linux wire-test host has no Windows certificate store and never runs secure
             if (Secure && !_loopbackOnly)
             {
                 if (!HelperTls.RuntimeReady(Port, out var tlsWhy))
                     throw new InvalidOperationException("Secure setup is not complete: " + tlsWhy);
             }
+#endif
             _listener.Start();
+#if !HEADLESS_HOST
             if (Secure && !_loopbackOnly)
             {
                 if (!HelperTls.VerifyListener(Port, out var hsWhy))
@@ -97,6 +101,7 @@ namespace ZephyrPlayer
                     throw new InvalidOperationException("Secure listener check failed: " + hsWhy);
                 }
             }
+#endif
             _ = Task.Run(Loop);
         }
 
@@ -177,16 +182,15 @@ namespace ZephyrPlayer
                     var code = System.Text.Json.JsonDocument.Parse(pairBody).RootElement.GetProperty("code").GetString() ?? "";
                     var (outcome, newToken) = code.Length == 0 || _onPair == null
                         ? (PairOutcome.NoCode, null)
-                        : _onPair(code);
+                        : _onPair(code, ctx.Request.RemoteEndPoint?.Address is { } ra ? SourceLimiter.Key(ra) : "");
                     switch (outcome)
                     {
                         case PairOutcome.Ok:
                             await Reply(ctx, 200, "{\"token\":\"" + newToken + "\"}");
                             return;
                         case PairOutcome.Locked:
-                            // Time-based lock: the phone says "try again in a few
-                            // minutes", never "restart the PC" (1.2.0).
-                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Press Pair on the PC for a new code.\"}");
+                            // Per-source backoff (at most 30 s, only for the sending address): the phone says "wait a moment", never "restart the PC".
+                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes from this phone. Wait a few seconds and try again.\"}");
                             return;
                         case PairOutcome.TooManyPhones:
                             await Reply(ctx, 409, "{\"error\":\"too many phones\"}");

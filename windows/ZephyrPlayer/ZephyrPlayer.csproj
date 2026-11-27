@@ -16,6 +16,9 @@
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\SecureLan\SecureLan.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Unit tests probe internal updater/input helpers without widening the
          app's public surface. -->
     <InternalsVisibleTo Include="ZephyrPlayer.Tests" />

@@ -1,5 +1,6 @@
 using System;
 using System.Security.Cryptography;
+using SecureLan;
 
 namespace ZephyrPlayer
 {
@@ -13,16 +14,16 @@ namespace ZephyrPlayer
     /// pairing while the user is not pairing), and the store caps at MaxPhones
     /// paired phones. 1.2.0 settles two teardown findings: an EXPIRED code is
     /// told apart from a WRONG code (the phone can say "use the new code on the
-    /// PC screen"), and 5 wrong codes lock pairing for LockDuration instead of
-    /// until the player restarts (a lock no longer strands him in a reboot).
+    /// PC screen"), and wrong codes are limited PER SENDING ADDRESS (SourceLimiter, bounded LRU, backoff of at most 30 s), never by a
+    /// shared counter: one address guessing cannot stop another address from pairing.
     /// </summary>
     public sealed class PairingGate
     {
-        public const int MaxFailures = 5;
+        /// <summary>Wrong guesses one SOURCE address may make before that source (alone) is backed off (SourceLimiter: 1,2,4,8,16,30 s). Another address is never affected.</summary>
+        public const int MaxFailures = 5; // kept for tests/docs: SourceLimiter starts backing a source off at 5 wrong guesses in a minute
         public const int MaxPhones = 8;
         public static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(10);
-        public static readonly TimeSpan LockDuration = TimeSpan.FromMinutes(5);
-
+        
         private readonly object _lock = new();
         private readonly Func<DateTime> _now;
         private string? _code;
@@ -33,10 +34,15 @@ namespace ZephyrPlayer
         private string? _prevCode;
         private DateTime _prevExpires = DateTime.MinValue;
         private static readonly TimeSpan PrevCodeGrace = TimeSpan.FromSeconds(30);
-        private int _failures;
-        private DateTime _lockedUntil = DateTime.MinValue;
+        private readonly SourceLimiter _sources;
 
-        public PairingGate(Func<DateTime>? now = null) { _now = now ?? (() => DateTime.UtcNow); }
+        internal int TrackedSources => _sources.Tracked;
+
+        public PairingGate(Func<DateTime>? now = null)
+        {
+            _now = now ?? (() => DateTime.UtcNow);
+            _sources = new SourceLimiter(() => new DateTimeOffset(DateTime.SpecifyKind(_now(), DateTimeKind.Utc)), 1024);
+        }
 
         /// <summary>Show a fresh code (invalidates the old one). One active code at a time.</summary>
         /// <param name="userStarted">True only for the user pressing Pair (a person is present):
@@ -47,7 +53,6 @@ namespace ZephyrPlayer
         {
             lock (_lock)
             {
-                if (userStarted) { _failures = 0; _lockedUntil = DateTime.MinValue; }
                 // Grace only for a LIVE code: an already-expired code (UI stall,
                 // sleep/wake) must not be revived for another 30s (round-3 P6).
                 if (_code != null && _now() <= _expires) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }
@@ -81,21 +86,17 @@ namespace ZephyrPlayer
         }
 
         /// <summary>Locked while a lockout is still running (time-based; no restart needed).</summary>
-        public bool Locked { get { lock (_lock) return _failures >= MaxFailures && _now() < _lockedUntil; } }
-
         /// <param name="phoneCount">Current paired-phone count (PairedStore) for the cap.</param>
         /// <param name="mint">Called once, inside the lock, only when the code is right.</param>
-        public PairOutcome TryPair(string code, int phoneCount, Func<string> mint, out string? token)
+        /// <param name="source">The remote address text; empty means no per-source tracking (tests).</param>
+        public PairOutcome TryPair(string code, int phoneCount, Func<string> mint, out string? token, string source = "")
         {
             lock (_lock)
             {
                 token = null;
-                if (_failures >= MaxFailures)
-                {
-                    if (_now() < _lockedUntil) return PairOutcome.Locked;
-                    _failures = 0; // the lock ran out; pairing is open again
-                }
-                // No code on screen: guesses here must not count toward the lock.
+                // Only THIS source's own backoff can refuse it; no failure of anyone else does.
+                if (source.Length > 0 && !_sources.IsAllowed(source)) return PairOutcome.Locked;
+                // No code on screen: guesses here must not count toward anything.
                 if (_code == null) return PairOutcome.NoCode;
                 // A code WAS shown but died: distinct from a wrong code, and a
                 // guess against a dead code never counts toward the lock either.
@@ -116,8 +117,7 @@ namespace ZephyrPlayer
                 }
                 if (!matches)
                 {
-                    _failures++;
-                    if (_failures >= MaxFailures) _lockedUntil = _now() + LockDuration;
+                    if (source.Length > 0) _sources.RecordFailure(source);
                     return PairOutcome.BadCode;
                 }
                 token = mint();
@@ -125,7 +125,7 @@ namespace ZephyrPlayer
                 _expires = DateTime.MinValue;
                 _prevCode = null;
                 _prevExpires = DateTime.MinValue;
-                _failures = 0;
+                if (source.Length > 0) _sources.RecordSuccess(source);
                 return PairOutcome.Ok;
             }
         }
