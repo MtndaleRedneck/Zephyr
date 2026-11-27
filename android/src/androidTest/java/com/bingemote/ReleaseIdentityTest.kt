@@ -10,8 +10,9 @@ class ReleaseIdentityTest {
    androidx.security.crypto.MasterKey.Builder(ctx).setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM).build(),
    androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
    androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM)
-  assertTrue(secrets.edit().remove("zephyrToken").commit())
-  assertEquals("", Store(ctx).zephyrToken)
+  assertTrue(secrets.edit().remove("zephyrToken").remove("zephyrCredential").remove("zephyrIntent").commit())
+  Store.resetZephyrRecordForTests()
+  assertEquals(null, Store(ctx).zephyrTarget())
  }
 
  @Test fun separateIdentityAndSavedChoices() {

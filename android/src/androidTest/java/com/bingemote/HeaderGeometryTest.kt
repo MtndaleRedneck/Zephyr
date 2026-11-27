@@ -89,7 +89,7 @@ class HeaderGeometryTest {
     }
 
     @Test fun wholeHeaderIsIdenticalOnEveryScreen() {
-        Store(context).zephyrToken = ""
+        ZephyrTestSeed.clear(Store(context))
         val screens = listOf("main", "movies", "settings", "yourpc", "mouse")
         val hs = screens.map { s -> launch(s); val h = measure(s); shot("hdr-$s"); Log.i("HeaderGeom", report(h)); h }
         val home = hs[0]
@@ -130,7 +130,7 @@ class HeaderGeometryTest {
 
     /** The first Settings card must start exactly at the header bottom (zero tolerance), like Home's first row. */
     @Test fun settingsFirstCardTopEqualsHeaderBottom() {
-        Store(context).zephyrToken = ""
+        ZephyrTestSeed.clear(Store(context))
         launch("settings")
         val h = measure("settings")
         val card = device.wait(Until.findObject(By.res("first_card")), 10000)
@@ -141,7 +141,7 @@ class HeaderGeometryTest {
     }
 
     @Test fun homeToSettingsAndBackKeepsTheSameHeader() {
-        Store(context).zephyrToken = ""
+        ZephyrTestSeed.clear(Store(context))
         launch("main")
         val h0 = measure("main"); Log.i("HeaderGeom", "T0 " + report(h0))
         device.findObject(By.desc("Settings")).click()

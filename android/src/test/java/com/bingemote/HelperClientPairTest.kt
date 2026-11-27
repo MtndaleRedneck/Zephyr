@@ -13,16 +13,19 @@ import org.junit.Test
  *  JSON, never blank) when there is not. */
 class HelperClientPairTest {
 
+    private lateinit var fx: TlsFixture
     private lateinit var server: MockWebServer
     private var port = 0
+    private var restore: () -> Unit = {}
 
     @Before fun start() {
-        server = MockWebServer()
-        server.start()
-        port = server.port
+        fx = TlsFixture()
+        server = fx.server
+        port = fx.port
+        restore = fx.install()
     }
 
-    @After fun stop() = server.shutdown()
+    @After fun stop() { restore(); fx.close() }
 
     private fun enqueue(code: Int, body: String) {
         server.enqueue(MockResponse().setResponseCode(code).setBody(body)
@@ -32,7 +35,7 @@ class HelperClientPairTest {
     private fun pairMessage(code: Int, body: String): String {
         enqueue(code, body)
         try {
-            HelperClient.pair("127.0.0.1", port, "424242")
+            HelperClient.pairSecure("127.0.0.1", port, "424242")
             throw AssertionError("expected pair to fail with $code")
         } catch (e: HelperClient.BadPairCode) {
             return e.msg

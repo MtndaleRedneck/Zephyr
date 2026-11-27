@@ -26,7 +26,7 @@ class UnpairedCardRoutingTest {
 
     @Before fun saveStore() {
         val s = Store(context)
-        saved = listOf(s.setupDone, s.selectedSource, s.zephyrToken, s.host, s.vlcPassword)
+        saved = listOf(s.setupDone, s.selectedSource, s.zephyrTarget() ?: "", s.host, s.vlcPassword)
     }
 
     /** Leave the app's saved state exactly as found so later classes see what they expect. */
@@ -34,7 +34,8 @@ class UnpairedCardRoutingTest {
         val s = Store(context)
         s.setupDone = saved[0] as Boolean
         s.selectedSource = saved[1] as Source
-        s.zephyrToken = saved[2] as String
+        val z = saved[2]
+        if (z is Store.ZephyrTarget) ZephyrTestSeed.seed(s, z.host, z.port, z.token, z.pinHex) else ZephyrTestSeed.clear(s)
         s.host = saved[3] as String
         s.vlcPassword = saved[4] as String
     }
@@ -51,7 +52,7 @@ class UnpairedCardRoutingTest {
         val store = Store(context)
         store.setupDone = true
         store.selectedSource = Source.ZEPHYR
-        store.zephyrToken = ""
+        ZephyrTestSeed.clear(store)
         home()
         val card = device.wait(Until.findObject(By.text("Zephyr PC isn't paired")), 15000)
         assertNotNull("unpaired Zephyr card not shown", card)
@@ -68,7 +69,7 @@ class UnpairedCardRoutingTest {
         val store = Store(context)
         store.setupDone = true
         store.selectedSource = Source.ZEPHYR
-        store.zephyrToken = ""
+        ZephyrTestSeed.clear(store)
         home()
         device.wait(Until.findObject(By.text("Zephyr PC isn't paired")), 15000)!!.click()
         assertNotNull(device.wait(Until.findObject(By.text("Set up Zephyr Player")), 10000))

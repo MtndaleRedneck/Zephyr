@@ -70,15 +70,19 @@ class MainActivity : ComponentActivity() {
         store = Store(this)
         // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
         // Remote (port 8492) and flag the one-time "what changed" notice.
-        store.migrateLegacyHelperPort()
+        // The migration and the debug seeds below write helper/VLC tuple fields, and each write publishes the tuple (a Keystore load): they run
+        // together on IO, in this order, and RemoteState waits for the job before it first publishes or polls.
+        val startup = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            store.migrateLegacyHelperPort()
+            if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
+            if (BuildConfig.DEBUG && intent.hasExtra("pairdemo")) { try { store.helperToken = "" } catch (e: SecureStoreUnavailable) { } }
+        }
         if (BuildConfig.DEBUG) intent.getStringExtra("pickeruri")?.let { DebugRig.pickerInitialUri = android.net.Uri.parse(it) }
         // Screenshot rig: a stand-in PC name so the Your PC card renders paired.
         if (BuildConfig.DEBUG && intent.hasExtra("pcdemo")) store.pcName = "MY-PC"
-        // Screenshot rig: a stand-in VLC pairing so the status pill can render Connected. Debug only.
-        if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
-        // Screenshot rig: the helper pair-code shot needs NO saved pairing (the code field then sits above the fold). Debug only.
-        if (BuildConfig.DEBUG && intent.hasExtra("pairdemo")) { try { store.helperToken = ""; store.pcName = "" } catch (e: SecureStoreUnavailable) { } }
-        remote = RemoteState(this, store, lifecycleScope)
+        // Screenshot rig seeds (stand-in VLC pairing for "demopaired", no saved pairing for "pairdemo") run in the startup job above. Debug only.
+        if (BuildConfig.DEBUG && intent.hasExtra("pairdemo")) { try { store.pcName = "" } catch (e: SecureStoreUnavailable) { } }
+        remote = RemoteState(this, store, lifecycleScope, startup)
         if (BuildConfig.DEBUG && intent.getBooleanExtra("demostatus", false)) remote.debugSeedStatus()
         if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { remote.debugForcePaired = true; remote.refreshPairing() }
         // Screenshot-rig only: render one status-notice review scenario per capture.
@@ -250,9 +254,7 @@ class MainActivity : ComponentActivity() {
                     "settings-pair-paired" -> {
                         // Debug capture only: fake a saved pairing so re-entry with a
                         // token (plain form, Back leaves) renders. Captured LAST in the rig; demo values never ship.
-                        remote.store.zephyrHost = "192.168.1.50"
-                        try { remote.store.zephyrToken = "demo-token" } catch (e: SecureStoreUnavailable) { }
-                        remote.store.zephyrPcName = "Demo PC"
+                        try { remote.store.saveZephyrPairing(SecureHttp.BoundPin("cd".repeat(32), "ef".repeat(32)), "192.168.1.50", remote.store.zephyrPort, "Demo PC") } catch (e: SecureStoreUnavailable) { }
                         ZephyrSetupScreen(
                             remote,
                             onDone = { current.value = "settings" },

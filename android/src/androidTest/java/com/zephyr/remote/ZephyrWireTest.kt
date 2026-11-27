@@ -34,18 +34,24 @@ class ZephyrWireTest {
         val args = InstrumentationRegistry.getArguments()
         port = args.getString("wire_port")?.toIntOrNull() ?: 0
         pairCode = args.getString("pair_code") ?: ""
-        assumeTrue("wire host not wired (needs -e wire_port N -e pair_code NNNNNN)", port > 0 && pairCode.isNotEmpty())
+        assumeTrue("wire host not wired (needs -e wire_port N -e pair_code NNNNNN, and a host Player that serves pinned https: -e wire_tls 1)", port > 0 && pairCode.isNotEmpty() && args.getString("wire_tls") == "1")
     }
+
+    @After fun clearPairing() { if (port > 0) com.bingemote.ZephyrTestSeed.clear(com.bingemote.Store(InstrumentationRegistry.getInstrumentation().targetContext)) }
 
     @Test fun pairBrowsePlayInputStatusOverTheRealWire() {
         // Pairing handshake: 6-digit code -> token (real PairingGate on the host).
-        val token = ZephyrClient.pair(host, port, pairCode)
-        assertTrue("empty token", token.isNotEmpty())
+        val proof = ZephyrClient.pair(host, port, pairCode)
+        assertTrue("empty token", proof.token.isNotEmpty())
+        // Later calls carry the whole captured tuple: the pairing is saved through the real protocol first, then read back.
+        val store = com.bingemote.Store(InstrumentationRegistry.getInstrumentation().targetContext)
+        assertEquals(com.bingemote.SecurePairSave.Outcome.SAVED, store.saveZephyrPairing(proof, host, port, "wire"))
+        val t = store.zephyrTarget()!!
 
         // Library browsing off the host's real disk (harness seeds the folder).
-        ZephyrClient.setLibraryFolder(host, port, token, "/tmp/zephyr-wire-lib")
-        assertEquals("/tmp/zephyr-wire-lib", ZephyrClient.libraryFolder(host, port, token))
-        val (listed, entries) = ZephyrClient.libraryList(host, port, token)
+        ZephyrClient.setLibraryFolder(t, "/tmp/zephyr-wire-lib")
+        assertEquals("/tmp/zephyr-wire-lib", ZephyrClient.libraryFolder(t))
+        val (listed, entries) = ZephyrClient.libraryList(t)
         assertTrue("library list failed", listed)
         assertTrue("seeded library empty", entries.any { it.name == "Wire Movie One (2024).mkv" })
 
@@ -58,13 +64,13 @@ class ZephyrWireTest {
         server.start()
         // StreamServer serves SAF/file URIs per protocol.md Streaming.
         val streamUrl = server.addMovie(Uri.fromFile(payload), "wire-payload.bin")
-        ZephyrClient.play(host, port, token, streamUrl, emptyList())
+        ZephyrClient.play(t, streamUrl, emptyList())
 
         // The host's play stub reports the fetch outcome through /control/status.
         var lastPlay = ""
         val deadline = System.currentTimeMillis() + 15_000
         while (System.currentTimeMillis() < deadline) {
-            lastPlay = ZephyrClient.controlStatus(host, port, token).optString("last_play")
+            lastPlay = ZephyrClient.controlStatus(t).optString("last_play")
             if (lastPlay.startsWith("fetched:")) break
             Thread.sleep(500)
         }
@@ -73,6 +79,6 @@ class ZephyrWireTest {
             lastPlay.startsWith("fetched:200:200000:range:206"))
 
         // Input frame over the wire (reaches the host's recorder, not the helper).
-        ZephyrClient.inputMove(host, port, token, 1.5, -1.5)
+        ZephyrClient.inputMove(t, 1.5, -1.5)
     }
 }

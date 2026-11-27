@@ -31,12 +31,12 @@ class InputRoutingTest {
     private lateinit var remote: RemoteState
 
     @Before fun setUp() {
-        zephyr = MockWebServer(); zephyr.start()
+        zephyr = TlsFakePlayer.server()
         helper = MockWebServer(); helper.start()
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         store = Store(context)
         // Isolate: a real paired state must not leak in from an earlier class.
-        store.zephyrHost = "127.0.0.1"; store.zephyrPort = zephyr.port; store.zephyrToken = "zt"
+        ZephyrTestSeed.seed(store, "127.0.0.1", zephyr.port)
         store.host = "127.0.0.1"; store.helperPort = helper.port; store.helperToken = "ht"
         remote = RemoteState(context, store, kotlinx.coroutines.MainScope())
         remote.publishAddress("127.0.0.1", helper.port, "ht")
@@ -44,12 +44,11 @@ class InputRoutingTest {
 
     @After fun tearDown() {
         store.selectedSource = Source.VLC
-        store.zephyrToken = ""
+        ZephyrTestSeed.clear(store)
         zephyr.shutdown(); helper.shutdown()
     }
 
     private fun ok() = MockResponse().setResponseCode(200).setBody("{\"ok\":true}")
-
     @Test fun zephyrSelected_framesGoOnlyToZephyr() = runBlocking {
         store.selectedSource = Source.ZEPHYR
         zephyr.enqueue(ok())
@@ -63,7 +62,7 @@ class InputRoutingTest {
 
     @Test fun zephyrSelectedUnpaired_noFallthroughToHelper() {
         store.selectedSource = Source.ZEPHYR
-        store.zephyrToken = ""
+        ZephyrTestSeed.clear(store)
         try {
             InputRouter.button(remote, "left", true)
             fail("unpaired Zephyr selection must not send anywhere")

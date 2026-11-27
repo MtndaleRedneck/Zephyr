@@ -14,16 +14,19 @@ import org.junit.Test
  *  survives, for each refusal shape. */
 class HelperClientErrorDetailTest {
 
+    private lateinit var fx: TlsFixture
     private lateinit var server: MockWebServer
     private var port = 0
+    private var restore: () -> Unit = {}
 
     @Before fun start() {
-        server = MockWebServer()
-        server.start()
-        port = server.port
+        fx = TlsFixture()
+        server = fx.server
+        port = fx.port
+        restore = fx.install()
     }
 
-    @After fun stop() = server.shutdown()
+    @After fun stop() { restore(); fx.close() }
 
     private fun enqueue(code: Int, body: String) {
         server.enqueue(MockResponse().setResponseCode(code).setBody(body)
@@ -33,7 +36,7 @@ class HelperClientErrorDetailTest {
     private fun playMessage(code: Int, body: String): String {
         enqueue(code, body)
         try {
-            HelperClient.playMovie("127.0.0.1", port, "tok", "a/b.mp4", 8080, "pw", false)
+            HelperClient.playMovie("127.0.0.1", port, fx.token, "a/b.mp4", 8080, "pw", false)
         } catch (e: HelperClient.Unreachable) {
             return e.message ?: ""
         }
@@ -68,7 +71,7 @@ class HelperClientErrorDetailTest {
     @Test fun `a bad token on play still means pair again`() {
         enqueue(403, "{\"error\":\"bad token\"}")
         try {
-            HelperClient.playMovie("127.0.0.1", port, "tok", "a/b.mp4", 8080, "pw", false)
+            HelperClient.playMovie("127.0.0.1", port, fx.token, "a/b.mp4", 8080, "pw", false)
             throw AssertionError("expected BadToken")
         } catch (e: HelperClient.BadToken) {
             assertEquals("The PC rejected the pairing token.", e.message)

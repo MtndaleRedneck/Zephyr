@@ -104,7 +104,7 @@ fun SettingsScreen(
     // just the phone's memory. Helpers without a key leave it absent and the phone-local
     // value stands (best-effort, same as the POST).
     LaunchedEffect(Unit) {
-        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        val ep = store.helperEndpoint(); val host = ep.host; val port = ep.port; val token = ep.token
         configScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val cfg = HelperClient.getConfig(host, port, token)
@@ -155,7 +155,7 @@ fun SettingsScreen(
         SettingsSection("Connected Sources", modifier = Modifier.semantics { testTagsAsResourceId = true }.testTag("first_card")) {
             // A cancelled setup can leave a helper token with no finished pairing: only a
             // COMPLETE setup shows the PC name (teardown A2 edge).
-            SourceRow("VLC PC", if (store.isConfigured) store.pcName.ifBlank { store.host } else "Not paired", hapticsOn = haptics, onLabelClick = onRepair)
+            SourceRow("VLC PC", if (store.isConfigured) store.pcName.ifBlank { store.host } else if (store.pairingNeedsRepair) "Pair this phone again" else "Not paired", hapticsOn = haptics, onLabelClick = onRepair)
             Spacer(Modifier.height(6.dp))
             SourceRow(
                 "Zephyr PC",
@@ -173,7 +173,7 @@ fun SettingsScreen(
         SettingsSection("PC power") {
             ToggleRow("Keep PC awake while watching", keepAwake, haptics) {
                 keepAwake = it; store.keepAwake = it
-                val host = store.host; val port = store.helperPort; val token = store.helperToken
+                val ep = store.helperEndpoint(); val host = ep.host; val port = ep.port; val token = ep.token
                 configScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     try { HelperClient.setKeepAwake(host, port, token, it) } catch (_: Exception) { }
                 }
@@ -199,11 +199,11 @@ fun SettingsScreen(
             var zephyrFolderRow by remember { mutableStateOf<String?>(null) }
             var zephyrFolderFailed by remember { mutableStateOf(false) }
             LaunchedEffect(zephyrSelected) {
-                if (zephyrSelected && store.zephyrToken.isNotBlank()) {
+                if (zephyrSelected && store.zephyrTarget() != null) {
                     val row = withContext(kotlinx.coroutines.Dispatchers.IO) {
                         try {
-                            com.zephyr.remote.ZephyrClient.libraryFolder(
-                                store.zephyrHost, store.zephyrPort, store.zephyrToken)
+                            val zt = store.zephyrTarget() ?: throw java.io.IOException("not paired")
+                            com.zephyr.remote.ZephyrClient.libraryFolder(zt).also { if (!zt.same(store.zephyrTarget())) throw java.io.IOException("The PC changed") }
                         } catch (e: Exception) { null }
                     }
                     // NEW-2: loading, unpaired and failed are different rows - a
@@ -213,7 +213,7 @@ fun SettingsScreen(
                 }
             }
             val folderRowText = if (zephyrSelected) when {
-                store.zephyrToken.isBlank() -> "Pair with the PC first."
+                store.zephyrTarget() == null -> "Pair with the PC first."
                 zephyrFolderFailed -> "Couldn't read it from the PC right now."
                 zephyrFolderRow == null -> "Reading from the PC..."
                 else -> zephyrFolderRow!!.ifBlank { "Not set yet. Tap Browse PC folders." }
@@ -298,7 +298,7 @@ fun SettingsScreen(
             Spacer(Modifier.height(9.dp))
             ToggleRow("Show volume on PC screen", showVolumeOnPc, haptics) {
                 showVolumeOnPc = it; store.showVolumeOnPc = it
-                val host = store.host; val port = store.helperPort; val token = store.helperToken
+                val ep = store.helperEndpoint(); val host = ep.host; val port = ep.port; val token = ep.token
                 configScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                     try { HelperClient.setVolumeOsd(host, port, token, it) } catch (_: Exception) { }
                 }

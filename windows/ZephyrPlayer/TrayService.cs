@@ -80,7 +80,7 @@ namespace ZephyrPlayer
                 ToolTipText = "Zephyr Player",
                 ContextMenu = BuildMenu(),
             };
-            // 2.0.1: IconSource decoded the .ico's FIRST
+            // 2.0.1 (icons looked low-res): IconSource decoded the .ico's FIRST
             // frame (16 px) and Windows stretched it to 24/32 px at 150/200 %. The tray now
             // gets the .ico frame made for the screen's tray size.
             var crisp = TrayIconForDpi();

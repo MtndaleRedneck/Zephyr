@@ -719,15 +719,16 @@ internal sealed class HelperWindow : Form
     /// <summary>Show or hide the pairing code block (window-visible work).</summary>
     private void TickStatus()
     {
+        HttpServer.ExpirePairCodeIfStale(DateTime.UtcNow);
         _code.Text = Program.PairCode ?? "----";
-        // The block shows only a live code (caption, code, Cancel, note); codes never expire.
+        // The block shows only a live code (caption, code, Cancel, note); a Pair session closes after 10 minutes.
         var live = Program.PairCode != null;
         if (live != _codeShown || live != _code.Visible)
         {
             _codeShown = live;
             _codeCaption.Visible = _code.Visible = _cancelPair.Visible = live;
             _codeNote.Visible = live;
-            _codeNote.Text = "Enter this code in the Zephyr app on your phone. Works once.";
+            _codeNote.Text = "Enter this code in the Zephyr app on your phone. Works once, for 10 minutes.";
             ApplyLayout();
         }
         UpdateVlcNote();
@@ -960,6 +961,7 @@ internal sealed class HelperWindow : Form
         {
             Program.PendingPhoneName = name;
             Program.PairCode = Program.NewPairCode();
+            Program.PairCodeIssuedUtc = DateTime.UtcNow;
             Program.PairFailures = 0;
         }
         _nameBox.Clear();

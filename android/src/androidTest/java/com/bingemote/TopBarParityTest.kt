@@ -38,7 +38,7 @@ class TopBarParityTest {
 
     @Test fun headerButtonSitsAtTheSameHeightOnHomeMoviesAndSettings() {
         val store = Store(context)
-        store.zephyrToken = ""
+        ZephyrTestSeed.clear(store)
         launch("main")
         val home = buttonBounds("Settings")
         launch("movies")

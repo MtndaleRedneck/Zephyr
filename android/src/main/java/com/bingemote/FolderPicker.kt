@@ -43,6 +43,10 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
     // Helper mode lists folders from the PC app (no VLC needed); VLC mode keeps
     // VLC's own "Up one folder" rows and paths exactly as they come back.
     var viaHelper by remember { mutableStateOf(false) }
+    // The PC this listing came from (pairing token). Saving the folder targets this PC only; a re-pair since the listing refuses the save.
+    val pinNote = remember { java.util.concurrent.atomic.AtomicReference<String?>(null) }   // set when the pairing check, not the PC, refused the save
+    var listedZ by remember { mutableStateOf<Store.ZephyrTarget?>(null) }   // same, for the Zephyr Player listing
+    var listedEp by remember { mutableStateOf<Store.HelperEndpoint?>(null) }
     // Where each folder was scrolled to before we walked into a child, so going back
     // up lands you where you were instead of back at the top.
     val scrollStack = remember { mutableStateListOf<Triple<String, Int, Int>>() }
@@ -67,11 +71,12 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
         scope.launch {
             if (viaZephyr) {
                 try {
-                    val zHost = remote.store.zephyrEndpoint
+                    val zt = withContext(Dispatchers.IO) { remote.store.zephyrTarget() }
                         ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
                     val names = withContext(Dispatchers.IO) {
-                        com.zephyr.remote.ZephyrClient.libraryBrowse(zHost, remote.store.zephyrPort, remote.store.zephyrToken, dir)
+                        com.zephyr.remote.ZephyrClient.libraryBrowse(zt, dir).also { if (!zt.same(remote.store.zephyrTarget())) throw java.io.IOException("The PC changed while this loaded. Try again.") }   // the answer belongs to the PC it was asked of
                     }
+                    listedZ = zt
                     dirs = names.filter { it.dir }.map { BrowseItem(name = it.name, isDir = true, path = childPath(dir, it.name), uri = "", sizeBytes = 0L) }
                     viaHelper = false
                     path = dir
@@ -80,16 +85,19 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
                     else listState.scrollToItem(0)
                 } catch (e: Exception) {
                     loading = false
-                    error = "Couldn't open that folder. Check Zephyr Player is open on the PC."
+                    error = if (e is com.zephyr.remote.ZephyrClient.PairingChanged || e is com.zephyr.remote.ZephyrClient.PinUnavailable) e.message
+                        else "Couldn't open that folder. Check Zephyr Player is open on the PC."
                 }
                 return@launch
             }
             // The PC app first: it answers with VLC closed. Too old or unreachable: VLC.
             if (remote.store.helperToken.isNotBlank()) {
                 try {
-                    val names = withContext(Dispatchers.IO) {
-                        HelperClient.browse(remote.store.host, remote.store.helperPort, remote.store.helperToken, dir)
+                    val (names, ep) = withContext(Dispatchers.IO) {
+                        val s = remote.store.helperVlcSnapshot()
+                        HelperClient.browse(s.endpoint.host, s.endpoint.port, s.endpoint.token, dir) to s.endpoint
                     }
+                    listedEp = ep
                     dirs = names.map { BrowseItem(name = it, isDir = true, path = childPath(dir, it), uri = "", sizeBytes = 0L) }
                     viaHelper = true
                     path = dir
@@ -100,9 +108,11 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
                 } catch (e: Exception) { /* old PC app or unreachable - try VLC below */ }
             }
             try {
-                val raw = withContext(Dispatchers.IO) {
-                    Vlc.browse(remote.store.host, remote.store.vlcPort, remote.store.vlcPassword, dir)
+                val (raw, ep) = withContext(Dispatchers.IO) {
+                    val s = remote.store.helperVlcSnapshot()
+                    Vlc.browse(s.endpoint.host, s.vlcPort, s.vlcPassword, dir) to s.endpoint
                 }
+                listedEp = ep
                 dirs = raw.filter { it.isDir }
                 viaHelper = false
                 path = dir
@@ -191,24 +201,29 @@ fun FolderPickerScreen(remote: RemoteState, listState: LazyListState, onPick: (S
                     if (saving || path.isEmpty()) return@PressTile
                     saving = true
                     saveError = null
+                    pinNote.set(null)
                     scope.launch {
                         // Save on the PC so Movies works with VLC closed; only then close.
                         val saved = withContext(Dispatchers.IO) {
                             if (viaZephyr) {
                                 try {
-                                    val zHost = remote.store.zephyrEndpoint ?: return@withContext false
-                                    com.zephyr.remote.ZephyrClient.setLibraryFolder(zHost, remote.store.zephyrPort, remote.store.zephyrToken, path)
+                                    val zt = listedZ ?: return@withContext false   // the listed PC; the client refuses it if the pairing changed
+                                    com.zephyr.remote.ZephyrClient.setLibraryFolder(zt, path)
                                     true
+                                } catch (e: com.zephyr.remote.ZephyrClient.PairingChanged) { pinNote.set(e.message); false
+                                } catch (e: com.zephyr.remote.ZephyrClient.PinUnavailable) { pinNote.set(e.message); false
                                 } catch (e: Exception) { false }
                             } else if (remote.store.helperToken.isBlank()) false
                             else try {
-                                HelperClient.setMoviesFolder(remote.store.host, remote.store.helperPort, remote.store.helperToken, path)
+                                // Save on the PC the folder was listed from: the transport refuses if the pairing changed since.
+                                val ep = listedEp ?: return@withContext false
+                                HelperClient.setMoviesFolder(ep.host, ep.port, ep.token, path)
                                 true
                             } catch (e: Exception) { false }
                         }
                         saving = false
                         if (saved) onPick(path)
-                        else saveError = "Couldn't save that on the PC. Check the connection and tap Select this folder again."
+                        else saveError = pinNote.get() ?: "Couldn't save that on the PC. Check the connection and tap Select this folder again."
                     }
                 },
                 background = OrangeGradient,

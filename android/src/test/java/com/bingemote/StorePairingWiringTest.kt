@@ -2,12 +2,16 @@ package com.bingemote
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /** The real Store, over in-memory preferences that can fail like a damaged secret store:
  *  the pairing save, the poison rule and the legacy zephyrToken getter wired together. */
 class StorePairingWiringTest {
+    @org.junit.Before fun startUnloaded() { Store.resetZephyrRecordForTests(); PairingPublication.resetForTests() }
+    @org.junit.After fun endUnloaded() { Store.resetZephyrRecordForTests(); PairingPublication.resetForTests() }
+
     private class Prefs(
         initial: Map<String, Any?> = emptyMap(),
         var throwOnRead: Set<String> = emptySet(),
@@ -98,21 +102,131 @@ class StorePairingWiringTest {
         assertFalse(store.commitPairing())
     }
 
-    @Test fun legacyPlaintextZephyrTokenGetterDoesNotThrowWhenTheBoxIsPoisoned() {
-        val secrets = Prefs(mapOf("helperToken" to "t"), throwOnRead = setOf("helperToken"))
-        val plain = Prefs(mapOf("zephyrToken" to "legacy-plain"))
-        val store = Store(plain, secrets)
-        store.helperToken // poisons the box
-        assertEquals("legacy-plain", store.zephyrToken) // no uncaught SecureStoreUnavailable, still readable
-        assertEquals("legacy-plain", plain.map["zephyrToken"]) // not migrated, not deleted
-        assertFalse(secrets.writtenKeys.contains("zephyrToken"))
+    private val ztok = "a1".repeat(32); private val zpin = "ab".repeat(32)
+    private fun proof() = SecureHttp.BoundPin(zpin, ztok)
+
+    @Test fun aTupleCapturedBeforeARePairIsRefusedByTheRealStoreEvenWithTheSameHostPortAndToken() {
+        val fx = TlsFixture()
+        val saved = com.zephyr.remote.ZephyrClient.pinSource
+        try {
+            Store.installZephyrPinSource()
+            com.zephyr.remote.ZephyrClient.resetClientsForTests()
+            val store = Store(Prefs(), Prefs())
+            assertEquals(SecurePairSave.Outcome.SAVED, store.saveZephyrPairing(SecureHttp.BoundPin(fx.pinHex, ztok), "127.0.0.1", fx.port, "pc"))
+            val t1 = store.zephyrTarget()!!                                        // captured by a caller
+            fx.server.enqueue(okhttp3.mockwebserver.MockResponse().setBody("{}"))
+            com.zephyr.remote.ZephyrClient.pause(t1)                               // control: it sends while the record is unchanged
+            assertEquals(1, fx.server.requestCount)
+            // Re-paired between capture and execution: same host, port and token, another key (and the new pairing's own local id).
+            val otherPin = PairedCredential.toHex(PinPolicy.hashSpki(byteArrayOf(9, 9, 9)))
+            assertEquals(SecurePairSave.Outcome.SAVED, store.saveZephyrPairing(SecureHttp.BoundPin(otherPin, ztok), "127.0.0.1", fx.port, "pc"))
+            val t2 = store.zephyrTarget()!!
+            assertTrue(t1.host == t2.host && t1.port == t2.port && t1.token == t2.token && t1.pinHex != t2.pinHex)
+            var refused = false
+            try { com.zephyr.remote.ZephyrClient.pause(t1) } catch (e: com.zephyr.remote.ZephyrClient.PairingChanged) { refused = true }
+            assertTrue(refused); assertEquals("nothing was sent for the stale tuple", 1, fx.server.requestCount)
+        } finally { com.zephyr.remote.ZephyrClient.pinSource = saved; com.zephyr.remote.ZephyrClient.resetClientsForTests(); fx.close() }
     }
 
-    @Test fun legacyPlaintextZephyrTokenMigratesWhenHealthy() {
-        val secrets = Prefs(); val plain = Prefs(mapOf("zephyrToken" to "legacy-plain"))
+    @Test fun anOldPlainZephyrPairingIsNeedsRepairNeverReadNeverMigratedNeverDeleted() {
+        val secrets = Prefs(); val plain = Prefs(mapOf("zephyrToken" to "legacy-plain", "zephyrHost" to "pc.local", "zephyrPort" to 47823))
         val store = Store(plain, secrets)
-        assertEquals("legacy-plain", store.zephyrToken)
-        assertEquals("legacy-plain", secrets.map["zephyrToken"])
+        assertNull(store.zephyrTarget())
+        assertTrue(store.zephyrPairing() === ZephyrCredential.State.NeedsRepair)
+        assertEquals("", store.zephyrHost); assertNull(store.zephyrEndpoint)
+        assertEquals("legacy-plain", plain.map["zephyrToken"])        // not deleted
+        assertTrue(secrets.writtenKeys.isEmpty())                       // not migrated into the secret box
+    }
+
+    @Test fun anOldPlainPairingOnABrokenStoreIsBlockedAndUntouched() {
+        val secrets = Prefs(mapOf("helperToken" to "t"), throwOnRead = setOf("helperToken"))
+        val plain = Prefs(mapOf("zephyrToken" to "legacy-plain", "zephyrHost" to "pc.local"))
+        val store = Store(plain, secrets)
+        store.helperToken // poisons the box
+        assertNull(store.zephyrTarget())
+        assertTrue(store.zephyrPairing() === ZephyrCredential.State.Blocked)
+        assertEquals("legacy-plain", plain.map["zephyrToken"])
+    }
+
+    @Test fun aSecureSaveWritesOnlyZephyrKeysAndRemovesTheOldTokenOnlyAfterTheSaveIsConfirmed() {
+        val secrets = Prefs(); val plain = Prefs(mapOf("zephyrToken" to "old-plain", "zephyrHost" to "old.local"))
+        val store = Store(plain, secrets)
+        assertEquals(SecurePairSave.Outcome.SAVED, store.saveZephyrPairing(proof(), "new.local", 47823, "pc"))
         assertFalse(plain.map.containsKey("zephyrToken"))
+        assertTrue((secrets.map["zephyrCredential"] as String).startsWith("z1|"))
+        assertEquals(null, secrets.map["zephyrIntent"])                 // marker cleared
+        assertFalse(secrets.writtenKeys.any { it.startsWith("helper") }) // helper keys never written
+        val t = store.zephyrTarget()!!
+        assertEquals(listOf("new.local", 47823, ztok, zpin), listOf(t.host, t.port, t.token, t.pinHex))
+        assertTrue(Regex("[0-9a-f]{32}").matches(t.pcId))
+        assertEquals("pc", store.zephyrPcName)
+        Store.resetZephyrRecordForTests()
+        val again = Store(plain, secrets).zephyrTarget()!!                // a reload from storage gives the same whole tuple
+        assertTrue(again.same(t))
+    }
+
+    @Test fun aRefusedCommitKeepsTheOldPairingAndNeverDeletesIt() {
+        val secrets = Prefs(); secrets.commitOk = false
+        val plain = Prefs(mapOf("zephyrToken" to "old-plain", "zephyrHost" to "old.local"))
+        val store = Store(plain, secrets)
+        val r = store.saveZephyrPairing(proof(), "new.local", 47823, "pc")
+        assertTrue(r != SecurePairSave.Outcome.SAVED)
+        assertEquals("old-plain", plain.map["zephyrToken"])
+        assertNull(store.zephyrTarget())                                // never falls back to the old token
+    }
+
+    @Test fun aStaleOldTokenNeverOverridesTheSecureRecord() {
+        val secrets = Prefs(); val plain = Prefs()
+        val store = Store(plain, secrets)
+        assertEquals(SecurePairSave.Outcome.SAVED, store.saveZephyrPairing(proof(), "new.local", 47823, "pc"))
+        plain.map["zephyrToken"] = "stale-plain"; plain.map["zephyrHost"] = "stale.local"
+        Store.resetZephyrRecordForTests()
+        val t = Store(plain, secrets).zephyrTarget()!!
+        assertEquals(ztok, t.token); assertEquals("new.local", t.host)
+    }
+
+    @Test fun eachPairingGetsItsOwnLocalIdAndNeverTheHelpers() {
+        val secrets = Prefs(); val store = Store(Prefs(), secrets)
+        store.saveZephyrPairing(proof(), "h", 47823, "pc"); val a = store.zephyrTarget()!!.pcId
+        store.saveZephyrPairing(proof(), "h", 47823, "pc"); val b = store.zephyrTarget()!!.pcId
+        assertTrue(a != b)
+    }
+
+    @Test fun realStorePublishesTheWholeTupleOnReadAndOnEachStandaloneSetter() {
+        PairingPublication.resetForTests()
+        val secrets = Prefs(mapOf("helperToken" to "legacy-tok", "vlcPassword" to "pw")); val plain = Prefs(mapOf("host" to "pc.local"))
+        val store = Store(plain, secrets)
+        assertEquals(null, store.pairingPeek())                       // unloaded until a reader publishes
+        val snap = store.helperVlcSnapshot()                          // legacy-only pairing: the fallback tuple is published, not null
+        assertEquals("legacy-tok", store.pairingPeek()?.endpoint?.token)
+        assertTrue(snap.sameTarget(store.pairingPeek()))
+        store.vlcPort = 9090                                          // a standalone setter is its own section and republishes the whole tuple
+        assertEquals(9090, store.pairingPeek()?.vlcPort)
+        assertEquals("pc.local", store.pairingPeek()?.endpoint?.host)
+        store.vlcPassword = "pw2"
+        assertEquals("pw2", store.pairingPeek()?.vlcPassword)
+        PairingPublication.resetForTests()
+    }
+
+    @Test fun aFailedSecretReadInvalidatesTheRealStoresPublishedTupleAtOnce() {
+        val secrets = Prefs(mapOf("helperToken" to "tok", "vlcPassword" to "pw")); val plain = Prefs(mapOf("host" to "pc.local"))
+        val store = Store(plain, secrets)
+        store.helperVlcSnapshot()
+        assertEquals("tok", store.pairingPeek()?.endpoint?.token)
+        secrets.throwOnRead = setOf("vlcPassword")
+        store.vlcPassword                                   // an unlocked getter hits the failing read and poisons the box
+        assertEquals(null, store.pairingPeek())             // dropped immediately, no stale good tuple
+        val after = store.helperVlcSnapshot()               // the next reader publishes the blank tuple
+        assertEquals("", after.vlcPassword); assertEquals("", store.pairingPeek()?.vlcPassword)
+    }
+
+    @Test fun realStoreLegacyHostEditDropsTheMainGuardCompare() {
+        val secrets = Prefs(mapOf("helperToken" to "tok", "vlcPassword" to "pw")); val plain = Prefs(mapOf("host" to "pc.local"))
+        val store = Store(plain, secrets)
+        val before = store.helperVlcSnapshot()
+        assertFalse(before.secure)                                   // legacy-only pairing is published as plain
+        assertTrue(before.samePc(store.pairingPeek()))
+        store.host = "other.local"                                    // a plain host edit, same token
+        assertFalse(before.samePc(store.pairingPeek()))
     }
 }

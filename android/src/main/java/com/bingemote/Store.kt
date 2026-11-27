@@ -21,6 +21,8 @@ class Store internal constructor(
     )
 
     init {
+        // Secure-only transport reads the loaded record from this store; unpaired, legacy, interrupted or unreadable yields null and nothing is sent.
+        HelperClient.pairingSource = { (helperPairing() as? PairedCredential.State.Secure)?.credential }
         // 1.9 removals: the seek bar is always on top and reconnect is always on.
         // Drop the retired keys so no stale setting lingers on existing installs.
         prefs.edit().remove("seekOnTop").remove("autoReconnect").remove("cancelStyle").apply()
@@ -41,6 +43,7 @@ class Store internal constructor(
         reader = { k -> secrets.getString(k, null) },
         writer = { k, v -> val ed = secrets.edit(); if (v == null) ed.remove(k) else ed.putString(k, v); ed.apply() },
         broken = storeOpenFailed,
+        onPoison = { PairingPublication.invalidate() },   // a failed read drops the published tuple at once: no stale good peek, no storage work here
     )
 
     /** Blocks until pending plain and secret writes are on disk; false when either commit is refused.
@@ -53,16 +56,16 @@ class Store internal constructor(
 
     /** Last known helper/VLC address. Rediscovered over UDP when it changes. */
     var host: String
-        get() = prefs.getString("host", "") ?: ""
-        set(v) = prefs.edit().putString("host", v).apply()
+        get() = (helperPairing() as? PairedCredential.State.Secure)?.credential?.host ?: (prefs.getString("host", "") ?: "")
+        set(v) = pairingSection { prefs.edit().putString("host", v).apply() }
 
     var vlcPort: Int
         get() = prefs.getInt("vlcPort", 8080)
-        set(v) = prefs.edit().putInt("vlcPort", v).apply()
+        set(v) = pairingSection { prefs.edit().putInt("vlcPort", v).apply() }
 
     var helperPort: Int
-        get() = prefs.getInt("helperPort", 8492) // Zephyr VLC Remote default
-        set(v) = prefs.edit().putInt("helperPort", v).apply()
+        get() = (helperPairing() as? PairedCredential.State.Secure)?.credential?.port ?: prefs.getInt("helperPort", 8492) // Zephyr VLC Remote default
+        set(v) = pairingSection { prefs.edit().putInt("helperPort", v).apply() }
 
     /** One-time notice after a 1.1 -> 1.2 upgrade retargeted the helper: the PC
      *  helper is now Zephyr VLC Remote. Dismissed forever on "Got it". */
@@ -76,7 +79,7 @@ class Store internal constructor(
      *  (round-3 A3). Returns true only on the upgrade path. */
     fun migrateLegacyHelperPort(): Boolean {
         if (prefs.getInt("helperPort", 8492) != 8488) return false
-        prefs.edit().putInt("helperPort", 8492).putBoolean("vlcRemoteNoticePending", true).apply()
+        pairingSection { prefs.edit().putInt("helperPort", 8492).putBoolean("vlcRemoteNoticePending", true).apply() }
         return true
     }
 
@@ -150,7 +153,7 @@ class Store internal constructor(
 
     var vlcPassword: String
         get() = secretBox.read("vlcPassword")
-        set(v) = secretBox.write("vlcPassword", v)
+        set(v) = pairingSection { secretBox.write("vlcPassword", v) }
 
     /** The in-flight adoption request id, kept until the PC acks so a crash mid-fetch
      *  replays the same id instead of burning the one-shot grant. */
@@ -163,11 +166,9 @@ class Store internal constructor(
         get() = prefs.getString("moviesPhoneTreeUri", "") ?: ""
         set(v) = prefs.edit().putString("moviesPhoneTreeUri", v).apply()
 
-    /** Zephyr Player source identity (paired separately from the BingeMote helper; port distinct). */
-    /** Zephyr Player host, written by pairing. Blank = no Zephyr PC paired. */
-    var zephyrHost: String
-        get() = prefs.getString("zephyrHost", "") ?: ""
-        set(v) = prefs.edit().putString("zephyrHost", v).apply()
+    /** Zephyr Player source identity (paired separately from the BingeMote helper; port distinct).
+     *  Host, port and endpoint come only from the stored secure record (see [zephyrTarget]); old plain-HTTP prefs are never read. */
+    val zephyrHost: String get() = zephyrTarget()?.host ?: ""
 
     /** The paired Zephyr PC's address, or null when none is paired. NEVER falls back to
      *  another host (round-6 N-3): the pairing token may only ever go to the address it
@@ -175,34 +176,71 @@ class Store internal constructor(
     val zephyrEndpoint: String?
         get() = zephyrHost.ifBlank { null }
 
+    /** The paired Player as ONE tuple. Immutable: an operation that holds one talks to exactly that host, port, token, local id and key. */
+    class ZephyrTarget(val host: String, val port: Int, val token: String, val pcId: String = "", val pinHex: String = "") {
+        fun same(o: ZephyrTarget?): Boolean = o != null && host == o.host && port == o.port && token == o.token && pcId == o.pcId && pinHex == o.pinHex
+    }
+    /** The process-wide record (shared by every Store instance): see [ZephyrRecord]. Only a Secure z1 record yields a target. */
+    fun zephyrTarget(): ZephyrTarget? = try {
+        zephyrRecord.read { targetOf(zephyrPairing()) }
+    } catch (e: SecureStoreUnavailable) { null }
+    private fun targetOf(st: ZephyrCredential.State): ZephyrTarget? =
+        (st as? ZephyrCredential.State.Secure)?.credential?.let { ZephyrTarget(it.host, it.port, it.token, it.pcId, it.pinHex) }
+
+    /** Zephyr pairing persistence: its own record, intent marker and latch (nothing shared with the helper but the write lock). */
+    internal val zephyrPairStore: ZephyrPairStore = object : ZephyrPairStore {
+        private fun syncWrite(k: String, v: String) {
+            if (secretBox.isBroken) throw SecureStoreUnavailable()
+            val ed = secrets.edit(); if (v.isEmpty()) ed.remove(k) else ed.putString(k, v)
+            if (!ed.commit()) throw IllegalStateException("secret commit refused")
+        }
+        override var credential: String get() = secretBox.read("zephyrCredential"); set(v) = syncWrite("zephyrCredential", v)
+        override var intent: String get() = secretBox.read("zephyrIntent"); set(v) = syncWrite("zephyrIntent", v)
+        override var pcName: String get() = zephyrPcName; set(v) { zephyrPcName = v }
+        override fun flush(): Boolean = commitPairing()
+        override fun healthy(): Boolean = !secureStoreBroken
+    }
+    /** Presence only: an old plain-HTTP token still exists. Its value is never read. */
+    private fun legacyZephyrPresent(): Boolean = !prefs.getString("zephyrToken", "").isNullOrEmpty() || secretBox.read("zephyrToken").isNotEmpty()
+    /** Usable only when Secure. Legacy-only, interrupted, corrupt or unreadable storage is never usable. */
+    internal fun zephyrPairing(): ZephyrCredential.State = ZephyrPairSave.load(zephyrPairStore) { legacyZephyrPresent() }
+
+    /** The only writer of the Player pairing. [proof] carries the token and the key from one pairing connection; the local id is new for
+     *  each pairing. Old plain-HTTP data is left exactly as it is on any outcome except a confirmed save, after which only the old token is removed. */
+    internal fun saveZephyrPairing(proof: SecureHttp.BoundPin, host: String, port: Int, pcName: String): SecurePairSave.Outcome {
+        var outcome = SecurePairSave.Outcome.FAILED_PRIOR_KEPT
+        zephyrRecord.write {
+            outcome = ZephyrPairSave.save(zephyrPairStore, host, port, pcName, proof, PairedCredential.newPcId())
+            targetOf(zephyrPairing())
+        }
+        if (outcome == SecurePairSave.Outcome.SAVED) {
+            runCatching { prefs.edit().remove("zephyrToken").apply(); secretBox.write("zephyrToken", "") }
+        }
+        return outcome
+    }
+
+    companion object {
+        private val zephyrRecord = ZephyrRecord<ZephyrTarget>()
+        /** Test-only: forget the process-shared cache so each test starts unloaded. */
+        internal fun resetZephyrRecordForTests() = zephyrRecord.resetForTests()
+        init { installZephyrPinSource() }
+        /** Installs the client's whole-tuple gate over the shared record (also called by tests that need the real gate back after another test cleared it). */
+        internal fun installZephyrPinSource() {
+            // Set once when the class loads, from the shared record, never from an instance. Reads nothing from disk; nothing is sent while a write is in flight.
+            com.zephyr.remote.ZephyrClient.pinSource = com.zephyr.remote.ZephyrClient.PinSource { t ->
+                when (val s = zephyrRecord.peekState()) {
+                    is ZephyrRecord.Peek.Unavailable -> com.zephyr.remote.ZephyrClient.Pin.UNAVAILABLE   // no verdict on the pairing
+                    is ZephyrRecord.Peek.Value -> if (t.same(s.v)) com.zephyr.remote.ZephyrClient.Pin.MATCH else com.zephyr.remote.ZephyrClient.Pin.CHANGED
+                }
+            }
+        }
+    }
+
     var zephyrPcName: String
         get() = prefs.getString("zephyrPcName", "") ?: ""
-        set(v) = prefs.edit().putString("zephyrPcName", v).apply()
+        private set(v) = prefs.edit().putString("zephyrPcName", v).apply()
 
-    var zephyrPort: Int
-        get() = prefs.getInt("zephyrPort", 47823)
-        set(v) = prefs.edit().putInt("zephyrPort", v).apply()
-    // Pairing token is a secret: same Keystore-backed store as the helper token.
-    // v13-dev builds wrote it to plain prefs; migrate on first read.
-    var zephyrToken: String
-        get() {
-            val plain = prefs.getString("zephyrToken", "") ?: ""
-            if (plain.isNotEmpty()) {
-                // Migration only when the encrypted store is healthy; while broken the
-                // plaintext value is honestly on disk, so it still reads, unmigrated.
-                // Current health, not the startup flag: a failed read earlier in this process also
-                // poisons the box, and then the write would throw out of this getter.
-                if (!secretBox.isBroken) {
-                    try {
-                        secretBox.write("zephyrToken", plain)
-                        prefs.edit().remove("zephyrToken").apply()
-                    } catch (e: SecureStoreUnavailable) { /* stays plaintext on disk, still reads, unmigrated */ }
-                }
-                return plain
-            }
-            return secretBox.read("zephyrToken")
-        }
-        set(v) = secretBox.write("zephyrToken", v)
+    val zephyrPort: Int get() = zephyrTarget()?.port ?: 47823
 
     /** The phone's Connected Sources selection (protocol.md Source routing): which PC
      * target input frames go to. Default VLC = today's behavior; nothing re-routes
@@ -211,17 +249,89 @@ class Store internal constructor(
         get() = if (prefs.getString("selectedSource", "vlc") == "zephyr") Source.ZEPHYR else Source.VLC
         set(v) = prefs.edit().putString("selectedSource", if (v == Source.ZEPHYR) "zephyr" else "vlc").apply()
 
+    /** The secure record's token when one is loaded; otherwise the raw old value, which the secure transport never sends. */
     var helperToken: String
-        get() = secretBox.read("helperToken")
-        set(v) = secretBox.write("helperToken", v)
+        get() = (helperPairing() as? PairedCredential.State.Secure)?.credential?.token ?: secretBox.read("helperToken")
+        set(v) = pairingSection { secretBox.write("helperToken", v) }
+
+    /** Every write of a helper/VLC tuple field runs in a writer section (see [PairingPublication]); a setter used on its own is its own section. */
+    internal fun <T> pairingSection(block: () -> T): T = SecurePairSave.writerSection(securePairStore, block)
+    /** The whole tuple exactly as the getters return it, for any pairing state, plus the broken check the publication needs. */
+    private val tupleSource = object : PairingPublicationSource {
+        override fun loadTuple(): HelperVlcSnapshot {
+            val c = (helperPairing() as? PairedCredential.State.Secure)?.credential
+            val ep = c?.let { HelperEndpoint(it.host, it.port, it.token) } ?: HelperEndpoint(host, helperPort, helperToken)
+            return HelperVlcSnapshot(ep, vlcPort, vlcPassword, secure = c != null)
+        }
+        override fun isBroken() = secureStoreBroken
+    }
+    /** Lock-free, storage-free: the published tuple, or null while unloaded or a writer section is in flight (treat as not current). */
+    fun pairingPeek(): HelperVlcSnapshot? = PairingPublication.peek()
+
+    /** Secure pairing persistence (credential record + write-ahead marker), same secret store and flush as the token. */
+    internal val securePairStore: SecurePairStore = object : SecurePairStore {
+        // Each write is a synchronous commit() that must report success; a refused commit throws, so the save logic sees it.
+        private fun syncWrite(k: String, v: String) {
+            if (secretBox.isBroken) throw SecureStoreUnavailable()
+            val ed = secrets.edit(); if (v.isEmpty()) ed.remove(k) else ed.putString(k, v)
+            if (!ed.commit()) throw IllegalStateException("secret commit refused")
+        }
+        override var credential: String get() = secretBox.read("helperCredential"); set(v) = syncWrite("helperCredential", v)
+        override var intent: String get() = secretBox.read("helperIntent"); set(v) = syncWrite("helperIntent", v)
+        override var vlcPassword: String get() = this@Store.vlcPassword; set(v) { this@Store.vlcPassword = v }
+        override var pcName: String get() = this@Store.pcName; set(v) { this@Store.pcName = v }
+        override var legacyToken: String get() = secretBox.read("helperToken"); set(v) = secretBox.write("helperToken", v)
+        override fun flush(): Boolean = commitPairing()
+        override fun healthy(): Boolean = !secureStoreBroken
+        override val publication: PairingPublicationSource get() = tupleSource
+    }
+    /** Usable only when Secure. Legacy-only, interrupted, corrupt or unreadable storage is never usable. */
+    internal fun helperPairing(): PairedCredential.State = SecurePairSave.load(securePairStore)
+
+    /** host, port and token read from ONE load of the stored record, for any operation that needs all three. Separate getters
+     *  each load again, so a move between two of them could mix an old host with a new port. Not secure = plain fallback values, which
+     *  the secure transport never sends. */
+    class HelperEndpoint(val host: String, val port: Int, val token: String)
+    /** Runs [block] with host, port and token from one load of the stored record. */
+    inline fun <T> withHelper(block: (String, Int, String) -> T): T { val e = helperEndpoint(); return block(e.host, e.port, e.token) }
+    /** Helper endpoint plus the VLC port and password, read together under the pairing write lock so a re-pair cannot land between the reads
+     *  (a re-pair writes the record and the VLC password inside that lock). Local reads only: no network, no suspension. */
+    class HelperVlcSnapshot(val endpoint: HelperEndpoint, val vlcPort: Int, val vlcPassword: String,
+                            /** True only when the endpoint came from a loaded Secure pairing record (host and port verified with the key); false for the plain fallback. */
+                            val secure: Boolean = false) {
+        /** Same PC for the Main guards. Secure pairing on both sides: token, VLC port and VLC password (a verified address move,
+         *  SecurePairSave.updateAddress, keeps pin and token and changes only host and helper port: the same PC). Both plain/legacy: the whole
+         *  [sameTarget], including host and helper port, because no verified move exists there. A secure/plain mismatch is never the same PC. */
+        fun samePc(o: HelperVlcSnapshot?): Boolean = when {
+            o == null || secure != o.secure -> false
+            secure -> endpoint.token == o.endpoint.token && vlcPort == o.vlcPort && vlcPassword == o.vlcPassword
+            else -> sameTarget(o)
+        }
+        /** The whole direct-VLC and helper target: address, helper port, token, VLC port and password. */
+        fun sameTarget(o: HelperVlcSnapshot?): Boolean = o != null && endpoint.host == o.endpoint.host && endpoint.port == o.endpoint.port &&
+            endpoint.token == o.endpoint.token && vlcPort == o.vlcPort && vlcPassword == o.vlcPassword
+        inline fun <T> withVlc(block: (String, Int, String) -> T): T = block(endpoint.host, vlcPort, vlcPassword)
+        inline fun <T> withHelper(block: (String, Int, String) -> T): T = block(endpoint.host, endpoint.port, endpoint.token)
+    }
+    fun helperVlcSnapshot(): HelperVlcSnapshot = SecurePairSave.readAndPublish(tupleSource)
+    /** Runs [block] with the VLC host, port and password from one locked read (see [helperVlcSnapshot]). The host is the stored pairing's, or the
+     *  plain saved one when there is no secure pairing, as [host] reads it, so direct-VLC use needs no helper pairing. */
+    inline fun <T> withVlc(block: (String, Int, String) -> T): T { val s = helperVlcSnapshot(); return block(s.endpoint.host, s.vlcPort, s.vlcPassword) }
+    fun helperEndpoint(): HelperEndpoint =
+        (helperPairing() as? PairedCredential.State.Secure)?.credential?.let { HelperEndpoint(it.host, it.port, it.token) }
+            ?: HelperEndpoint(host, helperPort, helperToken)
 
     val isConfigured: Boolean
-        get() = setupDone && host.isNotBlank() && vlcPassword.isNotBlank()
+        get() = setupDone && helperPairing() is PairedCredential.State.Secure && host.isNotBlank() && vlcPassword.isNotBlank()
+
+    /** An old plain-HTTP pairing, an interrupted save or an unreadable store: shown as "pair again", never as paired. */
+    val pairingNeedsRepair: Boolean
+        get() = setupDone && helperPairing().let { it is PairedCredential.State.NeedsRepair || it is PairedCredential.State.Blocked }
 
     /** Pairing state per source: the Zephyr PC rides on its own token, the VLC PC on a
      *  finished setup. Home gates its pair card and command sends on this (teardown A1). */
     fun isPaired(source: Source): Boolean =
-        if (source == Source.ZEPHYR) zephyrToken.isNotBlank() else isConfigured
+        if (source == Source.ZEPHYR) zephyrTarget() != null else isConfigured
 }
 
 private fun openSecrets(context: Context): android.content.SharedPreferences = try {

@@ -21,7 +21,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 internal fun mediaSourceConfigured(store: Store) =
-    if (store.selectedSource == Source.ZEPHYR) store.zephyrToken.isNotBlank() && store.zephyrHost.isNotBlank()
+    if (store.selectedSource == Source.ZEPHYR) store.zephyrTarget() != null
     else store.isConfigured
 
 /** Starts or stops the lock-screen controls service to match the setting. */
@@ -109,25 +109,29 @@ class MediaControlsService : Service() {
         scope.launch {
             try {
                 if (store.selectedSource == Source.ZEPHYR) {
+                    val zt = store.zephyrTarget() ?: throw java.io.IOException("Zephyr PC isn't paired")
                     val st = currentPlayback(store)
                     val next = ((st.volumeRaw * 100 / 256) + if (delta > 0) 5 else -5).coerceIn(0, 100)
-                    com.zephyr.remote.ZephyrClient.volume(store.zephyrHost, store.zephyrPort, store.zephyrToken, next)
+                    com.zephyr.remote.ZephyrClient.volume(zt, next)
+                    if (!zt.same(store.zephyrTarget())) return@launch   // re-paired meanwhile: publish nothing about the old PC
                     lastStatus = st.copy(volumeRaw = next * 256 / 100)
                     refreshNow()
                     return@launch
                 }
-                val helper = if (store.helperToken.isNotBlank())
-                    try { HelperClient.volumeGet(store.host, store.helperPort, store.helperToken) } catch (_: Exception) { null }
+                val vs = store.helperVlcSnapshot()   // one target (helper AND direct VLC fallback) for the whole operation
+                val ep = vs.endpoint
+                val helper = if (ep.token.isNotBlank())
+                    try { HelperClient.volumeGet(ep.host, ep.port, ep.token) } catch (_: Exception) { null }
                 else null
                 if (helper != null) {
                     val (win, winMuted) = helper
                     val next = (win + if (delta > 0) 5 else -5).coerceIn(0, 100)
-                    HelperClient.volumeSet(store.host, store.helperPort, store.helperToken, next)
-                    if (winMuted) HelperClient.volumeMute(store.host, store.helperPort, store.helperToken, false)
+                    HelperClient.volumeSet(ep.host, ep.port, ep.token, next)
+                    if (winMuted) HelperClient.volumeMute(ep.host, ep.port, ep.token, false)
                 } else {
-                    val st = currentPlayback(store)
+                    val st = Vlc.status(ep.host, vs.vlcPort, vs.vlcPassword)   // fresh, bound to this operation's snapshot (the cached lastStatus is not keyed to a PC)
                     val next = (st.volumeRaw + delta).coerceIn(0, Vlc.VOLUME_100)
-                    Vlc.setVolume(store.host, store.vlcPort, store.vlcPassword, next)
+                    Vlc.setVolume(ep.host, vs.vlcPort, vs.vlcPassword, next)
                     lastStatus = st.copy(volumeRaw = next)
                             }
                 refreshNow()
@@ -339,11 +343,13 @@ class MediaControlsService : Service() {
             val failureObserver = if (BuildConfig.DEBUG) beforePollFailure else null
             val commitObserver = if (BuildConfig.DEBUG) beforePollCommit else null
             val committedObserver = if (BuildConfig.DEBUG) pollCommitted else null
+            val playback = SelectedPlayback(store)
             val st = try {
-                SelectedPlayback(store).status()
+                playback.status()
             } catch (e: Vlc.BadAuth) {
-                // The one automatic heal: adopt the PC's current password once; never push ours.
-                if (store.selectedSource == Source.VLC && VlcAuthRepair.tryHealOnce(store)) { return } // the next poll uses it
+                // The one automatic heal: adopt the PC's current password once; never push ours. Bound to the PC this poll targeted.
+                val tok = playback.pcToken
+                if (store.selectedSource == Source.VLC && tok != null && VlcAuthRepair.tryHealOnce(store, tok)) { return } // the next poll uses it
                 recordPollFailure(epoch, failureObserver)
                 return
             } catch (e: Exception) { if (e is CancellationException) throw e;

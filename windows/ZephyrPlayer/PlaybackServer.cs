@@ -40,6 +40,11 @@ namespace ZephyrPlayer
         private static readonly System.Collections.Generic.HashSet<string> NamedKeys = new()
             { "enter", "backspace", "escape", "space", "tab", "up", "down", "left", "right" };
         public int Port { get; }
+        /// <summary>HTTPS (http.sys with an installer-bound certificate). Secure mode serves nothing over plaintext and
+        /// closes every non-IPv4 connection before reading a body or running any route.</summary>
+        public bool Secure { get; }
+        internal int NonIPv4Closed => _nonV4;
+        private int _nonV4;
 
         /// <param name="validateToken">Checks a Bearer token against the paired-phone
         /// store. Auth is MANDATORY: no build that opens this listener ships or runs
@@ -56,8 +61,10 @@ namespace ZephyrPlayer
             IInputSink? input = null,
             IPlaybackControl? control = null,
             DisplayGate? display = null,
-            Func<string, bool>? isPaired = null)
+            Func<string, bool>? isPaired = null,
+            bool secure = false)
         {
+            Secure = secure;
             _display = display;
             _isPaired = isPaired;
             _onPlay = onPlay;
@@ -69,7 +76,8 @@ namespace ZephyrPlayer
             _control = control;
             _loopbackOnly = loopbackOnly;
             Port = port;
-            _listener.Prefixes.Add(loopbackOnly ? $"http://127.0.0.1:{port}/" : $"http://+:{port}/");
+            var scheme = secure ? "https" : "http";
+            _listener.Prefixes.Add(loopbackOnly ? $"{scheme}://127.0.0.1:{port}/" : $"{scheme}://+:{port}/");
         }
 
         public void Start()
@@ -104,6 +112,13 @@ namespace ZephyrPlayer
                 }
                 try
                 {
+                    if (Secure && !IsIPv4Pair(ctx.Request.LocalEndPoint, ctx.Request.RemoteEndPoint))
+                    {
+                        // v1 is IPv4-only: drop the connection before any body is read or route runs.
+                        Interlocked.Increment(ref _nonV4);
+                        ctx.Response.Abort();
+                        continue;
+                    }
                     if (!TrustedRequest(ctx)) {ctx.Response.StatusCode=403;ctx.Response.Close();continue;}
                     var pair = ctx.Request.HttpMethod == "POST" && ctx.Request.Url?.AbsolutePath == "/pair";
                     if (!pair)
@@ -380,6 +395,11 @@ namespace ZephyrPlayer
             catch (OperationCanceledException) { await SafeError(ctx, 408, "request timed out"); }
             catch (Exception) { await SafeError(ctx, 400, "invalid request"); }
         }
+
+        private static bool IsIPv4Pair(IPEndPoint? local, IPEndPoint? remote) =>
+            local != null && remote != null
+            && local.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+            && remote.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork;
 
         private static bool TrustedRequest(HttpListenerContext ctx)
         {

@@ -63,10 +63,12 @@ android {
         }
     }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
-    testOptions { unitTests.isReturnDefaultValues = true }
+    testOptions { unitTests.isReturnDefaultValues = true; unitTests.isIncludeAndroidResources = true }
 }
 
 dependencies {
+    // Test-scope only (never in the release graph): simulated Android framework for the separate robolectricDebugUnitTest task.
+    testImplementation("org.robolectric:robolectric:4.14.1")
     // Tink references these class-retained build-time annotations; not runtime code.
     compileOnly("com.google.errorprone:error_prone_annotations:2.53.0")
     // The minified release androidTest APK has the same Tink/test-only annotation
@@ -105,4 +107,22 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
     androidTestImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+}
+
+// Robolectric tests (package com.bingemote.robo) run in their OWN Test task and JVM: observed, they break the plain TLS tests when they share
+// a JVM (cause undiagnosed). The plain task excludes the package; `check` runs both, and evidence must report both counts separately.
+tasks.withType<Test>().configureEach { maxHeapSize = "1000m" }
+afterEvaluate {
+    val plain = tasks.named<Test>("testDebugUnitTest")
+    // every ordinary Test task (debug and release variants) excludes the simulated package; only robolectricDebugUnitTest includes it
+    tasks.withType<Test>().matching { it.name != "robolectricDebugUnitTest" }.configureEach { filter.excludeTestsMatching("com.bingemote.robo.*") }
+    val robo = tasks.register<Test>("robolectricDebugUnitTest") {
+        group = "verification"
+        dependsOn("compileDebugUnitTestKotlin")
+        testClassesDirs = plain.get().testClassesDirs
+        classpath = plain.get().classpath
+        filter.includeTestsMatching("com.bingemote.robo.*")
+        mustRunAfter(plain)
+    }
+    tasks.named("check") { dependsOn(robo) }
 }

@@ -35,7 +35,7 @@ fun ZephyrSetupScreen(
     val store = remote.store
     val scope = rememberCoroutineScope()
     // Re-entering with a saved pairing opens on the pair step, which offers to continue with it.
-    val entryStep = remember { if (initialStep > 0) initialStep else if (store.zephyrToken.isBlank()) 1 else 2 }
+    val entryStep = remember { if (initialStep > 0) initialStep else if (store.zephyrTarget() == null) 1 else 2 }
     var step by remember { mutableStateOf(entryStep) }
     // Same shape as the BingeMote setup: a PC is chosen from Find my PC or a typed address, and only then does the code card appear.
     var manualHost by remember { mutableStateOf("") }
@@ -68,12 +68,12 @@ fun ZephyrSetupScreen(
     // RemoteState.pollZephyr, which writes unpaired flags). No store write and no refreshPairing on any outcome.
     // checkGen: each check (and each new pair attempt) bumps it, so a late result from an earlier
     // pair or an earlier Try again is dropped and cannot overwrite the current state.
-    fun checkAfterPair(h: String, port: Int, token: String) {
+    fun checkAfterPair(zt: Store.ZephyrTarget) {
         val gen = ++checkGen
         checkState = PairCheck.Checking
         scope.launch(Dispatchers.IO) {
             val result = try {
-                ZephyrClient.controlStatus(h, port, token); PairCheck.Ok
+                ZephyrClient.controlStatus(zt); if (zt.same(store.zephyrTarget())) PairCheck.Ok else PairCheck.CouldntCheck
             } catch (e: kotlinx.coroutines.CancellationException) { throw e
             } catch (e: ZephyrClient.BadToken) { PairCheck.BadToken
             } catch (e: Exception) { PairCheck.CouldntCheck }
@@ -93,19 +93,20 @@ fun ZephyrSetupScreen(
         val h = target.host
         scope.launch(Dispatchers.IO) {
             try {
-                val token = ZephyrClient.pair(h, target.port, c)
+                val proof = ZephyrClient.pair(h, target.port, c)
                 withContext(Dispatchers.Main) {
                     try {
-                        // Token FIRST: if secure storage is broken the fail-closed write throws before
-                        // anything else is touched, so the app never claims a pairing that would vanish at restart.
-                        store.zephyrToken = token
-                        store.zephyrHost = h
-                        store.zephyrPort = target.port
-                        store.zephyrPcName = if (target.name == "PC") "" else target.name // blank clears a previous PC's name
+                        // One locked, write-ahead save of identity, key, address and token from the same connection.
+                        val outcome = store.saveZephyrPairing(proof, h, target.port, if (target.name == "PC") "" else target.name) // blank name clears a previous PC's name
+                        if (outcome != SecurePairSave.Outcome.SAVED) {
+                            pairedName = null
+                            error = outcome.userMessage
+                            return@withContext
+                        }
                         code = ""
                         remote.refreshPairing()
                         pairedName = store.zephyrPcName.ifBlank { h }
-                        checkAfterPair(h, target.port, token)
+                        store.zephyrTarget()?.let { checkAfterPair(it) }
                     } catch (e: SecureStoreUnavailable) {
                         error = "The pairing worked but couldn't be saved (secure storage problem on this phone). Nothing was saved here - on the PC, remove this phone from Zephyr Player's pairing list and pair again."
                     } catch (e: Exception) {
@@ -245,8 +246,8 @@ fun ZephyrSetupScreen(
                             Spacer(Modifier.height(6.dp))
                             Text("Couldn't check with your PC.", color = Muted, fontSize = 13.sp)
                             androidx.compose.material3.TextButton(onClick = {
-                                val t = store.zephyrToken
-                                if (t.isNotBlank()) checkAfterPair(store.zephyrHost, store.zephyrPort, t)
+                                val zt = store.zephyrTarget()
+                                if (zt != null) checkAfterPair(zt)
                             }) { Text("Try again", color = AccentText) }
                         }
                         else -> {}

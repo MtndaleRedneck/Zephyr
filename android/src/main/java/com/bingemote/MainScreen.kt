@@ -239,7 +239,10 @@ private fun HomeContent(
             // A removed pairing says pair again; a silent helper says what it affects.
             // Neither shows while the hero already says the PC is unreachable.
             if (!lost) {
-                if (remote.unpaired) {
+                if (remote.keyChanged) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("This PC's security key changed, so the phone refused to connect. Unless you reinstalled or reset Zephyr VLC Remote on the PC, do not continue. To use it again, open Pair on the PC and pair this phone from Settings.", color = OnAccentSub, fontSize = 13.sp)
+                } else if (remote.unpaired) {
                     Spacer(Modifier.height(6.dp))
                     Text("This phone isn't paired with the PC anymore - pair again.", color = OnAccentSub, fontSize = 13.sp)
                 } else if (remote.helperNotice) {
@@ -257,13 +260,12 @@ private fun HomeContent(
                     color = OnAccentSub, fontSize = 13.sp,
                 )
             }
-            // S11b: the saved helper appeared at a NEW address. The helper token
-            // (and with it the VLC password) never follows a discovered host -
-            // re-pairing (fresh code from the helper window) is the safe path.
+            // The saved PC appeared at a NEW address and proved the stored key, so the stored address moved. The token and
+            // VLC password were never sent to the discovered host; only the key check decided.
             remote.helperMovedTo?.let { movedName ->
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Found Zephyr VLC Remote ($movedName) at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
+                    "Zephyr VLC Remote ($movedName) moved to a new address. This phone checked its key and updated the address, nothing to do.",
                     color = OnAccentSub, fontSize = 13.sp,
                 )
             }

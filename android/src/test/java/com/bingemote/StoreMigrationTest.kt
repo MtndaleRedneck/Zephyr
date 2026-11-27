@@ -97,30 +97,25 @@ class StoreMigrationTest {
     }
 
     @Test fun `the phone protocol reaches the migrated endpoint with the saved token`() {
-        // The retargeted phone talks the Zephyr VLC Remote HTTP protocol at the
-        // migrated port with its OLD token in the Zephyr header (round-4 A3).
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
-        server.start()
+        // The retargeted phone talks the Zephyr VLC Remote protocol at the migrated port with its
+        // token in the Zephyr header (round-4 A3). Now over the pinned HTTPS path.
+        val fx = TlsFixture(); val restore = fx.install()
+        fx.server.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
         try {
-            val ok = HelperClient.ping("127.0.0.1", server.port, "a1".repeat(32))
+            val ok = HelperClient.ping("127.0.0.1", fx.port, fx.token)
             assertTrue(ok)
-            val req = server.takeRequest()
+            val req = fx.server.takeRequest()
             assertEquals("/ping", req.path)
-            assertEquals("a1".repeat(32), req.getHeader("X-Zephyr-VLC-Remote-Token"))
-        } finally {
-            server.shutdown()
-        }
+            assertEquals(fx.token, req.getHeader("X-Zephyr-VLC-Remote-Token"))
+        } finally { restore(); fx.close() }
     }
 
     @Test fun `the migrated helper rejects a phone with no token`() {
-        val server = MockWebServer()
-        server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"))
-        server.start()
+        val fx = TlsFixture(); val restore = fx.install()
+        fx.server.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"))
         try {
-            assertFalse(HelperClient.ping("127.0.0.1", server.port, "0".repeat(64)))
-        } finally {
-            server.shutdown()
-        }
+            assertFalse(HelperClient.ping("127.0.0.1", fx.port, fx.token))
+            assertEquals(1, fx.server.requestCount)   // it reached the server and was refused, not skipped client-side
+        } finally { restore(); fx.close() }
     }
 }

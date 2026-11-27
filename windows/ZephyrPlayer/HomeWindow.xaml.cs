@@ -162,7 +162,7 @@ namespace ZephyrPlayer
 
         // ---------- breadcrumb ----------
 
-        /// <summary>Every real folder above the library root, drive first (C:\Users\TestUser\Videos\Movies gives C:, Users, TestUser, Videos).
+        /// <summary>Every real folder above the library root, drive first (C:\Users\Name\Videos\Movies gives C:, Users, Name, Videos).
         /// 2.0.1: the whole path is shown; the bar folds the middle into "..." only when it would not fit. Pure, for tests.</summary>
         internal static string[] RootPrefix(string folder)
         {

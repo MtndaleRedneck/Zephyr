@@ -17,7 +17,7 @@ class ZephyrCaptionDeliveryTest {
         val captionBodies = CopyOnWriteArrayList<String>()
         val firstGate = java.util.concurrent.CountDownLatch(1)
         @Volatile var gateFirst = false
-        private val server = ServerSocket(0)
+        private val server = TlsFakePlayer.sslContext.serverSocketFactory.createServerSocket(0)
         val port = server.localPort
         @Volatile var running = true
         init { thread(isDaemon = true) {
@@ -55,12 +55,11 @@ class ZephyrCaptionDeliveryTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         HapticTickTest.seedPrefs(ctx, false, pc.port)
         val store = Store(ctx)
-        store.zephyrHost = "127.0.0.1"; store.zephyrPort = pc.port; store.zephyrToken = "fixture"
+        ZephyrTestSeed.seed(store, "127.0.0.1", pc.port)
         store.selectedSource = Source.ZEPHYR
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         return RemoteState(ctx, store, scope) to scope
     }
-
     @Test fun pickedCaptionReachesTheZephyrPc() = runBlocking {
         FakePc().use { pc ->
             val (remote, scope) = setup(pc)
@@ -90,7 +89,6 @@ class ZephyrCaptionDeliveryTest {
             } finally { pc.firstGate.countDown(); scope.cancel() }
         }
     }
-
     @Test fun captionQueuedBehindASlowOneIsDroppedAfterTheGenerationMoves() = runBlocking {
         FakePc().use { pc ->
             pc.gateFirst = true                                        // the fake PC holds the first caption until released

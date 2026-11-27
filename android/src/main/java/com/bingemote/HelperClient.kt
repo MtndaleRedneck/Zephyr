@@ -13,12 +13,12 @@ import java.net.URL
 data class DiscoveredHelper(val host: String, val port: Int, val name: String)
 
 /**
- * Client for the Zephyr VLC Remote Windows helper: mouse, scroll, zoom and keyboard over LAN HTTP.
+ * Client for the Zephyr VLC Remote Windows helper: mouse, scroll, zoom and keyboard over LAN HTTPS.
  * It only ever talks the Zephyr VLC Remote identity (port 8491 discovery / 8492 HTTP),
  * so a BingeMote install on the same PC is never discovered or driven by this app.
- * Every request carries the pairing token. Pairing trades a one-time 6-digit code
- * (shown on the PC) for the token. HTTP is not encrypted. Use only on a trusted private network;
- * a device on that network could observe the token and input.
+ * Every request carries the pairing token and goes over HTTPS pinned to the PC's key,
+ * which the phone remembers the first time it pairs. Pairing trades a one-time 6-digit code
+ * (shown on the PC) for the token. A different key later is refused and needs a new pairing.
  */
 object HelperClient {
     const val DEFAULT_PORT = 8492 // Zephyr VLC Remote HTTP (BingeMote keeps 8488)
@@ -36,6 +36,37 @@ object HelperClient {
     /** The PC could not be connected to at all (off, sleeping, new address). */
     class ConnectTimeout(val msg: String) : Exception(msg)
 
+
+    /** The PC changed its key since pairing. Never retried, never downgraded: the phone must be paired again from the PC. */
+    class KeyChanged : Unreachable("This PC's security key changed, so the phone refused to connect. If you did not reinstall or reset Zephyr VLC Remote on the PC, do not continue. To pair again, open Pair on the PC and pair this phone from the start.")
+    /** No usable secure pairing (unpaired, old plain pairing, interrupted save, unreadable store). Nothing is sent. */
+    class NotPairedSecurely : Unreachable("This phone needs to be paired again. Open Pair on the PC and pair this phone.")
+
+    /** Supplies the loaded secure record (the app sets it from Store.helperPairing()). Null source means nothing can be sent. */
+    @Volatile internal var pairingSource: () -> PairedCredential? = { null }
+
+    private fun credential(): PairedCredential = pairingSource() ?: throw NotPairedSecurely()
+
+    /** Only https to the stored PC address, pinned to the stored key; the address and token args must still match that record (the token is the pairing the call was made for); nothing is sent otherwise. */
+    private fun secureOpen(host: String, port: Int, expectedToken: String, path: String, connectMs: Int = 4000, readMs: Int = 5000): HttpURLConnection {
+        val c = when (val d = RequestGate.decide(pairingSource, host, port, expectedToken)) {
+            is RequestGate.Decision.Allow -> d.credential
+            RequestGate.Decision.NotPaired -> throw NotPairedSecurely()
+            RequestGate.Decision.KeyChanged -> throw KeyChanged()   // after a key change nothing more is sent until re-pair
+        }
+        val conn = SecureHttp.open(c.policy(), c.pcId, c.host, c.port, path, false, null, connectMs, readMs).connection
+        // Same snapshot `c` supplies address, pin and token: a re-pair between two reads can never mix them.
+        conn.setRequestProperty("X-Zephyr-VLC-Remote-Token", c.token)
+        return conn
+    }
+
+    internal fun isKeyMismatch(e: Throwable?): Boolean {
+        var x = e; var n = 0
+        while (x != null && n++ < 8) { if (x is PinMismatchException) return true; x = x.cause }
+        return false
+    }
+    private fun mapFailure(e: Exception): Exception = if (e is KeyChanged) e else if (isKeyMismatch(e)) KeyChanged() else Unreachable(NO_PC)
+
     /** The mouse screen's live connection: while it is open, move/scroll/zoom/button go
      * out as fire-and-forget frames on it and the HTTP request below never happens. */
     @Volatile var live: LiveWs? = null
@@ -46,15 +77,14 @@ object HelperClient {
         Thread(r, "vlc-remote-io").apply { isDaemon = true }
     }
 
-    private fun post(host: String, port: Int, path: String, body: JSONObject, token: String?, timeoutMs: Int = 5000) {
-        val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
+    private fun post(host: String, port: Int, path: String, body: JSONObject, token: String, timeoutMs: Int = 5000) {
+        val c = secureOpen(host, port, token, path, timeoutMs, timeoutMs)
         try {
             c.connectTimeout = timeoutMs
             c.readTimeout = timeoutMs
             c.requestMethod = "POST"
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            if (token != null) c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             val bytes = body.toString().toByteArray(Charsets.UTF_8)
             c.outputStream.use { os: OutputStream -> os.write(bytes) }
             when (c.responseCode) {
@@ -67,7 +97,7 @@ object HelperClient {
         catch (e: java.net.SocketTimeoutException) { throw ConnectTimeout(NO_PC) }
         catch (e: java.net.ConnectException) { throw ConnectTimeout(NO_PC) }
         catch (e: java.net.UnknownHostException) { throw ConnectTimeout(NO_PC) }
-        catch (e: Exception) { throw Unreachable(NO_PC) }
+        catch (e: Exception) { throw mapFailure(e) }
         finally { releaseQuietly(c) }
     }
 
@@ -78,11 +108,10 @@ object HelperClient {
     } catch (e: Exception) { false }
 
     private fun get(host: String, port: Int, path: String, token: String, timeoutMs: Int = 5000): JSONObject {
-        val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
+        val c = secureOpen(host, port, token, path, timeoutMs, timeoutMs)
         try {
             c.connectTimeout = timeoutMs
             c.readTimeout = timeoutMs
-            c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             when (c.responseCode) {
                 in 200..299 -> return JSONObject(c.inputStream.use { it.readBytes().toString(Charsets.UTF_8) })
                 else -> throw failure(c)
@@ -93,7 +122,7 @@ object HelperClient {
         catch (e: java.net.SocketTimeoutException) { throw ConnectTimeout(NO_PC) }
         catch (e: java.net.ConnectException) { throw ConnectTimeout(NO_PC) }
         catch (e: java.net.UnknownHostException) { throw ConnectTimeout(NO_PC) }
-        catch (e: Exception) { throw Unreachable(NO_PC) }
+        catch (e: Exception) { throw mapFailure(e) }
         finally { releaseQuietly(c) }
     }
 
@@ -145,13 +174,12 @@ object HelperClient {
 
     /** Subtitle-only bounded transport. Cleanup closes rather than draining an untrusted body. */
     private fun subtitleRequest(host: String, port: Int, token: String, path: String, body: JSONObject? = null, timeoutMs: Int = 6000): JSONObject {
-        val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
+        val c = secureOpen(host, port, token, path, minOf(timeoutMs, 5000), timeoutMs)
         val deadline = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
         val stopper = deadline.schedule({ c.disconnect() }, timeoutMs.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
         try {
             c.connectTimeout = minOf(timeoutMs, 5000); c.readTimeout = timeoutMs
             c.instanceFollowRedirects = false
-            c.setRequestProperty("X-Zephyr-VLC-Remote-Token",token)
             if (body != null) {
                 c.requestMethod = "POST"; c.doOutput = true; c.setRequestProperty("Content-Type","application/json")
                 val bytes = body.toString().toByteArray(Charsets.UTF_8); c.setFixedLengthStreamingMode(bytes.size)
@@ -247,15 +275,14 @@ object HelperClient {
     }
 
     /** post() that returns the response body (/movies/play answers carry the resume question). */
-    private fun postForBody(host: String, port: Int, path: String, body: JSONObject, token: String?, timeoutMs: Int = 5000): String {
-        val c = URL("http://$host:$port$path").openConnection() as HttpURLConnection
+    private fun postForBody(host: String, port: Int, path: String, body: JSONObject, token: String, timeoutMs: Int = 5000): String {
+        val c = secureOpen(host, port, token, path, timeoutMs, timeoutMs)
         try {
             c.connectTimeout = timeoutMs
             c.readTimeout = timeoutMs
             c.requestMethod = "POST"
             c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            if (token != null) c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             c.outputStream.use { os: OutputStream -> os.write(body.toString().toByteArray(Charsets.UTF_8)) }
             val text = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)
                 ?.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) } ?: ""
@@ -269,7 +296,7 @@ object HelperClient {
         catch (e: java.net.SocketTimeoutException) { throw ConnectTimeout(NO_PC) }
         catch (e: java.net.ConnectException) { throw ConnectTimeout(NO_PC) }
         catch (e: java.net.UnknownHostException) { throw ConnectTimeout(NO_PC) }
-        catch (e: Exception) { throw Unreachable(NO_PC) }
+        catch (e: Exception) { throw mapFailure(e) }
         finally { releaseQuietly(c) }
     }
 
@@ -314,35 +341,40 @@ object HelperClient {
         return PairResult(o.getString("token"), o.optString("name", "PC"), pw, o.optBoolean("vlcPending", false))
     }
 
-    fun pair(host: String, port: Int, code: String): PairResult {
-        val c = URL("http://$host:$port/pair").openConnection() as HttpURLConnection
+    /** The old plain-HTTP pairing is removed. Nothing is sent; the secure pairing below replaces it. */
+    fun pair(host: String, port: Int, code: String): PairResult = throw NotPairedSecurely()
+
+    /** Secure first pairing over HTTPS: the key seen on THIS response is the one proven by [proof]. pcId is the local identity the key is remembered under. */
+    class SecurePairResult(val result: PairResult, val proof: SecureHttp.BoundPin, val pcId: String)
+
+    fun pairSecure(host: String, port: Int, code: String, pcId: String = PairedCredential.newPcId()): SecurePairResult {
+        val link = SecureHttp.open(PinPolicy(emptyMap()), pcId, host, port, "/pair", true)
+        val c = link.connection
         try {
-            c.connectTimeout = 4000; c.readTimeout = 4000
             c.requestMethod = "POST"; c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
             c.outputStream.use { it.write(JSONObject().put("code", code.trim()).toString().toByteArray(Charsets.UTF_8)) }
-            val text = (if (c.responseCode in 200..299) c.inputStream else c.errorStream)?.use { s: InputStream ->
-                s.readBytes().toString(Charsets.UTF_8)
-            } ?: ""
-            when (c.responseCode) {
-                200 -> return parsePairJson(text)
-                else -> {
-                    // The helper answers refusals with {"error","detail"}: the detail is
-                    // written for him, so show it instead of a bare code (NEW-A1 parity).
-                    val detail = try { JSONObject(text).optString("detail") } catch (e: Exception) { "" }
-                    val fallback = when (c.responseCode) {
-                        401, 403 -> "Wrong code. Check the code on the PC and try again."
-                        410 -> "That code expired - press Pair again in the Zephyr VLC Remote window on the PC."
-                        429 -> "Too many tries. Press Pair again in the Zephyr VLC Remote window on the PC."
-                        409 -> "That PC already has too many phones paired. Remove one in the Zephyr VLC Remote window first."
-                        else -> "Pairing failed (error ${c.responseCode})."
-                    }
-                    throw BadPairCode(if (detail.isNotBlank()) detail else fallback)
-                }
+            val rc = link.responseCode()
+            val bound = link.readBound() ?: throw Unreachable("The PC could not be verified. Pair again.")
+            val text = bound.body
+            if (rc == 200) {
+                // The token is taken from the body this link read and bound to its key; nothing else can supply it.
+                var parsed: PairResult? = null
+                val proof = bound.pin { body -> parsePairJson(body).also { parsed = it }.token }
+                return SecurePairResult(parsed!!, proof, pcId)
             }
+            val detail = try { JSONObject(text).optString("detail") } catch (e: Exception) { "" }
+            val fallback = when (rc) {
+                401, 403 -> "Wrong code. Check the code on the PC and try again."
+                410 -> "That code expired - press Pair again in the Zephyr VLC Remote window on the PC."
+                429 -> "Too many tries. Press Pair again in the Zephyr VLC Remote window on the PC."
+                409 -> "That PC already has too many phones paired. Remove one in the Zephyr VLC Remote window first."
+                else -> "Pairing failed (error $rc)."
+            }
+            throw BadPairCode(if (detail.isNotBlank()) detail else fallback)
         } catch (e: BadPairCode) { throw e }
         catch (e: Unreachable) { throw e }
-        catch (e: Exception) { throw Unreachable(NO_PC) }
+        catch (e: Exception) { throw mapFailure(e) }
         finally { releaseQuietly(c) }
     }
 
@@ -360,27 +392,26 @@ object HelperClient {
      *  served exactly once per paired phone. null = the grant is spent or the helper is
      *  too old to know the endpoint. Throws Unreachable when the PC cannot be reached. */
     fun adoptVlcPassword(host: String, port: Int, token: String, requestId: String): String? {
-        val o = postJson("http://$host:$port/vlc/adopt", token, JSONObject().put("requestId", requestId)) ?: return null
+        val o = postJson(host, port, "/vlc/adopt", token, JSONObject().put("requestId", requestId)) ?: return null
         return o.optString("password", "").ifBlank { null }
     }
 
     /** Confirm the password is stored: spends the one-shot grant for good. */
     fun ackVlcAdoption(host: String, port: Int, token: String, requestId: String): Boolean =
-        postJson("http://$host:$port/vlc/adopt", token, JSONObject().put("requestId", requestId).put("ack", true)) != null
+        postJson(host, port, "/vlc/adopt", token, JSONObject().put("requestId", requestId).put("ack", true)) != null
 
     /** POST a JSON body with the pairing token; null on any refusal (401/404/409/410) or error. */
-    private fun postJson(url: String, token: String, body: JSONObject): JSONObject? {
-        val c = URL(url).openConnection() as HttpURLConnection
+    private fun postJson(host: String, port: Int, path: String, token: String, body: JSONObject): JSONObject? {
+        val c = try { secureOpen(host, port, token, path) } catch (e: Exception) { return null }
         try {
             c.connectTimeout = 4000; c.readTimeout = 4000
             c.requestMethod = "POST"; c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             c.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
             if (c.responseCode !in 200..299) return null
             val text = c.inputStream.use { s: InputStream -> s.readBytes().toString(Charsets.UTF_8) }
             return JSONObject(text)
-        } catch (e: Exception) { return null }
+        } catch (e: Exception) { if (e is KeyChanged || isKeyMismatch(e)) throw KeyChanged(); return null }
         finally { releaseQuietly(c) }
     }
 
@@ -440,7 +471,7 @@ object HelperClient {
         return out.toList()
     }
 
-    /** One ordered path: the live socket when it is open, plain HTTP when it is not -
+    /** One ordered path: the live socket (wss) when it is open, pinned HTTPS when it is not -
      * never a per-frame mix of the two (mixed frames are ordered only per channel, and
      * interleaving them can reorder moves against clicks). A full socket queue drops the
      * frame instead of reordering it; the next move delta supersedes it. */
@@ -471,12 +502,11 @@ object HelperClient {
 
     /** Windows system volume, 0-100, and mute. Throws Unreachable when the helper does not answer. */
     fun volumeGet(host: String, port: Int, token: String): Pair<Int, Boolean> {
-        val c = URL("http://$host:$port/volume/get").openConnection() as HttpURLConnection
+        val c = secureOpen(host, port, token, "/volume/get", 1500, 5000)
         try {
             c.connectTimeout = 1500; c.readTimeout = 5000
             c.requestMethod = "POST"; c.doOutput = true
             c.setRequestProperty("Content-Type", "application/json")
-            c.setRequestProperty("X-Zephyr-VLC-Remote-Token", token)
             // Connect explicitly so a dead PC (connect timeout) is told apart from an error answer.
             try { c.connect() } catch (e: java.net.SocketTimeoutException) { throw ConnectTimeout(NO_PC) }
             c.outputStream.use { it.write("{}".toByteArray(Charsets.UTF_8)) }
@@ -493,7 +523,7 @@ object HelperClient {
         } catch (e: Unreachable) { throw e }
         catch (e: ConnectTimeout) { throw e }
         catch (e: BadToken) { throw e }
-        catch (e: Exception) { throw Unreachable(NO_PC) }
+        catch (e: Exception) { throw mapFailure(e) }
         finally { releaseQuietly(c) }
     }
 

@@ -6,7 +6,7 @@ using Xunit;
 
 namespace ZephyrPlayer.Tests
 {
-    /// <summary>2.0.1: Home tiles get a real movie
+    /// <summary>2.0.1 (Home tiles showed no icons): Home tiles get a real movie
     /// frame from libVLC when Windows has no thumbnail - proven on REAL files (an H.264
     /// MKV and an HEVC MKV whose first second fades in from black), not fixture PNGs.</summary>
     public class VlcThumbsTests

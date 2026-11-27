@@ -110,7 +110,7 @@ fun FeedbackScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> 
     val c = remember {
         val base = Feedback.context(ctx)
         // Pairing STATES only - never PC names, tokens or addresses.
-        val paired = (if (remote.store.zephyrToken.isNotBlank()) "Zephyr PC paired" else "Zephyr PC not paired") +
+        val paired = (if (remote.store.zephyrTarget() != null) "Zephyr PC paired" else "Zephyr PC not paired") +
             ", " + (if (remote.store.isConfigured) "VLC PC paired" else "VLC PC not paired")
         base.copy(
             source = if (remote.store.selectedSource == Source.ZEPHYR) "Zephyr PC" else "VLC PC",

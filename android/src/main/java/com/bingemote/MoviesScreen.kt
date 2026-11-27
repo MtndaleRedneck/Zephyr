@@ -103,6 +103,10 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     var zephyrFolder by remember { mutableStateOf<String?>(null) }
     // In-flight guard: a double-tap must not start two movies (two VLCs, two soundtracks).
     var starting by remember { mutableStateOf(false) }
+    // Pairing token of the PC the shown movie list came from; a play after a re-pair is refused, not sent to the new PC.
+    var listedZ by remember { mutableStateOf<Store.ZephyrTarget?>(null) }   // Zephyr listing: the Player the list came from
+    var listedVlc by remember { mutableStateOf<Store.HelperVlcSnapshot?>(null) }   // direct-VLC listing: the whole target it came from
+    var listedTok by remember { mutableStateOf<String?>(null) }
     // PC unreachable: the same state the home hero reads. The approved Movies design shows
     // the orange reconnect banner under the header and reloads by itself when the PC is back.
     val lost = !remote.pcReachable && !remote.expectingVlc
@@ -118,13 +122,21 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
      * exists; true = resume; false = start over. */
     fun startPlay(relPath: String, resume: Boolean?) {
         if (starting) return
-        val receiver = try { StreamTarget.capture(remote.store) } catch (e: Exception) { error = e.message; return }
+        // Only the Zephyr branch can fail here and it takes no pairing lock; the VLC snapshot is taken on the IO thread below (playMovie).
+        if (remote.store.selectedSource == Source.ZEPHYR) { try { StreamTarget.capture(remote.store) } catch (e: Exception) { error = e.message; return } }
         starting = true
+        val playTok = if (remote.store.selectedSource == Source.ZEPHYR) null else listedTok
         scope.launch(Dispatchers.IO) {
             try {
+                val snap = remote.store.helperVlcSnapshot()   // helper target and VLC credentials from one consistent read
+                val ep = snap.endpoint
+                if (playTok != null && ep.token != playTok) {   // re-paired since the list loaded: nothing is sent
+                    withContext(Dispatchers.Main) { error = "The PC changed since this list loaded. Open Movies again." }
+                    return@launch
+                }
                 val resp = HelperClient.playMovie(
-                    remote.store.host, remote.store.helperPort, remote.store.helperToken, relPath,
-                    remote.store.vlcPort, remote.store.vlcPassword, fullscreen = true, resume = resume,
+                    ep.host, ep.port, ep.token, relPath,
+                    snap.vlcPort, snap.vlcPassword, fullscreen = true, resume = resume,
                 )
                 // Screen was dark: the tap only woke the PC. Nothing else happens - the
                 // press sink was the feedback, and the next tap plays normally.
@@ -251,14 +263,14 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         if (starting) return
         askStreamNotifPermissionOnce()
         val toZephyr = remote.store.selectedSource == Source.ZEPHYR
-        if (toZephyr && remote.store.zephyrToken.isBlank()) {
+        if (toZephyr && remote.store.zephyrTarget() == null) {
             error = "Not paired with the Zephyr Player yet."
             return
         }
-        val receiver = try { StreamTarget.capture(remote.store) } catch (e: Exception) { error = plainPlayerError(e, "Couldn't start the stream."); return }
         starting = true
         scope.launch(Dispatchers.IO) {
             try {
+                val receiver = StreamTarget.capture(remote.store)   // locked pairing read stays off Main; same failure message via the catch below
                 val bound = StreamCoordinator.bind(context)
                 try {
                     val movieUri = Uri.parse(item.uri)
@@ -280,10 +292,12 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         error = null
         scope.launch {
             try {
-                val raw = withContext(Dispatchers.IO) {
-                    Vlc.browse(remote.store.host, remote.store.vlcPort, remote.store.vlcPassword, dir)
+                val (raw, listedSnap) = withContext(Dispatchers.IO) {
+                    val s = remote.store.helperVlcSnapshot()
+                    Vlc.browse(s.endpoint.host, s.vlcPort, s.vlcPassword, dir) to s
                 }
                 if (!gate.successCurrent("vlc", g, raw)) return@launch
+                listedVlc = listedSnap
                 show(raw, dir, false, restore)
             } catch (e: Exception) {
                 if (!gate.isCurrent(g)) return@launch
@@ -303,10 +317,12 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         error = null
         scope.launch {
             try {
-                val raw = withContext(Dispatchers.IO) {
-                    HelperClient.listMovies(remote.store.host, remote.store.helperPort, remote.store.helperToken, rel)
+                val (raw, listEp) = withContext(Dispatchers.IO) {
+                    val s = remote.store.helperEndpoint()
+                    HelperClient.listMovies(s.host, s.port, s.token, rel) to s
                 }
                 if (!gate.isCurrent(g)) return@launch
+                listedTok = listEp.token
                 val rows = raw.map { (name, dir) ->
                     BrowseItem(name = name, isDir = dir, path = if (rel.isEmpty()) name else "$rel\\$name", uri = "", sizeBytes = 0L)
                 }
@@ -323,11 +339,14 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                             // Strict read: a failed get throws and lands in the catch
                             // below (no heal) - an unknown PC state must never look
                             // like "PC has none" and trigger a push over its folder.
-                            val onPc = HelperClient.getMoviesFolderStrict(remote.store.host, remote.store.helperPort, remote.store.helperToken)
+                            val hep = remote.store.helperEndpoint()   // read and push target the same PC
+                            val onPc = HelperClient.getMoviesFolderStrict(hep.host, hep.port, hep.token)
                             if (onPc.isBlank()) {
                                 // Superseded while this IO ran: no PC write. (Check-then-act: narrows, does not remove, the window.)
                                 if (!gate.isCurrent(g)) return@withContext null
-                                HelperClient.setMoviesFolder(remote.store.host, remote.store.helperPort, remote.store.helperToken, remote.store.moviesPath.trim())
+                                // A re-pair since the read means the PC that answered is not the stored one: no push to the new PC.
+                                if (remote.store.helperEndpoint().token != hep.token) return@withContext null
+                                HelperClient.setMoviesFolder(hep.host, hep.port, hep.token, remote.store.moviesPath.trim())
                                 "push"
                             } else if (!onPc.trim().equals(remote.store.moviesPath.trim(), ignoreCase = true)) {
                                 // The PC's setting wins: pull its folder instead of
@@ -370,7 +389,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     /** PC origin with Zephyr as the selected source: browse the player's /library. */
     fun loadZephyr(rel: String, restore: Pair<Int, Int>? = null) {
         val g = gate.bump()
-        if (remote.store.zephyrToken.isBlank()) {
+        if (remote.store.zephyrTarget() == null) {
             loading = false
             error = "Zephyr PC isn't paired yet - pair it in Settings > Connected Sources."
             return
@@ -379,12 +398,16 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         error = null
         scope.launch {
             try {
-                val zHost = remote.store.zephyrEndpoint
-                    ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
-                val (atRootZ, rows) = withContext(Dispatchers.IO) {
-                    ZephyrClient.libraryList(zHost, remote.store.zephyrPort, remote.store.zephyrToken, rel)
+                val (zt, listed) = withContext(Dispatchers.IO) {
+                    val t = remote.store.zephyrTarget()
+                        ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
+                    val listed = ZephyrClient.libraryList(t, rel)
+                    if (!t.same(remote.store.zephyrTarget())) throw java.io.IOException("The PC changed while this loaded. Open Movies again.")   // the answer belongs to the PC it was asked of
+                    t to listed
                 }
+                val (atRootZ, rows) = listed
                 if (!gate.isCurrent(g)) return@launch
+                listedZ = zt
                 zephyrAtRoot = atRootZ
                 show(rows.map { (name, dir) ->
                     BrowseItem(name = name, isDir = dir, path = if (rel.isEmpty()) name else "$rel\\$name", uri = "", sizeBytes = 0L)
@@ -403,14 +426,16 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         starting = true
         scope.launch(Dispatchers.IO) {
             try {
-                val zHost = remote.store.zephyrEndpoint
+                val zt = remote.store.zephyrTarget()
                     ?: throw java.io.IOException("Zephyr PC isn't paired yet - pair it in Settings > Connected Sources.")
-                if (zephyrFolder == null) zephyrFolder = ZephyrClient.libraryFolder(zHost, remote.store.zephyrPort, remote.store.zephyrToken)
+                // The list came from one Player; play only there (the client also refuses a changed pairing).
+                if (listedZ != null && !listedZ!!.same(zt)) throw java.io.IOException("The PC changed since this list loaded. Open Movies again.")
+                if (zephyrFolder == null) { val f = ZephyrClient.libraryFolder(zt); if (!zt.same(remote.store.zephyrTarget())) throw java.io.IOException("The PC changed since this list loaded. Open Movies again."); zephyrFolder = f }
                 val folder = zephyrFolder.orEmpty().trimEnd('\\')
                 if (folder.isBlank()) throw java.io.IOException("No movies folder picked on the PC yet - pick one in the player Settings.")
                 val abs = (folder + "\\" + rel).replace('\\', '/')
                 val uri = "file:///" + android.net.Uri.encode(abs, "/:")
-                ZephyrClient.play(zHost, remote.store.zephyrPort, remote.store.zephyrToken, uri, emptyList())
+                ZephyrClient.play(zt, uri, emptyList())
                 withContext(Dispatchers.Main) { onBack() }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { error = plainPlayerError(e, "Couldn't play that one.") }
@@ -523,9 +548,16 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
             else -> {
                 if (starting) return
                 starting = true
+                val listedFrom = listedVlc
                 scope.launch(Dispatchers.IO) {
                     try {
-                        Vlc.playUri(remote.store.host, remote.store.vlcPort, remote.store.vlcPassword, item.uri)
+                        val s = remote.store.helperVlcSnapshot()
+                        // Play only on the PC and VLC credentials this list came from.
+                        if (listedFrom != null && !s.sameTarget(listedFrom)) {
+                            withContext(Dispatchers.Main) { error = "The PC changed since this list loaded. Open Movies again." }
+                            return@launch
+                        }
+                        Vlc.playUri(s.endpoint.host, s.vlcPort, s.vlcPassword, item.uri)
                         withContext(Dispatchers.Main) { onBack() }
                     } catch (e: Exception) {
                         // Used to fail silently and just close - stay put and say it didn't play.
@@ -549,7 +581,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
             val g0 = gate.current()
             val fromPc = withContext(Dispatchers.IO) {
                 if (remote.store.helperToken.isBlank()) null
-                else HelperClient.getMoviesFolder(remote.store.host, remote.store.helperPort, remote.store.helperToken)
+                else remote.store.withHelper { h, p, t -> HelperClient.getMoviesFolder(h, p, t) }
             }
             // Superseded by a newer load, or the user is on the phone list now: do not write the PC folder or reload over it.
             if (!gate.isCurrent(g0) || origin == Origin.PHONE) return@LaunchedEffect
@@ -571,7 +603,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
         val g0 = gate.current()
         val fromPc = withContext(Dispatchers.IO) {
             if (remote.store.helperToken.isBlank()) null
-            else HelperClient.getMoviesFolder(remote.store.host, remote.store.helperPort, remote.store.helperToken)
+            else remote.store.withHelper { h, p, t -> HelperClient.getMoviesFolder(h, p, t) }
         }
         if (!gate.isCurrent(g0)) return@LaunchedEffect // a load started while the PC answered: it owns the screen now
         if (!fromPc.isNullOrBlank()) remote.store.moviesPath = fromPc
@@ -753,7 +785,7 @@ internal fun plainPlayerError(e: Exception, fallback: String): String {
     val m = e.message ?: return fallback
     // Typed errors already carry one plain sentence written for him: pass it through.
     if (e is com.zephyr.remote.ZephyrClient.PairFailed || e is com.zephyr.remote.ZephyrClient.BadToken
-        || e is com.zephyr.remote.ZephyrClient.ScreenWoke || e is HelperClient.BadPairCode || e is HelperClient.BadToken || e is HelperClient.Unreachable) return m
+        || e is com.zephyr.remote.ZephyrClient.ScreenWoke || e is com.zephyr.remote.ZephyrClient.PairingChanged || e is com.zephyr.remote.ZephyrClient.PinUnavailable || e is HelperClient.BadPairCode || e is HelperClient.BadToken || e is HelperClient.Unreachable) return m
     if (m.startsWith("Player returned")) return "Zephyr Player had a problem. Try again."
     // Raw plumbing never reaches the screen (S2): socket text, timeouts and the
     // stream server's "server not ready" each get one plain sentence.

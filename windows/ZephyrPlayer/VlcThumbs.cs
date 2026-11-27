@@ -15,7 +15,7 @@ using MediaPlayer = LibVLCSharp.Shared.MediaPlayer;
 namespace ZephyrPlayer
 {
     /// <summary>
-    /// 2.0.1: our own movie frames for the Home
+    /// 2.0.1 (Home tiles showed no icons): our own movie frames for the Home
     /// grid when Windows has no thumbnail for a file. Windows often has none for MKV
     /// (HEVC without the paid extension, thumbnails off, no Explorer handler), so 2.0.0
     /// drew a blank tile for every one of his movies. The same libVLC that plays the

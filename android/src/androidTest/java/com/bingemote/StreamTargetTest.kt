@@ -26,21 +26,20 @@ class StreamTargetTest {
     private lateinit var store: Store
 
     @Before fun setUp() {
-        zephyr = MockWebServer(); zephyr.start()
+        zephyr = TlsFakePlayer.server()
         vlc = MockWebServer(); vlc.start()
         store = Store(InstrumentationRegistry.getInstrumentation().targetContext)
-        store.zephyrHost = "127.0.0.1"; store.zephyrPort = zephyr.port; store.zephyrToken = "zt"
+        ZephyrTestSeed.seed(store, "127.0.0.1", zephyr.port)
         store.host = "127.0.0.1"; store.vlcPort = vlc.port; store.vlcPassword = "pw"
     }
 
     @After fun tearDown() {
         store.selectedSource = Source.VLC
-        store.zephyrToken = ""
+        ZephyrTestSeed.clear(store)
         zephyr.shutdown(); vlc.shutdown()
     }
 
     private fun ok() = MockResponse().setResponseCode(200).setBody("{}")
-
     @Test fun capturedReceiverSurvivesSourceSwitchAndPausedOldReceiverBlocksIdleStop() {
         store.selectedSource = Source.ZEPHYR
         val tapped = StreamTarget.capture(store)
@@ -84,7 +83,6 @@ class StreamTargetTest {
             hit.path!!.contains("option=%3Ainput-slave%3Dhttp"))
         assertNull("zephyr got traffic while VLC selected", zephyr.takeRequest(1, TimeUnit.SECONDS))
     }
-
     @Test fun zephyrSelected_phoneMovieGoesToZephyrOnly() {
         store.selectedSource = Source.ZEPHYR
         zephyr.enqueue(ok())

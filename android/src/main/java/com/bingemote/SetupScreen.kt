@@ -122,28 +122,20 @@ fun SetupScreen(
         say("", false)
         scope.launch {
             try {
-                val paired = withContext(Dispatchers.IO) { HelperClient.pair(target.host, target.port, code) }
-                val fields = object : PairFields {
-                    override var host: String get() = store.host; set(v) { store.host = v }
-                    override var helperPort: Int get() = store.helperPort; set(v) { store.helperPort = v }
-                    override var helperToken: String get() = store.helperToken; set(v) { store.helperToken = v }
-                    override var pcName: String get() = store.pcName; set(v) { store.pcName = v }
-                    override var vlcPassword: String get() = store.vlcPassword; set(v) { store.vlcPassword = v }
-                    override fun flush(): Boolean = store.commitPairing()
-                    override fun healthy(): Boolean = !store.secureStoreBroken
+                val sp = withContext(Dispatchers.IO) { HelperClient.pairSecure(target.host, target.port, code) }
+                val paired = sp.result
+                val saveOutcome = withContext(Dispatchers.IO) { SecurePairSave.save(store.securePairStore, target.host, target.port,
+                    paired.name.ifBlank { target.name }, paired.vlcPassword, sp.proof, sp.pcId) }
+                if (saveOutcome != SecurePairSave.Outcome.SAVED) {
+                    pairing = false; say(saveOutcome.userMessage, true); return@launch
                 }
-                val saveOutcome = withContext(Dispatchers.IO) { HelperPairSave.save(fields, target.host, target.port, paired.token,
-                    paired.name.ifBlank { target.name }, paired.vlcPassword) }
-                when (saveOutcome) {
-                    HelperPairSave.Outcome.SAVED -> {}
-                    HelperPairSave.Outcome.FAILED_PRIOR_KEPT -> {
-                        pairing = false; say(HelperPairSave.PRIOR_KEPT_MESSAGE, true); return@launch
-                    }
-                    HelperPairSave.Outcome.FAILED_RESTORE_UNCERTAIN -> {
-                        pairing = false; say(HelperPairSave.UNCERTAIN_MESSAGE, true); return@launch
-                    }
+                // One non-suspending Main block: clear the old-PC notice, then publish a fresh re-read of the stored record.
+                val published = withContext(Dispatchers.Main) { remote.onRePaired(); remote.publishIfCurrent(null) }
+                if (!published) {
+                    pairing = false
+                    say("Paired, but the saved pairing could not be read back. Pair again.", true)
+                    return@launch
                 }
-                remote.publishAddress(target.host, target.port, paired.token)
                 // Automatic-first: the PC generated the VLC password and handed it over with
                 // the pair. Older helpers need an update before automatic setup can finish.
                 if (paired.vlcPassword != null) {
@@ -158,6 +150,9 @@ fun SetupScreen(
                 pairedName = store.pcName
                 justPaired = true
                 say("", false)
+            } catch (e: HelperClient.KeyChanged) {
+                pairing = false
+                say(e.msg, true)
             } catch (e: HelperClient.BadPairCode) {
                 pairing = false
                 say("That code didn't work. Get a fresh one: on your PC, open Zephyr VLC Remote from the icon by the clock, type a name under Pair new phone, and tap Pair.", true)

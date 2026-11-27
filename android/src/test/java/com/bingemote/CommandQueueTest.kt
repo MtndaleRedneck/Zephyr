@@ -16,17 +16,19 @@ import java.util.concurrent.TimeUnit
  *  from the real queue and its block performs the real ZephyrClient.captions request against a loopback server;
  *  a command queued before a generation bump is dropped and sends nothing. Bounded waits, no sleeps. */
 class CommandQueueTest {
-    private lateinit var server: MockWebServer
+    private lateinit var fx: TlsFixture
+    private val server: MockWebServer get() = fx.server
     private var generation = 0
     private lateinit var queue: CommandQueue
 
     @Before fun start() {
-        server = MockWebServer(); server.start()
+        fx = TlsFixture()
+        ZephyrClient.pinSource = fx.anyToken()   // explicit test source (the pin has its own tests)
         queue = CommandQueue(currentSubtitleGeneration = { generation })
     }
-    @After fun stop() = server.shutdown()
+    @After fun stop() { ZephyrClient.pinSource = null; fx.close() }
 
-    private fun captions(track: Int): () -> Unit = { ZephyrClient.captions("127.0.0.1", server.port, "tok", track) }
+    private fun captions(track: Int): () -> Unit = { ZephyrClient.captions(fx.target("tok"), track) }
     private fun sub(gen: Int, track: Int) = CommandQueue.Cmd("sub", System.currentTimeMillis(), gen, captions(track))
 
     @Test fun currentGenerationCaptionIsTakenAndDelivered() = runBlocking {

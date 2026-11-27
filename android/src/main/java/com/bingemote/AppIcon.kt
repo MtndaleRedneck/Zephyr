@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
@@ -30,8 +31,9 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun AppIcon(size: Dp = 34.dp, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
+    val config = LocalConfiguration.current   // a Compose state: recomposes on a configuration change (the Resources object is mutated in place)
     // Fresh, unshared instance (newDrawable) so bounds are never mutated on a shared drawable.
-    val drawable = remember(ctx.resources.configuration) {
+    val drawable = remember(config) {
         val d = androidx.core.content.ContextCompat.getDrawable(ctx, R.mipmap.ic_launcher)
         (d?.constantState?.newDrawable(ctx.resources)?.mutate() ?: d) as? AdaptiveIconDrawable
     }

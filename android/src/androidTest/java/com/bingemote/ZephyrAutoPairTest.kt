@@ -24,18 +24,14 @@ class ZephyrAutoPairTest {
         }
         return node
     }
-
     @Test fun sixthDigitPairsExactlyOnceWithoutButtonTap() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val device = UiDevice.getInstance(instrumentation)
-        val server = MockWebServer()
-        server.start()
+        val server = TlsFakePlayer.server()
         val store = Store(context)
-        store.zephyrToken = ""
-        store.zephyrHost = "127.0.0.1"
-        store.zephyrPort = server.port
-        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"token\":\"autopair-test-token\"}"))
+        ZephyrTestSeed.clear(store)
+        server.enqueue(MockResponse().setResponseCode(200).setBody("{\"token\":\"a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0\"}"))
         try {
             device.wakeUp()
             device.executeShellCommand("wm dismiss-keyguard")
@@ -62,8 +58,8 @@ class ZephyrAutoPairTest {
             assertEquals("/pair", request!!.path)
             assertEquals("123456", org.json.JSONObject(request.body.readUtf8()).getString("code"))
             val deadline = System.currentTimeMillis() + 8000
-            while (store.zephyrToken != "autopair-test-token" && System.currentTimeMillis() < deadline) Thread.sleep(100)
-            assertEquals("successful token not saved", "autopair-test-token", store.zephyrToken)
+            while (store.zephyrTarget()?.token != "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0" && System.currentTimeMillis() < deadline) Thread.sleep(100)
+            assertEquals("successful token not saved", "a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0", store.zephyrTarget()?.token)
             // BingeMote flow: the success card sits under the form with Continue; it does not jump away.
             // The card sits under the form in a scrolling column: scroll down until it is on screen.
             var card = device.wait(Until.findObject(By.textContains("Paired with")), 3000)
@@ -79,9 +75,11 @@ class ZephyrAutoPairTest {
             assertNotNull("Continue did not return to Settings", device.wait(Until.findObject(By.text("Settings")), 8000))
             device.executeShellCommand("screencap -p /sdcard/zephyr-autopair-success.png")
             Thread.sleep(700)
-            assertEquals("one entry must create exactly one pairing request", 1, server.requestCount)
+            var pairRequests = 1   // the one already taken
+            while (true) { val r = server.takeRequest(200, TimeUnit.MILLISECONDS) ?: break; if (r.path == "/pair") pairRequests++ }   // the post-pair status check is not a pairing request
+            assertEquals("one entry must create exactly one pairing request", 1, pairRequests)
         } finally {
-            store.zephyrToken = ""
+            ZephyrTestSeed.clear(store)
             server.shutdown()
             device.pressHome()
         }

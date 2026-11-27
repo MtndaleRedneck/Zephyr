@@ -17,7 +17,7 @@ namespace ZephyrVlcRemote;
 internal static class FirewallSetup
 {
     /// <summary>First line of the firewall.ok marker. Bump when the required shape changes.</summary>
-    internal const string MarkerVersion = "v2";
+    internal const string MarkerVersion = "v3";   // v3: HTTPS listener reservation plus certificate identity and sslcert bindings
 
     /// <summary>Who the port's URL reservation belongs to.</summary>
     internal enum AclOwnership { None, Ours, Legacy, Foreign }
@@ -30,6 +30,30 @@ internal static class FirewallSetup
     /// Exit 4 means the port is reserved by another app or another Windows user; their
     /// reservation is NEVER overwritten - the caller explains the conflict instead.</summary>
     public static int RunElevated(string? userSid, string? userDataDir)
+    {
+        var code = RunElevatedCore(userSid, userDataDir);
+        if (code != 0 && TlsStepDone)
+        {
+            // Whole-operation truth: the identity step succeeded and PERSISTS even though a later step did not.
+            Program.Log("firewall setup: exit " + code + " after the secure identity step succeeded. Remaining installed from this run: certificate, marker, both sslcert bindings. Not completed: the later firewall/listen-permission step that failed. Setup is idempotent and can be run again.");
+            Console.Error.WriteLine("Setup was only partly completed. The secure identity and its bindings were installed and remain; the firewall or listen permission step did not finish. Running setup again continues from here.");
+        }
+        return code;
+    }
+
+    private static bool TlsStepDone;
+
+    /// <summary>The unelevated "is everything in place" check. firewall.ok only records that this check passed; it holds no identity data and the identity marker is a separate, elevated-written file.</summary>
+    internal static bool SetupIsCurrent()
+    {
+        if (!(RulesHaveCurrentShape() && UrlAclNamesCurrentUser())) return false;
+        if (HelperTls.RuntimeReady(Program.HttpPort, out var why)) return true;
+        // An unreadable store or binding (for example an unelevated read that is refused) cannot be fixed by elevating: report it as a read failure, never as a reason to prompt again.
+        if (why.Contains("could not be read") || why.Contains("unreadable")) LastReadFailed = true;
+        return false;
+    }
+
+    private static int RunElevatedCore(string? userSid, string? userDataDir)
     {
         try
         {
@@ -63,6 +87,16 @@ internal static class FirewallSetup
                 Console.Error.WriteLine("The network port Zephyr VLC Remote needs is reserved for another app or another Windows user on this PC.");
                 return 4;
             }
+            // TLS identity and both wildcard bindings, in the same elevated step (no new prompt), BEFORE any firewall or urlacl change, so a refusal leaves those untouched. Anything the planner
+            // refuses (foreign binding, unreadable store or key, no marker for an existing binding) leaves everything as it was.
+            var tlsExit = TlsSetup.Run(Program.HttpPort, true);
+            if (tlsExit != 0)
+            {
+                Program.Log("firewall setup: secure identity setup did not complete (exit " + tlsExit + ").");
+                Console.Error.WriteLine("Secure setup could not be completed, so Zephyr VLC Remote did not open the network port. No firewall rule or listen permission was changed by this run" + (tlsExit == 9 ? "; an earlier interrupted secure setup is still unresolved." : "; any partial secure-identity step was rolled back where it could be proven (see the log)."));
+                return 8;
+            }
+            TlsStepDone = true;
             Run("netsh", $"advfirewall firewall delete rule name=\"{Program.LegacyFirewallRule}\""); // 1.x installs
             // Re-add our own rules from scratch: by name they are ours, whatever shape an
             // older build gave them (a 1.x exe-scoped TCP rule included). BingeMote's
@@ -98,8 +132,8 @@ internal static class FirewallSetup
                     break; // already exactly right
                 case AclOwnership.None:
                 case AclOwnership.Legacy:
-                    Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
-                    var acl = Run("netsh", "http add urlacl url=http://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
+                    Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
+                    var acl = Run("netsh", "http add urlacl url=https://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
                     if (acl != 0 || !UrlAclExists())
                     {
                         Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
@@ -118,6 +152,18 @@ internal static class FirewallSetup
                 Console.Error.WriteLine("The listen permission could not be verified.");
                 return 3;
             }
+            // Old http:// reservation: deleted only when positively ours or legacy, verified gone; a foreign or unreadable one is left.
+            try
+            {
+                var oldOwn = ClassifyOldHttpUrlAcl(sid);
+                if (UrlAclMigrationPlanner.PlanOld(oldOwn) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
+                {
+                    Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
+                    if (QueryUrlAcl("http://+:" + Program.HttpPort + "/").Found) Program.Log("firewall setup: the old http reservation could not be removed; it remains (plain http is not served).");
+                }
+                else Program.Log("firewall setup: old http reservation: " + oldOwn + "; left alone.");
+            }
+            catch (Exception ex) { Program.Log("firewall setup: old http reservation check failed (" + ex.GetType().Name + "); left alone."); }
             Program.Log("firewall setup: rules added (TCP System/" + Program.HttpPort + ", UDP exe/" +
                 Program.DiscoveryPort + "), listen permission scoped to SID " + sid + ".");
             if (!RuleExists())
@@ -461,9 +507,16 @@ internal static class FirewallSetup
     /// cannot be read or parsed is Foreign, never None (round-9 N9-3: the netsh-text
     /// version returned None on an unparsed block and setup would have DELETED a
     /// reservation it could not read).</summary>
-    internal static AclOwnership ClassifyUrlAcl(string? sid)
+    /// <summary>Ownership of the OLD http:// reservation, for migration planning only (UrlAclMigrationPlanner). Nothing deletes it yet.</summary>
+    internal static AclOwnership ClassifyOldHttpUrlAcl(string? sid)
     {
         var (found, sddl) = QueryUrlAcl("http://+:" + Program.HttpPort + "/");
+        return found ? ClassifySddl(sddl, sid) : AclOwnership.None;
+    }
+
+    internal static AclOwnership ClassifyUrlAcl(string? sid)
+    {
+        var (found, sddl) = QueryUrlAcl("https://+:" + Program.HttpPort + "/");
         if (!found) return AclOwnership.None;
         return ClassifySddl(sddl, sid);
     }
@@ -559,13 +612,18 @@ internal static class FirewallSetup
         }
         Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
         if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
-            Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
+        {
+            Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
+            if (UrlAclMigrationPlanner.PlanOld(ClassifyOldHttpUrlAcl(sid)) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
+                Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
+            TlsSetup.Remove(Program.HttpPort);   // identity cleanup: only what the marker proves is ours; see the log for what remains
+        }
         return 0;
     }
 
     internal static bool UrlAclExists()
     {
-        return QueryUrlAcl("http://+:" + Program.HttpPort + "/").Found;
+        return QueryUrlAcl("https://+:" + Program.HttpPort + "/").Found;
     }
 
     /// <summary>True when the port's reservation is EXACTLY a per-user grant for this

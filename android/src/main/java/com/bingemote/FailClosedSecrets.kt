@@ -17,13 +17,17 @@ internal class FailClosedSecrets(
     private val reader: (String) -> String?,
     private val writer: (String, String?) -> Unit,
     broken: Boolean,
+    /** Called once, after the failure flag is set, on the thread that saw the first failed read. Must do no storage work and take no storage-path lock.
+     *  Not atomic with the flag: between the flag and this call another thread can still see the old state. The flag-then-callback `first` check
+     *  is also not atomic, so a concurrent first failure may call it more than once (harmless for an idempotent callback). */
+    private val onPoison: (() -> Unit)? = null,
 ) {
     @Volatile private var poisoned = false
     private val startedBroken = broken
     /** True when the store failed to open or a read failed earlier in this process. */
     val isBroken: Boolean get() = startedBroken || poisoned
 
-    fun read(key: String): String = if (isBroken) "" else try { reader(key) ?: "" } catch (e: Exception) { poisoned = true; "" }
+    fun read(key: String): String = if (isBroken) "" else try { reader(key) ?: "" } catch (e: Exception) { val first = !poisoned; poisoned = true; if (first) onPoison?.invoke(); "" }
 
     fun write(key: String, value: String?) {
         if (isBroken) throw SecureStoreUnavailable()

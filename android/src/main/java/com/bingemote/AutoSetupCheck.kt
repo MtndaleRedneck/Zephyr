@@ -16,8 +16,10 @@ object AutoSetupCheck {
     }
 
     fun run(store: Store): Outcome {
+        // ONE locked snapshot for the whole check: the attestation, the first probe and the heal's expected identity all refer to this PC.
+        val firstSnap = store.helperVlcSnapshot()
         val attest = try {
-            HelperClient.vlcSetupStatus(store.host, store.helperPort, store.helperToken)
+            HelperClient.vlcSetupStatus(firstSnap.endpoint.host, firstSnap.endpoint.port, firstSnap.endpoint.token)
         } catch (e: HelperClient.BadToken) {
             return Outcome.REFUSED // the pairing itself is broken: re-pair
         } catch (e: Exception) {
@@ -28,15 +30,19 @@ object AutoSetupCheck {
         if (attest.pending) return Outcome.OK_DEFERRED
         // The PC says nothing is set up at all: never call that done.
         if (!attest.configured) return Outcome.REFUSED
+        // The PC under test is the one the setup check started with (its pairing token). A re-pair elsewhere during the heal aborts the check
+        // instead of probing a different PC with the new credentials.
         return try {
-            Vlc.status(store.host, store.vlcPort, store.vlcPassword)
+            Vlc.status(firstSnap.endpoint.host, firstSnap.vlcPort, firstSnap.vlcPassword)
             Outcome.OK
         } catch (e: Vlc.BadAuth) {
             // The one allowed heal: fetch the PC's current copy once (never push ours at a
             // refusal), then re-check once.
-            if (!VlcAuthRepair.tryHealOnce(store)) return Outcome.REFUSED
+            if (!VlcAuthRepair.tryHealOnce(store, firstSnap.endpoint.token)) return Outcome.REFUSED
             try {
-                Vlc.status(store.host, store.vlcPort, store.vlcPassword)
+                val again = store.helperVlcSnapshot()   // the healed password for the SAME PC
+                if (again.endpoint.token != firstSnap.endpoint.token) return Outcome.REFUSED
+                Vlc.status(again.endpoint.host, again.vlcPort, again.vlcPassword)
                 Outcome.OK
             } catch (e2: Vlc.BadAuth) {
                 Outcome.REFUSED

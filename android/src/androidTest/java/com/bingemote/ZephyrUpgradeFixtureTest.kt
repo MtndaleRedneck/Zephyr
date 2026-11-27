@@ -7,6 +7,7 @@ import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -23,15 +24,14 @@ class ZephyrUpgradeFixtureTest {
     @Test
     fun seed() {
         val s = Store(ctx)
-        s.zephyrHost = "192.0.2.10"
-        s.zephyrPort = 47823
-        s.zephyrPcName = "Upgrade Fixture PC"
-        s.zephyrToken = "upgrade-fixture-token"
+        // Legacy on-disk layout written directly (the secure-only build has no setter for it): host, port, name and a plain token.
+        assertTrue(ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit()
+            .putString("zephyrHost", "192.0.2.10").putInt("zephyrPort", 47823).putString("zephyrPcName", "Upgrade Fixture PC")
+            .putString("zephyrToken", "upgrade-fixture-token").commit())
         s.selectedSource = Source.ZEPHYR
         s.skipMainSec = 15
         s.skipSecondarySec = 60
         s.haptics = false
-        assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
         // The secure store must be the real one (checked on the instance that wrote the token, not a fresh open): a Keystore failure falls back to an in-memory stand-in whose token never reaches disk.
         assertEquals("secure store opened on the WRITING instance (token will be on disk)", false, s.secureStoreBroken)
         // Durable before the script installs the new build. Every setter above uses apply() (async), on TWO files: "settings"
@@ -47,11 +47,12 @@ class ZephyrUpgradeFixtureTest {
     @Test
     fun verify() {
         val s = Store(ctx)
-        assertEquals("192.0.2.10", s.zephyrHost)
-        assertEquals(47823, s.zephyrPort)
+        // Secure-only upgrade: the old plain pairing is not usable (needs a new pairing) and nothing was deleted or read as a fallback.
         assertEquals("Upgrade Fixture PC", s.zephyrPcName)
-        assertEquals("paired token survived the upgrade", "upgrade-fixture-token", s.zephyrToken)
-        assertTrue(s.isPaired(Source.ZEPHYR))
+        assertEquals(null, s.zephyrTarget())
+        assertTrue(s.zephyrPairing() === ZephyrCredential.State.NeedsRepair)
+        assertTrue("old plain token left in place", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).contains("zephyrToken"))
+        assertFalse(s.isPaired(Source.ZEPHYR))
         assertEquals(Source.ZEPHYR, s.selectedSource)
         assertEquals(15, s.skipMainSec)
         assertEquals(60, s.skipSecondarySec)
@@ -78,7 +79,7 @@ class ZephyrUpgradeFixtureTest {
         for (p in procs) { if (p.processName.equals(ctx.packageName)) alive = true }
         assertTrue("app process died after cold open", alive)
         // State still intact after the app itself ran against it.
-        assertEquals("upgrade-fixture-token", Store(ctx).zephyrToken)
+        assertTrue(Store(ctx).zephyrPairing() === ZephyrCredential.State.NeedsRepair)
     }
 
     // Diagnostic only; never changes the verdict. No kotlin stdlib calls (the shipped release app shrinks them): Java APIs, int

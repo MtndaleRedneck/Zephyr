@@ -42,13 +42,12 @@ class HelperRediscoverTest {
         // real HTTP server answering discovery, and the saved endpoint is a real
         // server refusing. run() must send the token ONLY to the saved endpoint.
         val spoof = MockWebServer(); spoof.start()
-        val saved = MockWebServer()
+        val fx = TlsFixture(); val saved = fx.server; val restore = fx.install()
         saved.enqueue(MockResponse().setResponseCode(401).setBody("{\"error\":\"unauthorized\"}"))
-        saved.start()
         try {
             val plan = HelperRediscover.run(
                 "127.0.0.1", saved.port, "Office PC",
-                pingSaved = { HelperClient.ping("127.0.0.1", saved.port, "c7".repeat(32)) },
+                pingSaved = { HelperClient.ping("127.0.0.1", saved.port, fx.token) },
                 discover = { listOf(DiscoveredHelper("127.0.0.1", spoof.port, "Office PC")) },
             )
             assertTrue(plan is HelperRediscover.Plan.MovedNotice)
@@ -56,26 +55,25 @@ class HelperRediscoverTest {
             // no VLC password, nothing. And no save-host call exists in the API.
             assertEquals(0, spoof.requestCount)
             val savedReq = saved.takeRequest()
-            assertEquals("c7".repeat(32), savedReq.getHeader("X-Zephyr-VLC-Remote-Token"))
+            assertEquals(fx.token, savedReq.getHeader("X-Zephyr-VLC-Remote-Token"))
         } finally {
-            spoof.shutdown(); saved.shutdown()
+            restore(); spoof.shutdown(); fx.close()
         }
     }
 
     @Test fun `the saved endpoint answering recovers with no discovery at all`() {
-        val saved = MockWebServer()
+        val fx = TlsFixture(); val saved = fx.server; val restore = fx.install()
         saved.enqueue(MockResponse().setResponseCode(200).setBody("{}"))
-        saved.start()
         try {
             val plan = HelperRediscover.run(
                 "127.0.0.1", saved.port,
-                pingSaved = { HelperClient.ping("127.0.0.1", saved.port, "c7".repeat(32)) },
+                pingSaved = { HelperClient.ping("127.0.0.1", saved.port, fx.token) },
                 discover = { throw AssertionError("discovery must not run when the saved endpoint answers") },
             )
             assertEquals(HelperRediscover.Plan.SavedEndpointSeen, plan)
             assertEquals(1, saved.requestCount)
         } finally {
-            saved.shutdown()
+            restore(); fx.close()
         }
     }
 

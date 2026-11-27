@@ -24,6 +24,10 @@ class RemoteState(
     private val app: Context,
     val store: Store,
     private val scope: CoroutineScope,
+    /** Startup work that must finish before the pairing tuple is first published or polled (the 1.1 port migration, debug seeds). */
+    private val startup: kotlinx.coroutines.Job? = null,
+    /** Where the first-publication preload (the one init coroutine below) runs; used nowhere else. Production keeps IO; a test passes a queued dispatcher to step it. */
+    ioDispatcher: kotlinx.coroutines.CoroutineDispatcher = Dispatchers.IO,
 ) {
     var status by mutableStateOf<VlcStatus?>(null)
         private set
@@ -74,6 +78,8 @@ class RemoteState(
         private set
     // The PC answered 401: this phone's pairing was removed. Definitive, not a blip.
     var unpaired by mutableStateOf(false)
+    /** The PC presented a different security key than the one remembered at pairing. Never cleared by a retry: only a fresh pairing replaces the record. */
+    var keyChanged by mutableStateOf(false)
         private set
     // The helper-down NOTICE waits ~5s of continuous failure; the VLC volume
     // fallback (2 strikes) still kicks in immediately - a brief blip falls back
@@ -93,6 +99,19 @@ class RemoteState(
     var liveHost by mutableStateOf(store.host); private set
     var livePort by mutableStateOf(store.helperPort); private set
     var liveToken by mutableStateOf(store.helperToken); private set
+
+    /** A successful re-pair replaces the PC identity: no pending or showing "moved" notice about the old PC may survive it. Main thread. */
+    fun onRePaired() {
+        movedGate.clear(); helperMovedTo = null
+        // Poll-derived state described the old PC. Reset it to "connecting" here, on Main, after the pairing write (which ran on IO before this):
+        // a stale poll block either ran earlier (this overwrites it) or sees a different token and publishes nothing.
+        status = null; failures = 0; helperFailures = 0; helperDownAt = 0L; closedPolls = 0; lastConnectedAt = 0L
+        unreachable = false; vlcClosed = false; vlcRefused = false; helperDown = false; helperNotice = false; unpaired = false
+        winVolume = null; connecting = true; muted = false; keyChanged = false   // keyChanged is recomputed from shared state on the next poll
+    }
+
+    /** Main thread only, no suspension between the read and the setter: publishes the stored record, optionally only while it is still [expectedRecord]. */
+    fun publishIfCurrent(expectedRecord: String?): Boolean = LivePublication.publishIfCurrent(store.securePairStore, expectedRecord, ::publishAddress)
 
     /** Pairing, re-pairing or rediscovery learned an address: open screens reconnect to it. */
     fun publishAddress(host: String, port: Int, token: String) {
@@ -121,8 +140,9 @@ class RemoteState(
     private var lastConnectedAt = 0L
     private var failures = 0
     private var helperFailures = 0
-    @Volatile private var rediscovering = false
-    @Volatile private var helperLastRediscoverAt = 0L
+    /** One atomic admission (in-flight flag + 60 s gap) for every rediscover() caller. */
+    private val helperAdmission = RediscoverAdmission()
+    private val movedGate = MovedNoticeGate()
     /** S11b: the saved helper appears at a NEW address. The saved token never
      *  follows a discovered host; the hero offers the safe re-pair path instead.
      *  Cleared on a good helper poll and on source switches. */
@@ -170,24 +190,29 @@ class RemoteState(
         subtitleRequest++; subtitleListRequest++; subtitleFolder = null; pickedSubtitleFile = null
         subtitleListLoading = false; subtitleMutationLoading = false; subtitleListInFlight = false
         muted = false; vlcClosed = false; vlcRefused = false
-        helperDown = false; helperNotice = false; helperMovedTo = null; unpaired = false
+        helperDown = false; helperNotice = false; helperMovedTo = null; movedGate.clear(); unpaired = false
         failures = 0; connecting = true; unreachable = true
         retry()
     }
 
     // N-3: no fallback to the helper host - the Zephyr bearer only ever goes to
     // the address it was paired with. (Blank simply fails the poll while unpaired.)
-    private fun zephyrHost() = store.zephyrHost
+    /** The Player target of the command now running (null for a non-Zephyr command), captured at tap time and re-matched at execution. */
+    @Volatile private var runZ: Store.ZephyrTarget? = null
+    private fun zt(): Store.ZephyrTarget = runZ ?: throw java.io.IOException("Zephyr PC isn't paired")
 
     private suspend fun pollZephyr() {
-        if (store.zephyrToken.isBlank()) {
+        val zPoll = withContext(Dispatchers.IO) { store.zephyrTarget() }
+        if (zPoll == null) {
             unreachable = true; connecting = false; return
         }
         try {
             val json = withContext(Dispatchers.IO) {
-                ZephyrClient.controlStatus(zephyrHost(), store.zephyrPort, store.zephyrToken)
+                ZephyrClient.controlStatus(zPoll)
             }
             if (store.selectedSource != Source.ZEPHYR) return
+            // The pairing changed during the request: this answer belongs to the old PC, so it writes nothing.
+            if (!zPoll.same(store.zephyrTarget())) return
             // Trust the phone's own volume/mute taps briefly: the poll used to snap the
             // number back before the command landed (teardown C13).
             val polledVol = (json.optInt("volume", 100).coerceIn(0, 100) * 256 / 100)
@@ -213,14 +238,16 @@ class RemoteState(
             zephyrMovedTo = null
             vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
         } catch (e: ZephyrClient.BadToken) {
-            if (store.selectedSource != Source.ZEPHYR) return
+            if (store.selectedSource != Source.ZEPHYR || !zPoll.same(store.zephyrTarget())) return
             // The PC removed this phone's pairing - say "pair again", not "can't reach"
             // (N2: a 401 is NOT an outage, and must clear any outage already showing).
             connecting = false
             lastConnectedAt = 0L
             PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
         } catch (e: Exception) {
-            if (store.selectedSource != Source.ZEPHYR) return
+            if (store.selectedSource != Source.ZEPHYR || !zPoll.same(store.zephyrTarget())) return
+            // A refused pin check says nothing about the PC: no outage count, no "pair again", no rediscovery.
+            if (e is ZephyrClient.PairingChanged || e is ZephyrClient.PinUnavailable) return
             PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
                 .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
             connecting = false
@@ -248,10 +275,12 @@ class RemoteState(
                 // S11 (security): the saved bearer token is NEVER sent to a discovered
                 // host - a spoofed same-name answer proves nothing. run() takes no
                 // token and no HTTP client at all (ZephyrRediscover.kt).
+                val zr = store.zephyrTarget() ?: return@launch
                 val plan = com.zephyr.remote.ZephyrRediscover.run(
-                    store.zephyrHost, store.zephyrPort, store.zephyrPcName,
+                    zr.host, zr.port, store.zephyrPcName,
                     discover = { ZephyrClient.discoverPlayers(3000) })
                 withContext(Dispatchers.Main) {
+                    if (!zr.same(store.zephyrTarget())) return@withContext   // re-paired meanwhile: the notice is about the old PC
                     when (plan) {
                         is com.zephyr.remote.ZephyrRediscover.Plan.MovedNotice ->
                             zephyrMovedTo = plan.name // the hero says what to do; re-pair is the safe path
@@ -273,21 +302,28 @@ class RemoteState(
     @Volatile var debugForcePaired = false
 
     init { refreshPairing() } // once at creation; then per poll + after pair/clear
+    init { scope.launch(ioDispatcher) { try { startup?.join(); store.helperVlcSnapshot() } catch (e: Exception) { } } }   // first publication of the pairing tuple, off Main
     fun refreshPairing() {
         zephyrPaired = store.isPaired(Source.ZEPHYR)
         vlcPaired = store.isPaired(Source.VLC) || (BuildConfig.DEBUG && debugForcePaired)
     }
     fun pairedForSelected(): Boolean = if (store.selectedSource == Source.ZEPHYR) zephyrPaired else vlcPaired
 
+    /** True while the stored pairing is still the PC this poll targeted (token identity; a move keeps it). Plain local read, no suspension. */
+    private fun samePollPc(snap: Store.HelperVlcSnapshot) = snap.samePc(store.pairingPeek())   // null peek (unloaded or a writer in flight) = not current: the outcome is dropped, never counted
+
     suspend fun pollOnce() {
+        startup?.join()   // no poll runs before the startup migration finished (already complete after the first call)
         refreshPairing()
         if (store.selectedSource == Source.ZEPHYR) { pollZephyr(); return }
         // The helper-notice state belongs to the pairing it was learned from: a new
         // or cleared token makes it stale. Reset it here so a re-paired phone never
         // sees "pair again" (or a leftover helper warning) about its NEW pairing.
         // Runs before the isConfigured early-return so a cleared token also resets.
-        if (noticeToken != store.helperToken) {
-            noticeToken = store.helperToken
+        var pub = store.pairingPeek()
+        if (pub == null) { withContext(Dispatchers.IO) { store.helperVlcSnapshot() }; pub = store.pairingPeek() }   // reader publish off Main; still null = writer in flight, skip the compare this poll
+        if (pub != null && noticeToken != pub.endpoint.token) {
+            noticeToken = pub.endpoint.token
             unpaired = false
             helperNotice = false
             helperDown = false
@@ -300,26 +336,35 @@ class RemoteState(
         // While VLC is closed, re-check it every 4th cycle instead of every cycle (fewer
         // dead-end requests); the helper ping still runs every cycle either way.
         val skipVlc = vlcClosed && (closedPolls++ % CmdPolicy.CLOSED_POLL_EVERY != 0)
+        // One locked read is this poll's target: the VLC status call, the helper call and any heal of a refusal all refer to this PC.
+        val pollSnap = withContext(Dispatchers.IO) { store.helperVlcSnapshot() }   // locked read stays off Main
         val vlcDeferred = if (skipVlc) null
-            else scope.async { twiceIO { Vlc.status(store.host, store.vlcPort, store.vlcPassword) } }
-        val volDeferred = if (store.helperToken.isNotBlank())
+            else scope.async { twiceIO { Vlc.status(pollSnap.endpoint.host, pollSnap.vlcPort, pollSnap.vlcPassword) } }
+        val volEp = pollSnap.endpoint
+        val volDeferred = if (volEp.token.isNotBlank())
             scope.async {
-                try { twiceIO { HelperClient.volumeGet(store.host, store.helperPort, store.helperToken) } }
+                try { twiceIO { HelperClient.volumeGet(volEp.host, volEp.port, volEp.token) } }
                 catch (e: HelperClient.BadToken) { throw e }
+                catch (e: HelperClient.KeyChanged) { throw e }
                 catch (e: Exception) { null }
             }
         else null
         // The helper's answer counts even when VLC's does not: the volume reading used to
         // be thrown away on the VLC-failure path, leaving the row stuck at its last value.
         if (volDeferred != null) {
-            val vm = try { volDeferred.await() } catch (e: HelperClient.BadToken) { unpaired = true; null }
+            keyChanged = KeyChangeState.isChanged(HelperClient.pairingSource()?.pcId)   // recomputed from shared state, never cleared by a good poll
+            val vm = try { volDeferred.await() } catch (e: HelperClient.BadToken) { if (samePollPc(pollSnap)) unpaired = true; null } catch (e: HelperClient.KeyChanged) { if (samePollPc(pollSnap)) keyChanged = true; null }
+            // Every helper outcome below describes the PC this poll targeted; if the pairing changed meanwhile none of it is published.
+            if (!samePollPc(pollSnap)) return
             if (vm != null) {
                 helperFailures = 0
                 if (System.currentTimeMillis() - localMuteAt > 1500) muted = vm.second
                 helperDown = false
                 helperDownAt = 0L
                 helperNotice = false
-                helperMovedTo = null
+                // The "moved" notice waits for this: a poll that just authenticated against the stored record. A saved address alone is
+                // not a working session. It stays ~10 s after that first success so it can be read, then clears.
+                helperMovedTo = movedGate.onAuthenticatedPoll(System.currentTimeMillis(), HelperRediscover.addressKey(volEp.host, volEp.port) + "|" + volEp.token)
                 unpaired = false
                 // Trust the phone's own taps briefly: the poll doesn't overwrite a volume
                 // change that is still landing (that overwrite made the number jump back).
@@ -342,6 +387,7 @@ class RemoteState(
         try {
             val s = vlcDeferred!!.await()
             if (store.selectedSource != Source.VLC) return
+            if (!samePollPc(pollSnap)) return   // answered by the PC this poll targeted, but a re-pair landed since: do not describe the new PC
             status = s
             lastConnectedAt = android.os.SystemClock.elapsedRealtime()
             // A new video clears the remembered subtitle pick; the sheet then shows the
@@ -364,25 +410,33 @@ class RemoteState(
             connecting = false
             expectingVlc = false
         } catch (e: Vlc.BadAuth) {
+            if (!samePollPc(pollSnap)) return
             lastConnectedAt = 0L
             // The one automatic heal: adopt the PC's current password once. The phone never
             // pushes its stored copy at the PC - a refusal can be an intentional PC change.
-            val healed = withContext(Dispatchers.IO) { VlcAuthRepair.tryHealOnce(store) }
+            val healed = withContext(Dispatchers.IO) { VlcAuthRepair.tryHealOnce(store, pollSnap.endpoint.token) }
+            if (!samePollPc(pollSnap)) return   // guard before ANY write, including clearing the refusal
             if (healed) { vlcRefused = false; return } // the next poll uses the fresh password
             vlcRefused = true
             failures = UNREACHABLE_AFTER
             unreachable = true
         } catch (e: Exception) {
+            // A failure of a poll against a PC that has since been replaced says nothing about the new pairing: drop it.
+            if (!samePollPc(pollSnap)) return
+            // The PC answering its helper but not VLC means VLC simply isn't open. Asked of the POLLED endpoint, before the guarded block below.
+            val pingEp = pollSnap.endpoint
+            val closed = failures + 1 >= UNREACHABLE_AFTER && pingEp.token.isNotBlank() &&
+                withContext(Dispatchers.IO) {
+                    HelperClient.ping(pingEp.host, pingEp.port, pingEp.token) ||
+                        HelperClient.ping(pingEp.host, pingEp.port, pingEp.token)
+                }
+            // From here to the end: one non-suspending Main block. Guard first, then every write.
+            if (!samePollPc(pollSnap)) return
             lastConnectedAt = 0L
             failures++
             if (failures >= UNREACHABLE_AFTER) {
                 unreachable = true
-                // The PC answering its helper but not VLC means VLC simply isn't open.
-                vlcClosed = store.helperToken.isNotBlank() &&
-                    withContext(Dispatchers.IO) {
-                        HelperClient.ping(store.host, store.helperPort, store.helperToken) ||
-                            HelperClient.ping(store.host, store.helperPort, store.helperToken)
-                    }
+                vlcClosed = closed
                 rediscover() // always on since 1.9 (the toggle is gone: nobody had a reason to shut it off)
             }
         }
@@ -397,31 +451,27 @@ class RemoteState(
      *  never set up (teardown A1). */
     fun rediscover() {
         if (store.selectedSource != Source.VLC || store.helperToken.isBlank()) return
-        if (rediscovering) return
-        // Same 60 s backoff as the Zephyr path: a dead PC must not mean a
-        // broadcast every failed poll (round-4b).
-        val nowMs = System.currentTimeMillis()
-        if (nowMs - helperLastRediscoverAt < 60_000) return
-        helperLastRediscoverAt = nowMs
-        rediscovering = true
-        scope.launch(Dispatchers.IO) {
-            try {
-                // run() invokes the token-carrying ping ONLY against the saved,
-                // pairing-learned endpoint; a discovered host is never probed
-                // (S11b regression-tested at the HTTP level).
-                when (val plan = HelperRediscover.run(
-                    store.host, store.helperPort, store.pcName,
-                    pingSaved = { HelperClient.ping(store.host, store.helperPort, store.helperToken) },
-                    discover = { HelperClient.discover(3000) },
-                )) {
-                    is HelperRediscover.Plan.MovedNotice -> withContext(Dispatchers.Main) {
-                        helperMovedTo = plan.name.ifBlank { plan.host }
+        // Same 60 s backoff as the Zephyr path: a dead PC must not mean a broadcast every failed poll (round-4b).
+        // Sole release point is the job's completion (RediscoverAdmission.launchIfAdmitted), so a cancelled-before-start job cannot wedge it.
+        helperAdmission.launchIfAdmitted(scope, Dispatchers.IO) {
+            // Saved endpoint first; discovered hosts get only a tokenless handshake against the STORED key, and only a
+            // key match can move the stored address (HelperMove). The token never goes to a discovered host.
+            when (val out = HelperMove.attempt(
+                store.securePairStore,
+                pingSaved = { c -> HelperClient.ping(c.host, c.port, c.token) },
+                discover = { HelperClient.discover(3000) },
+            )) {
+                is HelperMove.Outcome.Moved -> withContext(Dispatchers.Main) {
+                    // One non-suspending Main block: re-read the stored record and publish it only if it is still the moved one.
+                    // A re-pair that landed meanwhile publishes its own record after this block.
+                    if (publishIfCurrent(out.credential.encode())) {
+                        failures = 0
+                        // Notice only after a confirmed commit AND the next successful authenticated poll (see the poll success branch).
+                        if (out.committed) movedGate.onDurableMove(out.pcName.ifBlank { out.credential.host }, HelperRediscover.addressKey(out.credential.host, out.credential.port) + "|" + out.credential.token, System.currentTimeMillis())
                     }
-                    HelperRediscover.Plan.SavedEndpointSeen -> withContext(Dispatchers.Main) { failures = 0 }
-                    HelperRediscover.Plan.None -> { /* keep polling the saved endpoint */ }
                 }
-            } finally {
-                rediscovering = false
+                HelperMove.Outcome.SavedEndpointSeen -> withContext(Dispatchers.Main) { failures = 0 }
+                else -> { /* keep polling; a Blocked store already shows "pair again" through helperPairing() */ }
             }
         }
     }
@@ -449,6 +499,12 @@ class RemoteState(
     // Taps carry their time: a play/pause/skip/seek queued more than about 2 s (a dead
     // PC, a stalled request) is a tap he no longer expects, so it is dropped - and a
     // burst of volume steps folds into the newest one.
+    /** PC token of the command now running (null for a non-VLC command). Written and read only by the single command-executor coroutine. */
+    @Volatile private var runTok: Store.HelperVlcSnapshot? = null
+    /** Main thread, no suspension: true unless the running command's PC is no longer the stored pairing. */
+    private fun cmdPcCurrent(): Boolean =
+        runTok.let { it == null || it.samePc(store.pairingPeek()) } && (runZ?.same(store.zephyrTarget()) ?: true)
+
     private val cmds = CommandQueue(
         currentSubtitleGeneration = { subtitleRequest },
         onVolumeCoalesced = { Diag.volumeCoalesced.incrementAndGet() },
@@ -458,18 +514,26 @@ class RemoteState(
         scope.launch(Dispatchers.IO) {
             while (isActive) {
                 val c = cmds.next()
+                runTok = null; runZ = null
                 try { c.block() }
+                // Outcome writes run as one non-suspending Main block that first checks the command's PC is still the stored pairing.
                 catch (e: ZephyrClient.BadToken) {
                     // A revoked pairing is not a PC outage (N2): say "pair again".
-                    PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+                    withContext(Dispatchers.Main) { if (cmdPcCurrent()) PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures } }
                 }
                 catch (e: HelperClient.BadToken) {
                     // S-4: a revoked HELPER pairing is not a PC outage either.
-                    PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+                    withContext(Dispatchers.Main) { if (cmdPcCurrent()) PairingStatePolicy.onBadToken().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures } }
                 }
-                catch (_: Exception) {
-                    PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
-                        .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+                catch (e: HelperClient.KeyChanged) { withContext(Dispatchers.Main) { if (cmdPcCurrent()) keyChanged = true } }
+                catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    // A command the pin refused was never sent: not a PC failure.
+                    if (e is ZephyrClient.PairingChanged || e is ZephyrClient.PinUnavailable) continue
+                    withContext(Dispatchers.Main) {
+                        if (cmdPcCurrent()) PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
+                            .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+                    }
                 }
             }
         }
@@ -477,25 +541,40 @@ class RemoteState(
 
     /** Every non-subtitle command. Subtitle commands must go through [fireSubtitle], which requires
      *  the generation, so a missed caller cannot silently default to a value that is always dropped. */
-    private fun fire(kind: String, block: () -> Unit) {
+    private fun fire(kind: String, block: (Store.HelperVlcSnapshot) -> Unit) {
         require(kind != "sub") { "subtitle commands must use fireSubtitle(generation)" }
         enqueue(kind, NO_GENERATION, block)
     }
-    private fun fireSubtitle(generation: Int, block: () -> Unit) = enqueue("sub", generation, block)
-    private fun enqueue(kind: String, subtitleGeneration: Int, block: () -> Unit) {
+    private fun fireSubtitle(generation: Int, block: (Store.HelperVlcSnapshot) -> Unit) = enqueue("sub", generation, block)
+    private fun enqueue(kind: String, subtitleGeneration: Int, block: (Store.HelperVlcSnapshot) -> Unit) {
         // An unpaired source drops taps quietly - they are not PC failures
         // and must not feed the unreachable counter.
         if (!store.isPaired(store.selectedSource)) return
         val target = store.selectedSource
+        // Same for the Zephyr Player: the whole tuple at tap time.
+        val zTap = if (target == Source.ZEPHYR) store.zephyrTarget() else null
+        // The PC this tap was made for (pairing token; lock-free read). A command that runs after a re-pair does not follow the new PC.
+        val tapPeek = if (target == Source.VLC) store.pairingPeek() else null
+        if (target == Source.VLC && tapPeek == null) return   // pairing unloaded or being written: not a current PC, drop the tap quietly (not a PC failure)
+        val tapTok = tapPeek   // the whole captured tuple (token, VLC port, VLC password); an address move keeps it
         // First press while the PC's screen is dark only wakes it (VLC source; helper-routed
         // ones are also swallowed PC-side, so one tap never half-lands). A queued tap never
         // moves to a different source after a selector change.
         val gated: () -> Unit = {
             if (store.selectedSource == target && store.isPaired(target)) {
-                if (target == Source.VLC && HelperClient.screenIsDark(store.host, store.helperPort, store.helperToken)) {
-                    HelperClient.wakeDisplay(store.host, store.helperPort, store.helperToken)
-                } else {
-                    block()
+                // ONE locked read for the whole command (dark-screen probe, wake and the block itself), taken at execution on this IO thread.
+                val snap = store.helperVlcSnapshot()
+                val ep = snap.endpoint
+                val zNow = if (target == Source.ZEPHYR) store.zephyrTarget() else null
+                val zOk = target != Source.ZEPHYR || (zTap != null && zTap.same(zNow))
+                if ((tapTok == null || tapTok.samePc(snap)) && zOk) {   // else re-paired since the tap: drop it, not a PC failure
+                    runTok = tapTok
+                    runZ = zTap
+                    if (target == Source.VLC && HelperClient.screenIsDark(ep.host, ep.port, ep.token)) {
+                        HelperClient.wakeDisplay(ep.host, ep.port, ep.token)
+                    } else {
+                        block(snap)
+                    }
                 }
             }
         }
@@ -516,17 +595,17 @@ class RemoteState(
                 else -> s
             }
         }
-        fire("playpause") {
+        fire("playpause") { snap ->
             if (store.selectedSource == Source.ZEPHYR) {
-                if (s?.playing == true) ZephyrClient.pause(zephyrHost(), store.zephyrPort, store.zephyrToken)
-                else ZephyrClient.resume(zephyrHost(), store.zephyrPort, store.zephyrToken)
-            } else Vlc.togglePause(store.host, store.vlcPort, store.vlcPassword)
+                if (s?.playing == true) ZephyrClient.pause(zt())
+                else ZephyrClient.resume(zt())
+            } else snap.withVlc { h, p, w -> Vlc.togglePause(h, p, w) }
         }
     }
-    fun toggleFullscreen() = fire("fullscreen") {
+    fun toggleFullscreen() = fire("fullscreen") { snap ->
         if (store.selectedSource == Source.ZEPHYR)
-            ZephyrClient.fullscreen(zephyrHost(), store.zephyrPort, store.zephyrToken, !(status?.fullscreen ?: false))
-        else Vlc.toggleFullscreen(store.host, store.vlcPort, store.vlcPassword)
+            ZephyrClient.fullscreen(zt(), !(status?.fullscreen ?: false))
+        else snap.withVlc { h, p, w -> Vlc.toggleFullscreen(h, p, w) }
     }
     fun skip(seconds: Int) {
         val current = status
@@ -540,17 +619,17 @@ class RemoteState(
             // the same point; the poll corrects within about a second (teardown B1).
             status = current.copy(timeSec = zephyrTarget)
         }
-        fire("skip") {
+        fire("skip") { snap ->
             if (store.selectedSource == Source.ZEPHYR)
-                ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken, zephyrTarget)
-            else Vlc.skip(store.host, store.vlcPort, store.vlcPassword, seconds)
+                ZephyrClient.seek(zt(), zephyrTarget)
+            else snap.withVlc { h, p, w -> Vlc.skip(h, p, w, seconds) }
         }
     }
     fun seekTo(seconds: Long) {
         if (BuildConfig.DEBUG) Log.i("BMSeek", "seekTo seconds=$seconds")
-        fire("seek") {
-            if (store.selectedSource == Source.ZEPHYR) ZephyrClient.seek(zephyrHost(), store.zephyrPort, store.zephyrToken, seconds)
-            else Vlc.seekTo(store.host, store.vlcPort, store.vlcPassword, seconds)
+        fire("seek") { snap ->
+            if (store.selectedSource == Source.ZEPHYR) ZephyrClient.seek(zt(), seconds)
+            else snap.withVlc { h, p, w -> Vlc.seekTo(h, p, w, seconds) }
         }
     }
 
@@ -565,10 +644,10 @@ class RemoteState(
                 localMuteAt = System.currentTimeMillis()
                 // Its own "mute" command: folded into "volume", two quick volume taps
                 // would coalesce the unmute away and the PC stays muted (S6).
-                fire("mute") { ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, false) }
+                fire("mute") { snap -> ZephyrClient.mute(zt(), false) }
             }
-            fire("volume") {
-                ZephyrClient.volume(zephyrHost(), store.zephyrPort, store.zephyrToken, next)
+            fire("volume") { snap ->
+                ZephyrClient.volume(zt(), next)
             }
             return
         }
@@ -581,10 +660,11 @@ class RemoteState(
             val next = (base + if (up) 5 else -5).coerceIn(0, 100)
             winVolume = next
             localVolumeAt = System.currentTimeMillis()
-            fire("volume") {
-                HelperClient.volumeSet(store.host, store.helperPort, store.helperToken, next)
+            fire("volume") { snap ->
+                val ep = snap.endpoint
+                HelperClient.volumeSet(ep.host, ep.port, ep.token, next)
                 // Unmute only when it WAS muted - a plain volume step must not touch the mute switch.
-                if (wasMuted) HelperClient.volumeMute(store.host, store.helperPort, store.helperToken, false)
+                if (wasMuted) HelperClient.volumeMute(ep.host, ep.port, ep.token, false)
             }
             return
         }
@@ -595,14 +675,14 @@ class RemoteState(
             muted = false
             val next = (base + if (up) Vlc.VOLUME_STEP else -Vlc.VOLUME_STEP).coerceIn(0, Vlc.VOLUME_100)
             status?.let { status = it.copy(volumeRaw = next) }
-            fire("volume") { Vlc.setVolume(store.host, store.vlcPort, store.vlcPassword, next) }
+            fire("volume") { snap -> snap.withVlc { h, p, w -> Vlc.setVolume(h, p, w, next) } }
         } else {
             val cur = s?.volumeRaw ?: return
             val next = (cur + if (up) Vlc.VOLUME_STEP else -Vlc.VOLUME_STEP).coerceIn(0, Vlc.VOLUME_100)
             // Echo the tap on the row right away - with the PC unreachable the poll can't
             // do it, and a tap that changes nothing feels dead. The next good poll overwrites.
             status = s.copy(volumeRaw = next)
-            fire("volume") { Vlc.setVolume(store.host, store.vlcPort, store.vlcPassword, next) }
+            fire("volume") { snap -> snap.withVlc { h, p, w -> Vlc.setVolume(h, p, w, next) } }
         }
     }
 
@@ -612,24 +692,24 @@ class RemoteState(
             localMuteAt = System.currentTimeMillis()
             // Mute gets its own queue kind: folding it into "volume" could drop volume
             // steps queued just before it (teardown C13).
-            fire("mute") { ZephyrClient.mute(zephyrHost(), store.zephyrPort, store.zephyrToken, next) }
+            fire("mute") { snap -> ZephyrClient.mute(zt(), next) }
             return
         }
         if (winVolume != null) {
             val next = !muted
             muted = next
             localMuteAt = System.currentTimeMillis()
-            fire("mute") { HelperClient.volumeMute(store.host, store.helperPort, store.helperToken, next) }
+            fire("mute") { snap -> snap.withHelper { h, p, t -> HelperClient.volumeMute(h, p, t, next) } }
             return
         }
         if (muted) {
             muted = false
             val back = preMuteRaw.coerceIn(1, Vlc.VOLUME_100)
-            fire("volume") { Vlc.setVolume(store.host, store.vlcPort, store.vlcPassword, back) }
+            fire("volume") { snap -> snap.withVlc { h, p, w -> Vlc.setVolume(h, p, w, back) } }
         } else {
             preMuteRaw = (status?.volumeRaw ?: Vlc.VOLUME_100 / 2).coerceIn(1, Vlc.VOLUME_100 * 2)
             muted = true
-            fire("volume") { Vlc.setVolume(store.host, store.vlcPort, store.vlcPassword, 0) }
+            fire("volume") { snap -> snap.withVlc { h, p, w -> Vlc.setVolume(h, p, w, 0) } }
         }
     }
 
@@ -729,7 +809,7 @@ class RemoteState(
         val request = ++subtitleListRequest
         val mutationAtStart = subtitleRequest
         if (!quiet) { subtitleListLoading = true; subtitleListError = null }
-        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        val ep = store.helperEndpoint(); val host = ep.host; val port = ep.port; val token = ep.token
         scope.launch {
             try {
                 val folder = withContext(Dispatchers.IO) { HelperClient.subtitleFiles(host, port, token) }
@@ -775,7 +855,7 @@ class RemoteState(
             return
         }
         val request = ++subtitleRequest
-        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        val ep = store.helperEndpoint(); val host = ep.host; val port = ep.port; val token = ep.token
         val warningKey = subtitleWarningKey
         subtitleMutationError = null
         subtitleMutationLoading = true
@@ -830,16 +910,16 @@ class RemoteState(
     fun pickSubtitle(trackId: Int) {
         if (store.selectedSource == Source.ZEPHYR) {
             pickedSubtitle = trackId
-            fireSubtitle(subtitleRequest) { ZephyrClient.captions(zephyrHost(), store.zephyrPort, store.zephyrToken, trackId) }
+            fireSubtitle(subtitleRequest) { _ -> ZephyrClient.captions(zt(), trackId) }
             return
         }
         reconcileSubtitleWarnings()
         subtitleRequest++
         subtitleMutationLoading = false
         val request = subtitleRequest
-        val host = store.host; val port = store.helperPort; val token = store.helperToken
+        val snap = store.helperVlcSnapshot(); val ep = snap.endpoint; val host = ep.host; val port = ep.port; val token = ep.token
         val warningKey = subtitleWarningKey
-        val vlcPort = store.vlcPort; val password = store.vlcPassword
+        val vlcPort = snap.vlcPort; val password = snap.vlcPassword
         val mediaId = confirmedSubtitleMedia
         if (!subtitleOutcomeUnknown) subtitleMutationError = null
         subtitleMutationLoading = true

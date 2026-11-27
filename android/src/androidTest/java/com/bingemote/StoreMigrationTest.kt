@@ -3,6 +3,7 @@ package com.bingemote
 import android.content.Context
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
@@ -16,8 +17,9 @@ class StoreMigrationTest {
     fun encryptedStoreRetains64HexTokenAcrossReopen() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val token = "a7".repeat(32)
-        Store(ctx).zephyrToken = token
-        assertEquals(token, Store(ctx).zephyrToken)
+        ZephyrTestSeed.seed(Store(ctx), "192.0.2.10", 47823, token = token)
+        Store.resetZephyrRecordForTests()   // the reopen must come from storage, not the process cache
+        assertEquals(token, Store(ctx).zephyrTarget()?.token)
         org.junit.Assert.assertFalse(Store(ctx).secureStoreBroken)
     }
 
@@ -38,7 +40,7 @@ class StoreMigrationTest {
     /** v2.0 in-place upgrade continuity (same applicationId + signing key): an
      * existing paired install keeps its helper pairing and identity through the
      * Connected Sources migration, defaults to the VLC source, starts unpaired
-     * for Zephyr, and moves any plain-pref zephyrToken into encrypted secrets. */
+     * for Zephyr, and leaves any plain-pref zephyrToken unread (NeedsRepair). */
     @Test
     fun pairedInstallSurvivesConnectedSourcesMigration() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
@@ -56,8 +58,11 @@ class StoreMigrationTest {
         assertEquals("192.168.1.50", store2.host)
         assertEquals("helper-secret", store2.helperToken)
         assertEquals(Source.VLC, store2.selectedSource)
-        assertEquals("legacy-plain-token", store2.zephyrToken)
-        assertFalse("plain zephyrToken key must be migrated out", prefs.contains("zephyrToken"))
+        // Secure-only: an old plain token is never read or migrated; it needs a new pairing and is left on disk untouched.
+        Store.resetZephyrRecordForTests()
+        assertEquals(null, Store(ctx).zephyrTarget())
+        assertTrue(Store(ctx).zephyrPairing() === ZephyrCredential.State.NeedsRepair)
+        assertTrue("old plain token is left in place", prefs.contains("zephyrToken"))
         prefs.edit().clear().commit()
     }
 }

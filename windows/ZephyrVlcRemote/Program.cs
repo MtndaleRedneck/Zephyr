@@ -140,6 +140,9 @@ internal static class Program
     /// <summary>"Show volume on PC screen" - the small pop-up on each phone volume change. Default ON.</summary>
     internal static bool VolumeOsdEnabled = true;
     internal static string? PairCode;
+    /// <summary>When the on-screen code was made. A Pair session lasts PairSessionLifetime, then closes by itself.</summary>
+    internal static DateTime PairCodeIssuedUtc = DateTime.MinValue;
+    internal static readonly TimeSpan PairSessionLifetime = TimeSpan.FromMinutes(10);
     /// <summary>The version that last ran; a change means an upgrade just landed.</summary>
     internal static string? LastRunVersion;
     /// <summary>A newer published helper version, found by the background update check.</summary>
@@ -324,7 +327,7 @@ internal static class Program
             // failed setup leaves it untouched. Same-path updates never get here: their
             // rules already match and the check below passes at once.
             FirewallSetup.LastReadFailed = false;
-            if (!(FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser()))
+            if (!(FirewallSetup.SetupIsCurrent()))
             {
                 Log("Update launched from another folder needs its own firewall setup first - the running copy keeps serving meanwhile.");
                 if (FirewallSetup.LastReadFailed)
@@ -335,7 +338,7 @@ internal static class Program
                     return 0;
                 }
                 if (!FirewallSetup.ExplainAndRelaunch()) return 0;
-                if (!(FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser()))
+                if (!(FirewallSetup.SetupIsCurrent()))
                 {
                     // Do NOT say the running copy "was left alone": the elevated setup
                     // deletes and re-adds the rules, so a mid-failure may have rewritten
@@ -388,7 +391,7 @@ internal static class Program
         // marker file can even be copied between machines (round-8). The marker is
         // still stamped (the upgrade smoke asserts it) but nothing trusts it.
         FirewallSetup.LastReadFailed = false;
-        if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
+        if (FirewallSetup.SetupIsCurrent())
         {
             StampFirewallMarker();
         }
@@ -409,7 +412,7 @@ internal static class Program
             // (even if a leftover listen permission would let us bind) and offer the
             // setup again on the next launch.
             if (!FirewallSetup.ExplainAndRelaunch()) return 0;
-            if (FirewallSetup.RulesHaveCurrentShape() && FirewallSetup.UrlAclNamesCurrentUser())
+            if (FirewallSetup.SetupIsCurrent())
                 StampFirewallMarker();
             else
             {
@@ -442,6 +445,7 @@ internal static class Program
         if (overrideCode is { Length: 4 } && overrideCode.All(char.IsDigit))
         {
             PairCode = overrideCode;
+            PairCodeIssuedUtc = DateTime.UtcNow;
         }
 
         using var http = new HttpServer();
