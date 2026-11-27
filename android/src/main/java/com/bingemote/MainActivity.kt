@@ -196,7 +196,7 @@ class MainActivity : ComponentActivity() {
                     "subtitles" -> MainScreen(
                         remote,
                         onMouse = { current.value = "mouse" },
-                        onMovies = { navigationScope.launch { moviesListState.scrollToItem(0); current.value = "movies" } },
+                        onMovies = { moviesListState.requestScrollToItem(0); current.value = "movies" },   // non-suspending: scrollToItem waits for the list's first layout, which never comes before the screen is shown
                         onSettings = { openSettings(resetScroll = true) },
                         startSubtitlesOpen = true,
                     )
@@ -273,7 +273,7 @@ class MainActivity : ComponentActivity() {
                     else -> MainScreen(
                         remote,
                         onMouse = { current.value = "mouse" },
-                        onMovies = { navigationScope.launch { moviesListState.scrollToItem(0); current.value = "movies" } },
+                        onMovies = { moviesListState.requestScrollToItem(0); current.value = "movies" },   // non-suspending: scrollToItem waits for the list's first layout, which never comes before the screen is shown
                         onSettings = { openSettings(resetScroll = true) },
                         // The unpaired card goes straight to the selected source's pairing screen.
                         onPairSelected = {
