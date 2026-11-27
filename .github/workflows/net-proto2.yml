@@ -23,13 +23,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [upgrade]
+        part: [abuse]
     runs-on: windows-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
       - name: probe ${{ matrix.part }}
-        timeout-minutes: 5
+        timeout-minutes: 6
         shell: pwsh
         run: ./scripts/np2.ps1 -Part ${{ matrix.part }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

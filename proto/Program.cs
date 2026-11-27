@@ -3,6 +3,8 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net.Security;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 
@@ -111,6 +113,61 @@ static class P
             Console.WriteLine("RENEW oldThumb=" + old.Thumbprint + " newThumb=" + c2.Thumbprint);
             Console.WriteLine("RENEW oldSpki=" + Convert.ToHexString(SHA256.HashData(old.PublicKey.ExportSubjectPublicKeyInfo())).ToLowerInvariant());
             Console.WriteLine("RENEW newSpki=" + Convert.ToHexString(SHA256.HashData(c2.PublicKey.ExportSubjectPublicKeyInfo())).ToLowerInvariant());
+            return 0;
+        }
+        if (mode == "abuse")
+        {
+            int port = int.Parse(a[1]);
+            Func<string, int, string> raw = (payload, waitMs) =>
+            {
+                try
+                {
+                    using var tc = new TcpClient("127.0.0.1", port);
+                    using var ssl = new SslStream(tc.GetStream(), false, (x, c, ch, e) => true);
+                    ssl.AuthenticateAsClient("x");
+                    var b = Encoding.ASCII.GetBytes(payload);
+                    ssl.Write(b, 0, b.Length);
+                    ssl.ReadTimeout = waitMs;
+                    var buf = new byte[256];
+                    int n = ssl.Read(buf, 0, buf.Length);
+                    return n <= 0 ? "closed-no-reply" : Encoding.ASCII.GetString(buf, 0, Math.Min(n, 40)).Replace("\r\n", " | ");
+                }
+                catch (Exception e) { return "ERR " + e.GetType().Name; }
+            };
+            var sw = Stopwatch.StartNew();
+            Console.WriteLine("ABUSE normal: " + raw("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 5000) + " " + sw.ElapsedMilliseconds + "ms");
+            Console.WriteLine("ABUSE 64KB header value: " + raw("GET / HTTP/1.1\r\nHost: x\r\nX-A: " + new string('a', 65536) + "\r\n\r\n", 5000));
+            Console.WriteLine("ABUSE 1MB header value: " + raw("GET / HTTP/1.1\r\nHost: x\r\nX-A: " + new string('a', 1 << 20) + "\r\n\r\n", 5000));
+            Console.WriteLine("ABUSE POST claiming 1GB body, sends 10 bytes: " + raw("POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 1073741824\r\nConnection: close\r\n\r\n0123456789", 5000));
+            Console.WriteLine("ABUSE garbage after TLS: " + raw("\u0001\u0002garbage\r\n\r\n", 5000));
+            // many slow connections holding partial headers
+            var held = new List<TcpClient>();
+            var streams = new List<SslStream>();
+            int ok = 0, fail = 0;
+            for (int i = 0; i < 300; i++)
+            {
+                try
+                {
+                    var tc = new TcpClient("127.0.0.1", port);
+                    var ssl = new SslStream(tc.GetStream(), false, (x, c, ch, e) => true);
+                    ssl.AuthenticateAsClient("x");
+                    var b = Encoding.ASCII.GetBytes("GET / HTTP/1.1\r\nHost: x\r\n");
+                    ssl.Write(b, 0, b.Length);
+                    held.Add(tc); streams.Add(ssl); ok++;
+                }
+                catch { fail++; }
+            }
+            Console.WriteLine("ABUSE slow connections held open: " + ok + " ok, " + fail + " failed");
+            sw.Restart();
+            Console.WriteLine("ABUSE normal request while 300 slow connections held: " + raw("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 8000) + " " + sw.ElapsedMilliseconds + "ms");
+            System.Threading.Thread.Sleep(int.Parse(a[2]) * 1000);
+            int stillOpen = 0;
+            foreach (var st in streams)
+            {
+                try { st.ReadTimeout = 200; var bb = new byte[16]; int n = st.Read(bb, 0, 16); if (n > 0) stillOpen += 0; } catch (IOException ex) when (ex.InnerException is SocketException se && se.SocketErrorCode == SocketError.TimedOut) { stillOpen++; } catch { }
+            }
+            Console.WriteLine("ABUSE after " + a[2] + "s idle, connections still held open by server (read timed out = still open): " + stillOpen + " of " + ok);
+            Console.WriteLine("ABUSE normal request after: " + raw("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 5000));
             return 0;
         }
         if (mode == "nlm")

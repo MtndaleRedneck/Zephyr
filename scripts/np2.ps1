@@ -161,6 +161,23 @@ if ($Part -eq 'upgrade') {
   Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete urlacl url=https://+:48443/; Remove-LocalUser -Name protouser -ErrorAction SilentlyContinue }
 }
 
+if ($Part -eq 'abuse') {
+  $mk = & $proto mkcert | Out-String
+  $thumb = ([regex]::Match($mk, 'THUMB (\S+)')).Groups[1].Value
+  $app = 'appid={12345678-1234-1234-1234-123456789abc}'
+  Step 'sslcert' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
+  Step 'urlacl' { netsh http add urlacl url=https://+:48443/ user=Everyone }
+  $so = Join-Path $env:TEMP 'serve.out'
+  $sp = Start-Process -FilePath $proto -ArgumentList 'serve https 48443 150' -NoNewWindow -PassThru -RedirectStandardOutput $so -RedirectStandardError ($so + '.err')
+  Start-Sleep -Seconds 6
+  Step 'http.sys limits' { reg query 'HKLM\SYSTEM\CurrentControlSet\Services\HTTP\Parameters' 2>&1 }
+  Step 'listener owner' { netstat -ano -p tcp | Select-String ':48443' }
+  Bounded 'abuse' $proto 'abuse 48443 75' 140
+  Step 'server still alive' { 'alive=' + (-not $sp.HasExited) }
+  & taskkill.exe /F /T /PID $sp.Id | Out-Null
+  Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete urlacl url=https://+:48443/ }
+}
+
 if ($Part -eq 'hyperv') {
   if (Get-Command New-VMSwitch -ErrorAction SilentlyContinue) {
     Step 'create internal switch' { New-VMSwitch -Name protoswitch -SwitchType Internal | Out-String }
