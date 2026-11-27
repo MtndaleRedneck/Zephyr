@@ -43,7 +43,10 @@ class ScrollNavigationTest {
         ZephyrTestSeed.clear(Store(context))
         launch("settings")
         val top = headerTop(); assertNotNull(top)
+        settle()
+        shot("hg-sn-settings-1-before-swipe"); diag("settings1-before")
         swipeUp(3)
+        shot("hg-sn-settings-1-after-swipe"); diag("settings1-after")
         assertFalse("settings did not scroll, test would prove nothing", headerVisible())
         device.wait(Until.findObject(By.desc("Back")), 4000)?.let { /* the header scrolled away with the content */ }
         device.pressBack(); // system Back to Home
@@ -56,12 +59,18 @@ class ScrollNavigationTest {
         ZephyrTestSeed.clear(Store(context))
         launch("settings")
         val top = headerTop(); assertNotNull(top)
+        settle()
+        shot("hg-sn-settings-2-before-swipe"); diag("settings2-before")
         swipeUp(3)
+        shot("hg-sn-settings-2-after-swipe"); diag("settings2-after")
         tapText("Send feedback")
         assertEquals("feedback header top on fresh entry", top, headerTop())
+        shot("hg-sn-feedback-1-opened")
         swipeUp(2)
+        shot("hg-sn-feedback-2-scrolled")
         device.pressBack() // Back to Settings
         assertNotNull(device.wait(Until.findObject(By.textContains("Send feedback")), 8000))
+        shot("hg-sn-settings-2-after-back"); diag("settings2-back")
         assertFalse("Back reset Settings to the top; it must keep the position", headerVisible())
         // Entering Feedback a second time starts at the top again.
         tapText("Send feedback")
@@ -86,12 +95,27 @@ class ScrollNavigationTest {
         assertNotNull("Movies reopened but is not at the top (first folder row missing)", waitRow("Documentaries", 8000))
     }
 
+    /** Let the entry animation and first data load finish before gesturing: the Settings content must be on screen and the UI idle. */
+    private fun settle() {
+        assertNotNull("Settings content did not appear", device.wait(Until.findObject(By.textContains("Connected Sources")), 8000))
+        device.waitForIdle(2000)
+        Thread.sleep(700)
+    }
+
     /** A list row by its visible name. Rows are merged clickable nodes, so the name can sit in text or in content description; match either, as a substring. */
     private fun row(name: String) = device.findObject(By.textContains(name)) ?: device.findObject(By.descContains(name))
     private fun waitRow(name: String, ms: Long): androidx.test.uiautomator.UiObject2? {
         val end = System.currentTimeMillis() + ms
         while (System.currentTimeMillis() < end) { row(name)?.let { return it }; Thread.sleep(250) }
         return null
+    }
+
+    /** Ground truth for a gesture: what the UI tree says is scrollable, where, and where the header is. Written next to the pictures. */
+    private fun diag(tag: String) {
+        val sc = device.findObjects(By.scrollable(true)).joinToString(";") { it.visibleBounds.toShortString() }
+        val h = device.findObject(By.res("screen_header"))?.visibleBounds?.toShortString() ?: "none"
+        val line = "$tag display=${device.displayWidth}x${device.displayHeight} scrollable=[$sc] header=$h pkg=${device.currentPackageName}"
+        device.executeShellCommand("sh -c 'echo \"$line\" >> /sdcard/hg-sn-diag.txt'")
     }
 
     /** Evidence picture pulled by ui-evidence.sh (hg-*.png on /sdcard). */

@@ -32,8 +32,10 @@ for cls in com.bingemote.HeaderGeometryTest com.bingemote.TopBarParityTest com.b
     adb exec-out screencap -p > "instrument-results/$(basename $cls).FAIL-screen.png" 2>/dev/null || true
   fi
 done
-for f in $(adb shell ls /sdcard/hg-*.png /sdcard/topbar-parity.png 2>/dev/null | tr -d '\r'); do
+for f in $(adb shell ls /sdcard/hg-*.png /sdcard/hg-*.txt /sdcard/topbar-parity.png 2>/dev/null | tr -d '\r'); do
   adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true
 done
+# Failure ground truth written by FailureDumpRule (resumed activity, logcat tail, hierarchy): pulled so a red test explains itself.
+for f in $(adb shell ls /sdcard/Android/data/$PKG/files/bm-* 2>/dev/null | tr -d '\r'); do adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true; done
 adb shell wm size reset; adb shell wm density reset
 exit $FAIL
