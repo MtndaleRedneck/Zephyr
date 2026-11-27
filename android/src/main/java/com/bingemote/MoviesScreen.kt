@@ -218,7 +218,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 BrowseItem(name = "Documentaries", isDir = true, path = "demo://d1", uri = "demo://d1", sizeBytes = 0L),
                 BrowseItem(name = "The Big Example Movie (2024).mkv", isDir = false, path = "demo://m1", uri = "demo://m1", sizeBytes = 4_280_000_000L),
                 BrowseItem(name = "Another Sample Film.mp4", isDir = false, path = "demo://m2", uri = "demo://m2", sizeBytes = 1_640_000_000L),
-            )
+            ) + (if (DebugRig.manyMovies) (1..40).map { BrowseItem(name = "Demo Film %02d.mkv".format(it), isDir = false, path = "demo://x$it", uri = "demo://x$it", sizeBytes = 1_000_000_000L) } else emptyList())
             loading = false
             error = null
             return

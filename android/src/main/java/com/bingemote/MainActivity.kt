@@ -77,6 +77,7 @@ class MainActivity : ComponentActivity() {
             if (BuildConfig.DEBUG && intent.hasExtra("demopaired")) { try { store.helperToken = "demo-token" } catch (e: SecureStoreUnavailable) { } }
             if (BuildConfig.DEBUG && intent.hasExtra("pairdemo")) { try { store.helperToken = "" } catch (e: SecureStoreUnavailable) { } }
         }
+        if (BuildConfig.DEBUG) DebugRig.manyMovies = intent.hasExtra("manymovies")
         if (BuildConfig.DEBUG) intent.getStringExtra("pickeruri")?.let { DebugRig.pickerInitialUri = android.net.Uri.parse(it) }
         // Screenshot rig: a stand-in PC name so the Your PC card renders paired.
         if (BuildConfig.DEBUG && intent.hasExtra("pcdemo")) store.pcName = "MY-PC"
@@ -199,7 +200,7 @@ class MainActivity : ComponentActivity() {
                         onSettings = { openSettings(resetScroll = true) },
                         startSubtitlesOpen = true,
                     )
-                    "movies" -> MoviesScreen(remote, moviesListState, onBack = { current.value = "main" }, demoResumeAsk = BuildConfig.DEBUG && intent.hasExtra("resumeask"))
+                    "movies" -> MoviesScreen(remote, moviesListState, onBack = { current.value = "main" }, demoResumeAsk = BuildConfig.DEBUG && intent.hasExtra("resumeask"), demoPhone = BuildConfig.DEBUG && intent.hasExtra("manymovies"))
                     // CI screenshot state (debug builds only): the resume dialog over the list.
                     "movies-resume" -> MoviesScreen(remote, moviesListState, onBack = { current.value = "main" }, demoResumeAsk = BuildConfig.DEBUG)
                     // CI screenshot state (debug builds only): Phone origin with demo rows.

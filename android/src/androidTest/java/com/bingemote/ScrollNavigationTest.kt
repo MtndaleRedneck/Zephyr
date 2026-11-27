@@ -68,13 +68,24 @@ class ScrollNavigationTest {
         assertEquals("feedback header top on second entry", top, headerTop())
     }
 
-    /** Movies scrolled, to Home and in again: opens at the top. Uses the demo Movies list. */
+    /** Movies scrolled, to Home and in again: opens at the top. Demo Movies list of 43 rows (extra "manymovies", debug only), Home paired demo. */
     @Test fun freshEntryIntoMoviesStartsAtTheTop() {
-        launch("movies")
-        val top = headerTop(); assertNotNull(top)
-        swipeUp(3)
+        ZephyrTestSeed.clear(Store(context))
+        launchWith("main", "--ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok --ez manymovies true")
+        val movies = device.wait(Until.findObject(By.desc("Movies")), 12000); assertNotNull("Home Movies tile", movies); movies!!.click()
+        assertNotNull("demo list did not appear", device.wait(Until.findObject(By.textContains("The Big Example Movie")), 12000))
+        assertNotNull("top of the list: first folder row", device.findObject(By.text("Documentaries")))
+        swipeUp(4)
+        assertNull("list did not scroll (first folder row still visible): the test would prove nothing", device.findObject(By.text("Documentaries")))
         device.pressBack() // Back to Home
-        tapText("Movies")
-        assertEquals("movies header top after fresh entry", top, headerTop())
+        val again = device.wait(Until.findObject(By.desc("Movies")), 8000); assertNotNull("Home Movies tile after Back", again); again!!.click()
+        assertNotNull("Movies reopened but is not at the top (first folder row missing)", device.wait(Until.findObject(By.text("Documentaries")), 8000))
+    }
+
+    private fun launchWith(screen: String, extras: String) {
+        device.wakeUp()
+        device.executeShellCommand("wm dismiss-keyguard")
+        device.executeShellCommand("am force-stop ${context.packageName}")
+        device.executeShellCommand("am start -n ${context.packageName}/com.bingemote.MainActivity --es screen $screen $extras")
     }
 }
