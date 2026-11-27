@@ -435,6 +435,17 @@ jobs:
           $installed = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           if (-not (Test-Path $installed)) { throw "installed exe missing: $installed" }
           Write-Output "installed: $installed"
+          # Lineage: the exe the installer put on disk must be byte-identical to the clean release-shaped publish
+          # (windows/out, no CaptureHook) that this job's hook-exclusion scan read, and the installer was built from
+          # that same folder (installer.iss: Source "out\*"). Installer -> installed exe -> scanned exe is one hash chain.
+          $publishedHash = (Get-FileHash "windows/out/ZephyrPlayer.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $installedHash = (Get-FileHash $installed -Algorithm SHA256).Hash.ToLowerInvariant()
+          $capHash = (Get-FileHash "windows/capture-out/ZephyrPlayer.exe" -Algorithm SHA256).Hash.ToLowerInvariant()
+          $lineage = "exe-lineage kind=player installed=$installedHash published-clean=$publishedHash hooked-control=$capHash match=$($installedHash -eq $publishedHash)"
+          Write-Host $lineage
+          Add-Content -Path (Join-Path $env:RUNNER_TEMP 'installer-hash-log.txt') -Value $lineage
+          if ($installedHash -ne $publishedHash) { throw "installed ZephyrPlayer.exe differs from the clean published exe" }
+          if ($installedHash -eq $capHash) { throw "installed ZephyrPlayer.exe is the hooked capture build" }
           # The per-user installer no longer adds firewall rules or the listen
           # permission (round-6 N-8): run the app's own setup step headless (the CI
           # runner is elevated, so the same code path the explained first-run
@@ -465,6 +476,8 @@ jobs:
           $expectedSddl = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sid)")).GetSddlForm('All')
           if ($actualSddl -ne $expectedSddl) { Write-Host "47823 reservation:"; Write-Host $block; Write-Host "expected SDDL: $expectedSddl"; throw 'URL ACL must scope the installing user SID' }
           Write-Output "firewall shape: TCP System/47823/Private/LocalSubnet, UDP exe/Private/LocalSubnet, ACL user SID - verified"
+          # Secure mode is HTTPS only (no plaintext fallback). Pinned-HTTPS status helper (Get-TlsStatus), shared by every smoke that talks to the installed Player.
+          . ./scripts/zephyr_tls_pin.ps1
           # Negative-hook test on the SHIPPED binary (round-6 G6): even with the capture
           # env switch set, the shipped exe has no ci-capture-token compiled in, so the
           # hook token must be rejected like any other unknown token.
@@ -481,18 +494,19 @@ jobs:
           for ($i = 0; $i -lt 40 -and -not $ok; $i++) {
             Start-Sleep -Seconds 1
             try {
-              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer local-smoke-token' } -TimeoutSec 2 -UseBasicParsing
-              $ok = ($r.StatusCode -eq 200)
+              $ok = ((Get-TlsStatus 'local-smoke-token') -eq 200)
             } catch {}
           }
           if (-not $ok) { throw 'shipped exe never answered with its real paired token' }
-          $negCode = 0
-          try {
-            $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer ci-capture-token' } -TimeoutSec 3 -UseBasicParsing
-            $negCode = [int]$r.StatusCode
-          } catch { if ($_.Exception.Response) { $negCode = [int]$_.Exception.Response.StatusCode } }
+          Write-Output 'SECURE PAIRED TOKEN: PASS - installed clean exe answered 200 over HTTPS (pinned to its own identity) for the real paired token'
+          $negCode = Get-TlsStatus 'ci-capture-token'
           if ($negCode -ne 401) { throw "NEGATIVE HOOK FAILED: shipped exe answered ci-capture-token with $negCode, expected 401" }
-          Write-Output 'NEGATIVE HOOK: PASS - shipped exe rejects ci-capture-token even with ZEPHYR_CI_CAPTURE=1'
+          Write-Output 'NEGATIVE HOOK: PASS - shipped exe rejects ci-capture-token even with ZEPHYR_CI_CAPTURE=1 (HTTPS, 401)'
+          # No plaintext fallback: the same request over http must never answer 200.
+          $plainCode = 0
+          try { $plainCode = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer local-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
+          if ($plainCode -eq 200) { throw 'PLAINTEXT FALLBACK: installed exe answered the paired token over plain http' }
+          Write-Output "NO PLAINTEXT: PASS - plain http to the secure port did not answer 200 (status $plainCode, 0 = no answer)"
           $neg.Kill()
           Start-Sleep -Seconds 2
           # The installer's runasoriginaluser auto-launch can take a while (or
@@ -548,13 +562,10 @@ jobs:
           if (-not $running -or @($running | Where-Object { $_.Path -eq $installed }).Count -eq 0) { throw 'replacement did not relaunch installed app' }
           if ((Get-FileHash $settingsPath).Hash -ne $beforeSettings) { throw 'replacement changed settings' }
           # Startup may migrate the legacy token to DPAPI. Prove identity, not ciphertext bytes.
-          $req = [System.Net.Http.HttpClient]::new()
-          $req.DefaultRequestHeaders.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer','local-smoke-token')
-          $auth = $req.GetAsync('http://127.0.0.1:47823/control/status').GetAwaiter().GetResult()
-          if ([int]$auth.StatusCode -ne 200) { throw "replacement lost original pairing: $($auth.StatusCode)" }
-          $req.DefaultRequestHeaders.Authorization = $null
-          $noAuth = $req.GetAsync('http://127.0.0.1:47823/control/status').GetAwaiter().GetResult()
-          if ([int]$noAuth.StatusCode -ne 401) { throw 'replacement accepted unauthenticated control' }
+          $authCode = Get-TlsStatus 'local-smoke-token'
+          if ($authCode -ne 200) { throw "replacement lost original pairing: $authCode" }
+          $noAuthCode = Get-TlsStatus $null
+          if ($noAuthCode -ne 401) { throw "replacement accepted unauthenticated control: $noAuthCode" }
           $savedPairings = Get-Content $pairingPath -Raw | ConvertFrom-Json
           if (@($savedPairings).Count -ne 1) { throw 'replacement changed pairing count' }
           $storedToken = [string]$savedPairings[0].token
@@ -562,7 +573,6 @@ jobs:
           Add-Type -AssemblyName System.Security
           $decoded = [Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($storedToken.Substring(6)), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))
           if ($decoded -cne 'local-smoke-token') { throw 'replacement changed pairing identity' }
-          $req.Dispose()
           if (-not (Test-Path (Join-Path (Split-Path $installed) 'libvlc'))) { throw 'installed libvlc directory missing' }
           Write-Output 'LOCAL_REINSTALL_CONTINUITY: PASS - installed path relaunched; settings hash unchanged; original pairing identity/count preserved, protected at rest, authenticated 200/unauthenticated 401. Same-version replacement, not published version upgrade.'
           # Report actual installed shortcut display names, never user paths.
@@ -692,17 +702,19 @@ jobs:
           $skipOk = ($s.SkipForwardSeconds -eq 60) -or ($s.SecondarySkipSeconds -eq 60)
           if (-not $skipOk) { throw "upgrade lost the 60s skip setting" }
           # The 1.1.0-format pairing token must still authorize a REAL control call.
+          # The 1.1.0-era binary was plaintext; the upgraded build is HTTPS only. Pinned to the identity the post-upgrade setup step created.
+          . ./scripts/zephyr_tls_pin.ps1
           $ok200 = $false
           for ($i = 0; $i -lt 15 -and -not $ok200; $i++) {
-            try {
-              $r = Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-smoke-token' } -TimeoutSec 3 -UseBasicParsing
-              $ok200 = ($r.StatusCode -eq 200)
-            } catch { Start-Sleep -Seconds 1 }
+            $ok200 = ((Get-TlsStatus 'upgrade-smoke-token') -eq 200)
+            if (-not $ok200) { Start-Sleep -Seconds 1 }
           }
-          if (-not $ok200) { throw '1.1.0-format pairing token no longer authorizes /control/status after upgrade' }
-          $unauth = $false
-          try { Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -TimeoutSec 3 -UseBasicParsing | Out-Null } catch { $unauth = ($_.Exception.Response.StatusCode.value__ -eq 401) }
-          if (-not $unauth) { throw 'unauthenticated /control/status was not 401 after upgrade' }
+          if (-not $ok200) { throw '1.1.0-format pairing token no longer authorizes /control/status after upgrade (pinned HTTPS)' }
+          $unauthCode = Get-TlsStatus $null
+          if ($unauthCode -ne 401) { throw "unauthenticated /control/status was not 401 after upgrade (got $unauthCode)" }
+          $plainUp = 0
+          try { $plainUp = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
+          if ($plainUp -eq 200) { throw 'PLAINTEXT FALLBACK: upgraded app answered the migrated token over plain http' }
           Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - original CI 1.1.0 installer recovered from run40413487207, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
