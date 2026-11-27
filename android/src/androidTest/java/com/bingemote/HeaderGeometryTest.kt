@@ -90,7 +90,7 @@ class HeaderGeometryTest {
 
     @Test fun wholeHeaderIsIdenticalOnEveryScreen() {
         ZephyrTestSeed.clear(Store(context))
-        val screens = listOf("main", "movies", "settings", "yourpc", "mouse")
+        val screens = listOf("main", "movies", "settings", "yourpc", "feedback", "mouse")
         val hs = screens.map { s -> launch(s); val h = measure(s); shot("hdr-$s"); Log.i("HeaderGeom", report(h)); h }
         val home = hs[0]
         val sb = StringBuilder()
