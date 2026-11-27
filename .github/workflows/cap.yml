@@ -1,0 +1,19 @@
+name: cap
+on:
+  push:
+    branches: [tmp/cap]
+jobs:
+  cap:
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: capability probe
+        timeout-minutes: 4
+        shell: pwsh
+        run: ./scripts/cap.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: cap
+          path: out/*.txt
