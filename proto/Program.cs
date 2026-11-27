@@ -170,6 +170,17 @@ static class P
             Console.WriteLine("ABUSE normal request after: " + raw("GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 5000));
             return 0;
         }
+        if (mode == "udprecv")
+        {
+            var rx = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            rx.Bind(new IPEndPoint(IPAddress.Any, int.Parse(a[1])));
+            rx.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.PacketInformation, true);
+            rx.ReceiveTimeout = int.Parse(a[2]) * 1000;
+            var buf = new byte[256]; EndPoint rep = new IPEndPoint(IPAddress.Any, 0); SocketFlags fl = SocketFlags.None;
+            try { int n = rx.ReceiveMessageFrom(buf, 0, buf.Length, ref fl, ref rep, out IPPacketInformation pi); Console.WriteLine("UDPRECV got " + n + " bytes from=" + rep + " destAddr=" + pi.Address + " ifIndex=" + pi.Interface); }
+            catch (Exception e) { Console.WriteLine("UDPRECV nothing received: " + e.GetType().Name); }
+            return 0;
+        }
         if (mode == "nlm")
         {
             foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
