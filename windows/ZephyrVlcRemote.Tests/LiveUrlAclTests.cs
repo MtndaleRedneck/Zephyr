@@ -11,7 +11,7 @@ namespace ZephyrVlcRemote.Tests;
 public class LiveUrlAclTests
 {
     private static string Sid => WindowsIdentity.GetCurrent().User!.Value;
-    private const string Url = "http://+:8492/"; // Program.HttpPort
+    private const string Url = "https://+:8492/"; // Program.HttpPort; the helper classifies the https reservation (FirewallSetup.cs); the old http one is separate
 
     private static void Netsh(string args, bool assertExit = true)
     {

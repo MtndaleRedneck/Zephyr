@@ -10,6 +10,8 @@ param([switch]$HomeOnly)
 # not evidence.
 $ErrorActionPreference = 'Continue'
 $note = "$env:RUNNER_TEMP/pc-desktop-note.txt"
+# Secure mode is HTTPS only: every request to the Player goes over HTTPS pinned to its own identity (same helper the installed-exe smokes use).
+. "$PSScriptRoot/zephyr_tls_pin.ps1"
 # Fresh forensics for this run: the app writes ZephyrPlayer-crash.log on any
 # unhandled failure; printed below whenever a window never appears.
 $crashLog = Join-Path $env:TEMP 'ZephyrPlayer-crash.log'
@@ -300,10 +302,16 @@ function StopZephyr { Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | S
 function Get-Http($method, $path, $token, $body) {
     # Status code only; an unreachable server is -1, never "fine".
     try {
-        $h = @{}; if ($token) { $h['Authorization'] = "Bearer $token" }
-        $r = Invoke-WebRequest -Method $method -Uri "http://127.0.0.1:47823$path" -Headers $h -ContentType 'application/json' -Body $body -UseBasicParsing -SkipHttpErrorCheck -TimeoutSec 10
-        return [int]$r.StatusCode
+        $r = Invoke-ZephyrTls $method $path $token $body
+        if ($r.Status -eq 0) { return -1 }
+        return [int]$r.Status
     } catch { return -1 }
+}
+# Like Invoke-RestMethod: a non-2xx or unreachable answer is an error, never a silent pass.
+function Send-ZephyrOk($method, $path, $body) {
+    $r = Invoke-ZephyrTls $method $path 'ci-capture-token' $body
+    if ($r.Status -lt 200 -or $r.Status -gt 299) { throw "$method $path answered $($r.Status) over HTTPS" }
+    return $r
 }
 function Close-PairingWindow($proc) {
     # A fresh profile auto-shows the pairing screen over Home; close it so the
@@ -722,8 +730,8 @@ if (-not $ctrlUp) { throw "control server did not come up for the phone-start ba
 # /play is the route the real phone uses to START playback (ZephyrClient.play): it
 # hides Home and SHOWS the player window. /control/play only drives the current
 # session (no Show) - using it here proved nothing about the phone-start flow.
-$playResp = Invoke-WebRequest -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') -SkipHttpErrorCheck
-if ($playResp.StatusCode -ne 200) { throw "phone-start play POST answered $($playResp.StatusCode) (body of $("$($playResp.Content)".Length) chars withheld from the public log)" }
+$playResp = Invoke-ZephyrTls 'POST' '/play' 'ci-capture-token' '{"url":"http://127.0.0.1:8901/s/tok/1"}'
+if ($playResp.Status -ne 200) { throw "phone-start play POST answered $($playResp.Status) over HTTPS (body of $("$($playResp.Body)".Length) chars withheld from the public log)" }
 # Find the player window BY TITLE: Home and MainWindow are both titled "Zephyr
 # Player", the pairing window has its own title, and any transient dialog (which
 # once masqueraded as the player, then died mid-poll and left a stale handle) is
@@ -836,23 +844,23 @@ if (-not $gotStart) {
 }
 Start-Sleep -Seconds 5   # past the 3s idle timer, still playing
 $szBar2 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-autohide.png"
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+$null = Send-ZephyrOk 'POST' '/control/pause' '{}'
 # Paused keeps the bar: the phone's pause must reveal/hold controls without a mouse.
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+$null = Send-ZephyrOk 'POST' '/control/resume' '{}'
 Start-Sleep -Milliseconds 700
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/pause" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+$null = Send-ZephyrOk 'POST' '/control/pause' '{}'
 Start-Sleep -Seconds 5   # well past the idle timer: a paused movie never loses the bar
 $szBar3 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-paused.png"
 # Parked-cursor case: a cursor SITTING OVER the playing video must not pin the bar
 # (only real movement reveals it). Move onto the video, wait past the idle timer.
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/control/resume" -Headers $hdr -ContentType "application/json" -Body '{}' | Out-Null
+$null = Send-ZephyrOk 'POST' '/control/resume' '{}'
 [ZWU32]::SetCursorPos(500, 350) | Out-Null   # window center: inside, over the video
 Start-Sleep -Seconds 5
 $szBar4 = CaptureWindow $hwBar "$env:RUNNER_TEMP/pc-bar-parked.png"
 # Close the real player to return Home, then start again through the phone route.
 [ZWU32]::PostMessage($hwBar, 0x0010, [System.IntPtr]::Zero, [System.IntPtr]::Zero) | Out-Null
 Start-Sleep -Milliseconds 800
-Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:47823/play" -Headers $hdr -ContentType "application/json" -Body ('{"url":"http://127.0.0.1:8901/s/tok/1"}') | Out-Null
+$null = Send-ZephyrOk 'POST' '/play' '{"url":"http://127.0.0.1:8901/s/tok/1"}'
 Start-Sleep -Seconds 2
 $hwRestart = Find-PlayerWindow $pBar.Id $hwHome
 if ($hwRestart -eq [System.IntPtr]::Zero) { throw "Home/replay did not restore player" }
@@ -932,7 +940,7 @@ $fnPauseGlyph = -1; $fnPauseClock = -1; $fnSeek = -1; $fnFs = 0
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
 function Get-PlayerStatus {
-    try { return Invoke-RestMethod -Uri "http://127.0.0.1:47823/control/status" -Headers $hdr -TimeoutSec 5 } catch { return $null }
+    try { $r = Invoke-ZephyrTls 'GET' '/control/status' 'ci-capture-token' $null; if ($r.Status -ne 200) { return $null }; return ($r.Body | ConvertFrom-Json) } catch { return $null }
 }
 WakeControls
 $ppTarget = $null
