@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Net;
 using System.Security.Principal;
 using Xunit;
@@ -56,6 +57,7 @@ public class HelperTlsWindowsIntegrationTests
         Assert.Equal(0, TlsSetup.Remove(TestPort));
         BothBindings(HttpSysSsl.Kind.Absent);
         Assert.False(HelperTls.RuntimeReady(TestPort, out _));   // fails closed afterwards
+        Sentinel("elevated-lifecycle", "done=true");
     }
 
     [Fact]
@@ -81,6 +83,7 @@ public class HelperTlsWindowsIntegrationTests
             var r = HttpSysSsl.QueryExact_(IPAddress.Any, TestPort);
             Assert.Equal(HttpSysSsl.Kind.Found, r.Kind);                            // still there
             Assert.Equal(cert.Thumbprint, r.Thumbprint, ignoreCase: true);
+            Sentinel("foreign-binding", "done=true");
         }
         finally
         {
@@ -98,15 +101,31 @@ public class HelperTlsWindowsIntegrationTests
         Assert.True(IsAdmin);
         Assert.Equal(0, TlsSetup.Run(TestPort, true));
         Assert.True(HelperTls.RuntimeReady(TestPort, out var why), why);
+        Sentinel("setup-only", "ready=true");
     }
 
     /// <summary>Run as a standard (non-admin) user by the workflow AFTER the elevated test left a ready identity: the unelevated runtime view must read it as Ready without enumerating or signing.</summary>
     [Fact]
     public void StandardUserRuntimeReadsReadyState()
     {
-        if (Environment.GetEnvironmentVariable("ZEPHYR_TLS_STDUSER") != "1" || !OperatingSystem.IsWindows()) return;
-        Assert.False(IsAdmin, "this check must run unelevated");
-        Assert.True(HelperTls.RuntimeReady(TestPort, out var why), why);
+        // The workflow passes ZEPHYR_TLS_STDUSER and the expected account with `dotnet test -e`, so the child does not depend on inherited environment.
+        if (Environment.GetEnvironmentVariable("ZEPHYR_TLS_STDUSER") != "1") return;   // normal runs: not applicable; the workflow requires the sentinel, so an unexercised pass fails there
+        Assert.True(OperatingSystem.IsWindows());
+        var expected = Environment.GetEnvironmentVariable("ZEPHYR_TLS_EXPECT_USER");
+        Assert.False(string.IsNullOrEmpty(expected), "expected account name was not passed");
+        Assert.Equal(expected, Environment.UserName, ignoreCase: true);
+        Assert.False(IsAdmin, "this check must run with a non-admin token");
+        var ready = HelperTls.RuntimeReady(TestPort, out var why);
+        Sentinel("standard-user", "ready=" + ready + ";reason=" + why);
+        Assert.True(ready, why);
+    }
+
+    /// <summary>Proof the test body really ran (an early return reports as passed). The workflow requires each sentinel, so a skipped or unexercised test fails the run. Contains only the test name, account name, elevation flag and readiness reason; no secrets.</summary>
+    private static void Sentinel(string name, string extra)
+    {
+        var dir = Environment.GetEnvironmentVariable("ZEPHYR_TLS_SENTINEL_DIR");
+        if (string.IsNullOrEmpty(dir)) throw new InvalidOperationException("ZEPHYR_TLS_SENTINEL_DIR is required when the integration test runs");
+        File.WriteAllText(Path.Combine(dir, name + ".txt"), $"user={Environment.UserName};admin={IsAdmin};{extra}");
     }
 
     private static void RunNetsh(string args)
