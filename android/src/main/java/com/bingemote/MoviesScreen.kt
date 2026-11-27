@@ -599,6 +599,8 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
 
     // The PC's setting wins when the helper has one; the phone's copy is the fallback.
     LaunchedEffect(Unit) {
+        // Debug demo list only: show it at once, never wait on a PC/helper round trip (the demo seed holds a token for an address that does not exist).
+        if (demoPhone && BuildConfig.DEBUG) { gate.bump(); loadPhone(); return@LaunchedEffect }
         if (!remote.pcReachable) { gate.bump(); loading = false; return@LaunchedEffect }
         val g0 = gate.current()
         val fromPc = withContext(Dispatchers.IO) {
