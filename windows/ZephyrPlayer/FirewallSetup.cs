@@ -55,6 +55,12 @@ namespace ZephyrPlayer
         {
             LastReadFailed = false;
             if (!RulesHaveCurrentShape() || !UrlAclNamesCurrentUser()) return false;
+            // The secure identity must be ready for this unelevated copy too; an unreadable store or binding is a read failure, never a reason to prompt again.
+            if (!HelperTls.RuntimeReady(PlaybackServer.DefaultPort, out var tlsWhy))
+            {
+                if (tlsWhy.Contains("could not be read") || tlsWhy.Contains("unreadable")) LastReadFailed = true;
+                return false;
+            }
             StampMarker();
             return true;
         }
@@ -171,7 +177,7 @@ namespace ZephyrPlayer
 
         public static bool UrlAclExists()
         {
-            return QueryUrlAcl("http://+:" + PlaybackServer.DefaultPort + "/").Found;
+            return QueryUrlAcl("https://+:" + PlaybackServer.DefaultPort + "/").Found;
         }
 
         /// <summary>True when the port's reservation names the CURRENT user (a read-only
@@ -354,9 +360,16 @@ namespace ZephyrPlayer
         /// DELETED a reservation it could not read).</summary>
         internal static AclOwnership ClassifyUrlAcl(string? sid)
         {
-            var (found, sddl) = QueryUrlAcl("http://+:" + PlaybackServer.DefaultPort + "/");
+            var (found, sddl) = QueryUrlAcl("https://+:" + PlaybackServer.DefaultPort + "/");
             if (!found) return AclOwnership.None;
             return ClassifySddl(sddl, sid);
+        }
+
+        /// <summary>The pre-TLS http:// reservation: classified separately so it is deleted only when positively ours or legacy.</summary>
+        internal static AclOwnership ClassifyOldHttpUrlAcl(string? sid)
+        {
+            var (found, sddl) = QueryUrlAcl("http://+:" + PlaybackServer.DefaultPort + "/");
+            return found ? ClassifySddl(sddl, sid) : AclOwnership.None;
         }
 
         /// <summary>Runs inside the elevated copy. [userSid] is the UNelevated user's
@@ -396,6 +409,14 @@ namespace ZephyrPlayer
                     Console.Error.WriteLine("The network port Zephyr Player needs is reserved for another app or another Windows user on this PC.");
                     return 4;
                 }
+                // Secure identity and both wildcard bindings, in this same elevated step (no new prompt), BEFORE any firewall or urlacl change:
+                // anything the planner refuses (foreign binding, unreadable store or key) leaves everything as it was and nothing is opened.
+                var tlsExit = TlsSetup.Run(PlaybackServer.DefaultPort, true);
+                if (tlsExit != 0)
+                {
+                    Console.Error.WriteLine("Secure setup could not be completed, so Zephyr Player did not open the network port. No firewall rule or listen permission was changed by this run (secure setup exit " + tlsExit + ").");
+                    return 8;
+                }
                 // Re-add our own rules from scratch: by name they are ours, whatever shape
                 // the 1.1.0 installer gave them (any-address TCP 47823, UDP 8489 - which
                 // was BingeMote's port and must go). Other apps' rules are never named.
@@ -411,13 +432,21 @@ namespace ZephyrPlayer
                         break; // already exactly right
                     case AclOwnership.None:
                     case AclOwnership.Legacy:
-                        Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
-                        var acl = Run("netsh", "http add urlacl url=http://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
+                        Run("netsh", "http delete urlacl url=https://+:" + PlaybackServer.DefaultPort + "/");
+                        var acl = Run("netsh", "http add urlacl url=https://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")");
                         if (acl.ExitCode != 0 || !UrlAclExists()) return 3;
                         break;
                 }
                 // Verify the reservation really names the intended user, not just the port.
                 if (!UrlAclNamesUser(sid)) return 3;
+                // Old http:// reservation: deleted only when positively ours or legacy, never a foreign or unreadable one.
+                try
+                {
+                    var oldOwn = ClassifyOldHttpUrlAcl(sid);
+                    if (UrlAclMigrationPlanner.PlanOld(oldOwn) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
+                        Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
+                }
+                catch (Exception) { }
                 RemoveLegacy110UninstallEntry();
                 return RulesExist() ? 0 : 2;
             }
@@ -512,7 +541,16 @@ namespace ZephyrPlayer
             Run("netsh", $"advfirewall firewall delete rule name=\"{TcpRuleName}\"");
             Run("netsh", $"advfirewall firewall delete rule name=\"{UdpRuleName}\"");
             if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
-                Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
+                Run("netsh", "http delete urlacl url=https://+:" + PlaybackServer.DefaultPort + "/");
+            // The old http reservation too, only when positively ours or legacy.
+            try
+            {
+                if (UrlAclMigrationPlanner.PlanOld(ClassifyOldHttpUrlAcl(sid)) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
+                    Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
+            }
+            catch (Exception) { }
+            // Removes only the bindings the marker proves are ours; certificate, key and marker stay so pairing survives a reinstall.
+            TlsSetup.Remove(PlaybackServer.DefaultPort);
             return 0;
         }
 

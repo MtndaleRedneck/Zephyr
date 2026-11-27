@@ -82,7 +82,21 @@ namespace ZephyrPlayer
 
         public void Start()
         {
+            // Secure mode is HTTPS only: if the identity, key or either binding is not exactly as setup left it, nothing listens (no plaintext fallback).
+            if (Secure && !_loopbackOnly)
+            {
+                if (!HelperTls.RuntimeReady(Port, out var tlsWhy))
+                    throw new InvalidOperationException("Secure setup is not complete: " + tlsWhy);
+            }
             _listener.Start();
+            if (Secure && !_loopbackOnly)
+            {
+                if (!HelperTls.VerifyListener(Port, out var hsWhy))
+                {
+                    try { _listener.Stop(); } catch { }
+                    throw new InvalidOperationException("Secure listener check failed: " + hsWhy);
+                }
+            }
             _ = Task.Run(Loop);
         }
 

@@ -1,3 +1,8 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
 using System.Diagnostics;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -8,7 +13,30 @@ using System.Security.Principal;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
+#if ZEPHYR_PLAYER
+namespace ZephyrPlayer;
+#else
 namespace ZephyrVlcRemote;
+#endif
+
+/// <summary>The only per-product values in this file. The Player compiles this same source with ZEPHYR_PLAYER and gets its OWN identity: own
+/// app id, friendly name, certificate subject, protected folder and setup mutex, so neither product can match, renew or remove the other's.</summary>
+internal static class TlsProduct
+{
+#if ZEPHYR_PLAYER
+    internal const string DirName = "ZephyrPlayer";
+    internal const string AppIdText = "9c1e4a7b-3d52-4f08-8b6e-71a2c5d90e34";
+    internal const string FriendlyName = "Zephyr Player LAN identity";
+    internal const string CertSubject = "CN=Zephyr Player";
+    internal const string SetupMutex = @"Global\ZephyrPlayerTlsSetup";
+#else
+    internal const string DirName = "ZephyrVlcRemote";
+    internal const string AppIdText = "5b0d6f6e-7a0e-4f4f-9a3c-2f1d9e0c4a11";
+    internal const string FriendlyName = "Zephyr VLC Remote LAN identity";
+    internal const string CertSubject = "CN=Zephyr VLC Remote";
+    internal const string SetupMutex = @"Global\ZephyrVlcRemoteTlsSetup";
+#endif
+}
 
 // PRIVATE SOURCE, NOT COMPILED, NOT RUN. No Windows runner, no .NET toolchain and no elevated session existed when this was written.
 // Every Windows-facing member is an unverified draft until it has run on a real machine. See HelperTlsTests.cs for the unrun list.
@@ -130,7 +158,7 @@ internal static class UrlAclMigrationPlanner
 /// <summary>Files written only by the elevated side: atomic replace, then a DACL of SYSTEM and Administrators full control, Users read-only.</summary>
 internal static class ProtectedFile
 {
-    internal static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ZephyrVlcRemote");
+    internal static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), TlsProduct.DirName);
 
     /// <summary>True only when the directory exists, is owned by SYSTEM, Administrators or TrustedInstaller, and no non-admin principal can write or change it. A foreign directory is NEVER repaired here.</summary>
     internal static bool DirTrusted(string dir)
@@ -408,8 +436,8 @@ internal static class HttpSysSsl
 internal static class TlsInspector
 {
     internal const string StoreLabel = "MY";
-    internal static readonly Guid AppId = new("5b0d6f6e-7a0e-4f4f-9a3c-2f1d9e0c4a11");   // this app's own id, not a test placeholder
-    internal const string FriendlyName = "Zephyr VLC Remote LAN identity";
+    internal static readonly Guid AppId = new(TlsProduct.AppIdText);   // this app's own id, not a test placeholder
+    internal const string FriendlyName = TlsProduct.FriendlyName;
 
     /// <summary>privilegedKeyCheck=false (runtime): public certificate plus a key REFERENCE only. The runtime may be unable to use a SYSTEM/Admin-only key by design.</summary>
     internal static (CertState state, X509Certificate2? cert) FindByThumbprint(string thumbprint, bool privilegedKeyCheck)
@@ -546,7 +574,7 @@ internal static class TlsSetup
     internal static int Run(int port, bool explicitSetup)
     {
         if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)) return 6;
-        using var mutex = MutexAcl.Create(false, @"Global\ZephyrVlcRemoteTlsSetup", out _, MakeMutexSecurity());
+        using var mutex = MutexAcl.Create(false, TlsProduct.SetupMutex, out _, MakeMutexSecurity());
         bool got;
         try { got = mutex.WaitOne(TimeSpan.FromSeconds(30)); } catch (AbandonedMutexException) { got = true; }   // prior holder died: we own it, the journal tells what it left
         if (!got) return 7;
@@ -677,7 +705,7 @@ internal static class TlsSetup
 
     private static X509Certificate2 NewCert(ECDsa key, bool persistedKey)
     {
-        var req = new CertificateRequest("CN=Zephyr VLC Remote", key, HashAlgorithmName.SHA256);
+        var req = new CertificateRequest(TlsProduct.CertSubject, key, HashAlgorithmName.SHA256);
         req.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
         req.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
         req.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(new OidCollection { new Oid("1.3.6.1.5.5.7.3.1") }, false));
@@ -746,7 +774,7 @@ internal static class TlsSetup
     internal static int Remove(int port)
     {
         if (!new WindowsPrincipal(WindowsIdentity.GetCurrent()).IsInRole(WindowsBuiltInRole.Administrator)) return 6;
-        using var mutex = MutexAcl.Create(false, @"Global\ZephyrVlcRemoteTlsSetup", out _, MakeMutexSecurity());
+        using var mutex = MutexAcl.Create(false, TlsProduct.SetupMutex, out _, MakeMutexSecurity());
         bool got;
         try { got = mutex.WaitOne(TimeSpan.FromSeconds(30)); } catch (AbandonedMutexException) { got = true; }
         if (!got) return 7;

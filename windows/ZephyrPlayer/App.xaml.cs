@@ -309,7 +309,8 @@ namespace ZephyrPlayer
                 display: _displayWatch.CreateGate(),
                 control: new MainWindowPlaybackControl(_player, player,
                     showForPlayback: () => { EnsurePlayer(); _home?.Hide(); _player!.Show(); }),
-                settings: settings);
+                settings: settings,
+                secure: true);
             // Firewall + listen permission (round-6 N-8): the per-user installer never
             // adds them, so the FIRST run explains and asks Windows once. Declining
             // closes the app cleanly (retry on next launch) instead of failing the
