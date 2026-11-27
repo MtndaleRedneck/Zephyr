@@ -76,6 +76,8 @@ function Expect($what, $method, $path, $token, $body, [int]$want) {
     if ($got -ne $want) { throw "$what answered $got, expected $want" }
     return $r
 }
+# Candidate is HTTPS-only: pinned-HTTPS helpers (Get-TlsStatus) pin the identity the candidate's own setup creates.
+. (Join-Path $PSScriptRoot 'zephyr_tls_pin.ps1')
 function Uninstall-Player {
     Stop-Player
     $u = "$env:LOCALAPPDATA\Programs\Zephyr Player\unins000.exe"
@@ -292,11 +294,31 @@ try {
     Note 'candidate_installed_version' "PROVEN (installed ProductVersion equals exactly $wantPv; was $pv0)"
     Note 'installer_left_real_data_identical' "PROVEN (3 real files byte-identical after the candidate installer)"
     Stop-Player
+    # The candidate is HTTPS-only (no plaintext fallback) and, like a real user, runs its own one-time setup
+    # (the elevated --install-firewall pass: rules, identity, https listen permission and binding) before it can
+    # listen. The 2.0.2 data is untouched by it. Setup output is kept for the log; a nonzero exit fails the step.
+    $setupErr = Join-Path $env:RUNNER_TEMP 'pub202-candidate-setup.err'
+    $setupOut = Join-Path $env:RUNNER_TEMP 'pub202-candidate-setup.out'
+    $cs = Start-Process $exe -ArgumentList '--install-firewall', $sid -PassThru -Wait -RedirectStandardError $setupErr -RedirectStandardOutput $setupOut
+    Write-Output "candidate setup exit $($cs.ExitCode)"; Write-Output '--- candidate setup stderr ---'; Get-Content $setupErr -ErrorAction SilentlyContinue
+    if ($cs.ExitCode -ne 0) { throw "candidate --install-firewall exit $($cs.ExitCode)" }
+    foreach ($f in $files) {
+        if ((Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash -ne $before[$f]) { throw "the candidate setup changed $f" }
+    }
     $null = Start-Process $exe -PassThru
     if (-not (Wait-Server 40)) { throw 'candidate control server never came up on the real 2.0.2 data' }
     Start-Sleep -Seconds 4
-    $null = Expect 'candidate-real-token' 'Get' '/control/status' $token $null 200
-    $null = Expect 'candidate-wrong-token' 'Get' '/control/status' 'not-a-real-token' $null 401
+    $c200 = $false
+    for ($i = 0; $i -lt 15 -and -not $c200; $i++) { $c200 = ((Get-TlsStatus $token) -eq 200); if (-not $c200) { Start-Sleep -Seconds 1 } }
+    Note 'http[candidate-real-token]' "pinned HTTPS GET /control/status -> $(if ($c200) { 200 } else { 'not 200' }) (want 200)"
+    if (-not $c200) { throw 'candidate-real-token did not answer 200 over pinned HTTPS' }
+    $wrong = Get-TlsStatus 'not-a-real-token'
+    Note 'http[candidate-wrong-token]' "pinned HTTPS GET /control/status -> $wrong (want 401)"
+    if ($wrong -ne 401) { throw "candidate-wrong-token answered $wrong, expected 401" }
+    $plain = 0
+    try { $plain = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
+    Note 'http[candidate-plaintext]' "plain http GET /control/status -> $plain (want not 200)"
+    if ($plain -eq 200) { throw 'PLAINTEXT 200: the candidate answered the real token over plain http' }
     Stop-Player
     $paired2 = Get-Content "$dataDir\paired.json" -Raw
     $e2 = (@($paired2 | ConvertFrom-Json))[0]
