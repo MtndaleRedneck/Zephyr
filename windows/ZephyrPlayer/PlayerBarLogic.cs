@@ -112,8 +112,8 @@ namespace ZephyrPlayer
         /// <summary>The LibVLC creation options for the subtitle look (size and style).
         /// libVLC 3 reads them when it is created; none of them can change on a playing
         /// movie. Position: none is set, so libVLC's default placement is used, the same
-        /// place Windows VLC 3.0.24 draws them
-        /// (CP2 round 5 removed the old 150 DIP --sub-margin lift). While the bar
+        /// place Windows VLC 3.0.24 draws them (the same spot VLC PC
+        /// uses; CP2 round 5 removed the old 150 DIP --sub-margin lift). While the bar
         /// shows it can cover the line (disclosed, accepted); the bar auto-hides.
         /// [dpiScale] no longer changes any option (it scaled the removed lift).</summary>
         public static string[] SubtitleOptions(string size, double dpiScale)
