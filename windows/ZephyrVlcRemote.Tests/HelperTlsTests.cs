@@ -163,50 +163,81 @@ SSL Certificate bindings:
         => Assert.Equal(expected, UrlAclMigrationPlanner.PlanOld(Enum.Parse<FirewallSetup.AclOwnership>(owner)).ToString());
 
     // The 1.1.0 upgrade collision (add https fails 183 while the old http reservation exists): drive the SAME function both setups call, with fakes for netsh and the classifier.
-    private static (int rc, int adds, int deletes, bool gone) Migrate(int[] addResults, FirewallSetup.AclOwnership old, bool classifierThrows = false)
+    private const string E183 = "\r\nUrl reservation add failed, Error: 183\r\nCannot create a file when that file already exists.\r\n";
+    private const string E5 = "\r\nUrl reservation add failed, Error: 5\r\nAccess is denied.\r\n";
+    private sealed class Fake
     {
-        int adds = 0, deletes = 0;
-        var rc = UrlAclMigrationPlanner.AddHttpsReservation(
-            () => addResults[Math.Min(adds++, addResults.Length - 1)],
-            () => classifierThrows ? throw new InvalidOperationException("unreadable") : old,
-            () => deletes++, out var gone);
-        return (rc, adds, deletes, gone);
+        public (int, string)[] Adds = Array.Empty<(int, string)>(); public int AddCalls, DeleteCalls, ClassifyCalls;
+        public FirewallSetup.AclOwnership[] Classes = { FirewallSetup.AclOwnership.Ours }; public bool Throws; public int DeleteExit;
+        public UrlAclMigrationPlanner.HttpsAddResult Go() => UrlAclMigrationPlanner.AddHttpsReservation(
+            () => Adds[Math.Min(AddCalls++, Adds.Length - 1)],
+            () => { var c = Classes[Math.Min(ClassifyCalls++, Classes.Length - 1)]; return Throws ? throw new InvalidOperationException("unreadable") : c; },
+            () => { DeleteCalls++; return DeleteExit; });
     }
 
     [Theory]
     [InlineData("Ours")]
     [InlineData("Legacy")]
-    public void CollisionWithOurOrLegacyOldHttp_RemovesItOnceAndRetriesOnce(string owner)
+    public void Collision183WithOurOrLegacyOldHttp_RemovesItOnceVerifiesAndRetriesOnce(string owner)
     {
-        var r = Migrate(new[] { 1, 0 }, Enum.Parse<FirewallSetup.AclOwnership>(owner));
-        Assert.Equal((0, 2, 1, true), (r.rc, r.adds, r.deletes, r.gone));
+        var f = new Fake { Adds = new[] { (1, E183), (0, "") }, Classes = new[] { Enum.Parse<FirewallSetup.AclOwnership>(owner), FirewallSetup.AclOwnership.None } };
+        var r = f.Go();
+        Assert.Equal((0, 2, 1, 2, true), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls, r.OldHttpDeleted));
+        Assert.Equal(1, r.FirstExit); Assert.Contains("183", r.FirstOutput);   // the original add diagnostics are kept
     }
 
     [Theory]
     [InlineData(FirewallSetup.AclOwnership.Foreign)]   // also what an unreadable reservation classifies as
     [InlineData(FirewallSetup.AclOwnership.None)]
-    public void CollisionWithForeignOrAbsentOldHttp_NeverDeletesAndKeepsTheFailure(FirewallSetup.AclOwnership owner)
+    public void Collision183WithForeignOrAbsentOldHttp_NeverDeletesAndKeepsTheFailure(FirewallSetup.AclOwnership owner)
     {
-        var r = Migrate(new[] { 1 }, owner);
-        Assert.Equal((1, 1, 0, false), (r.rc, r.adds, r.deletes, r.gone));
+        var f = new Fake { Adds = new[] { (1, E183) }, Classes = new[] { owner } };
+        var r = f.Go();
+        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted));
+    }
+
+    [Fact] public void OnlyTheSpecific183CollisionTriggersCleanup_AccessDeniedNeverDeletes()
+    {
+        var f = new Fake { Adds = new[] { (1, E5) } };
+        var r = f.Go();
+        Assert.Equal((1, 1, 0, 0), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls));
+        Assert.False(UrlAclMigrationPlanner.IsAlreadyExists(0, E183));
+        Assert.False(UrlAclMigrationPlanner.IsAlreadyExists(1, "Error: 1831"));
     }
 
     [Fact] public void ClassifierFailureMeansNoDeletion()
     {
-        var r = Migrate(new[] { 1 }, FirewallSetup.AclOwnership.Ours, classifierThrows: true);
-        Assert.Equal((1, 1, 0, false), (r.rc, r.adds, r.deletes, r.gone));
+        var f = new Fake { Adds = new[] { (1, E183) }, Throws = true };
+        var r = f.Go();
+        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted));
+    }
+
+    [Fact] public void FailedDeleteMeansNoRetry_AndTheOriginalFailureIsReturned()
+    {
+        var f = new Fake { Adds = new[] { (1, E183), (0, "") }, DeleteExit = 5 };
+        var r = f.Go();
+        Assert.Equal((1, 1, 1, false, 5), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted, r.DeleteExit));
+    }
+
+    [Fact] public void OldHttpStillPresentAfterDeleteMeansNoRetry_PartialStateIsReported()
+    {
+        var f = new Fake { Adds = new[] { (1, E183), (0, "") }, Classes = new[] { FirewallSetup.AclOwnership.Ours, FirewallSetup.AclOwnership.Ours } };
+        var r = f.Go();
+        Assert.Equal((1, 1, 1, true), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted));   // flagged deleted=true: a delete was attempted
     }
 
     [Fact] public void RetryFailureIsReportedTruthfully_AndNothingIsRolledBack()
     {
-        var r = Migrate(new[] { 1, 183 }, FirewallSetup.AclOwnership.Ours);
-        Assert.Equal((183, 2, 1, true), (r.rc, r.adds, r.deletes, r.gone));   // the second failure is returned; the old reservation stays removed; no third try
+        var f = new Fake { Adds = new[] { (1, E183), (183, E183) }, Classes = new[] { FirewallSetup.AclOwnership.Ours, FirewallSetup.AclOwnership.None } };
+        var r = f.Go();
+        Assert.Equal((183, 2, 1, true, 1, 183), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted, r.FirstExit, r.RetryExit));   // no third try
     }
 
     [Fact] public void FirstAddSuccess_TouchesNothingElse()
     {
-        var r = Migrate(new[] { 0 }, FirewallSetup.AclOwnership.Ours);
-        Assert.Equal((0, 1, 0, false), (r.rc, r.adds, r.deletes, r.gone));
+        var f = new Fake { Adds = new[] { (0, "") } };
+        var r = f.Go();
+        Assert.Equal((0, 1, 0, 0), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls));
     }
 
     [Fact] public void StaleOwnedBindingNeedsExplicitSetupAndBecomesAnUpdate()

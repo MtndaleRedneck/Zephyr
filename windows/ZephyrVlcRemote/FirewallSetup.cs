@@ -133,12 +133,13 @@ internal static class FirewallSetup
                 case AclOwnership.None:
                 case AclOwnership.Legacy:
                     Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
-                    var acl = UrlAclMigrationPlanner.AddHttpsReservation(
-                        () => Run("netsh", "http add urlacl url=https://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")"),
+                    var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
+                        () => RunCapture("netsh", "http add urlacl url=https://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")"),
                         () => ClassifyOldHttpUrlAcl(sid),
-                        () => Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/"),
-                        out var oldHttpGone);
-                    if (oldHttpGone) Program.Log("firewall setup: the https listen permission collided with the old http reservation (positively ours or legacy); the old one was removed and the add retried (result exit " + acl + ").");
+                        () => Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/"));
+                    var acl = addRes.Exit;
+                    if (addRes.FirstExit != 0)
+                        Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation deleted=" + addRes.OldHttpDeleted + " (delete exit " + addRes.DeleteExit + "); retry exit " + addRes.RetryExit + ".");
                     if (acl != 0 || !UrlAclExists())
                     {
                         Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
@@ -693,7 +694,9 @@ internal static class FirewallSetup
         return false;
     }
 
-    private static int Run(string file, string args)
+    private static int Run(string file, string args) => RunCapture(file, args).Exit;
+
+    private static (int Exit, string Output) RunCapture(string file, string args)
     {
         var psi = new ProcessStartInfo(file, args) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
         using var p = Process.Start(psi)!;
@@ -706,9 +709,9 @@ internal static class FirewallSetup
         {
             try { p.Kill(entireProcessTree: true); } catch { }
             Program.Log("firewall setup: " + file + " did not finish in 30 s and was stopped.");
-            return -1;
+            return (-1, "");
         }
         Task.WaitAll(new Task[] { stdout, stderr }, 5_000);
-        return p.ExitCode;
+        return (p.ExitCode, (stdout.IsCompletedSuccessfully ? stdout.Result : "") + (stderr.IsCompletedSuccessfully ? stderr.Result : ""));
     }
 }
