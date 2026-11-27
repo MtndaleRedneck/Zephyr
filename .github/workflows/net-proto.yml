@@ -1,0 +1,35 @@
+name: net-proto
+on:
+  push:
+    branches: [tmp/net-proto]
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: parse script with the PowerShell parser (nothing is executed)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/netproto.ps1).Path, [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs.Count -gt 0) { $errs | ForEach-Object { $_.ToString() }; exit 1 }
+          'parse clean'
+      - name: build prototype
+        run: dotnet build proto -c Release
+  run:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: run feasibility checks
+        timeout-minutes: 10
+        shell: pwsh
+        run: ./scripts/netproto.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: net-proto
+          path: out/*.txt
