@@ -139,7 +139,7 @@ internal static class FirewallSetup
                         () => Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/"));
                     var acl = addRes.Exit;
                     if (addRes.FirstExit != 0)
-                        Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation deleted=" + addRes.OldHttpDeleted + " (delete exit " + addRes.DeleteExit + "); retry exit " + addRes.RetryExit + ".");
+                        Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (addRes.DeleteExit is int de ? " (delete exit " + de + ")" : "") + (addRes.RetryExit is int re ? "; retry exit " + re : "; no retry") + ". An attempted delete is not proof the reservation is gone.");
                     if (acl != 0 || !UrlAclExists())
                     {
                         Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");

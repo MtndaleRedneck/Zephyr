@@ -182,7 +182,7 @@ SSL Certificate bindings:
     {
         var f = new Fake { Adds = new[] { (1, E183), (0, "") }, Classes = new[] { Enum.Parse<FirewallSetup.AclOwnership>(owner), FirewallSetup.AclOwnership.None } };
         var r = f.Go();
-        Assert.Equal((0, 2, 1, 2, true), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls, r.OldHttpDeleted));
+        Assert.Equal((0, 2, 1, 2, true), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls, r.OldHttpDeleteAttempted));
         Assert.Equal(1, r.FirstExit); Assert.Contains("183", r.FirstOutput);   // the original add diagnostics are kept
     }
 
@@ -193,7 +193,7 @@ SSL Certificate bindings:
     {
         var f = new Fake { Adds = new[] { (1, E183) }, Classes = new[] { owner } };
         var r = f.Go();
-        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted));
+        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));
     }
 
     [Fact] public void OnlyTheSpecific183CollisionTriggersCleanup_AccessDeniedNeverDeletes()
@@ -209,28 +209,28 @@ SSL Certificate bindings:
     {
         var f = new Fake { Adds = new[] { (1, E183) }, Throws = true };
         var r = f.Go();
-        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted));
+        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));
     }
 
     [Fact] public void FailedDeleteMeansNoRetry_AndTheOriginalFailureIsReturned()
     {
         var f = new Fake { Adds = new[] { (1, E183), (0, "") }, DeleteExit = 5 };
         var r = f.Go();
-        Assert.Equal((1, 1, 1, false, 5), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted, r.DeleteExit));
+        Assert.Equal((1, 1, 1, false, 5), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted, r.DeleteExit));
     }
 
     [Fact] public void OldHttpStillPresentAfterDeleteMeansNoRetry_PartialStateIsReported()
     {
         var f = new Fake { Adds = new[] { (1, E183), (0, "") }, Classes = new[] { FirewallSetup.AclOwnership.Ours, FirewallSetup.AclOwnership.Ours } };
         var r = f.Go();
-        Assert.Equal((1, 1, 1, true), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted));   // flagged deleted=true: a delete was attempted
+        Assert.Equal((1, 1, 1, true), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));   // attempted=true: a delete was attempted, absence is not proven; no retry
     }
 
     [Fact] public void RetryFailureIsReportedTruthfully_AndNothingIsRolledBack()
     {
         var f = new Fake { Adds = new[] { (1, E183), (183, E183) }, Classes = new[] { FirewallSetup.AclOwnership.Ours, FirewallSetup.AclOwnership.None } };
         var r = f.Go();
-        Assert.Equal((183, 2, 1, true, 1, 183), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleted, r.FirstExit, r.RetryExit));   // no third try
+        Assert.Equal((183, 2, 1, true, 1), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted, r.FirstExit)); Assert.Equal(183, r.RetryExit);   // no third try
     }
 
     [Fact] public void FirstAddSuccess_TouchesNothingElse()

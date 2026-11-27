@@ -438,7 +438,7 @@ namespace ZephyrPlayer
                             () => ClassifyOldHttpUrlAcl(sid),
                             () => Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/").ExitCode);
                         if (addRes.FirstExit != 0)
-                            Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation deleted=" + addRes.OldHttpDeleted + " (delete exit " + addRes.DeleteExit + "); retry exit " + addRes.RetryExit + ".");
+                            Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (addRes.DeleteExit is int de ? " (delete exit " + de + ")" : "") + (addRes.RetryExit is int re ? "; retry exit " + re : "; no retry") + ". An attempted delete is not proof the reservation is gone.");
                         var aclExit = addRes.Exit;
                         if (aclExit != 0 || !UrlAclExists()) return 3;
                         break;

@@ -154,23 +154,24 @@ internal static class UrlAclMigrationPlanner
         _ => Action.None,
     };
 
-    internal sealed record HttpsAddResult(int Exit, int FirstExit, string FirstOutput, bool OldHttpDeleted, int DeleteExit, int RetryExit, string RetryOutput);
+    /// <summary>DeleteExit and RetryExit are null when that step never ran. OldHttpDeleteAttempted records an attempt, not proof the reservation is gone.</summary>
+    internal sealed record HttpsAddResult(int Exit, int FirstExit, string FirstOutput, bool OldHttpDeleteAttempted, int? DeleteExit, int? RetryExit, string RetryOutput);
 
-    /// <summary>netsh prints the Win32 error number; 183 (ERROR_ALREADY_EXISTS) is language-neutral.</summary>
+    /// <summary>Matches netsh's "Error: 183" text (ERROR_ALREADY_EXISTS), as observed in the English output on the runner. If netsh prints it differently (for example a localized label) this does not match and the code fails closed: nothing is deleted and the original add failure is returned.</summary>
     internal static bool IsAlreadyExists(int exit, string output) => exit != 0 && System.Text.RegularExpressions.Regex.IsMatch(output ?? "", @"Error:\s*183\b");
 
     /// <summary>Adds the https:// listen permission. Observed on the 1.1.0 upgrade path (run 46073822526): while the old http:// reservation for the same port exists, the https add fails with error 183. ONLY that specific failure, and only when a fresh classification (made right after the failed add) says the old reservation is positively ours or legacy, removes it and retries the add ONCE.
-    /// Any other failure (access denied, bad SID, ...) never deletes anything. A delete that fails, or an old reservation that is still there afterwards, means no retry: the ORIGINAL add failure is returned. Every step's exit and output is in the result for the caller to log.
+    /// Any other failure (access denied, bad SID, ...) never deletes anything. A delete that fails, or an old reservation that is still classified as present afterwards, means no retry: the ORIGINAL add failure is returned. Every step's exit and output is in the result for the caller to log.
     /// There is no rollback: if the retry fails the old http reservation stays removed (plain http is retired, nothing serves it); the setup is re-runnable and the next run starts from "no reservation".</summary>
     internal static HttpsAddResult AddHttpsReservation(System.Func<(int Exit, string Output)> addHttps, System.Func<FirewallSetup.AclOwnership> classifyOldHttp, System.Func<int> deleteOldHttp)
     {
         var first = addHttps();
-        if (first.Exit == 0) return new(0, 0, first.Output, false, 0, 0, "");
-        HttpsAddResult Fail(bool deleted = false, int del = 0) => new(first.Exit, first.Exit, first.Output, deleted, del, 0, "");
+        if (first.Exit == 0) return new(0, 0, first.Output, false, null, null, "");
+        HttpsAddResult Fail(bool attempted = false, int? del = null) => new(first.Exit, first.Exit, first.Output, attempted, del, null, "");
         if (!IsAlreadyExists(first.Exit, first.Output)) return Fail();
         try { if (PlanOld(classifyOldHttp()) != Action.DeleteOldHttpReservation) return Fail(); } catch { return Fail(); }
         var del = deleteOldHttp();
-        if (del != 0) return Fail(false, del);
+        if (del != 0) return Fail(true, del);
         try { if (classifyOldHttp() != FirewallSetup.AclOwnership.None) return Fail(true, del); } catch { return Fail(true, del); }
         var retry = addHttps();
         return new(retry.Exit, first.Exit, first.Output, true, del, retry.Exit, retry.Output);
