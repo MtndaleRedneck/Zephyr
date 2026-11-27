@@ -24,6 +24,7 @@ public class HeldButtonWiringTests : IDisposable
         PowerWake.ForgetSwallowedButtonsForTests();
         PowerWake.NoteMonitorState(1);
         InputSender.ButtonSink = (b, d) => { lock (_l) _sent.Add((b, d)); };
+        HelperTestTls.EnsureReady();
         _server.Start();
     }
 
@@ -40,7 +41,7 @@ public class HeldButtonWiringTests : IDisposable
 
     private static async Task Post(HttpClient c, string path, string json, string token = Token)
     {
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"http://127.0.0.1:{Program.HttpPort}{path}") { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+        using var req = new HttpRequestMessage(HttpMethod.Post, $"https://127.0.0.1:{Program.HttpPort}{path}") { Content = new StringContent(json, Encoding.UTF8, "application/json") };
         req.Headers.Add("X-Zephyr-VLC-Remote-Token", token);
         using var res = await c.SendAsync(req);
         Assert.Equal(200, (int)res.StatusCode);
@@ -49,7 +50,7 @@ public class HeldButtonWiringTests : IDisposable
     [Fact]
     public async Task Http_ReleaseOfAHeldButton_ReachesTheMouse_WhenTheScreenWentDark()
     {
-        using var c = new HttpClient();
+        using var c = HelperTestTls.Client();
         await Post(c, "/mouse/button", "{\"button\":\"left\",\"down\":true}");
         PowerWake.NoteMonitorState(0);
         await Post(c, "/mouse/button", "{\"button\":\"left\",\"down\":false}");
@@ -60,7 +61,7 @@ public class HeldButtonWiringTests : IDisposable
     public async Task Http_FirstPressOnADarkScreen_OnlyWakes_ThenTheSecondPressOnALitScreen_ReachesTheMouse()
     {
         PowerWake.NoteMonitorState(0);
-        using var c = new HttpClient();
+        using var c = HelperTestTls.Client();
         await Post(c, "/mouse/button", "{\"button\":\"left\",\"down\":true}");
         Assert.Empty(Sent());                                      // dark: the press only wakes
         PowerWake.NoteMonitorState(1);                             // the wake lit the screen
@@ -71,9 +72,9 @@ public class HeldButtonWiringTests : IDisposable
     [Fact]
     public async Task Ws_ReleaseOfAHeldButton_ReachesTheMouse_WhenTheScreenWentDark()
     {
-        using var ws = new ClientWebSocket();
+        using var ws = HelperTestTls.Ws();
         ws.Options.SetRequestHeader("X-Zephyr-VLC-Remote-Token", Token);
-        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
+        await ws.ConnectAsync(new Uri($"wss://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
         async Task Send(string j) => await ws.SendAsync(Encoding.UTF8.GetBytes(j), WebSocketMessageType.Text, true, CancellationToken.None);
         await Send("{\"cmd\":\"button\",\"button\":\"left\",\"down\":true}");
         await WaitFor(() => Sent().Count == 1);
@@ -86,9 +87,9 @@ public class HeldButtonWiringTests : IDisposable
     [Fact]
     public async Task Ws_ADroppedConnectionStillReleasesWhatItHeld()
     {
-        var ws = new ClientWebSocket();
+        var ws = HelperTestTls.Ws();
         ws.Options.SetRequestHeader("X-Zephyr-VLC-Remote-Token", Token);
-        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
+        await ws.ConnectAsync(new Uri($"wss://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
         await ws.SendAsync(Encoding.UTF8.GetBytes("{\"cmd\":\"button\",\"button\":\"left\",\"down\":true}"), WebSocketMessageType.Text, true, CancellationToken.None);
         await WaitFor(() => Sent().Count == 1);
         ws.Abort();                                                   // no close frame, like a phone that died
@@ -103,7 +104,7 @@ public class HeldButtonWiringTests : IDisposable
     public async Task Http_WakeOnlyRightTap_ReachesNeitherAPressNorALoneRightUp()
     {
         PowerWake.NoteMonitorState(0);
-        using var c = new HttpClient();
+        using var c = HelperTestTls.Client();
         await Post(c, "/mouse/button", RightDown);
         PowerWake.NoteMonitorState(1);                       // the wake lit the screen before the finger lifted
         await Post(c, "/mouse/button", RightUp);
@@ -117,7 +118,7 @@ public class HeldButtonWiringTests : IDisposable
     public async Task Http_AnotherPhonesRelease_IsNotEatenByThisPhonesSwallowedPress()
     {
         PowerWake.NoteMonitorState(0);
-        using var c = new HttpClient();
+        using var c = HelperTestTls.Client();
         await Post(c, "/mouse/button", LeftDown, Token);     // phone A: swallowed by the wake
         PowerWake.NoteMonitorState(1);
         await Post(c, "/mouse/button", LeftDown, TokenB);    // phone B: lit, delivered
@@ -130,9 +131,9 @@ public class HeldButtonWiringTests : IDisposable
     [Fact]
     public async Task Ws_WakeOnlyRightTap_IsConsumedWhole_AndTheNextTapWorks()
     {
-        using var ws = new ClientWebSocket();
+        using var ws = HelperTestTls.Ws();
         ws.Options.SetRequestHeader("X-Zephyr-VLC-Remote-Token", Token);
-        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
+        await ws.ConnectAsync(new Uri($"wss://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
         async Task Send(string j) => await ws.SendAsync(Encoding.UTF8.GetBytes(j), WebSocketMessageType.Text, true, CancellationToken.None);
         PowerWake.NoteMonitorState(0);
         await Send("{\"cmd\":\"button\",\"button\":\"right\",\"down\":true}");
@@ -151,15 +152,15 @@ public class HeldButtonWiringTests : IDisposable
     public async Task ASwallowedPressOverTheLiveConnection_IsMatchedByItsReleaseOverHttp_SamePhoneOnly()
     {
         // The phone falls back to HTTP when its live connection is not open, so the owner is the phone, not the channel.
-        var ws = new ClientWebSocket();
+        var ws = HelperTestTls.Ws();
         ws.Options.SetRequestHeader("X-Zephyr-VLC-Remote-Token", Token);
-        await ws.ConnectAsync(new Uri($"ws://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
+        await ws.ConnectAsync(new Uri($"wss://127.0.0.1:{Program.HttpPort}/ws"), CancellationToken.None);
         PowerWake.NoteMonitorState(0);
         await ws.SendAsync(Encoding.UTF8.GetBytes("{\"cmd\":\"button\",\"button\":\"left\",\"down\":true}"), WebSocketMessageType.Text, true, CancellationToken.None);
         await WaitFor(() => PowerWake.SwallowedButtonCountForTests == 1);
         ws.Abort();                                          // the live connection drops: nothing was injected, so nothing to release
         PowerWake.NoteMonitorState(1);
-        using var c = new HttpClient();
+        using var c = HelperTestTls.Client();
         await Post(c, "/mouse/button", LeftUp, TokenB);      // another phone: delivered
         Assert.Equal(new[] { ("left", false) }, Sent());
         await Post(c, "/mouse/button", LeftUp, Token);       // the same phone: matches the swallowed press, consumed

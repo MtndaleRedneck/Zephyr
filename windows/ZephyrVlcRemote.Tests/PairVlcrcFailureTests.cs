@@ -44,9 +44,10 @@ public class PairVlcrcFailureTests : IDisposable
 
     private static async Task<(int Status, JsonElement Body)> PairAsyncWithCode(string code)
     {
+        HelperTestTls.EnsureReady();
         using var server = new HttpServer(); server.Start();
-        using var client = new HttpClient();
-        using var res = await client.PostAsync($"http://127.0.0.1:{Program.HttpPort}/pair", new StringContent("{\"code\":\"" + code + "\"}", Encoding.UTF8, "application/json"));
+        using var client = HelperTestTls.Client();
+        using var res = await client.PostAsync($"https://127.0.0.1:{Program.HttpPort}/pair", new StringContent("{\"code\":\"" + code + "\"}", Encoding.UTF8, "application/json"));
         var text = await res.Content.ReadAsStringAsync();
         return ((int)res.StatusCode, JsonDocument.Parse(text).RootElement.Clone());
     }
