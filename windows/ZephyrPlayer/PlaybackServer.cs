@@ -190,7 +190,7 @@ namespace ZephyrPlayer
                             return;
                         case PairOutcome.Locked:
                             // Per-source backoff (at most 30 s, only for the sending address): the phone says "wait a moment", never "restart the PC".
-                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes from this phone. Wait a few seconds and try again.\"}");
+                            await Reply(ctx, 429, "{\"error\":\"locked\",\"detail\":\"Too many wrong codes. Wait a few seconds and try again. If it keeps failing, press Pair on the PC for a new code.\"}");
                             return;
                         case PairOutcome.TooManyPhones:
                             await Reply(ctx, 409, "{\"error\":\"too many phones\"}");

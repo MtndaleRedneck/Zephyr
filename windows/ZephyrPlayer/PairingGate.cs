@@ -20,7 +20,10 @@ namespace ZephyrPlayer
     public sealed class PairingGate
     {
         /// <summary>Wrong guesses one SOURCE address may make before that source (alone) is backed off (SourceLimiter: 1,2,4,8,16,30 s). Another address is never affected.</summary>
-        public const int MaxFailures = 5; // kept for tests/docs: SourceLimiter starts backing a source off at 5 wrong guesses in a minute
+        public const int MaxFailures = 5; // SourceLimiter starts backing ONE source off at 5 wrong guesses in a minute
+        /// <summary>Wrong guesses from ALL sources together that close the current pairing session (the old gate allowed 10 per 10-minute code: 5, a 5-minute lock, 5 more).
+        /// It caps what any number of addresses can try at 10 of 10,000 (0.1%), the same bound as before. It is NOT a timed ban: the next Pair press (a person at the PC) opens a fresh code with a fresh budget at once.</summary>
+        public const int SessionGuessBudget = 10;
         public const int MaxPhones = 8;
         public static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(10);
         
@@ -36,6 +39,7 @@ namespace ZephyrPlayer
         private static readonly TimeSpan PrevCodeGrace = TimeSpan.FromSeconds(30);
         private readonly SourceLimiter _sources;
 
+        private int _failures;
         internal int TrackedSources => _sources.Tracked;
 
         public PairingGate(Func<DateTime>? now = null)
@@ -53,6 +57,7 @@ namespace ZephyrPlayer
         {
             lock (_lock)
             {
+                if (userStarted) _failures = 0; // only a person pressing Pair re-opens the budget; the automatic renewal never does
                 // Grace only for a LIVE code: an already-expired code (UI stall,
                 // sleep/wake) must not be revived for another 30s (round-3 P6).
                 if (_code != null && _now() <= _expires) { _prevCode = _code; _prevExpires = _now() + PrevCodeGrace; }
@@ -86,6 +91,9 @@ namespace ZephyrPlayer
         }
 
         /// <summary>Locked while a lockout is still running (time-based; no restart needed).</summary>
+        /// <summary>True once the shared guess budget closed this pairing session (the panel then takes the code down and says so). Cleared by the next Pair press, never by a timer.</summary>
+        public bool Locked { get { lock (_lock) return _failures >= SessionGuessBudget; } }
+
         /// <param name="phoneCount">Current paired-phone count (PairedStore) for the cap.</param>
         /// <param name="mint">Called once, inside the lock, only when the code is right.</param>
         /// <param name="source">The remote address text; empty means no per-source tracking (tests).</param>
@@ -96,6 +104,7 @@ namespace ZephyrPlayer
                 token = null;
                 // Only THIS source's own backoff can refuse it; no failure of anyone else does.
                 if (source.Length > 0 && !_sources.IsAllowed(source)) return PairOutcome.Locked;
+                if (_failures >= SessionGuessBudget) return PairOutcome.Locked;
                 // No code on screen: guesses here must not count toward anything.
                 if (_code == null) return PairOutcome.NoCode;
                 // A code WAS shown but died: distinct from a wrong code, and a
@@ -117,6 +126,7 @@ namespace ZephyrPlayer
                 }
                 if (!matches)
                 {
+                    _failures++;
                     if (source.Length > 0) _sources.RecordFailure(source);
                     return PairOutcome.BadCode;
                 }
@@ -125,6 +135,7 @@ namespace ZephyrPlayer
                 _expires = DateTime.MinValue;
                 _prevCode = null;
                 _prevExpires = DateTime.MinValue;
+                _failures = 0;
                 if (source.Length > 0) _sources.RecordSuccess(source);
                 return PairOutcome.Ok;
             }

@@ -91,25 +91,46 @@ namespace ZephyrPlayer.Tests
         {
             var now = DateTime.UtcNow;
             var gate = new PairingGate(() => now);
-            var code = gate.NewCode();
             for (var round = 0; round < 12; round++)
             {
+                gate.NewCode(userStarted: true); // a person reopens the session each round
                 for (var i = 0; i < PairingGate.MaxFailures; i++) gate.TryPair("000000", 0, () => "t", out _, "10.0.0.9");
                 now += TimeSpan.FromSeconds(31); // longer than the largest backoff step (30 s)
             }
+            var code = gate.NewCode(userStarted: true);
             Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out _, "10.0.0.9"));
         }
 
         [Fact]
-        public void Wrong_Guesses_Of_Many_Sources_Never_Lock_The_Right_Code_Out()
+        public void Many_Sources_Together_Are_Held_To_The_Session_Budget_And_Pair_Reopens_It()
         {
             var now = DateTime.UtcNow;
             var gate = new PairingGate(() => now);
             var code = gate.NewCode();
-            for (var s = 0; s < 3000; s++) // more sources than the limiter tracks: memory stays bounded, nobody else is refused
-                gate.TryPair("000000", 0, () => "t", out _, "172.16." + (s / 250) + "." + (s % 250));
+            // 10 wrong guesses from 10 DIFFERENT addresses close the session: no address got near its own backoff.
+            for (var s = 0; s < PairingGate.SessionGuessBudget; s++)
+                Assert.Equal(PairOutcome.BadCode, gate.TryPair("000000", 0, () => "t", out _, "172.16.0." + s));
+            Assert.True(gate.Locked);
+            Assert.Equal(PairOutcome.Locked, gate.TryPair(code, 0, () => "t", out _, "192.168.1.50"));
+            gate.NewCode(); // automatic renewal: stays closed
+            Assert.True(gate.Locked);
+            var fresh = gate.NewCode(userStarted: true); // a person presses Pair: open at once, no timer
+            Assert.False(gate.Locked);
+            Assert.Equal(PairOutcome.Ok, gate.TryPair(fresh, 0, () => "minted", out _, "192.168.1.50"));
+        }
+
+        [Fact]
+        public void Source_Table_Stays_Bounded_Across_Sessions()
+        {
+            var now = DateTime.UtcNow;
+            var gate = new PairingGate(() => now);
+            for (var round = 0; round < 400; round++)
+            {
+                gate.NewCode(userStarted: true);
+                for (var s = 0; s < PairingGate.SessionGuessBudget; s++)
+                    gate.TryPair("000000", 0, () => "t", out _, "10." + (round / 250) + "." + (round % 250) + "." + s);
+            }
             Assert.True(gate.TrackedSources <= 1024);
-            Assert.Equal(PairOutcome.Ok, gate.TryPair(code, 0, () => "minted", out _, "192.168.1.50"));
         }
 
         [Fact]
