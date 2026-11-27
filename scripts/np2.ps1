@@ -212,3 +212,28 @@ if ($Part -eq 'hyperv') {
   } else { Log 'no Hyper-V cmdlets on this runner' }
 }
 Log 'part finished'
+
+if ($Part -eq 'v6tls') {
+  $mk = & $proto mkcert | Out-String
+  Log $mk
+  $thumb = ([regex]::Match($mk, 'THUMB (\S+)')).Groups[1].Value
+  $spki = ([regex]::Match($mk, 'SPKI (\S+)')).Groups[1].Value
+  $app = 'appid={12345678-1234-1234-1234-123456789abc}'
+  Step 'sslcert v4 ONLY (no [::] binding)' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
+  Step 'sslcert list' { netsh http show sslcert }
+  Step 'urlacl' { netsh http add urlacl url=https://+:48443/ user=Everyone }
+  $ll = (Get-NetIPAddress -AddressFamily IPv6 | Where-Object { $_.IPAddress -like 'fe80*' } | Select-Object -First 1)
+  $llip = ($ll.IPAddress -split '%')[0]
+  Log ('link-local ' + $llip + ' ifIndex ' + $ll.InterfaceIndex)
+  $so = Join-Path $env:TEMP 'serve.out'
+  $se = $so + '.err'
+  $sp = Start-Process -FilePath $proto -ArgumentList 'serve https 48443 60' -NoNewWindow -PassThru -RedirectStandardOutput $so -RedirectStandardError $se
+  Start-Sleep -Seconds 6
+  Log ('netstat: ' + ((netstat -ano -p tcpv6 | Select-String ':48443 ') -join ' | '))
+  Bounded 'control v4 loopback right pin' $proto ('client https://127.0.0.1:48443/ ' + $spki) 20
+  Bounded 'v6 loopback ::1' $proto ('client https://[::1]:48443/ ' + $spki) 20
+  Bounded 'v6 link-local' $proto ('client https://[' + $llip + '%' + $ll.InterfaceIndex + ']:48443/ ' + $spki) 20
+  Log ('server out: ' + (Get-Content $so -Raw -ErrorAction SilentlyContinue))
+  & taskkill.exe /F /T /PID $sp.Id | Out-Null
+  Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete urlacl url=https://+:48443/ }
+}
