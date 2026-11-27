@@ -616,8 +616,10 @@ internal static class FirewallSetup
             Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
             if (UrlAclMigrationPlanner.PlanOld(ClassifyOldHttpUrlAcl(sid)) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
                 Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
-            TlsSetup.Remove(Program.HttpPort);   // identity cleanup: only what the marker proves is ours; see the log for what remains
         }
+        // Binding cleanup is decided by the identity marker's proof, not by the listen-permission owner: a missing reservation must not strand an owned binding.
+        // Only a reservation that is another app's or another user's (handled above) leaves the machine-wide binding alone.
+        TlsSetup.Remove(Program.HttpPort);   // removes only the exact bindings the marker proves are ours; cert, key and marker stay (pairing survives a reinstall); see the log for what remains
         return 0;
     }
 

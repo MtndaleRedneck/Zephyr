@@ -13,7 +13,7 @@ namespace ZephyrVlcRemote;
 // PRIVATE SOURCE, NOT COMPILED, NOT RUN. No Windows runner, no .NET toolchain and no elevated session existed when this was written.
 // Every Windows-facing member is an unverified draft until it has run on a real machine. See HelperTlsTests.cs for the unrun list.
 
-internal sealed record TlsIdentityMarker(string Thumbprint, string SpkiSha256Hex, string AppId, int Port, string CreatedUtc);
+internal sealed record TlsIdentityMarker(string Thumbprint, string SpkiSha256Hex, string AppId, int Port, string CreatedUtc, int Schema = 1);
 
 /// <summary>Public metadata about the identity. Absent (no file) is distinct from Corrupt (a file exists but cannot be trusted).</summary>
 public enum MarkerState { Absent, Present, Corrupt }
@@ -36,7 +36,8 @@ internal sealed record TlsObservation(
     bool ExplicitSetup,
     bool Ipv6Capable = true,
     string Diag = "",
-    bool MarkerPortMismatch = false);
+    bool MarkerPortMismatch = false,
+    bool CertExpired = false);
 
 /// <summary>PROPOSAL, default strict (both families required). If ever approved, set true: with no IPv6 stack, a missing [::] binding is not required. It never applies to a present-but-wrong binding. http.sys behavior with IPv6 disabled is UNVERIFIED.</summary>
 internal static class TlsPolicy
@@ -95,6 +96,7 @@ internal static class TlsPlanner
                     UpdateV4: o.V4 != BindingState.Absent, UpdateV6: o.V6 != BindingState.Absent && v6req);
         }
         if (!o.CertMatchesMarker) return Fail("the certificate in the store does not match the identity marker");
+        if (o.CertExpired && !o.ExplicitSetup) return Fail("the certificate has expired; run setup again to renew it (same key, no re-pair)");
 
         bool stale4 = o.V4 == BindingState.StaleOwned, stale6 = o.V6 == BindingState.StaleOwned;
         bool needV4 = o.V4 == BindingState.Absent, needV6 = o.V6 == BindingState.Absent;
@@ -189,7 +191,7 @@ internal static class TlsMarkerStore
             if (path == null && !ProtectedFile.DirTrusted(ProtectedFile.Dir)) return (MarkerState.Corrupt, null);
             var m = JsonSerializer.Deserialize<TlsIdentityMarker>(File.ReadAllText(p));
             if (m != null && Regex.IsMatch(m.Thumbprint ?? "", "^[0-9A-Fa-f]{40}$") && Regex.IsMatch(m.SpkiSha256Hex ?? "", "^[0-9a-f]{64}$")
-                && Guid.TryParse(m.AppId, out _) && m.Port is > 0 and <= 65535) return (MarkerState.Present, m);
+                && Guid.TryParse(m.AppId, out _) && m.Port is > 0 and <= 65535 && m.Schema == 1) return (MarkerState.Present, m);
             return (MarkerState.Corrupt, null);
         }
         catch { return (MarkerState.Corrupt, null); }   // exists but unreadable: never read as "absent"
@@ -199,7 +201,7 @@ internal static class TlsMarkerStore
 }
 
 /// <summary>Durable record of what an in-flight setup or renewal has changed, written BEFORE each mutation.</summary>
-internal sealed record TlsJournal(string Kind, string? NewThumb, string? OldThumb, bool CertAdded, bool Bound4, bool Bound6, bool Updated4, bool Updated6, string StartedUtc);
+internal sealed record TlsJournal(string Kind, string? NewThumb, string? OldThumb, bool CertAdded, bool Bound4, bool Bound6, bool Updated4, bool Updated6, string StartedUtc, int Schema = 1);
 
 internal static class TlsJournalStore
 {
@@ -213,7 +215,7 @@ internal static class TlsJournalStore
             if (!File.Exists(p)) return (MarkerState.Absent, null);
             if (path == null && !ProtectedFile.DirTrusted(ProtectedFile.Dir)) return (MarkerState.Corrupt, null);
             var j = JsonSerializer.Deserialize<TlsJournal>(File.ReadAllText(p));
-            return j != null && (j.Kind is "Fresh" or "Bind" or "Renew") ? (MarkerState.Present, j) : (MarkerState.Corrupt, null);
+            return j != null && j.Schema == 1 && (j.Kind is "Fresh" or "Bind" or "Renew") ? (MarkerState.Present, j) : (MarkerState.Corrupt, null);
         }
         catch { return (MarkerState.Corrupt, null); }
     }
@@ -479,7 +481,7 @@ internal static class TlsInspector
         if (elevated && all == null) { v4 = v4 == BindingState.ExactExpected ? v4 : BindingState.Unknown; v6 = v6 == BindingState.ExactExpected ? v6 : BindingState.Unknown; }
         bool orphan = ms == MarkerState.Absent && HasOrphanOurCert();
         bool due = c != null && TlsLifetime.IsRenewalDue(new DateTimeOffset(c.NotAfter), DateTimeOffset.UtcNow);
-        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && marker.Port != port);
+        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && marker.Port != port, c != null && new DateTimeOffset(c.NotAfter) <= DateTimeOffset.UtcNow);
     }
 
     /// <summary>Precise, non-secret reason a binding is not treated as ours. Never leads to deletion: an app-id match alone is not ownership, and a binding naming a certificate that is gone stays untouched.</summary>

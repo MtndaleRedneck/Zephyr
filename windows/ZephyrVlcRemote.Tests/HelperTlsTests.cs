@@ -21,6 +21,30 @@ public class HelperTlsTests
     [Fact] public void MarkerWrittenForAnotherPortFailsClosed()
         => Assert.Equal(TlsAction.FailClosed, TlsPlanner.Plan(Obs(M) with { MarkerPortMismatch = true }).Action);
 
+    [Fact] public void ExpiredCertificateFailsClosedAtRuntimeAndRenewsInExplicitSetup()
+    {
+        Assert.Equal(TlsAction.FailClosed, TlsPlanner.Plan(Obs(M) with { CertExpired = true, RenewalDue = true }).Action);
+        var p = TlsPlanner.Plan(Obs(M, setup: true) with { CertExpired = true, RenewalDue = true });
+        Assert.Equal(TlsAction.Ready, p.Action);   // explicit setup takes the same-key renewal path
+        Assert.True(p.RenewDue);
+    }
+
+    [Fact] public void NewerSchemaMarkerOrJournalIsNeverGuessedAt()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "tls-schema-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(dir);
+        try
+        {
+            var mp = Path.Combine(dir, "m.json"); var jp = Path.Combine(dir, "j.json");
+            File.WriteAllText(mp, System.Text.Json.JsonSerializer.Serialize(M with { Schema = 2 }));
+            File.WriteAllText(jp, System.Text.Json.JsonSerializer.Serialize(new TlsJournal("Fresh", null, null, false, false, false, false, false, "x", 2)));
+            Assert.Equal(MarkerState.Corrupt, TlsMarkerStore.Read(mp).state);
+            Assert.Equal(MarkerState.Corrupt, TlsJournalStore.Read(jp).state);
+            File.WriteAllText(mp, "{\"Thumbprint\":\"" + Thumb + "\",\"SpkiSha256Hex\":\"" + Spki + "\",\"AppId\":\"" + TlsInspector.AppId + "\",\"Port\":8492,\"CreatedUtc\":\"x\"}");   // old file without a Schema field
+            Assert.Equal(MarkerState.Present, TlsMarkerStore.Read(mp).state);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+
     [Fact] public void RuntimeNeverBindsOrRegeneratesEvenWhenSomethingIsMissing()
     {
         Assert.Equal(TlsAction.FailClosed, TlsPlanner.Plan(Obs(M, v6: BindingState.Absent)).Action);
