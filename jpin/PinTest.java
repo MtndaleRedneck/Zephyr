@@ -62,6 +62,7 @@ public class PinTest {
             }
         });
         t.setDaemon(true); t.start();
+        if (a.length > 4 && a[4].equals("serve")) { System.out.println("serving"); Thread.sleep(900000); return; }
         String base = "https://127.0.0.1:" + port + "/";
         String wrongHost = "https://localhost:" + port + "/";
         String wrongPin = "0".repeat(64);

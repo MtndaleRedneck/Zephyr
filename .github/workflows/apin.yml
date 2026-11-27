@@ -1,0 +1,51 @@
+name: apin
+on:
+  push:
+    branches: [tmp/apin]
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+      - name: enable kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: server cert (expired, wrong SAN) and server
+        run: |
+          mkdir -p out
+          keytool -genkeypair -alias t -keyalg EC -groupname secp256r1 -dname "CN=other.example" -ext "san=dns:other.example" -startdate "-10d" -validity 2 -storetype PKCS12 -keystore k.p12 -storepass changeit -keypass changeit
+          keytool -exportcert -alias t -keystore k.p12 -storepass changeit -file c.der
+          openssl x509 -inform der -in c.der -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -hex | sed 's/^.* //' > pin.txt
+          cat pin.txt
+          nohup java jpin/PinTest.java k.p12 changeit "$(cat pin.txt)" 48443 serve > out/server.txt 2>&1 &
+          sleep 8
+          cat out/server.txt
+      - name: build
+        working-directory: apin
+        run: gradle --no-daemon :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: run on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          working-directory: apin
+          script: |
+            adb logcat -c
+            gradle --no-daemon :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.pin=$(cat ../pin.txt) || true
+            adb logcat -d -s PINT:I > ../out/android.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: apin
+          path: out/*.txt
