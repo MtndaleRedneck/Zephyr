@@ -216,7 +216,7 @@ SSL Certificate bindings:
     {
         var f = new Fake { Adds = new[] { (1, E183), (0, "") }, DeleteExit = 5 };
         var r = f.Go();
-        Assert.Equal((1, 1, 1, false, 5), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted, r.DeleteExit));
+        Assert.Equal((1, 1, 1, true), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted)); Assert.Equal(5, r.DeleteExit); Assert.Null(r.RetryExit);   // a delete was attempted (it failed); no retry
     }
 
     [Fact] public void OldHttpStillPresentAfterDeleteMeansNoRetry_PartialStateIsReported()
