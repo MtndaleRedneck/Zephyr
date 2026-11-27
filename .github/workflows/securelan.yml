@@ -1,0 +1,25 @@
+name: securelan-prep
+on:
+  push:
+    branches: ['prep/secure-tls-*']
+    paths: ['windows/SecureLan/**', 'windows/SecureLan.Tests/**', '.github/workflows/securelan.yml']
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: build (compile is the gate)
+        run: dotnet build windows/SecureLan.Tests -c Release
+      - name: test
+        run: dotnet test windows/SecureLan.Tests -c Release --no-build --logger "trx;LogFileName=r.trx" --results-directory out
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: securelan-test-results
+          path: out/*.trx
