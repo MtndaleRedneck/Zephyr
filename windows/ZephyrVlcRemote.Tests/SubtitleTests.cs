@@ -5,7 +5,7 @@ using Xunit;
 
 namespace ZephyrVlcRemote.Tests;
 
-[Collection("HTTP reservation")]
+[Collection("ProgramState")]
 public class SubtitleTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), "bm-subs-" + Guid.NewGuid().ToString("N"));

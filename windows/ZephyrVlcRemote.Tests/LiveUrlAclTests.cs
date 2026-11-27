@@ -8,6 +8,7 @@ namespace ZephyrVlcRemote.Tests;
 /// planted reservations - the native read path the pure classifier tests cannot
 /// reach. Requires elevation (the CI windows runner is elevated); asserts rather than
 /// skips so a silent non-run can never pass.</summary>
+[Collection("ProgramState")]
 public class LiveUrlAclTests
 {
     private static string Sid => WindowsIdentity.GetCurrent().User!.Value;
