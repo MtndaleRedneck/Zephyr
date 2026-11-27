@@ -187,11 +187,11 @@ SSL Certificate bindings:
     }
 
     [Theory]
-    [InlineData(FirewallSetup.AclOwnership.Foreign)]   // also what an unreadable reservation classifies as
-    [InlineData(FirewallSetup.AclOwnership.None)]
-    public void Collision183WithForeignOrAbsentOldHttp_NeverDeletesAndKeepsTheFailure(FirewallSetup.AclOwnership owner)
+    [InlineData("Foreign")]   // also what an unreadable reservation classifies as
+    [InlineData("None")]
+    public void Collision183WithForeignOrAbsentOldHttp_NeverDeletesAndKeepsTheFailure(string owner)
     {
-        var f = new Fake { Adds = new[] { (1, E183) }, Classes = new[] { owner } };
+        var f = new Fake { Adds = new[] { (1, E183) }, Classes = new[] { Enum.Parse<FirewallSetup.AclOwnership>(owner) } };
         var r = f.Go();
         Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));
     }

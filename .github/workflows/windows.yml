@@ -740,9 +740,12 @@ jobs:
           # a BLIND "netsh http delete urlacl" with no ownership check. Plant a FOREIGN
           # reservation on 47823, run the post-upgrade uninstaller, and require the
           # reservation to survive; the log is printed either way for inspection.
+          # The setup that just ran created OUR https reservation on this disposable runner. http:// and https:// reservations for one port collide (error 183, observed), so remove only that one first, then plant the foreign reservation on the old http:// URL the 1.1.0 blind delete targeted, and prove the plant.
+          netsh http delete urlacl url=https://+:47823/ | Out-Null
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
           $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
+          if ($aclBefore -notmatch 'SDDL:') { throw 'N-10: the foreign http reservation could not be planted (fixture broken, not a product result)' }
           $unins = Join-Path (Split-Path $installed) 'unins000.exe'
           if (-not (Test-Path $unins)) { throw "uninstaller missing: $unins" }
           $unLog = "$env:RUNNER_TEMP/uninstall-upgrade-smoke.log"
