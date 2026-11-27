@@ -1,0 +1,33 @@
+name: v6
+on:
+  push:
+    branches: [tmp/v6]
+jobs:
+  validate:
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: parse script with the PowerShell parser (nothing is executed)
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errs = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path scripts/v6.ps1).Path, [ref]$tokens, [ref]$errs) | Out-Null
+          if ($errs.Count -gt 0) { $errs | ForEach-Object { $_.ToString() }; exit 1 }
+          'parse clean'
+  probe:
+    needs: validate
+    runs-on: windows-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - name: probe
+        timeout-minutes: 4
+        shell: pwsh
+        run: ./scripts/v6.ps1
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: v6
+          path: out/*.txt
