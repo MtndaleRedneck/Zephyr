@@ -7,9 +7,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class AccentPrefsTest {
-    @Test fun tenSwatchesOrangeFirst() {
-        assertEquals(10, AccentSwatches.size)
-        assertEquals(0xFF349E96.toInt(), AccentSwatches[9].toArgb())
+    @Test fun eightSwatchesOrangeFirstNoBurntOrangeOrTeal() {
+        assertEquals(8, AccentSwatches.size)
+        assertEquals(false, AccentSwatches.any { it.toArgb() == 0xFFCC5500.toInt() || it.toArgb() == 0xFF349E96.toInt() })
         assertEquals(AccentNames.size, AccentSwatches.size)
         assertEquals(0xFFF97C02.toInt(), AccentSwatches[0].toArgb())
         assertEquals(AccentSwatches.size, AccentSwatches.map { it.toArgb() }.toSet().size)
@@ -18,7 +18,9 @@ class AccentPrefsTest {
         assertEquals(Color(ORANGE_ARGB), AccentPrefs.resolve(null))
         assertEquals(Color(ORANGE_ARGB), AccentPrefs.resolve(0x12345678))
         assertEquals(AccentSwatches[3], AccentPrefs.resolve(AccentSwatches[3].toArgb()))
-        assertEquals(Color(0xFF349E96), AccentPrefs.resolve(0xFF349E96.toInt()))
+        // A previously saved teal or burnt orange is no longer offered, so it reads as orange.
+        assertEquals(Color(ORANGE_ARGB), AccentPrefs.resolve(0xFF349E96.toInt()))
+        assertEquals(Color(ORANGE_ARGB), AccentPrefs.resolve(0xFFCC5500.toInt()))
         for (s in AccentSwatches) assertEquals(s, AccentPrefs.resolve(s.toArgb()))
     }
 }
