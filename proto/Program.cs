@@ -102,11 +102,13 @@ static class P
             Console.WriteLine("STARTED as " + Environment.UserName + " " + a[1] + " " + a[2]);
             Console.Out.Flush();
             var end = DateTime.UtcNow.AddSeconds(int.Parse(a[3]));
+            Task<HttpListenerContext> task = null;
             while (DateTime.UtcNow < end)
             {
-                var task = l.GetContextAsync();
+                if (task == null) task = l.GetContextAsync();
                 if (!task.Wait(1000)) continue;
                 var ctx = task.Result;
+                task = null;
                 var local = ctx.Request.LocalEndPoint.Address;
                 string d = Describe(local);
                 Console.WriteLine("REQ from=" + ctx.Request.RemoteEndPoint.Address + " " + d);
@@ -164,11 +166,14 @@ static class P
         }
         if (mode == "coexist")
         {
-            var l = new HttpListener();
-            l.Prefixes.Add("http://+:" + a[1] + "/");
-            l.Prefixes.Add("https://+:" + a[1] + "/");
-            try { l.Start(); Console.WriteLine("COEXIST started both on " + a[1]); l.Stop(); }
-            catch (Exception e) { Console.WriteLine("COEXIST failed " + e.GetType().Name + ": " + e.Message); }
+            string[][] sets = { new[] { "http" }, new[] { "https" }, new[] { "http", "https" } };
+            foreach (var set in sets)
+            {
+                var l = new HttpListener();
+                foreach (var sc in set) l.Prefixes.Add(sc + "://+:" + a[1] + "/");
+                try { l.Start(); Console.WriteLine("COEXIST " + string.Join("+", set) + " on " + a[1] + ": started"); l.Stop(); l.Close(); }
+                catch (Exception e) { Console.WriteLine("COEXIST " + string.Join("+", set) + " on " + a[1] + ": FAILED " + e.GetType().Name + ": " + e.Message); }
+            }
             return 0;
         }
         Console.WriteLine("modes: nlm serve client udp coexist");

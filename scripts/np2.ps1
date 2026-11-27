@@ -62,7 +62,7 @@ if ($Part -eq 'tls') {
   Step 'sslcert v4' { netsh http add sslcert ipport=0.0.0.0:48443 certhash=$thumb $app }
   Step 'sslcert v6' { netsh http add sslcert 'ipport=[::]:48443' certhash=$thumb $app }
   Step 'sslcert port2' { netsh http add sslcert ipport=0.0.0.0:48444 certhash=$thumb $app }
-  Step 'urlacl' { netsh http add urlacl url=https://+:48443/ user=Everyone }
+  Step 'urlacl' { netsh http add urlacl url=https://+:48443/ user=Everyone; netsh http add urlacl url=http://+:48444/ user=Everyone }
   $so = Join-Path $env:TEMP 'serve.out'
   $se = $so + '.err'
   $sp = Start-Process -FilePath $proto -ArgumentList 'serve https 48443 60' -NoNewWindow -PassThru -RedirectStandardOutput $so -RedirectStandardError $se
@@ -76,7 +76,7 @@ if ($Part -eq 'tls') {
   Log ('server err: ' + (Get-Content $se -Raw -ErrorAction SilentlyContinue))
   & taskkill.exe /F /T /PID $sp.Id | Out-Null
   Bounded 'http+https same port WITH cert binding' $proto 'coexist 48444' 30
-  Bounded 'http+https same port NO cert binding' $proto 'coexist 48445' 30
+  Bounded 'same checks, port with NO cert binding' $proto 'coexist 48445' 30
   Step 'cleanup' { netsh http delete sslcert ipport=0.0.0.0:48443; netsh http delete sslcert 'ipport=[::]:48443'; netsh http delete sslcert ipport=0.0.0.0:48444; netsh http delete urlacl url=https://+:48443/ }
 }
 
