@@ -1,0 +1,29 @@
+name: jpin
+on:
+  push:
+    branches: [tmp/jpin]
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: build expired, wrong-SAN ECDSA cert and run pin checks
+        timeout-minutes: 3
+        run: |
+          mkdir -p out
+          keytool -genkeypair -alias t -keyalg EC -groupname secp256r1 -dname "CN=other.example" -ext "san=dns:other.example" -startdate "-10d" -validity 2 -storetype PKCS12 -keystore k.p12 -storepass changeit -keypass changeit
+          keytool -list -v -keystore k.p12 -storepass changeit | grep -E "Valid from|Alias|Subject|Signature algorithm|Subject Public Key" | tee out/cert.txt
+          keytool -exportcert -alias t -keystore k.p12 -storepass changeit -file c.der
+          PIN=$(openssl x509 -inform der -in c.der -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -hex | sed 's/^.* //')
+          echo "pin $PIN" | tee -a out/cert.txt
+          timeout 90 java jpin/PinTest.java k.p12 changeit "$PIN" 48443 2>&1 | tee out/pin.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: jpin
+          path: out/*.txt
