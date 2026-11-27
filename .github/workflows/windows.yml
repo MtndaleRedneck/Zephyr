@@ -502,11 +502,11 @@ jobs:
           $negCode = Get-TlsStatus 'ci-capture-token'
           if ($negCode -ne 401) { throw "NEGATIVE HOOK FAILED: shipped exe answered ci-capture-token with $negCode, expected 401" }
           Write-Output 'NEGATIVE HOOK: PASS - shipped exe rejects ci-capture-token even with ZEPHYR_CI_CAPTURE=1 (HTTPS, 401)'
-          # No plaintext fallback: the same request over http must never answer 200.
+          # No authenticated plaintext answer: the same request over http must not return 200 (this does not claim the port never speaks HTTP).
           $plainCode = 0
           try { $plainCode = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer local-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
-          if ($plainCode -eq 200) { throw 'PLAINTEXT FALLBACK: installed exe answered the paired token over plain http' }
-          Write-Output "NO PLAINTEXT: PASS - plain http to the secure port did not answer 200 (status $plainCode, 0 = no answer)"
+          if ($plainCode -eq 200) { throw 'PLAINTEXT 200: installed exe returned 200 for the paired token over plain http' }
+          Write-Output "NO PLAINTEXT 200: PASS - the paired token over plain http did not return 200 (status $plainCode, 0 = no answer); this does not claim the port never speaks HTTP"
           $neg.Kill()
           Start-Sleep -Seconds 2
           # The installer's runasoriginaluser auto-launch can take a while (or
@@ -714,7 +714,7 @@ jobs:
           if ($unauthCode -ne 401) { throw "unauthenticated /control/status was not 401 after upgrade (got $unauthCode)" }
           $plainUp = 0
           try { $plainUp = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
-          if ($plainUp -eq 200) { throw 'PLAINTEXT FALLBACK: upgraded app answered the migrated token over plain http' }
+          if ($plainUp -eq 200) { throw 'PLAINTEXT 200: upgraded app returned 200 for the migrated token over plain http' }
           Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - original CI 1.1.0 installer recovered from run40413487207, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
           Start-Sleep -Seconds 2
