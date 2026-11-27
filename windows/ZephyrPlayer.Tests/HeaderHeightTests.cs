@@ -10,7 +10,7 @@ using Xunit;
 
 namespace ZephyrPlayer.Tests
 {
-    /// <summary>Header heights must be EXACTLY identical, measured on the
+    /// <summary>Rule: header heights must be EXACTLY identical, measured on the
     /// rendered screen - including across transitions - never assumed from constants. These tests
     /// measure the real rendered header of each Player surface before and after its transitions
     /// (windowed vs fullscreen, tab switches, section switches) and assert exact equality, and they
