@@ -166,6 +166,57 @@ namespace ZephyrPlayer.Tests
         }
 
         [Fact]
+        public void Concurrent_Wrong_Guesses_From_Many_Sources_Count_Exactly_The_Budget()
+        {
+            var gate = new PairingGate();
+            gate.NewCode();
+            var bad = 0; var locked = 0;
+            using var start = new System.Threading.ManualResetEventSlim(false);
+            var threads = new System.Collections.Generic.List<System.Threading.Thread>();
+            for (var i = 0; i < 100; i++)
+            {
+                var src = "10.9." + (i / 250) + "." + (i % 250);
+                var th = new System.Threading.Thread(() =>
+                {
+                    start.Wait();
+                    var o = gate.TryPair("000000", 0, () => "t", out _, src);
+                    if (o == PairOutcome.BadCode) System.Threading.Interlocked.Increment(ref bad);
+                    else if (o == PairOutcome.Locked) System.Threading.Interlocked.Increment(ref locked);
+                });
+                threads.Add(th); th.Start();
+            }
+            start.Set();
+            foreach (var th in threads) th.Join();
+            Assert.Equal(PairingGate.SessionGuessBudget, bad);   // exactly ten counted wrong attempts, however they interleave
+            Assert.Equal(100 - PairingGate.SessionGuessBudget, locked);
+        }
+
+        [Fact]
+        public void Concurrent_Right_Code_Mints_Exactly_One_Token()
+        {
+            var gate = new PairingGate();
+            var code = gate.NewCode();
+            var ok = 0; var minted = 0;
+            using var start = new System.Threading.ManualResetEventSlim(false);
+            var threads = new System.Collections.Generic.List<System.Threading.Thread>();
+            for (var i = 0; i < 64; i++)
+            {
+                var src = "10.8.0." + i;
+                var th = new System.Threading.Thread(() =>
+                {
+                    start.Wait();
+                    var o = gate.TryPair(code, 0, () => { System.Threading.Interlocked.Increment(ref minted); return "t"; }, out _, src);
+                    if (o == PairOutcome.Ok) System.Threading.Interlocked.Increment(ref ok);
+                });
+                threads.Add(th); th.Start();
+            }
+            start.Set();
+            foreach (var th in threads) th.Join();
+            Assert.Equal(1, ok);       // the code is one-shot even when 64 phones send it at once
+            Assert.Equal(1, minted);   // and mint runs once
+        }
+
+        [Fact]
         public void NewCode_IsFourDigits()
         {
             var gate = new PairingGate();
