@@ -46,11 +46,44 @@ function Show-Log([string]$path, [int]$tail) {
     $out = foreach ($k in $cats.Keys) { "$k=$(@($lines | Where-Object { $_ -match $cats[$k] }).Count)" }
     Write-Host "helper.log: $($lines.Count) lines read; known-message counts: $($out -join ', '); line text withheld from the public log"
 }
+# Secure mode is HTTPS only (no plaintext fallback). Every request to the helper goes over HTTPS to 127.0.0.1:8492 and accepts ONLY the certificate whose
+# thumbprint is the helper's own stored identity (CN=Zephyr VLC Remote, created by the elevated setup): a pin, not "skip validation". No answer at all
+# (connect or TLS failure, including a pin mismatch) THROWS, like Invoke-WebRequest did, so it can never satisfy an assertion. Headers (token, Origin, Host)
+# and the form-encoded string body are sent exactly as before; the helper's status and body are returned unchanged.
+$pinSrc = @(
+  'using System; using System.Collections.Generic; using System.Net.Http; using System.Text;',
+  'public static class ZephyrVlcPin {',
+  '  public static string Thumb = "";',
+  '  public static string[] Send(string method, string url, string[] names, string[] values, string body, int timeoutSec) {',
+  '    var h = new HttpClientHandler();',
+  '    h.ServerCertificateCustomValidationCallback = (m, c, ch, e) => c != null && Thumb.Length > 0 && string.Equals(c.Thumbprint, Thumb, StringComparison.OrdinalIgnoreCase);',
+  '    using (var cl = new HttpClient(h) { Timeout = TimeSpan.FromSeconds(timeoutSec) }) {',
+  '      var req = new HttpRequestMessage(new HttpMethod(method), url);',
+  '      if (body != null) req.Content = new StringContent(body, Encoding.UTF8, "application/x-www-form-urlencoded");',
+  '      for (int i = 0; i < names.Length; i++) {',
+  '        if (string.Equals(names[i], "Host", StringComparison.OrdinalIgnoreCase)) req.Headers.Host = values[i];',
+  '        else req.Headers.TryAddWithoutValidation(names[i], values[i]);',
+  '      }',
+  '      using (var res = cl.SendAsync(req).GetAwaiter().GetResult()) {',
+  '        return new[] { ((int)res.StatusCode).ToString(), res.Content.ReadAsStringAsync().GetAwaiter().GetResult() };',
+  '      }',
+  '    }',
+  '  }',
+  '}') -join "`n"
+if (-not ('ZephyrVlcPin' -as [type])) { Add-Type -TypeDefinition $pinSrc }
+function Invoke-HelperTls([string]$method, [string]$path, $headers, $body, [int]$timeoutSec = 10) {
+    $ids = @(Get-ChildItem Cert:\LocalMachine\My | Where-Object { $_.Subject -eq 'CN=Zephyr VLC Remote' })
+    if ($ids.Count -ne 1) { throw "expected exactly one Zephyr VLC Remote identity in the machine store, found $($ids.Count)" }
+    [ZephyrVlcPin]::Thumb = $ids[0].Thumbprint
+    $names = @(); $vals = @()
+    foreach ($k in $headers.Keys) { $names += [string]$k; $vals += [string]$headers[$k] }
+    $r = [ZephyrVlcPin]::Send($method, "https://127.0.0.1:8492$path", [string[]]$names, [string[]]$vals, $body, $timeoutSec)
+    return @{ code = [int]$r[0]; body = $r[1] }
+}
 function Invoke-Helper($path, $body, $token, [int]$timeoutSec = 10) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Post -Body $body -Headers $headers -UseBasicParsing -TimeoutSec $timeoutSec -SkipHttpErrorCheck
-    return @{ code = [int]$r.StatusCode; body = $r.Content }
+    return (Invoke-HelperTls 'POST' $path $headers $body $timeoutSec)
 }
 function Assert($cond, $msg) { $script:assertCount++; if (-not $cond) { throw "ASSERT FAILED: $msg" } ; Write-Host "ok ($script:assertCount): $msg" }
 
@@ -147,8 +180,7 @@ function Assert-HelperFirewallRules([string]$exePath) {
 function Invoke-HelperGet($path, $token, [int]$timeoutSec = 10) {
     $headers = @{}
     if ($token) { $headers['X-Zephyr-VLC-Remote-Token'] = $token }
-    $r = Invoke-WebRequest -Uri "http://127.0.0.1:8492$path" -Method Get -Headers $headers -UseBasicParsing -TimeoutSec $timeoutSec -SkipHttpErrorCheck
-    return @{ code = [int]$r.StatusCode; body = $r.Content }
+    return (Invoke-HelperTls 'GET' $path $headers $null $timeoutSec)
 }
 
 
@@ -297,12 +329,17 @@ Assert ($legacy -notmatch 'Zephyr VLC Remote Helper') "migration removes the 1.x
 # Another app or another Windows user's reservation on 8492 is not ours: setup must stop
 # with the conflict exit and leave it in place (round-7 N4 + multi-user rule).
 Write-Host "== foreign URL ACL conflict =="
+# The product classifies the https reservation (plain http is retired): plant the foreign one there, after removing only the reservations this run's own setup created.
 netsh http delete urlacl url=http://+:8492/ | Out-Null
-netsh http add urlacl url=http://+:8492/ sddl="D:(A;;GX;;;SY)" | Out-Null
+netsh http delete urlacl url=https://+:8492/ | Out-Null
+netsh http add urlacl url=https://+:8492/ sddl="D:(A;;GX;;;SY)" | Out-Null
+$plantedBlock = (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8492/' } | Select-Object -First 1
+Assert ($plantedBlock -match 'S-1-5-18|\(A;;GX;;;SY\)') "the foreign https reservation is planted before the conflict run"
 $fwf = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
 Assert ($fwf.ExitCode -eq 4) "a foreign reservation stops setup with the conflict exit (got $($fwf.ExitCode))"
-$foreignAcl = netsh http show urlacl | Out-String
-Assert ($foreignAcl -match 'S-1-5-18|\(A;;GX;;;SY\)') "the foreign reservation is left untouched"
+$foreignBlock = (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8492/' } | Select-Object -First 1
+Assert ($foreignBlock -match 'S-1-5-18|\(A;;GX;;;SY\)') "the foreign reservation is left untouched"
+netsh http delete urlacl url=https://+:8492/ | Out-Null
 netsh http delete urlacl url=http://+:8492/ | Out-Null
 # Restore the good state for the rest of the suite.
 $fw2 = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
@@ -349,10 +386,10 @@ try {
     Assert ($r.body -match 'detail') "wrong code answers with a written-for-him detail"
 
     # CSRF / DNS-rebinding guards (round-5): browsers send Origin; rebound names fail Host.
-    $rOrigin = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/pair' -Method Post -Body '{"code":"4242"}' -Headers @{ Origin = 'http://evil.example' } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
-    Assert ([int]$rOrigin.StatusCode -eq 403) "a browser-style Origin header is refused"
-    $rHost = Invoke-WebRequest -Uri 'http://127.0.0.1:8492/ping' -Headers @{ Host = 'evil.example.com'; 'X-Zephyr-VLC-Remote-Token' = ('a1' * 32) } -UseBasicParsing -TimeoutSec 10 -SkipHttpErrorCheck
-    Assert ([int]$rHost.StatusCode -eq 403) "a rebound DNS name in Host is refused"
+    $rOrigin = Invoke-HelperTls 'POST' '/pair' @{ Origin = 'http://evil.example' } '{"code":"4242"}'
+    Assert ([int]$rOrigin.code -eq 403) "a browser-style Origin header is refused"
+    $rHost = Invoke-HelperTls 'GET' '/ping' @{ Host = 'evil.example.com'; 'X-Zephyr-VLC-Remote-Token' = ('a1' * 32) } $null
+    Assert ([int]$rHost.code -eq 403) "a rebound DNS name in Host is refused"
 
     $r = Invoke-Helper '/pair' '{"code":"4242"}' $null
     Write-Host "right-code pair -> $($r.code): $(Safe-Body $r.body)"
