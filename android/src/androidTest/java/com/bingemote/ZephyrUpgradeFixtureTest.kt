@@ -76,7 +76,10 @@ class ZephyrUpgradeFixtureTest {
         if (!windowUp) captureWindowFailure(device)
         assertTrue("app window never appeared after cold open", windowUp)
         Thread.sleep(3000)
-        assertTrue("app window gone after cold open", appWindowPersists(device))
+        val persists = appWindowPersists(device)
+        // Same diagnostic as the arrival failure path, BEFORE the assertion fails and teardown finishes the app.
+        if (!persists) captureWindowFailure(device)
+        assertTrue("app window gone after cold open", persists)
         val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         // Plain loop, no Iterable.any (kotlin inline today, but one less stdlib dependency on the shipped app's shrunk classes).
         var alive = false
@@ -187,6 +190,13 @@ class ZephyrUpgradeFixtureTest {
             dialog = { foundDialog(device) },
             capture = { n, d -> captureDialog(device, n, d) },
             tap = { d -> tapWaitInsideDialog(device, d) },
+            afterTap = { d ->
+                AnrDialogGate.awaitRemoval(
+                    tapped = d, now = { System.currentTimeMillis() },
+                    goneWait = { ms -> device.wait(Until.gone(By.textContains("isn't responding")), ms) },
+                    dialog = { foundDialog(device) },
+                )
+            },
             hasWindow = { device.hasObject(sel) },
         )
     }

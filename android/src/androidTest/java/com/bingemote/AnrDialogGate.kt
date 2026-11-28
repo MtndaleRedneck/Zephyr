@@ -56,12 +56,48 @@ object AnrDialogGate {
         dialog: () -> Dialog?,
         capture: (tapNumber: Int, d: Dialog) -> Unit,
         tap: (Dialog) -> Unit,
+        afterTap: (Dialog) -> Unit,
         hasWindow: () -> Boolean,
     ): Boolean {
         while (true) {
             if (hasWindow()) return true
             val d = dialog() ?: return false
             dismiss(d, taps, capture, tap)
+            // Only after the tap actually happened: the SAME dialog must be confirmed removed (or this throws) before the next query.
+            afterTap(d)
+        }
+    }
+
+    const val REMOVAL_CEILING_MS = 5000L
+    const val REMOVAL_SLICE_MS = 250L
+
+    /**
+     * Removal confirmation after a real tap on [tapped]. Runs one event wait per slice (goneWait, which is true only when NO
+     * "isn't responding" node is on screen). Each non-gone slice re-reads the dialog: a different title/package (a replacement or a
+     * second dialog) throws at once; the same one keeps waiting. One ceiling measured from the start, never extended, then throws.
+     * After goneWait is true the screen is read once more and any dialog throws. Never queries the app window, never sleeps.
+     */
+    fun awaitRemoval(
+        tapped: Dialog,
+        now: () -> Long,
+        goneWait: (sliceMs: Long) -> Boolean,
+        dialog: () -> Dialog?,
+        ceilingMs: Long = REMOVAL_CEILING_MS,
+        sliceMs: Long = REMOVAL_SLICE_MS,
+    ) {
+        val end = now() + ceilingMs
+        while (true) {
+            if (goneWait(sliceMs)) {
+                val left = dialog()
+                if (left != null) throw AssertionError("a dialog is on screen again after the tapped one went: title=${left.title} pkg=${left.pkg}")
+                return
+            }
+            val d = dialog()
+            if (d == null) return
+            if (d.title != tapped.title || d.pkg != tapped.pkg) {
+                throw AssertionError("a different ANR dialog replaced the tapped one: title=${d.title} pkg=${d.pkg}")
+            }
+            if (now() >= end) throw AssertionError("tapped ANR dialog was not removed within ${ceilingMs} ms")
         }
     }
 

@@ -34,8 +34,11 @@ class AnrDialogGateTest {
         fun wait(budget: Long = 20000): Boolean = AnrDialogGate.waitForWindow(
             budgetMs = budget, pollMs = 1000, taps = taps, now = { clock }, dialog = ::nextDialog, capture = ::capture, tap = ::tap,
             windowUp = { ms -> polls += 1; clock += ms; polls >= windowUpAtPoll })
+        var afterTapFails = false
+        fun afterTap(d: AnrDialogGate.Dialog) { events.add("removed"); if (afterTapFails) throw AssertionError("removal failed") }
         fun persists(hasWindow: () -> Boolean) = AnrDialogGate.persists(
-            taps = taps, dialog = ::nextDialog, capture = ::capture, tap = ::tap, hasWindow = { queries += 1; hasWindow() })
+            taps = taps, dialog = ::nextDialog, capture = ::capture, tap = ::tap, afterTap = ::afterTap,
+            hasWindow = { events.add("query"); queries += 1; hasWindow() })
     }
 
     @Test fun classifierToleratesOnlyTheExactDialog() {
@@ -94,11 +97,11 @@ class AnrDialogGateTest {
         val r = Rig(emptyList()); assertFalse(r.persists { false }); assertEquals(1, r.queries); assertEquals(0, r.tapped); assertEquals(0L, r.clock)
     }
     @Test fun persistenceToleratedDialogIsCapturedTappedThenQueriedAgain() {
-        val r = Rig(listOf(launcher)); assertTrue(r.persists { r.queries >= 2 }); assertEquals(listOf("capture1", "tap"), r.events); assertEquals(2, r.queries)
+        val r = Rig(listOf(launcher)); assertTrue(r.persists { r.queries >= 2 }); assertEquals(listOf("query", "capture1", "tap", "removed", "query"), r.events); assertEquals(2, r.queries)
     }
     @Test fun persistenceToleratedDialogButWindowStillMissingFails() { val r = Rig(listOf(launcher)); assertFalse(r.persists { false }); assertEquals(1, r.tapped) }
     @Test fun persistenceForeignDialogThrowsWithoutCaptureOrTap() {
-        val r = Rig(listOf(appAnr)); expectFailure("not dismissed") { r.persists { false } }; assertEquals(emptyList<String>(), r.events)
+        val r = Rig(listOf(appAnr)); expectFailure("not dismissed") { r.persists { false } }; assertEquals(listOf("query"), r.events)
     }
     @Test fun persistenceFailedTapDoesNotEarnAnotherQuery() {
         val r = Rig(listOf(launcher)); r.tapFails = true
@@ -155,5 +158,50 @@ class AnrDialogGateTest {
         expectFailure("Wait bounds") { verify(p = panel(waitBounds = AnrDialogGate.Box(500, 500, 500, 600))) }
         expectFailure("is not android:id/aerr_wait") { verify(p = panel(waitId = "android:id/button1")) }
         expectFailure("is not android:id/aerr_wait") { verify(p = panel(waitId = null)) }
+    }
+
+    // Removal completion after the real tap
+    @Test fun persistenceOrderIsQueryCaptureTapRemovedQuery() {
+        val r = Rig(listOf(launcher)); var n = 0
+        assertTrue(r.persists { n += 1; n >= 2 })
+        assertEquals(listOf("query", "capture1", "tap", "removed", "query"), r.events)
+    }
+    @Test fun failedRemovalConfirmationEarnsNoQuery() {
+        val r = Rig(listOf(launcher)); r.afterTapFails = true
+        expectFailure("removal failed") { r.persists { false } }; assertEquals(1, r.queries)
+    }
+    @Test fun noRemovalWaitWhenNoDialogWasTapped() {
+        val r = Rig(emptyList()); assertFalse(r.persists { false }); assertEquals(listOf("query"), r.events)
+    }
+    private class Removal(val goneAtSlice: Int = Int.MAX_VALUE, screens: List<AnrDialogGate.Dialog?> = emptyList()) {
+        var clock = 0L; var slices = 0; var apps = 0
+        val screens = ArrayDeque(screens)
+        fun run(tapped: AnrDialogGate.Dialog) = AnrDialogGate.awaitRemoval(
+            tapped = tapped, now = { clock },
+            goneWait = { ms -> slices += 1; clock += ms; slices >= goneAtSlice },
+            dialog = { if (screens.isEmpty()) tapped else screens.removeFirst() })
+    }
+    @Test fun removalCompletesWhenNothingIsLeftOnScreen() {
+        val r = Removal(goneAtSlice = 3, screens = listOf(launcher, launcher, null)); r.run(launcher); assertEquals(3, r.slices)
+    }
+    @Test fun removalCompletesWhenTheDialogIsNoLongerThereAfterASlice() {
+        val r = Removal(screens = listOf(launcher, null)); r.run(launcher); assertEquals(2, r.slices)
+    }
+    @Test fun removalTimesOutAtTheCeilingAndDoesNotExtendIt() {
+        val r = Removal(); expectFailure("not removed within 5000") { r.run(launcher) }
+        assertEquals(AnrDialogGate.REMOVAL_CEILING_MS / AnrDialogGate.REMOVAL_SLICE_MS, r.slices.toLong())
+    }
+    @Test fun removalFailsWhenAnAppAnrReplacesTheTappedDialog() {
+        val r = Removal(screens = listOf(appAnr)); expectFailure("different ANR dialog") { r.run(launcher) }; assertEquals(1, r.slices)
+    }
+    @Test fun removalFailsWhenTheSameTitleFromAnotherPackageReplacesIt() {
+        val r = Removal(screens = listOf(AnrDialogGate.Dialog("Pixel Launcher isn't responding", "com.zephyr.remote")))
+        expectFailure("different ANR dialog") { r.run(launcher) }
+    }
+    @Test fun removalFailsWhenAnotherDialogAppearsRightAfterGone() {
+        val r = Removal(goneAtSlice = 1, screens = listOf(appAnr)); expectFailure("on screen again") { r.run(launcher) }
+    }
+    @Test fun removalFailsOnAMultiDialogMarker() {
+        val r = Removal(screens = listOf(AnrDialogGate.Dialog("2 ANR dialogs on screen", null))); expectFailure("different ANR dialog") { r.run(launcher) }
     }
 }
