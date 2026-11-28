@@ -121,10 +121,9 @@ internal static class Program
     internal static string? PendingPhoneName;
     /// <summary>The window re-reads the phone list on the UI thread when this fires (any thread).</summary>
     internal static Action? PhonesChanged;
-    /// <summary>Wi-Fi names where "Not now" was chosen on the public-network prompt; not asked again.</summary>
+    /// <summary>Unused retained round-trip data: Wi-Fi names from an earlier build's removed prompt. Kept so existing config files load and save unchanged; nothing in the UI reads it.</summary>
     internal static readonly List<string> DeclinedNetworks = new();
-    /// <summary>Wi-Fi names he marked as home. A home network is never buried by "Not now":
-    /// if it shows as Public again, it is asked about again.</summary>
+    /// <summary>Unused retained round-trip data: Wi-Fi names marked home by an earlier build's removed prompt. Kept so existing config files load and save unchanged; nothing in the UI reads it.</summary>
     internal static readonly List<string> HomeNetworks = new();
     /// <summary>More phones than this on one PC is a mistake, not a household.</summary>
     internal const int MaxPhones = 8;

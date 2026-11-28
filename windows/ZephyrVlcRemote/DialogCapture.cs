@@ -25,7 +25,7 @@ internal static class DialogCapture
         using var owner = new Form { Text = "Dialog test owner", Location = new Point(0, 0), StartPosition = FormStartPosition.Manual };
         owner.Show();
         Capture("confirm", () => ConfirmDialog.Ask(owner, "Remove Test phone? It stops controlling this PC right away. You can pair it again any time with a new code.", "Remove"));
-        Capture("note", () => NoteDialog.Show(owner, "Setup is done. Your phone can reach this PC."));
+        Capture("note", () => NoteDialog.Show(owner, "Setup is complete."));
         CheckKey("enter", "{ENTER}");
         CheckKey("escape", "{ESC}");
         owner.Close();
