@@ -42,14 +42,15 @@ class ZephyrAutoPairTest {
                 .putExtra("screen", "settings-pair-2"))
             // BingeMote flow: choose the PC first (typed address -> "Use this address"), then the code card appears.
             assertNotNull("address field absent", device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000))
-            // The screen scans for a PC when it opens: "Looking..." shows a spinner that moves the address field and button, and when the
-            // scan ends the layout moves back. Wait for the scan to finish so the tap below lands on the button where it really is.
-            device.wait(Until.gone(By.text("Looking\u2026")), 10000)
+            // The screen scans for a PC when it opens: while it scans, a spinner moves the address field and button, and when the scan ends
+            // the layout moves back. Positive readiness: the scan has finished when the "Find my PC" button is back and enabled.
+            assertNotNull("opening scan did not settle (Find my PC not enabled)", device.wait(Until.findObject(By.text("Find my PC").enabled(true)), 15000))
             val addr = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000)
             assertNotNull("address field absent after scan", addr)
             addr!!.text = "127.0.0.1:${server.port}"
-            val use = device.wait(Until.findObject(By.text("Use this address")), 5000)
-            assertNotNull("Use this address missing", use)
+            // Re-find the button only once it is enabled (it enables when the typed address reaches the screen state), at its settled position.
+            val use = device.wait(Until.findObject(By.text("Use this address").enabled(true)), 5000)
+            assertNotNull("Use this address missing or not enabled", use)
             use!!.click()
             assertNotNull("code field absent", findScrolling(device, By.text("Code from your PC"), 8000))
             val fields = device.findObjects(By.clazz("android.widget.EditText"))
