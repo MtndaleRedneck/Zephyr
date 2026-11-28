@@ -1053,9 +1053,8 @@ Prove-MouseRecovery $hw4 'fullscreen'
 StopZephyr
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
-netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
-netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
 . "$PSScriptRoot/zephyr_fw_assert.ps1"; Remove-ZJournaledRules 'ZephyrPlayer'   # this script's own setup run created them; removed by the product journal's unique keys
+$global:LASTEXITCODE = 0   # cleanup only: a leftover native nonzero code would become the step exit code; real failures exit 1 explicitly below
 
 # Verdicts: video area must be alive (moving pattern => many lit pixels in the
 # center band), and the bottom bar band must show lit control pixels.

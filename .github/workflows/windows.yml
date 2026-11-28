@@ -1080,6 +1080,7 @@ jobs:
           # Harness cleanup: the product's rules by the unique keys in its own journal (the foreign-reservation uninstall left them by design), then the planted earlier-build fixtures by exact name.
           Remove-ZJournaledRules 'ZephyrPlayer'
           Remove-ZPlantedLegacyRules @('Zephyr Player','Zephyr Player Discovery')
+          $global:LASTEXITCODE = 0   # best-effort cleanup deletes above can leave a native nonzero code that the pwsh step wrapper would turn into the step exit code; every assertion before them already throws on failure
           Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
 
       - name: Legacy HKLM uninstall entry behavior proof (upgrade, setup declined)
