@@ -330,7 +330,7 @@ $logTxt = Get-Content (Join-Path $data0 'helper.log') -Raw -ErrorAction Silently
 Assert ($logTxt -match 'firewall inventory: existing rule left as found[^\r\n]*Zephyr VLC Remote') "the helper log names the planted earlier rules as left as found"
 
 # --- Part 1c: a FOREIGN port reservation is a conflict, never an overwrite -------------
-# Another app or another Windows user's reservation on 8492 is not ours: setup must stop
+# Another app or another Windows user's reservation on 8493 is not ours: setup must stop
 # with the conflict exit and leave it in place (round-7 N4 + multi-user rule).
 Write-Host "== foreign URL ACL conflict =="
 # The product classifies the https reservation (plain http is retired): plant the foreign one there, after removing only the reservations this run's own setup created.

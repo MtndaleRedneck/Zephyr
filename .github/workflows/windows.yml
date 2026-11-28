@@ -663,12 +663,12 @@ jobs:
           Start-Sleep -Seconds 2
           $sidUp = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           # Diagnostics (read-only): the setup copy's own stderr/stdout and the reservation/binding state before and after, printed on every run.
-          Write-Output "--- before post-upgrade setup: urlacl 47824 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+          Write-Output "--- before post-upgrade setup: urlacl 47823+47824 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':4782[34]/' }
           Write-Output "--- before post-upgrade setup: sslcert 47824 ---"; netsh http show sslcert ipport=0.0.0.0:47824 | Out-String
           $fwErr = Join-Path $env:RUNNER_TEMP 'upgrade-setup.err'; $fwOut = Join-Path $env:RUNNER_TEMP 'upgrade-setup.out'
           $fwUp = Start-Process $installed -ArgumentList "--install-firewall `"$sidUp`"" -Wait -PassThru -RedirectStandardError $fwErr -RedirectStandardOutput $fwOut
           Write-Output "post-upgrade setup exit $($fwUp.ExitCode)"; Write-Output "--- setup stderr ---"; Get-Content $fwErr -ErrorAction SilentlyContinue; Write-Output "--- setup stdout ---"; Get-Content $fwOut -ErrorAction SilentlyContinue
-          Write-Output "--- after post-upgrade setup: urlacl 47824 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+          Write-Output "--- after post-upgrade setup: urlacl 47823+47824 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':4782[34]/' }
           Write-Output "--- after post-upgrade setup: sslcert 47824 ---"; netsh http show sslcert ipport=0.0.0.0:47824 | Out-String
           if ($fwUp.ExitCode -ne 0) {
             # Diagnostic only (disposable runner), failure path only: the setup copy swallows netsh output, so repeat its exact https reservation command here with output and exit visible, record the state, remove only what this probe added, then fail as before.
@@ -676,7 +676,7 @@ jobs:
             $probe = (netsh http add urlacl url=https://+:47824/ sddl="D:(A;;GX;;;$sidUp)") 2>&1 | Out-String
             Write-Output "probe netsh add https urlacl exit $LASTEXITCODE"; Write-Output $probe
             $probeAdded = ($LASTEXITCODE -eq 0)
-            Write-Output "--- diagnostic probe: urlacl 47824 after probe ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+            Write-Output "--- diagnostic probe: urlacl 47823+47824 after probe ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':4782[34]/' }
             if ($probeAdded) { netsh http delete urlacl url=https://+:47824/ | Out-Null }
             Write-Output "--- firewall rules after the failed setup ---"; netsh advfirewall firewall show rule name="Zephyr Player" | Out-String; netsh advfirewall firewall show rule name="Zephyr Player Discovery" | Out-String
             throw "post-upgrade firewall migration exit $($fwUp.ExitCode)"
