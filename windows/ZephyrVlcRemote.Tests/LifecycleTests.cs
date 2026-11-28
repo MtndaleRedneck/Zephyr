@@ -95,6 +95,10 @@ public class LifecycleTests
         Assert.True(ZephyrRules.IsConflict(Row("x", "Zephyr VLC Remote", "True", "9999", "Any"), owned, ports, legacy));
         Assert.False(ZephyrRules.IsConflict(Row("x", "Zephyr VLC Remote", "False", "8492", "Any"), owned, ports, legacy));
         Assert.False(ZephyrRules.IsConflict(Row("x", "other", "True", "1234", "Any"), owned, ports, legacy));
+        var progs = new HashSet<string> { "C:\\vlc\\vlc.exe" };
+        var byProg = Row("x", "Allow VLC", "True", "Any", "Any"); byProg[9] = "c:\\VLC\\vlc.exe";
+        Assert.True(ZephyrRules.IsConflict(byProg, owned, ports, legacy, progs));      // any-port allow for a program we use is reported
+        Assert.False(ZephyrRules.IsConflict(byProg, owned, ports, legacy, null));
     }
 
     [Fact]

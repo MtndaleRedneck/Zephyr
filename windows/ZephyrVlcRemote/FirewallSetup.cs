@@ -337,7 +337,7 @@ internal static class FirewallSetup
     {
         var (_, j) = ZephyrLifecycle.LifecycleJournalStore.Read();
         var owned = new HashSet<string>(j?.Rules.Select(r => r.Key) ?? Enumerable.Empty<string>());
-        var (ok, list) = ZephyrLifecycle.ZephyrRules.Conflicts(owned, new HashSet<int> { Program.HttpPort, Program.DiscoveryPort }, new HashSet<string>(LegacyRuleNames));
+        var (ok, list) = ZephyrLifecycle.ZephyrRules.Conflicts(owned, new HashSet<int> { Program.HttpPort, Program.DiscoveryPort }, new HashSet<string>(LegacyRuleNames), new HashSet<string>(new[] { Environment.ProcessPath ?? "", Movies.FindVlc() ?? "" }.Where(x => x.Length > 0)));
         if (!ok) { Program.Log("firewall inventory: other rules could not be read; the boundary is not claimed."); return; }
         if (list.Count == 0) Program.Log("firewall inventory: no other enabled inbound allow rules found for these ports or earlier Zephyr names.");
         foreach (var c in list) Program.Log("firewall inventory: existing rule left as found (not created by this build, not removed): " + c);

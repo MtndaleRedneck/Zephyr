@@ -170,7 +170,7 @@ namespace ZephyrPlayer
         {
             var (_, j) = ZephyrLifecycle.LifecycleJournalStore.Read();
             var owned = new HashSet<string>(j?.Rules.Select(r => r.Key) ?? Enumerable.Empty<string>());
-            var (ok, list) = ZephyrLifecycle.ZephyrRules.Conflicts(owned, new HashSet<int> { PlaybackServer.DefaultPort, DiscoveryResponder.OwnPort, 8489 }, new HashSet<string> { TcpRuleName, UdpRuleName });
+            var (ok, list) = ZephyrLifecycle.ZephyrRules.Conflicts(owned, new HashSet<int> { PlaybackServer.DefaultPort, DiscoveryResponder.OwnPort, 8489 }, new HashSet<string> { TcpRuleName, UdpRuleName }, new HashSet<string>(new[] { Environment.ProcessPath ?? "" }.Where(x => x.Length > 0)));
             if (!ok) { Console.Error.WriteLine("firewall inventory: other rules could not be read; the boundary is not claimed."); return; }
             if (list.Count == 0) Console.Error.WriteLine("firewall inventory: no other enabled inbound allow rules found for these ports or earlier Zephyr Player names.");
             foreach (var c in list) Console.Error.WriteLine("firewall inventory: existing rule left as found (not created by this build, not removed): " + c);

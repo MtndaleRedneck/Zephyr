@@ -153,9 +153,11 @@ internal static class ZephyrRules
         catch { return (-1, ""); }
     }
 
-    private const string PropLine =
-        "$p=$x|Get-NetFirewallPortFilter; $a=$x|Get-NetFirewallAddressFilter; $ap=$x|Get-NetFirewallApplicationFilter; $sv=$x|Get-NetFirewallServiceFilter; " +
-        "$x.Enabled+'|'+$x.Direction+'|'+$x.Action+'|'+$x.Profile+'|'+$p.Protocol+'|'+($p.LocalPort -join ',')+'|'+($p.RemotePort -join ',')+'|'+($a.RemoteAddress -join ',')+'|'+($a.LocalAddress -join ',')+'|'+$ap.Program+'|'+$sv.Service+'|'+$x.EdgeTraversalPolicy";
+    // PropPre runs first (statements); PropExpr is one expression. [string] cast first: enum + string would try to convert the string to the enum.
+    private const string PropPre =
+        "$p=$x|Get-NetFirewallPortFilter; $a=$x|Get-NetFirewallAddressFilter; $ap=$x|Get-NetFirewallApplicationFilter; $sv=$x|Get-NetFirewallServiceFilter; ";
+    private const string PropExpr =
+        "[string]$x.Enabled+'|'+$x.Direction+'|'+$x.Action+'|'+$x.Profile+'|'+$p.Protocol+'|'+($p.LocalPort -join ',')+'|'+($p.RemotePort -join ',')+'|'+($a.RemoteAddress -join ',')+'|'+($a.LocalAddress -join ',')+'|'+$ap.Program+'|'+$sv.Service+'|'+$x.EdgeTraversalPolicy";
 
     /// <summary>f = the 12 property fields (enabled, direction, action, profile, protocol, local port, remote port, remote address, local address, program, service, edge traversal).</summary>
     internal static RuleState ClassifyProps(string[] f, RuleSpec s)
@@ -176,7 +178,7 @@ internal static class ZephyrRules
         var script =
             "$ErrorActionPreference='Stop'; try { $all=@(Get-NetFirewallRule) } catch { 'ERR'; exit 0 }; " +
             "foreach ($n in @(" + names + ")) { try { $r=@($all | Where-Object { $_.DisplayName -ceq $n }); " +
-            "if ($r.Count -eq 0) { $n+'|ABSENT'; continue }; if ($r.Count -ne 1) { $n+'|DUP'; continue }; $x=$r[0]; $n+'|ONE|'+(" + PropLine + ") } catch { $n+'|ERR' } }";
+            "if ($r.Count -eq 0) { $n+'|ABSENT'; continue }; if ($r.Count -ne 1) { $n+'|DUP'; continue }; $x=$r[0]; " + PropPre + "$n+'|ONE|'+" + PropExpr + " } catch { $n+'|ERR' } }";
         var (exit, output) = RunPs(script);
         if (exit != 0) return result;
         foreach (var raw in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
@@ -200,7 +202,7 @@ internal static class ZephyrRules
         if (!Regex.IsMatch(key, LifecycleJournalStore.KeyPattern)) return bad;
         var script =
             "$ErrorActionPreference='Stop'; try { $all=@(Get-NetFirewallRule) } catch { 'ERR'; exit 0 }; " +
-            "try { $r=@($all | Where-Object { $_.Name -ceq '" + key + "' }); if ($r.Count -eq 0) { 'ABSENT'; exit 0 }; if ($r.Count -ne 1) { 'DUP'; exit 0 }; $x=$r[0]; 'ONE|'+$x.DisplayName+'|'+(" + PropLine + ") } catch { 'ERR' }";
+            "try { $r=@($all | Where-Object { $_.Name -ceq '" + key + "' }); if ($r.Count -eq 0) { 'ABSENT'; exit 0 }; if ($r.Count -ne 1) { 'DUP'; exit 0 }; $x=$r[0]; " + PropPre + "'ONE|'+$x.DisplayName+'|'+" + PropExpr + " } catch { 'ERR' }";
         var (exit, output) = RunPs(script);
         if (exit != 0) return bad;
         var line = output.Trim();
@@ -256,17 +258,18 @@ internal static class ZephyrRules
     internal static bool AllExact(IReadOnlyList<RuleSpec> specs) => ReadAll(specs).Values.All(v => v == RuleState.Exact);
 
     /// <summary>A rule that could widen or shadow the intended boundary: enabled inbound allow, not one this build journaled, and either carrying one of the legacy display names or naming one of our ports.</summary>
-    internal static bool IsConflict(string[] f, ISet<string> ownedKeys, ISet<int> ports, ISet<string> legacyNames)
+    internal static bool IsConflict(string[] f, ISet<string> ownedKeys, ISet<int> ports, ISet<string> legacyNames, ISet<string>? programs = null)
     {
         // f: key|display|enabled|direction|action|profile|protocol|localPort|remote|program
         if (f.Length != 10 || ownedKeys.Contains(f[0])) return false;
         if (!string.Equals(f[2], "True", StringComparison.OrdinalIgnoreCase) || !string.Equals(f[3], "Inbound", StringComparison.OrdinalIgnoreCase) || !string.Equals(f[4], "Allow", StringComparison.OrdinalIgnoreCase)) return false;
         if (legacyNames.Contains(f[1])) return true;
+        if (programs != null && programs.Any(x => string.Equals(x, f[9], StringComparison.OrdinalIgnoreCase))) return true;   // any-port allow for our exe or vlc.exe
         return f[7].Split(',').Any(p => int.TryParse(p, out var n) && ports.Contains(n));
     }
 
     /// <summary>Report, never touch: other enabled inbound allow rules that name our ports or carry known earlier Zephyr display names. (ok=false when the enumeration failed.)</summary>
-    internal static (bool ok, List<string> conflicts) Conflicts(ISet<string> ownedKeys, ISet<int> ports, ISet<string> legacyNames)
+    internal static (bool ok, List<string> conflicts) Conflicts(ISet<string> ownedKeys, ISet<int> ports, ISet<string> legacyNames, ISet<string>? programs = null)
     {
         var script =
             "$ErrorActionPreference='Stop'; try { $all=@(Get-NetFirewallRule -Direction Inbound -Action Allow -Enabled True) } catch { 'ERR'; exit 0 }; " +
@@ -278,7 +281,7 @@ internal static class ZephyrRules
         foreach (var raw in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
             var f = raw.Trim().Split('|');
-            if (IsConflict(f, ownedKeys, ports, legacyNames)) list.Add($"'{f[1]}' profile {f[5]} {f[6]} port {f[7]} remote {f[8]} program {f[9]}");
+            if (IsConflict(f, ownedKeys, ports, legacyNames, programs)) list.Add($"'{f[1]}' profile {f[5]} {f[6]} port {f[7]} remote {f[8]} program {f[9]}");
         }
         return (true, list);
     }
