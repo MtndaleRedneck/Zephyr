@@ -833,6 +833,17 @@ try {
     function Set-TakeoverUdpRule([string]$program) {
         # Product-faithful fixture: the elevated setup from THAT copy creates its own journaled, unique-Name rules (a by-name netsh rule is no longer a valid witness).
         $prog = (Resolve-Path $program).Path
+        # Product limitation, labeled: setup is create-only by display name, so a second copy at another path cannot add its own UDP rule while the first copy's journaled rule exists (it exits 2, never rewrites). The supported relocation is uninstall-old (journal removes its rules) then install-new; this fixture models that step by removing ONLY the other path's journaled UDP discovery rules by their unique journal keys.
+        $jp = Join-Path $env:ProgramData 'ZephyrVlcRemote\lifecycle.json'
+        if (Test-Path $jp) {
+            $jo = Get-Content $jp -Raw | ConvertFrom-Json
+            foreach ($r in @($jo.Rules)) {
+                if ($r.DisplayName -like 'Zephyr VLC Remote 8491 UDP*' -and $r.Key -match '^Zephyr-[0-9a-f]{32}$') {
+                    $ap = (Get-NetFirewallRule -Name $r.Key -ErrorAction SilentlyContinue | Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue).Program
+                    if ($ap -and $ap -ne $prog) { Remove-NetFirewallRule -Name $r.Key }
+                }
+            }
+        }
         $t = Start-Process $prog -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
         if ($t.ExitCode -ne 0) { throw "takeover fixture: elevated setup from $prog exited $($t.ExitCode)" }
         $m = @(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote 8491 UDP*' -ErrorAction SilentlyContinue | Where-Object { ($_ | Get-NetFirewallApplicationFilter).Program -eq $prog })
