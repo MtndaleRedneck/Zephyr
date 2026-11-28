@@ -74,34 +74,32 @@ class UpgradeConnectionTest {
     }
     @Test fun verifyNewReleaseAfterUpdate() {
         val s=Store(ctx)
+        // Legacy retention: everything the old plain pairing stored survives the update untouched.
         assertEquals("Upgrade Fixture PC",s.pcName);assertEquals("127.0.0.1",s.host)
         assertEquals(18488,s.helperPort);assertEquals(18080,s.vlcPort)
         assertEquals("encrypted helper token retained",token,s.helperToken)
         assertEquals("encrypted VLC password retained",password,s.vlcPassword)
-        assertTrue(s.setupDone);assertTrue(s.lockScreenControls);assertTrue(s.isConfigured)
+        assertTrue("setupDone retained",s.setupDone);assertTrue("lockScreenControls retained",s.lockScreenControls)
         assertEquals("seeded124",ctx.getSharedPreferences("settings",0).getString("upgradeFixture",null))
+        // The secure-only build never treats an old plain-HTTP helper pairing as a connection: it must read "pair again".
+        assertTrue("legacy plain helper pairing must need repair",s.pairingNeedsRepair)
+        assertFalse("legacy plain helper pairing must not count as configured",s.isConfigured)
+        assertFalse("legacy plain helper pairing must not count as paired",s.isPaired(Source.VLC))
         val pc=Pc(token,password)
         var pcCause: Throwable? = null
         try {
-            assertTrue("updated helper auth",HelperClient.ping(s.host,s.helperPort,s.helperToken))
-            assertTrue("updated VLC auth",Vlc.status(s.host,s.vlcPort,s.vlcPassword).playing)
             val device=UiDevice.getInstance(inst)
-            for(granted in java.util.Collections.singletonList(InstrumentationRegistry.getArguments().getString("permission") == "granted")) {
-                val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
-                val remote=RemoteState(ctx,s,scope)
-                try {
-                    runBlocking { remote.pollOnce();remote.pollOnce() }
-                    assertFalse("poll connects with notification permission=$granted",remote.unreachable)
-                    assertFalse(remote.helperDown);assertFalse(remote.unpaired)
-                    assertEquals("fixture.mkv",remote.status?.title)
-                    inst.runOnMainSync { ctx.startActivity(Intent(ctx,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                    val h=pc.helper.get(); val v=pc.vlc.get();Thread.sleep(6_000)
-                    assertTrue("activity helper poll continues permission=$granted",pc.helper.get()>h)
-                    assertTrue("activity VLC poll continues permission=$granted",pc.vlc.get()>v)
-                    println("UPGRADE: retained credentials authenticate; activity helper+VLC polls permission=$granted")
-                    device.pressHome();Thread.sleep(500)
-                } finally { scope.cancel() }
-            }
+            val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
+            val remote=RemoteState(ctx,s,scope)
+            try {
+                runBlocking { remote.pollOnce();remote.pollOnce() }
+                inst.runOnMainSync { ctx.startActivity(Intent(ctx,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                Thread.sleep(6_000)
+                assertEquals("no plaintext helper request after the upgrade",0,pc.helper.get())
+                assertTrue("still needs repair after polling and launch",s.pairingNeedsRepair)
+                println("UPGRADE: legacy plain pairing retained and shown as pair-again; no plaintext helper request")
+                device.pressHome();Thread.sleep(500)
+            } finally { scope.cancel() }
         } catch (e: Throwable) { pcCause = e; throw e
         } finally { if(pcCause==null) pc.close() else try { pc.close() } catch (ce: Throwable) { } }
     }

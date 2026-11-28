@@ -110,7 +110,17 @@ focused_dialog_logged_in_job() {
   pp=$(single_allowed_dialog "$focus") || return 1
   pkg=${pp% *}; id=${pp#* }
   ACCEPTED_DIALOG=""
-  hit=$(grep -m1 -E "input_focus: \[Focus (request|entering) $id Application Not Responding: ${pkg//./\\.}[ ,]" "$seed") || return 1
+  hit=$(grep -m1 -E "input_focus: \[Focus (request|entering) $id Application Not Responding: ${pkg//./\\.}[ ,]" "$seed") || hit=""
+  if [ -z "$hit" ]; then
+    # The ANR can land between the seed run and verify (the install-over step), when neither run log holds it. The system's own
+    # last-ANR record is then the evidence: the app at fault must be the SAME allowlisted package as the one focused dialog.
+    # Diagnostic recognition only: one bounded Wait-and-rerun, the app-window assertion is untouched.
+    local la fault
+    la=$(adb shell dumpsys window lastanr)
+    fault=$(printf '%s\n' "$la" | sed -n 's/.*Application at fault: ActivityRecord{[^ ]* u[0-9]* \([A-Za-z0-9_.]*\)\/.*/\1/p' | head -1)
+    [ -n "$fault" ] && [ "$fault" = "$pkg" ] || return 1
+    hit="system last-ANR record: application at fault $fault"
+  fi
   echo "NOTE: allowlisted ANR dialog package=$pkg window=$id seen earlier in seed-rawlog.txt: $hit"
   [ -n "${GITHUB_STEP_SUMMARY:-}" ] && printf 'upgrade-prior: allowlisted ANR dialog package=%s window=%s was in the seed run log before verify: %s\n' "$pkg" "$id" "$hit" >> "$GITHUB_STEP_SUMMARY"
   ACCEPTED_DIALOG="$pp"   # the exact "<pkg> <id>" the gate checked: dismiss_foreign_anr must see this same pair, or it does nothing
