@@ -154,17 +154,18 @@ class ZephyrUpgradeFixtureTest {
     private fun box(r: android.graphics.Rect?) = r?.let { AnrDialogGate.Box(it.left, it.top, it.right, it.bottom) }
     private fun tapWaitInsideDialog(device: UiDevice, first: AnrDialogGate.Dialog) {
         val stale = "dialog changed while reading it"
+        // java.util only here (no kotlin.collections extension: firstOrNull/emptyList threw NoSuchMethodError in the minified signed-upgrade run).
         try {
             val nodes = device.findObjects(By.textContains("isn't responding"))
-            val node = nodes.firstOrNull()
+            val node = if (nodes.isEmpty()) null else nodes[0]
             val again = node?.let { AnrDialogGate.Dialog(it.text, it.applicationPackage) }
             // Panel = the nearest ancestor whose resource id is the dialog panel; if none within 6 levels, fail closed (no wider search).
             var panel: androidx.test.uiautomator.UiObject2? = node?.parent
             var up = 0
             while (panel != null && panel.resourceName != AnrDialogGate.PANEL_ID && up < 6) { panel = panel.parent; up += 1 }
             if (panel != null && panel.resourceName != AnrDialogGate.PANEL_ID) panel = null
-            val waits = panel?.findObjects(By.res(AnrDialogGate.WAIT_ID).text("Wait")) ?: emptyList()
-            val w = waits.firstOrNull()
+            val waits = panel?.findObjects(By.res(AnrDialogGate.WAIT_ID).text("Wait")) ?: java.util.Collections.emptyList<androidx.test.uiautomator.UiObject2>()
+            val w = if (waits.isEmpty()) null else waits[0]
             val p = if (node == null || panel == null) null else AnrDialogGate.Panel(
                 panel.resourceName, box(panel.visibleBounds), node.resourceName, box(node.visibleBounds),
                 waits.size, w?.applicationPackage, w?.resourceName, box(w?.visibleBounds))
