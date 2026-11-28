@@ -5,8 +5,10 @@ set -euo pipefail
 PKG=com.zephyr.remote.debug
 mkdir -p screenshots
 adb install -r android/build/outputs/apk/debug/app-debug.apk
-# Explicit initial rig state (install -r keeps the app's prefs, incl. a Player selection left by an earlier capture) and failure-safe cleanup.
-adb shell pm clear $PKG >/dev/null 2>&1 || true
+# Explicit initial rig state, CHECKED: install -r keeps the app's prefs (incl. a Player selection left by an earlier capture), so the clear must print Success or the rig fails loud.
+# Exit cleanup below is best-effort only (EXIT trap; not a guarantee on every signal).
+CLR=$(adb shell pm clear $PKG 2>&1 | tr -d '\r') || { echo "RIG FAIL: pm clear command failed: $CLR"; exit 1; }
+[ "$CLR" = "Success" ] || { echo "RIG FAIL: initial pm clear did not report Success: $CLR"; exit 1; }
 trap 'adb shell pm clear $PKG >/dev/null 2>&1 || true' EXIT
 dismiss_anr() {
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || return 0
