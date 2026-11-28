@@ -39,6 +39,20 @@ class AutomaticOnlySetupTest {
         device.waitForIdle()
     }
 
+    /** Number of pixels in [r] that differ from the region's own background (top-left pixel) by more than a text-sized luminance step. */
+    private fun visibleTextPixels(file: java.io.File, r: android.graphics.Rect): Int {
+        val bmp = android.graphics.BitmapFactory.decodeFile(file.absolutePath) ?: return -1
+        try {
+            val left = r.left.coerceIn(0, bmp.width - 1); val right = r.right.coerceIn(left + 1, bmp.width)
+            val top = r.top.coerceIn(0, bmp.height - 1); val bottom = r.bottom.coerceIn(top + 1, bmp.height)
+            fun lum(c: Int) = ((c shr 16) and 255) * 0.3 + ((c shr 8) and 255) * 0.59 + (c and 255) * 0.11
+            val bg = lum(bmp.getPixel(left, top))
+            var n = 0
+            for (y in top until bottom) for (x in left until right) if (Math.abs(lum(bmp.getPixel(x, y)) - bg) > 30) n++
+            return n
+        } finally { bmp.recycle() }
+    }
+
     @Test fun updateSuccessSharesVersionRowAndExpires() {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
@@ -54,8 +68,21 @@ class AutomaticOnlySetupTest {
         assertNotNull(success)
         assertEquals(version.visibleBounds.centerY(), success.visibleBounds.centerY())
         assertTrue(success.visibleBounds.left > version.visibleBounds.right)
-        device.takeScreenshot(java.io.File(ctx.getExternalFilesDir(null), "bm-updates-success.png"))
-        assertTrue(device.wait(Until.gone(By.text("You're up to date.")), 7000))
+        val successShot = java.io.File(ctx.getExternalFilesDir(null), "bm-updates-success.png")
+        assertTrue(device.takeScreenshot(successShot))
+        val region = success.visibleBounds
+        val baseline = visibleTextPixels(successShot, region)
+        assertTrue("success text must be drawn in its region before it expires (pixels=$baseline)", baseline > 20)
+        // Same 7 s budget. The expiry is judged by what is on screen: a failed run (artifact 15241964578, 46092171560) showed the text
+        // gone from the screenshot while the accessibility tree still held the node, so the tree alone cannot tell "expired" from "stale".
+        val deadline = android.os.SystemClock.elapsedRealtime() + 7000
+        var expired = false
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            val now = java.io.File(ctx.getExternalFilesDir(null), "bm-updates-poll.png")
+            if (device.takeScreenshot(now) && visibleTextPixels(now, region) * 20 < baseline) { expired = true; break }
+            Thread.sleep(250)
+        }
+        assertTrue("success text still drawn after 7 s", expired)
         assertTrue(device.hasObject(By.text("Version " + BuildConfig.VERSION_NAME)))
         device.takeScreenshot(java.io.File(ctx.getExternalFilesDir(null), "bm-updates-expired.png"))
     }
