@@ -182,7 +182,6 @@ namespace ZephyrPlayer
         /// 40508776538: the unelevated check failed on its own path, not the shape).</summary>
         internal static bool RulesHaveCurrentShapeFor(string exePath)
         {
-            ZephyrLifecycle.ProtectedFile.App = "ZephyrPlayer";
             return ZephyrLifecycle.ZephyrRules.AllExact(ExpectedSpecs(exePath));
         }
 
@@ -194,6 +193,23 @@ namespace ZephyrPlayer
             if (tcp.Count == 0 || udp.Count == 0) return false;
             return tcp.All(r => RuleMatches(r, 6, PlaybackServer.DefaultPort, "System"))
                 && udp.All(r => RuleMatches(r, 17, DiscoveryResponder.OwnPort, exePath));
+        }
+
+        /// <summary>Deleting a pre-existing http:// reservation to make room for https is a shape-based delete (no creation witness). Off: the 1.1.0 upgrade path then fails closed at the https add (exit 3) until a decision is made.</summary>
+        internal const bool AllowShapeBasedOldHttpDelete = false;
+
+        /// <summary>Uninstall: delete the https reservation only if the journal says this build added it AND the live descriptor is still equivalent; then it must read back absent.</summary>
+        internal static bool RemoveJournaledUrlAcl(ZephyrLifecycle.UrlAclEntry e)
+        {
+            try
+            {
+                var (found, sddl) = QueryUrlAcl(e.Url);
+                if (!found) return true;
+                if (sddl == null || !ZephyrLifecycle.SddlUtil.Equivalent(sddl, e.Sddl)) return false;
+                Run("netsh", "http delete urlacl url=" + e.Url);
+                return !QueryUrlAcl(e.Url).Found;
+            }
+            catch (Exception) { return false; }
         }
 
         public static bool UrlAclExists()
@@ -440,7 +456,6 @@ namespace ZephyrPlayer
                 }
                 // Create-only, unique-Name, journaled rules (ProgramData journal, admin-written). Nothing is deleted or rewritten by DisplayName:
                 // the 1.1.0 rules and any earlier "Zephyr Player" / "Zephyr Player Discovery" rules stay as found and are reported below.
-                ZephyrLifecycle.ProtectedFile.App = "ZephyrPlayer";
                 var specs = ExpectedSpecs(exe);
                 var rulesOk = ZephyrLifecycle.ZephyrRules.Install(specs);
                 ReportOtherRules();
@@ -448,30 +463,36 @@ namespace ZephyrPlayer
                 switch (aclOwner)
                 {
                     case AclOwnership.Ours:
-                        break; // already exactly right
+                        break; // already exactly right (nothing here proves who created it, so it is not journaled)
                     case AclOwnership.None:
+                        {
+                            // Create-only: no reservation existed. No delete first. Journal only after the live descriptor reads back as exactly the intended grant.
+                            var url = "https://+:" + PlaybackServer.DefaultPort + "/";
+                            var grant = ZephyrLifecycle.SddlUtil.PerUserListenGrant(sid);
+                            var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
+                                () => Run("netsh", "http add urlacl url=" + url + " sddl=" + grant),
+                                () => ClassifyOldHttpUrlAcl(sid),
+                                () => AllowShapeBasedOldHttpDelete ? Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/").ExitCode : -1);
+                            if (addRes.FirstExit != 0)
+                                Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (AllowShapeBasedOldHttpDelete ? "" : " (disabled: an old http reservation has no creation witness and is never deleted by shape)"));
+                            if (addRes.Exit != 0 || !UrlAclExists()) return 3;
+                            var (foundNow, liveSddl) = QueryUrlAcl(url);
+                            if (foundNow && liveSddl != null && ZephyrLifecycle.SddlUtil.Equivalent(liveSddl, grant))
+                            {
+                                if (!ZephyrLifecycle.LifecycleJournalStore.Merge(Array.Empty<ZephyrLifecycle.RuleEntry>(), null, null, new ZephyrLifecycle.UrlAclEntry(url, grant)))
+                                    Console.Error.WriteLine("The listen permission was added but could NOT be journaled; it will never be removed automatically.");
+                            }
+                            else Console.Error.WriteLine("The listen permission read back differently than added; not journaled, never removed automatically.");
+                            break;
+                        }
                     case AclOwnership.Legacy:
-                        Run("netsh", "http delete urlacl url=https://+:" + PlaybackServer.DefaultPort + "/");
-                        var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
-                            () => Run("netsh", "http add urlacl url=https://+:" + PlaybackServer.DefaultPort + "/ sddl=D:(A;;GX;;;" + sid + ")"),
-                            () => ClassifyOldHttpUrlAcl(sid),
-                            () => Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/").ExitCode);
-                        if (addRes.FirstExit != 0)
-                            Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (addRes.DeleteExit is int de ? " (delete exit " + de + ")" : "") + (addRes.RetryExit is int re ? "; retry exit " + re : "; no retry") + ". An attempted delete is not proof the reservation is gone.");
-                        var aclExit = addRes.Exit;
-                        if (aclExit != 0 || !UrlAclExists()) return 3;
+                        Console.Error.WriteLine("An Everyone listen permission exists on port " + PlaybackServer.DefaultPort + "; left as found (no creation witness).");
                         break;
                 }
                 // Verify the reservation really names the intended user, not just the port.
                 if (!UrlAclNamesUser(sid)) return 3;
-                // Old http:// reservation: deleted only when positively ours or legacy, never a foreign or unreadable one.
-                try
-                {
-                    var oldOwn = ClassifyOldHttpUrlAcl(sid);
-                    if (UrlAclMigrationPlanner.PlanOld(oldOwn) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
-                        Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
-                }
-                catch (Exception) { }
+                // Old http:// reservation: never deleted here (no creation witness). Reported only.
+                try { Console.Error.WriteLine("old http reservation: " + ClassifyOldHttpUrlAcl(sid) + "; left as found."); } catch (Exception) { }
                 RemoveLegacy110UninstallEntry();
                 return RulesHaveCurrentShapeFor(exe) ? 0 : 2;
             }
@@ -564,17 +585,7 @@ namespace ZephyrPlayer
                 return 0;
             }
             // Only what the protected journal says this build created, by unique key, each read back. 1.1.0 and earlier-name rules are left.
-            ZephyrLifecycle.ProtectedFile.App = "ZephyrPlayer";
-            ZephyrLifecycle.ZephyrRules.UninstallCleanup(null);
-            if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
-                Run("netsh", "http delete urlacl url=https://+:" + PlaybackServer.DefaultPort + "/");
-            // The old http reservation too, only when positively ours or legacy.
-            try
-            {
-                if (UrlAclMigrationPlanner.PlanOld(ClassifyOldHttpUrlAcl(sid)) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
-                    Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/");
-            }
-            catch (Exception) { }
+            ZephyrLifecycle.ZephyrRules.UninstallCleanup(null, RemoveJournaledUrlAcl);
             // Removes only the bindings the marker proves are ours; certificate, key and marker stay so pairing survives a reinstall.
             TlsSetup.Remove(PlaybackServer.DefaultPort);
             return 0;

@@ -148,3 +148,44 @@ public class LifecycleTests
         Assert.Equal(specs.Length, specs.Select(s => s.Display).Distinct().Count());
     }
 }
+
+public class UrlAclWitnessTests
+{
+    private const string Sid = "S-1-5-21-1-2-3-1001";
+
+    [Fact]
+    public void JournaledGrantEquivalentOnlyToTheExactPerUserGrant()
+    {
+        var grant = SddlUtil.PerUserListenGrant(Sid);
+        Assert.True(SddlUtil.Equivalent(grant, "D:(A;;GX;;;" + Sid + ")"));
+        Assert.False(SddlUtil.Equivalent(grant, "D:(A;;GX;;;WD)"));                                  // the Everyone grant is not ours
+        Assert.False(SddlUtil.Equivalent(grant, "D:(A;;GX;;;" + Sid + ")(A;;GX;;;WD)"));             // a widened descriptor is not unchanged
+        Assert.False(SddlUtil.Equivalent(grant, "D:(A;;GA;;;" + Sid + ")"));
+        Assert.False(SddlUtil.Equivalent(grant, ""));
+    }
+
+    [Fact]
+    public void JournalAcceptsOnlyAnHttpsPlusUrl()
+    {
+        var k = "Zephyr-0123456789abcdef0123456789abcdef";
+        var j = new LifecycleJournal(1, new(), null, new(), new UrlAclEntry("https://+:8492/", "D:(A;;GX;;;" + Sid + ")"));
+        Assert.True(LifecycleJournalStore.IsValid(j));
+        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("http://+:8492/", "x") }));
+        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("https://+:8492/ ; rm", "x") }));
+        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("https://+:8492/", "") }));
+        Assert.NotNull(k);
+    }
+
+    [Fact]
+    public void OldJournalWithoutUrlAclStillReads()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "zl-" + Guid.NewGuid().ToString("N") + ".json");
+        try
+        {
+            File.WriteAllText(path, "{\"Version\":1,\"Rules\":[],\"Watchdog\":null,\"Uncertain\":[]}");
+            var (st, j) = LifecycleJournalStore.Read(path);
+            Assert.Equal(JournalState.Present, st); Assert.Null(j!.UrlAcl);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+}

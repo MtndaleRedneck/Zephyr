@@ -43,6 +43,9 @@ internal static class FirewallSetup
 
     private static bool TlsStepDone;
 
+    /// <summary>Deleting a pre-existing http:// reservation to make room for https is a shape-based delete (no creation witness). Off: the 1.1.0 upgrade path then fails closed at the https add (exit 3) until a decision is made.</summary>
+    internal const bool AllowShapeBasedOldHttpDelete = false;
+
     /// <summary>The unelevated "is everything in place" check. firewall.ok only records that this check passed; it holds no identity data and the identity marker is a separate, elevated-written file.</summary>
     internal static bool SetupIsCurrent()
     {
@@ -99,7 +102,6 @@ internal static class FirewallSetup
             TlsStepDone = true;
             // Create-only, unique-Name, journaled rules (ProgramData journal, admin-written). Nothing is deleted or rewritten by DisplayName:
             // earlier builds' rules ("Zephyr VLC Remote", "Zephyr VLC Remote VLC", "Zephyr VLC Remote Helper") stay as found and are reported below.
-            ZephyrLifecycle.ProtectedFile.App = "ZephyrVlcRemote";
             ZephyrLifecycle.LifeLog.Sink = Program.Log;
             var vlc = Movies.FindVlc();
             var specs = ExpectedSpecs(Environment.ProcessPath ?? "", vlc);
@@ -115,23 +117,36 @@ internal static class FirewallSetup
             switch (aclOwner)
             {
                 case AclOwnership.Ours:
-                    break; // already exactly right
+                    break; // already exactly right (no journal entry unless an earlier run of this build wrote one: nothing here proves who created it)
                 case AclOwnership.None:
-                case AclOwnership.Legacy:
-                    Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
-                    var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
-                        () => RunCapture("netsh", "http add urlacl url=https://+:" + Program.HttpPort + "/ sddl=D:(A;;GX;;;" + sid + ")"),
-                        () => ClassifyOldHttpUrlAcl(sid),
-                        () => Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/"));
-                    var acl = addRes.Exit;
-                    if (addRes.FirstExit != 0)
-                        Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (addRes.DeleteExit is int de ? " (delete exit " + de + ")" : "") + (addRes.RetryExit is int re ? "; retry exit " + re : "; no retry") + ". An attempted delete is not proof the reservation is gone.");
-                    if (acl != 0 || !UrlAclExists())
                     {
-                        Program.Log("firewall setup: the listen permission could not be added (netsh exit " + acl + ").");
-                        Console.Error.WriteLine("The listen permission could not be added.");
-                        return 3;
+                        // Create-only: the reservation did not exist. No delete first. Journal it only after the live descriptor reads back as exactly the intended grant.
+                        var url = "https://+:" + Program.HttpPort + "/";
+                        var grant = ZephyrLifecycle.SddlUtil.PerUserListenGrant(sid);
+                        var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
+                            () => RunCapture("netsh", "http add urlacl url=" + url + " sddl=" + grant),
+                            () => ClassifyOldHttpUrlAcl(sid),
+                            () => AllowShapeBasedOldHttpDelete ? Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/") : -1);
+                        if (addRes.FirstExit != 0)
+                            Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (AllowShapeBasedOldHttpDelete ? "" : " (disabled: an old http reservation has no creation witness and is never deleted by shape)"));
+                        if (addRes.Exit != 0 || !UrlAclExists())
+                        {
+                            Program.Log("firewall setup: the listen permission could not be added (netsh exit " + addRes.Exit + "); nothing existing was replaced.");
+                            Console.Error.WriteLine("The listen permission could not be added.");
+                            return 3;
+                        }
+                        var (foundNow, liveSddl) = QueryUrlAcl(url);
+                        if (foundNow && liveSddl != null && ZephyrLifecycle.SddlUtil.Equivalent(liveSddl, grant))
+                        {
+                            if (!ZephyrLifecycle.LifecycleJournalStore.Merge(Array.Empty<ZephyrLifecycle.RuleEntry>(), null, null, new ZephyrLifecycle.UrlAclEntry(url, grant)))
+                                Program.Log("firewall setup: the listen permission was added but could NOT be journaled; it will never be removed automatically.");
+                        }
+                        else Program.Log("firewall setup: the listen permission read back differently than added; not journaled, never removed automatically.");
+                        break;
                     }
+                case AclOwnership.Legacy:
+                    // A broad Everyone reservation at https has no creation witness: left as found, never deleted or replaced. The user-scoped check below fails and setup reports it.
+                    Program.Log("firewall setup: an Everyone listen permission exists on port " + Program.HttpPort + "; left as found (no creation witness).");
                     break;
             }
             // Verify the reservation really names the intended user, not just the port:
@@ -144,17 +159,8 @@ internal static class FirewallSetup
                 Console.Error.WriteLine("The listen permission could not be verified.");
                 return 3;
             }
-            // Old http:// reservation: deleted only when positively ours or legacy, verified gone; a foreign or unreadable one is left.
-            try
-            {
-                var oldOwn = ClassifyOldHttpUrlAcl(sid);
-                if (UrlAclMigrationPlanner.PlanOld(oldOwn) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
-                {
-                    Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
-                    if (QueryUrlAcl("http://+:" + Program.HttpPort + "/").Found) Program.Log("firewall setup: the old http reservation could not be removed; it remains (plain http is not served).");
-                }
-                else Program.Log("firewall setup: old http reservation: " + oldOwn + "; left alone.");
-            }
+            // Old http:// reservation: never deleted here (no creation witness). Reported only.
+            try { Program.Log("firewall setup: old http reservation: " + ClassifyOldHttpUrlAcl(sid) + "; left as found."); }
             catch (Exception ex) { Program.Log("firewall setup: old http reservation check failed (" + ex.GetType().Name + "); left alone."); }
             Program.Log("firewall setup: rules added (TCP System/" + Program.HttpPort + ", UDP exe/" +
                 Program.DiscoveryPort + "), listen permission scoped to SID " + sid + ".");
@@ -575,25 +581,6 @@ internal static class FirewallSetup
     private static string VlcRuleMarkerPath(string? dataDir = null) =>
         Path.Combine(dataDir ?? Program.DataDir, "vlc-firewall-rule-owned.txt");
 
-    private static void AddRule(string protocol, int port)
-    {
-        // http.sys owns inbound HTTP in the KERNEL: Windows Firewall attributes the TCP
-        // listener to the System binary, not this exe (Microsoft documents this for
-        // http.sys/IIS; System.Net.HttpListener runs on http.sys). A rule naming our exe
-        // would never match and the phone would be dropped on a real LAN - loopback CI
-        // cannot see that. So TCP 8492 is program=System + LocalSubnet + Private, and
-        // the per-user URL ACL becomes the limit on who may take the port. The UDP
-        // discovery socket lives in THIS process, so its rule stays program-scoped.
-        Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\" protocol={protocol} localport={port}");
-        string args;
-        if (protocol == "TCP")
-            args = $"advfirewall firewall add rule name=\"{Program.FirewallRule}\" dir=in action=allow protocol=TCP localport={port} program=System profile=private remoteip=localsubnet";
-        else
-            args = $"advfirewall firewall add rule name=\"{Program.FirewallRule}\" dir=in action=allow protocol=UDP localport={port} program=\"{Environment.ProcessPath ?? ""}\" profile=private remoteip=localsubnet";
-        var code = Run("netsh", args);
-        if (code != 0) throw new InvalidOperationException($"netsh add rule exited {code}");
-    }
-
     /// <summary>Remove what setup added: both helper rules and, when it is ours, the
     /// listen permission. Runs elevated at uninstall. [userSid] is the UNINSTALLING
     /// user's SID (the unelevated uninstaller passes it): the ACL is deleted only when
@@ -627,19 +614,27 @@ internal static class FirewallSetup
             return 0;
         }
         // Rules and watchdog: only what the protected journal says this build created, by unique key, each read back. Earlier builds' rules and the legacy task are left.
-        ZephyrLifecycle.ProtectedFile.App = "ZephyrVlcRemote";
         ZephyrLifecycle.LifeLog.Sink = Program.Log;
-        ZephyrLifecycle.ZephyrRules.UninstallCleanup(ZephyrLifecycle.WatchdogSetup.RemoveJournaled);
-        if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
-        {
-            Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");
-            if (UrlAclMigrationPlanner.PlanOld(ClassifyOldHttpUrlAcl(sid)) == UrlAclMigrationPlanner.Action.DeleteOldHttpReservation)
-                Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/");
-        }
+        ZephyrLifecycle.ZephyrRules.UninstallCleanup(ZephyrLifecycle.WatchdogSetup.RemoveJournaled, RemoveJournaledUrlAcl);
         // Binding cleanup is decided by the identity marker's proof, not by the listen-permission owner: a missing reservation must not strand an owned binding.
         // Only a reservation that is another app's or another user's (handled above) leaves the machine-wide binding alone.
         TlsSetup.Remove(Program.HttpPort);   // removes only the exact bindings the marker proves are ours; cert, key and marker stay (pairing survives a reinstall); see the log for what remains
         return 0;
+    }
+
+    /// <summary>Uninstall: delete the https reservation only if the journal says this build added it AND the live descriptor is still equivalent to the journaled one; then it must read back absent.</summary>
+    internal static bool RemoveJournaledUrlAcl(ZephyrLifecycle.UrlAclEntry e)
+    {
+        try
+        {
+            var (found, sddl) = QueryUrlAcl(e.Url);
+            if (!found) return true;
+            if (sddl == null || !ZephyrLifecycle.SddlUtil.Equivalent(sddl, e.Sddl)) { Program.Log("uninstall cleanup: listen permission left (changed since it was added, or unreadable)."); return false; }
+            Run("netsh", "http delete urlacl url=" + e.Url);
+            if (QueryUrlAcl(e.Url).Found) { Program.Log("uninstall cleanup: listen permission delete returned but it still reads back; left in the journal."); return false; }
+            return true;
+        }
+        catch (Exception ex) { Program.Log("uninstall cleanup: listen permission not removed: " + ex.Message); return false; }
     }
 
     internal static bool UrlAclExists()

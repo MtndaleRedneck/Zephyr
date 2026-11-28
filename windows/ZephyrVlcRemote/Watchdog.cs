@@ -7,6 +7,11 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
+#if ZEPHYR_PLAYER
+using ZephyrPlayer;
+#else
+using ZephyrVlcRemote;
+#endif
 
 // VLC watchdog lifecycle: ported from the BingeMote design (fdb4bbc). Not compiled, not run on Windows.
 namespace ZephyrLifecycle;
@@ -41,23 +46,7 @@ internal static class WatchdogSetup
         + "</Task>";
 
     /// <summary>ACE-set equality of two SDDL strings (order and SDDL aliases such as SY/BA do not matter). Anything unparseable is unequal.</summary>
-    internal static bool SddlEquivalent(string a, string b)
-    {
-        try
-        {
-            static HashSet<string>? Aces(string s)
-            {
-                var d = new RawSecurityDescriptor(s).DiscretionaryAcl;
-                if (d == null) return null;
-                return d.Cast<GenericAce>().Select(x => x is CommonAce c
-                    ? c.AceType + "|" + c.SecurityIdentifier.Value + "|" + c.AccessMask + "|" + c.AceFlags
-                    : "other|" + x.AceType).ToHashSet();
-            }
-            var x1 = Aces(a); var x2 = Aces(b);
-            return x1 != null && x2 != null && x1.SetEquals(x2);
-        }
-        catch { return false; }
-    }
+    internal static bool SddlEquivalent(string a, string b) => SddlUtil.Equivalent(a, b);
 
     [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern bool WTSQuerySessionInformation(IntPtr server, int sessionId, int infoClass, out IntPtr buffer, out int bytes);

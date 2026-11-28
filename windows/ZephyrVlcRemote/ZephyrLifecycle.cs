@@ -8,6 +8,11 @@ using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+#if ZEPHYR_PLAYER
+using ZephyrPlayer;
+#else
+using ZephyrVlcRemote;
+#endif
 
 // Shared by Zephyr VLC Remote and Zephyr Player (the Player links this file, as it does HelperTls.cs).
 // Pattern ported from the BingeMote lifecycle at fdb4bbc; NOT proven here: not compiled, not run on Windows.
@@ -27,58 +32,31 @@ internal sealed record RuleEntry(string Key, string DisplayName, string Props);
 internal sealed record UncertainEntry(string Key, string DisplayName, string Outcome);
 /// <summary>The per-user relaunch task. Verified=false: registered but the read-back could not be confirmed; kept as history, never refreshed or deleted on that basis.</summary>
 internal sealed record WatchdogEntry(string Task, string Sid, string Sddl, string Exe, bool Verified, string? Note = null);
-internal sealed record LifecycleJournal(int Version, List<RuleEntry> Rules, WatchdogEntry? Watchdog, List<UncertainEntry> Uncertain);
+/// <summary>The https:// listen permission this build ADDED (the reservation did not exist, the add succeeded, and the live descriptor read back exactly the intended per-user grant). Uninstall deletes it only while the live descriptor is still equivalent.</summary>
+internal sealed record UrlAclEntry(string Url, string Sddl);
+internal sealed record LifecycleJournal(int Version, List<RuleEntry> Rules, WatchdogEntry? Watchdog, List<UncertainEntry> Uncertain, UrlAclEntry? UrlAcl = null);
 
-/// <summary>Files written only by the elevated side: atomic replace, DACL of SYSTEM and Administrators full control, Users read-only.
-/// The directory must be owned by SYSTEM/Administrators/TrustedInstaller with no non-admin writer; a foreign or user-writable directory is never repaired and its journal is treated as Corrupt.</summary>
-internal static class ProtectedFile
+internal static class SddlUtil
 {
-    internal static string App = "ZephyrVlcRemote";
-    internal static string Dir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), App);
-
-    internal static bool DirTrusted(string dir)
+    /// <summary>ACE-set equality of two SDDL strings (order and aliases such as SY/BA/WD do not matter). Anything unparseable is unequal.</summary>
+    internal static bool Equivalent(string a, string b)
     {
         try
         {
-            var sec = new DirectoryInfo(dir).GetAccessControl();
-            var owner = sec.GetOwner(typeof(SecurityIdentifier)) as SecurityIdentifier;
-            var ok = new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid };
-            bool ownerOk = owner != null && (ok.Any(w => owner.IsWellKnown(w)) || owner.Value.StartsWith("S-1-5-80-"));
-            if (!ownerOk) return false;
-            var writeish = FileSystemRights.WriteData | FileSystemRights.AppendData | FileSystemRights.WriteAttributes | FileSystemRights.WriteExtendedAttributes | FileSystemRights.Delete | FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership;
-            foreach (FileSystemAccessRule r in sec.GetAccessRules(true, true, typeof(SecurityIdentifier)))
+            static HashSet<string>? Aces(string s)
             {
-                if (r.AccessControlType != AccessControlType.Allow || (r.FileSystemRights & writeish) == 0) continue;
-                var s = (SecurityIdentifier)r.IdentityReference;
-                if (!(s.IsWellKnown(WellKnownSidType.LocalSystemSid) || s.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) || s.Value.StartsWith("S-1-5-80-") || s.Value == "S-1-3-0")) return false;
+                var d = new System.Security.AccessControl.RawSecurityDescriptor(s).DiscretionaryAcl;
+                if (d == null) return null;
+                return d.Cast<System.Security.AccessControl.GenericAce>().Select(x => x is System.Security.AccessControl.CommonAce c
+                    ? c.AceType + "|" + c.SecurityIdentifier.Value + "|" + c.AccessMask + "|" + c.AceFlags
+                    : "other|" + x.AceType).ToHashSet();
             }
-            return true;
+            var x1 = Aces(a); var x2 = Aces(b);
+            return x1 != null && x2 != null && x1.SetEquals(x2);
         }
         catch { return false; }
     }
-
-    internal static void WriteAtomic(string path, string text)
-    {
-        var dir = Path.GetDirectoryName(path)!;
-        if (!Directory.Exists(dir))
-        {
-            var ds = new DirectorySecurity();
-            ds.SetAccessRuleProtection(true, false);
-            foreach (var (sid, rights) in new[] { (WellKnownSidType.LocalSystemSid, FileSystemRights.FullControl), (WellKnownSidType.BuiltinAdministratorsSid, FileSystemRights.FullControl), (WellKnownSidType.BuiltinUsersSid, FileSystemRights.ReadAndExecute) })
-                ds.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(sid, null), rights, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
-            new DirectoryInfo(dir).Create(ds);
-        }
-        if (!DirTrusted(dir)) throw new InvalidOperationException("the data directory is not trusted (owner or ACL); it was not changed");
-        var tmp = path + ".new";
-        File.WriteAllText(tmp, text);
-        var sec = new FileSecurity();
-        sec.SetAccessRuleProtection(true, false);
-        sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
-        sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, AccessControlType.Allow));
-        sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null), FileSystemRights.Read, AccessControlType.Allow));
-        new FileInfo(tmp).SetAccessControl(sec);
-        File.Move(tmp, path, true);
-    }
+    internal static string PerUserListenGrant(string sid) => "D:(A;;GX;;;" + sid + ")";
 }
 
 /// <summary>What the elevated setup itself created. An entry is written only after the object was created by THIS run (name was absent, create succeeded) and read back exact.
@@ -92,6 +70,7 @@ internal static class LifecycleJournalStore
         j != null && j.Version == 1 && j.Rules != null && j.Uncertain != null
         && j.Rules.All(e => e != null && Regex.IsMatch(e.Key ?? "", KeyPattern) && !string.IsNullOrEmpty(e.DisplayName) && !string.IsNullOrEmpty(e.Props))
         && j.Uncertain.All(u => u != null && Regex.IsMatch(u.Key ?? "", KeyPattern) && !string.IsNullOrEmpty(u.Outcome))
+        && (j.UrlAcl == null || (Regex.IsMatch(j.UrlAcl.Url ?? "", @"\Ahttps://\+:\d{1,5}/\z") && !string.IsNullOrEmpty(j.UrlAcl.Sddl)))
         && (j.Watchdog == null || (WatchdogIds.SidAcceptable(j.Watchdog.Sid) && j.Watchdog.Task == WatchdogIds.TaskName));
 
     internal static (JournalState state, LifecycleJournal? journal) Read(string? path = null)
@@ -107,7 +86,7 @@ internal static class LifecycleJournalStore
         catch { return (JournalState.Corrupt, null); }
     }
 
-    internal static bool Merge(IEnumerable<RuleEntry> rules, WatchdogEntry? watchdog, IEnumerable<UncertainEntry>? uncertain = null)
+    internal static bool Merge(IEnumerable<RuleEntry> rules, WatchdogEntry? watchdog, IEnumerable<UncertainEntry>? uncertain = null, UrlAclEntry? urlAcl = null)
     {
         try
         {
@@ -116,7 +95,8 @@ internal static class LifecycleJournalStore
             var merged = new LifecycleJournal(1,
                 (cur?.Rules ?? new List<RuleEntry>()).Concat(rules).DistinctBy(e => e.Key).ToList(),
                 watchdog ?? cur?.Watchdog,
-                (cur?.Uncertain ?? new List<UncertainEntry>()).Concat(uncertain ?? Array.Empty<UncertainEntry>()).DistinctBy(u => u.Key).ToList());
+                (cur?.Uncertain ?? new List<UncertainEntry>()).Concat(uncertain ?? Array.Empty<UncertainEntry>()).DistinctBy(u => u.Key).ToList(),
+                urlAcl ?? cur?.UrlAcl);
             ProtectedFile.WriteAtomic(FilePath, JsonSerializer.Serialize(merged));
             return true;
         }
@@ -127,7 +107,7 @@ internal static class LifecycleJournalStore
     {
         try
         {
-            if (j.Rules.Count == 0 && j.Watchdog == null && j.Uncertain.Count == 0) { File.Delete(FilePath); return; }
+            if (j.Rules.Count == 0 && j.Watchdog == null && j.Uncertain.Count == 0 && j.UrlAcl == null) { File.Delete(FilePath); return; }
             ProtectedFile.WriteAtomic(FilePath, JsonSerializer.Serialize(j));
         }
         catch (Exception ex) { LifeLog.Log("lifecycle journal not updated: " + ex.Message); }
@@ -321,14 +301,15 @@ internal static class ZephyrRules
     }
 
     /// <summary>Uninstall cleanup entry: journaled rules (and, when the caller supplies it, the journaled watchdog) only. No journal, a corrupt one, or an untrusted directory leaves everything as found.</summary>
-    internal static void UninstallCleanup(Func<WatchdogEntry, bool>? removeWatchdog)
+    internal static void UninstallCleanup(Func<WatchdogEntry, bool>? removeWatchdog, Func<UrlAclEntry, bool>? removeUrlAcl = null)
     {
         var (st, j) = LifecycleJournalStore.Read();
         if (st == JournalState.Absent) { LifeLog.Log("uninstall cleanup: no lifecycle journal; firewall rules and watchdog task left as found."); return; }
         if (st == JournalState.Corrupt || j == null) { LifeLog.Log("uninstall cleanup: lifecycle journal unreadable or untrusted; firewall rules and watchdog task left."); return; }
         var keepRules = RemoveJournaled(j.Rules);
         var keepWd = j.Watchdog != null && (removeWatchdog == null || !removeWatchdog(j.Watchdog)) ? j.Watchdog : null;
+        var keepAcl = j.UrlAcl != null && (removeUrlAcl == null || !removeUrlAcl(j.UrlAcl)) ? j.UrlAcl : null;
         foreach (var u in j.Uncertain) LifeLog.Log("uninstall cleanup: possible orphan firewall rule '" + u.DisplayName + "' key " + u.Key + " (" + u.Outcome + "): never created-witnessed, not removed.");
-        LifecycleJournalStore.Replace(new LifecycleJournal(1, keepRules, keepWd, j.Uncertain));
+        LifecycleJournalStore.Replace(new LifecycleJournal(1, keepRules, keepWd, j.Uncertain, keepAcl));
     }
 }
