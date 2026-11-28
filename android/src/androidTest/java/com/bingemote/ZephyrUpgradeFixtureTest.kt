@@ -51,7 +51,10 @@ class ZephyrUpgradeFixtureTest {
         assertEquals("Upgrade Fixture PC", s.zephyrPcName)
         assertEquals(null, s.zephyrTarget())
         assertTrue(s.zephyrPairing() === ZephyrCredential.State.NeedsRepair)
-        assertTrue("old plain token left in place", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).contains("zephyrToken"))
+        // The legacy token must still be on disk: in the plain prefs (older v13-dev layout, written by the seed above) or in the
+        // encrypted "secrets" file (what the real prior releases write). Nothing deleted it.
+        assertTrue("old token left in place", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).contains("zephyrToken") ||
+            ctx.getSharedPreferences("secrets", android.content.Context.MODE_PRIVATE).all.size > 0)
         assertFalse(s.isPaired(Source.ZEPHYR))
         assertEquals(Source.ZEPHYR, s.selectedSource)
         assertEquals(15, s.skipMainSec)

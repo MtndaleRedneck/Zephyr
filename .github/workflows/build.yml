@@ -153,7 +153,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3
       - name: Build the prior release (debug) with the fixture test
         run: |
-          cp new/android/src/androidTest/java/com/bingemote/ZephyrUpgradeFixtureTest.kt old/android/src/androidTest/java/com/bingemote/
+          cp new/scripts/upgrade-old-fixture/ZephyrUpgradeFixtureTest.kt old/android/src/androidTest/java/com/bingemote/
           cp new/android/src/androidTest/java/com/bingemote/UpgradeConnectionTest.kt old/android/src/androidTest/java/com/bingemote/
           cd old && ./gradlew --no-daemon assembleDebug assembleDebugAndroidTest
           mkdir -p /tmp/up
@@ -217,7 +217,7 @@ jobs:
       - name: Real published 1.5.0 (sha256 pinned) and its commit
         run: |
           set -euo pipefail
-          [ "$(git -C old rev-parse HEAD)" = efe4871ae70de537c2e56c8e9d27d75ede34e3e8 ] || { echo "old tag is not efe4871"; exit 1; }
+          [ "$(git -C old rev-parse HEAD)" = 85cc1f8c01a59d47a8882e0291458dd4240e73b8 ] || { echo "old tag is not 85cc1f8"; exit 1; }
           mkdir -p /tmp/up
           curl -sfL -o /tmp/up/old-app.apk https://github.com/MtndaleRedneck/Zephyr/releases/download/zephyr-android-v1.5.0/Zephyr-Android-1.5.0.apk
           echo "b4230632816f1cb39b669f5d111debfec1c9a4f894b4a709a581225528ebe0aa  /tmp/up/old-app.apk" | sha256sum -c
@@ -235,14 +235,14 @@ jobs:
           trap 'rm -f "$RUNNER_TEMP/release.keystore"' EXIT
           printf '%s' "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           export KEYSTORE_FILE="$RUNNER_TEMP/release.keystore"
-          cp new/android/src/androidTest/java/com/bingemote/ZephyrUpgradeFixtureTest.kt old/android/src/androidTest/java/com/bingemote/
+          cp new/scripts/upgrade-old-fixture/ZephyrUpgradeFixtureTest.kt old/android/src/androidTest/java/com/bingemote/
           cp new/android/src/androidTest/java/com/bingemote/UpgradeConnectionTest.kt old/android/src/androidTest/java/com/bingemote/
           # The 1.5.0 tag has no testBuildType switch: add the same one-line switch to the CI checkout of the tag only (not committed).
           sed -i 's|^    compileSdk = 35$|    compileSdk = 35\n    testBuildType = "release"|' old/android/build.gradle.kts
           grep -q 'testBuildType = "release"' old/android/build.gradle.kts
           (cd old && ./gradlew --no-daemon -q assembleReleaseAndroidTest)
           cp old/android/build/outputs/apk/androidTest/release/*.apk /tmp/up/old-test.apk
-          cp new/android/src/androidTest/java/com/bingemote/ZephyrUpgradeFixtureTest.kt old16/android/src/androidTest/java/com/bingemote/
+          cp new/scripts/upgrade-old-fixture/ZephyrUpgradeFixtureTest.kt old16/android/src/androidTest/java/com/bingemote/
           cp new/android/src/androidTest/java/com/bingemote/UpgradeConnectionTest.kt old16/android/src/androidTest/java/com/bingemote/
           # The 1.8.0 tag already switches testBuildType on -PsignedUpgradeTest.
           (cd old16 && ./gradlew --no-daemon -q -PsignedUpgradeTest assembleReleaseAndroidTest)
