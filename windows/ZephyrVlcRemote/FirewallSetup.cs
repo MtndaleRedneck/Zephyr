@@ -185,7 +185,7 @@ internal static class FirewallSetup
         var ok = ConfirmDialog.Ask(null,
             "One Windows permission, then setup is done. " +
             "Zephyr VLC Remote needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. " +
-            "It adds three firewall rules for home (Private) networks only - one for the phone connection, one for phone discovery, and one that opens VLC's own remote on Private networks - plus the listen permission for the phone connection.",
+            "It adds firewall rules for the phone connection and for phone discovery, for home (Private) networks and for a Wi-Fi Windows calls Public, in both cases only for devices on the same local network, plus one that opens VLC's own remote on Private networks only, and the listen permission for the phone connection.",
             "Continue");
         if (!ok)
         {

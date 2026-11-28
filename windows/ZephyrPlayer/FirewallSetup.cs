@@ -597,7 +597,7 @@ namespace ZephyrPlayer
             if (!Explain(
                 "One Windows permission, then setup is done. " +
                 "Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. " +
-                "It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection. It also creates this PC's private security certificate, so the connection between your phone and this PC is encrypted.",
+                "It adds firewall rules for the phone connection and for phone discovery, for home (Private) networks and for a Wi-Fi Windows calls Public, in both cases only for devices on the same local network, plus the listen permission for the phone connection. It also creates this PC's private security certificate, so the connection between your phone and this PC is encrypted.",
                 "Continue"))
             {
                 Note("No problem - setup will be offered again next time you open Zephyr Player.");
@@ -792,7 +792,7 @@ namespace ZephyrPlayer
                 var dlg = DarkDialog(
                     note
                         ? "Setup did not finish, so the phone cannot reach this PC yet. Zephyr Player will now close and offer to set up again next time you open it."
-                        : "One Windows permission, then setup is done. Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. It adds two firewall rules for home (Private) networks only - one for the phone connection and one for phone discovery - plus the listen permission for the phone connection.",
+                        : "One Windows permission, then setup is done. Zephyr Player needs to let your phone reach this PC on your home network, so Windows will now ask for administrator permission once. It adds firewall rules for the phone connection and for phone discovery, for home (Private) networks and for a Wi-Fi Windows calls Public, in both cases only for devices on the same local network, plus the listen permission for the phone connection.",
                     note ? "OK" : "Continue",
                     note ? null : "Cancel",
                     () => { });

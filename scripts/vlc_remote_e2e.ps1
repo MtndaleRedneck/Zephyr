@@ -314,8 +314,9 @@ Assert-HelperFirewallRules $exe
 # headless here.
 Write-Host "== earlier-build rules are left as found and reported, never rewritten =="
 # Plant what 1.x builds left (harness fixtures, not product output): an exe-scoped TCP rule without LocalSubnet, a 1.x helper rule, and the broad plain-http Everyone grant on the OLD port.
+$exeFull = (Resolve-Path $exe).Path   # netsh stores/validates the program path as given; the fixture uses the full path like the product does (hypothesis for the earlier RED, not an established cause)
 # Planted-fixture output is shown (not swallowed) so a missing fixture is visible in the log, and read back by exact DisplayName BEFORE setup runs.
-netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=TCP localport=8492 program="$exe" profile=private
+netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=TCP localport=8492 program="$exeFull" profile=private
 Write-Host "fixture add rule 'Zephyr VLC Remote' exit $LASTEXITCODE"
 netsh advfirewall firewall add rule name="Zephyr VLC Remote Helper" dir=in action=allow protocol=TCP localport=8492 profile=private
 Write-Host "fixture add rule 'Zephyr VLC Remote Helper' exit $LASTEXITCODE"
