@@ -271,7 +271,7 @@ namespace ZephyrPlayer
             var text = FirewallSetup.LastReadFailed
                 ? "Windows Firewall settings could not be read on this PC, so Zephyr cannot check its setup right now. A restart of Windows usually fixes the read."
                 : current
-                    ? "Zephyr's firewall setup is in place for home (Private) networks. Windows is treating this Wi-Fi as public, and Zephyr does not change that. If this is your home Wi-Fi, you can set it to Private in Windows Settings, under Network & internet."
+                    ? "Zephyr's firewall setup is in place. Keep your phone and this PC on the same Wi-Fi."
                     : "Zephyr's firewall setup is not complete. Quit Zephyr from the tray icon and open it again: it will offer the setup.";
             FirewallCheckResult?.Invoke(text);
             var dlg = FirewallSetup.NoteWindow(text, "Firewall setup");
