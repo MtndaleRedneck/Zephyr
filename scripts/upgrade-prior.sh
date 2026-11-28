@@ -25,10 +25,15 @@ ANR_ALLOW="com.google.android.apps.nexuslauncher com.android.systemui"
 run() {
   adb logcat -b all -c 2>/dev/null || adb logcat -c
   adb shell rm -rf /sdcard/Android/data/$PKG/files/verify-fail-hierarchy.xml /sdcard/Android/data/$PKG/files/verify-fail-window.txt /sdcard/Android/data/$PKG/files/verify-fail.png 2>/dev/null || true
+  adb shell 'rm -f /sdcard/Android/data/'"$PKG"'/files/bm-andialog-upgrade-verify-* /sdcard/Android/data/'"$PKG"'/files/bm-dismissed-dialogs.txt' 2>/dev/null || true
   adb shell am instrument -w -e class "$1" $TESTPKG/$RUNNER 2>&1 | tee "instrument-results/$2.txt"
   # Failure-time evidence written by the fixture (screenshot, accessibility tree, dumpsys window). Diagnostic only: never changes a verdict.
   mkdir -p "instrument-results/$2-device"
   for f in verify-fail.png verify-fail-hierarchy.xml verify-fail-window.txt; do
+    adb pull "/sdcard/Android/data/$PKG/files/$f" "instrument-results/$2-device/$f" >/dev/null 2>&1 || true
+  done
+  # Evidence of every tolerated launcher ANR dialog (written BEFORE its tap; the test fails before tapping if it cannot be written).
+  for f in $(adb shell ls /sdcard/Android/data/$PKG/files/ 2>/dev/null | tr -d '\r' | grep -E '^(bm-andialog-upgrade-verify-|bm-dismissed-dialogs)' || true); do
     adb pull "/sdcard/Android/data/$PKG/files/$f" "instrument-results/$2-device/$f" >/dev/null 2>&1 || true
   done
   local raw="instrument-results/$2-rawlog.txt" sys="instrument-results/$2-syslog.txt" rc

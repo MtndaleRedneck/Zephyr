@@ -114,17 +114,55 @@ class ZephyrUpgradeFixtureTest {
     // nothing here (context lookup, files dir, IO) can throw past the caller; the assert stays outside, in verify().
     private val taps = AnrDialogGate.Taps()
 
-    private fun foundDialog(device: UiDevice) = device.findObject(By.textContains("isn't responding"))?.let {
-        AnrDialogGate.Dialog(it.text, it.applicationPackage)
+    /** Null when no "isn't responding" node is on screen; a synthetic dialog the gate rejects when there is more than one candidate. */
+    private fun foundDialog(device: UiDevice): AnrDialogGate.Dialog? {
+        val nodes = device.findObjects(By.textContains("isn't responding"))
+        if (nodes.isEmpty()) return null
+        if (nodes.size > 1) return AnrDialogGate.Dialog("${nodes.size} ANR dialogs on screen", null)
+        return try { AnrDialogGate.Dialog(nodes[0].text, nodes[0].applicationPackage) }
+        catch (e: androidx.test.uiautomator.StaleObjectException) { null }
     }
 
+    /**
+     * MANDATORY evidence before any tolerated dismissal: screenshot, window hierarchy and a log line must all be written and non-empty,
+     * else this throws and the gate never reaches the tap.
+     */
     private fun captureDialog(device: UiDevice, n: Int, d: AnrDialogGate.Dialog) {
-        val dir = ctx.getExternalFilesDir(null)
+        val dir = ctx.getExternalFilesDir(null) ?: throw AssertionError("cannot capture the ANR dialog: no external files dir")
         Log.i("ZephyrUpgradeFixture", "tolerated system ANR dialog #$n: title=${d.title} pkg=${d.pkg}")
-        if (dir == null) return
-        runCatching { device.takeScreenshot(java.io.File(dir, "bm-andialog-upgrade-verify-$n-before.png")) }
-        runCatching { device.dumpWindowHierarchy(java.io.File(dir, "bm-andialog-upgrade-verify-$n-before.uix")) }
-        runCatching { java.io.File(dir, "bm-dismissed-dialogs.txt").appendText("test=upgrade-verify n=$n title=${d.title} pkg=${d.pkg}\n") }
+        val png = java.io.File(dir, "bm-andialog-upgrade-verify-$n-before.png")
+        if (!device.takeScreenshot(png) || !png.exists() || png.length() == 0L) throw AssertionError("cannot capture the ANR dialog: screenshot failed")
+        val uix = java.io.File(dir, "bm-andialog-upgrade-verify-$n-before.uix")
+        try { device.dumpWindowHierarchy(uix) } catch (e: java.io.IOException) { throw AssertionError("cannot capture the ANR dialog: hierarchy dump failed: ${e.message}") }
+        if (!uix.exists() || uix.length() == 0L) throw AssertionError("cannot capture the ANR dialog: hierarchy file empty")
+        val log = java.io.File(dir, "bm-dismissed-dialogs.txt")
+        try { log.appendText("test=upgrade-verify n=$n title=${d.title} pkg=${d.pkg}\n") } catch (e: java.io.IOException) { throw AssertionError("cannot capture the ANR dialog: log write failed: ${e.message}") }
+    }
+
+    /**
+     * Re-reads the dialog node right before the click and taps only the Wait button inside THAT dialog's own container (nearest ancestor
+     * of its title node that holds a Wait), never a global By.text("Wait"). Any stale, changed, second or ambiguous dialog throws.
+     * UiAutomator has no atomic click-if-unchanged, so a replacement in the few ms between this re-read and the click is not excluded.
+     */
+    private fun tapWaitInsideDialog(device: UiDevice, first: AnrDialogGate.Dialog) {
+        val nodes = device.findObjects(By.textContains("isn't responding"))
+        val node = nodes.firstOrNull()
+        val again = try { node?.let { AnrDialogGate.Dialog(it.text, it.applicationPackage) } }
+            catch (e: androidx.test.uiautomator.StaleObjectException) { null }
+        var container = try { node?.parent } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
+        var waits: List<androidx.test.uiautomator.UiObject2> = emptyList()
+        var depth = 0
+        while (container != null && depth < 4) {
+            waits = try { container.findObjects(By.text("Wait")) } catch (e: androidx.test.uiautomator.StaleObjectException) { emptyList() }
+            if (waits.isNotEmpty()) break
+            container = try { container.parent } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
+            depth += 1
+        }
+        val waitPkg = try { waits.firstOrNull()?.applicationPackage } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
+        AnrDialogGate.verifyBeforeClick(first, again, nodes.size, waits.size, waitPkg)
+        try { waits[0].click() } catch (e: androidx.test.uiautomator.StaleObjectException) {
+            throw AssertionError("Wait button vanished before the click")
+        }
     }
 
     private fun waitForAppWindow(device: UiDevice, budgetMs: Long): Boolean {
@@ -133,7 +171,7 @@ class ZephyrUpgradeFixtureTest {
             budgetMs = budgetMs, pollMs = 1000, taps = taps, now = { System.currentTimeMillis() },
             dialog = { foundDialog(device) },
             capture = { n, d -> captureDialog(device, n, d) },
-            tap = { device.findObject(By.text("Wait"))?.click() },
+            tap = { d -> tapWaitInsideDialog(device, d) },
             windowUp = { ms -> device.wait(Until.hasObject(sel), ms) },
         )
     }
@@ -145,7 +183,7 @@ class ZephyrUpgradeFixtureTest {
             taps = taps,
             dialog = { foundDialog(device) },
             capture = { n, d -> captureDialog(device, n, d) },
-            tap = { device.findObject(By.text("Wait"))?.click() },
+            tap = { d -> tapWaitInsideDialog(device, d) },
             hasWindow = { device.hasObject(sel) },
         )
     }

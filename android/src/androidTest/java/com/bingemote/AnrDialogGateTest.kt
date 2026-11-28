@@ -8,115 +8,128 @@ import org.junit.Test
 
 /** Positive and negative cases for the cold-open dialog gate. Pure JVM logic, run on the device runner with the other suites. */
 class AnrDialogGateTest {
-    private class Rig(val dialogs: ArrayDeque<AnrDialogGate.Dialog?>, val windowUpAtPoll: Int = Int.MAX_VALUE) {
-        var clock = 0L
-        var polls = 0
-        var tapped = 0
-        val taps = AnrDialogGate.Taps()
-        val captured = mutableListOf<Pair<Int, AnrDialogGate.Dialog>>()
-        fun run(budget: Long = 20000): Boolean = AnrDialogGate.waitForWindow(
-            budgetMs = budget, pollMs = 1000, taps = taps, now = { clock },
-            dialog = { if (dialogs.isEmpty()) null else dialogs.removeFirst() },
-            capture = { n, d -> captured.add(n to d) },
-            tap = { tapped += 1 },
-            windowUp = { ms -> polls += 1; clock += ms; polls >= windowUpAtPoll },
-        )
+    /** Runs block and returns the AssertionError it threw; fails (outside any catch) if it threw none or the message lacks [contains]. */
+    private fun expectFailure(contains: String, block: () -> Unit): AssertionError {
+        require(contains.isNotEmpty())
+        var thrown: AssertionError? = null
+        try { block() } catch (e: AssertionError) { thrown = e }
+        if (thrown == null) fail("expected an AssertionError containing '$contains', none was thrown")
+        assertTrue("message was: ${thrown!!.message}", thrown.message!!.contains(contains))
+        return thrown
     }
+
     private val launcher = AnrDialogGate.Dialog("Pixel Launcher isn't responding", "android")
+    private val appAnr = AnrDialogGate.Dialog("Zephyr isn't responding", "android")
+
+    private class Rig(dialogs: List<AnrDialogGate.Dialog?>, val windowUpAtPoll: Int = Int.MAX_VALUE) {
+        val dialogs = ArrayDeque(dialogs)
+        val taps = AnrDialogGate.Taps()
+        var clock = 0L; var polls = 0; var tapped = 0; var queries = 0
+        val events = mutableListOf<String>()
+        var captureFails = false
+        var tapFails = false
+        fun nextDialog() = if (dialogs.isEmpty()) null else dialogs.removeFirst()
+        fun capture(n: Int, d: AnrDialogGate.Dialog) { events.add("capture$n"); if (captureFails) throw AssertionError("cannot capture") }
+        fun tap(d: AnrDialogGate.Dialog) { events.add("tap"); if (tapFails) throw AssertionError("tap failed"); tapped += 1 }
+        fun wait(budget: Long = 20000): Boolean = AnrDialogGate.waitForWindow(
+            budgetMs = budget, pollMs = 1000, taps = taps, now = { clock }, dialog = ::nextDialog, capture = ::capture, tap = ::tap,
+            windowUp = { ms -> polls += 1; clock += ms; polls >= windowUpAtPoll })
+        fun persists(hasWindow: () -> Boolean) = AnrDialogGate.persists(
+            taps = taps, dialog = ::nextDialog, capture = ::capture, tap = ::tap, hasWindow = { queries += 1; hasWindow() })
+    }
 
     @Test fun classifierToleratesOnlyTheExactDialog() {
         assertEquals(AnrDialogGate.Verdict.TOLERATE, AnrDialogGate.classify("Pixel Launcher isn't responding", "android"))
         for ((t, p) in listOf(
-            "Zephyr isn't responding" to "android",
-            "Pixel Launcher isn't responding" to "com.zephyr.remote",
-            "Pixel Launcher isn't responding" to null,
-            null to "android",
-            "System UI isn't responding" to "android",
-            "pixel launcher isn't responding" to "android",
-            "Pixel Launcher isn't responding " to "android",
-            "" to "",
+            "Zephyr isn't responding" to "android", "Pixel Launcher isn't responding" to "com.zephyr.remote",
+            "Pixel Launcher isn't responding" to null, null to "android", "System UI isn't responding" to "android",
+            "pixel launcher isn't responding" to "android", "Pixel Launcher isn't responding " to "android", "" to "",
+            "2 ANR dialogs on screen" to null,
         )) assertEquals("$t/$p", AnrDialogGate.Verdict.REJECT, AnrDialogGate.classify(t, p))
     }
 
-    @Test fun noDialogAndWindowUpPassesWithoutATap() {
-        val r = Rig(ArrayDeque(), windowUpAtPoll = 1)
-        assertTrue(r.run()); assertEquals(0, r.tapped); assertTrue(r.captured.isEmpty())
+    // Arrival wait
+    @Test fun noDialogAndWindowUpPassesWithoutATap() { val r = Rig(emptyList(), 1); assertTrue(r.wait()); assertEquals(emptyList<String>(), r.events) }
+    @Test fun toleratedDialogIsCapturedThenTappedInThatOrderThenWindowPasses() {
+        val r = Rig(listOf(launcher), 2); assertTrue(r.wait()); assertEquals(listOf("capture1", "tap"), r.events)
     }
-
-    @Test fun toleratedDialogIsCapturedThenTappedThenWindowPasses() {
-        val r = Rig(ArrayDeque(listOf(launcher)), windowUpAtPoll = 2)
-        assertTrue(r.run()); assertEquals(1, r.tapped); assertEquals(1, r.captured.size); assertEquals(1, r.captured[0].first)
+    @Test fun appAnrDialogThrowsBeforeAnyCaptureOrTap() {
+        val r = Rig(listOf(appAnr), 1); expectFailure("not dismissed") { r.wait() }; assertEquals(emptyList<String>(), r.events)
     }
-
-    @Test fun appOwnedAnrDialogThrowsAndIsNeverTapped() {
-        val r = Rig(ArrayDeque(listOf(AnrDialogGate.Dialog("Zephyr isn't responding", "android"))), windowUpAtPoll = 1)
-        try { r.run(); fail("must throw") } catch (e: AssertionError) { assertTrue(e.message!!.contains("not dismissed")) }
-        assertEquals(0, r.tapped)
+    @Test fun rightTitleFromAnotherPackageThrowsBeforeAnyCaptureOrTap() {
+        val r = Rig(listOf(AnrDialogGate.Dialog("Pixel Launcher isn't responding", "com.zephyr.remote")))
+        expectFailure("not dismissed") { r.wait() }; assertEquals(emptyList<String>(), r.events)
     }
-
-    @Test fun rightTitleFromAnotherPackageThrowsAndIsNeverTapped() {
-        val r = Rig(ArrayDeque(listOf(AnrDialogGate.Dialog("Pixel Launcher isn't responding", "com.zephyr.remote"))))
-        try { r.run(); fail("must throw") } catch (e: AssertionError) { }
-        assertEquals(0, r.tapped)
+    @Test fun nullPackageAndNullTitleAreRejected() {
+        expectFailure("not dismissed") { Rig(listOf(AnrDialogGate.Dialog("Pixel Launcher isn't responding", null))).wait() }
+        expectFailure("not dismissed") { Rig(listOf(AnrDialogGate.Dialog(null, "android"))).wait() }
     }
-
+    @Test fun multipleCandidateDialogsMarkerIsRejectedWithoutTap() {
+        val r = Rig(listOf(AnrDialogGate.Dialog("2 ANR dialogs on screen", null)))
+        expectFailure("not dismissed") { r.wait() }; assertEquals(0, r.tapped)
+    }
+    @Test fun failedCaptureThrowsBeforeTheTap() {
+        val r = Rig(listOf(launcher), 1); r.captureFails = true
+        expectFailure("cannot capture") { r.wait() }; assertEquals(listOf("capture1"), r.events); assertEquals(0, r.tapped)
+    }
+    @Test fun failedTapThrowsAndTheWindowIsNeverQueriedAfterIt() {
+        val r = Rig(listOf(launcher), 1); r.tapFails = true
+        expectFailure("tap failed") { r.wait() }; assertEquals(0, r.polls)
+    }
     @Test fun sixthTapThrows() {
-        val r = Rig(ArrayDeque(List(10) { launcher }))
-        try { r.run(); fail("must throw") } catch (e: AssertionError) { assertTrue(e.message!!.contains("keeps returning")) }
-        assertEquals(AnrDialogGate.MAX_TAPS, r.tapped)
+        val r = Rig(List(10) { launcher })
+        expectFailure("keeps returning") { r.wait() }; assertEquals(AnrDialogGate.MAX_TAPS, r.tapped)
     }
-
     @Test fun missingWindowStillFailsAfterTheSameBudgetEvenWithDialogsTolerated() {
-        val r = Rig(ArrayDeque(listOf(launcher, launcher)), windowUpAtPoll = Int.MAX_VALUE)
-        assertFalse(r.run(20000))
-        assertEquals(2, r.tapped)
+        val r = Rig(listOf(launcher, launcher)); assertFalse(r.wait(20000)); assertEquals(2, r.tapped)
         assertTrue("polled until the deadline: ${r.polls}", r.polls in 20..21)
     }
+    @Test fun tapsDoNotExtendTheDeadline() { val r = Rig(List(5) { launcher }); assertFalse(r.wait(8000)); assertTrue("polls=${r.polls}", r.polls in 8..9) }
 
-    @Test fun tapsDoNotExtendTheDeadline() {
-        val r = Rig(ArrayDeque(List(5) { launcher }))
-        assertFalse(r.run(8000))
-        assertTrue("polls=${r.polls}", r.polls in 8..9)
-    }
-
-    // Persistence check (the second original assertion): immediate, no grace.
-    private fun persists(rig: Rig, hasWindow: () -> Boolean) = AnrDialogGate.persists(
-        taps = rig.taps, dialog = { if (rig.dialogs.isEmpty()) null else rig.dialogs.removeFirst() },
-        capture = { n, d -> rig.captured.add(n to d) }, tap = { rig.tapped += 1 }, hasWindow = hasWindow)
-
+    // Persistence check (second original assertion): immediate, no grace
     @Test fun persistenceWithWindowPresentNeedsNoDialogCheckAndNoTap() {
-        val r = Rig(ArrayDeque(listOf(launcher)))
-        assertTrue(persists(r) { true }); assertEquals(0, r.tapped); assertEquals(1, r.dialogs.size)
+        val r = Rig(listOf(launcher)); assertTrue(r.persists { true }); assertEquals(0, r.tapped); assertEquals(1, r.dialogs.size)
     }
-
     @Test fun persistenceNoDialogMeansTheFirstFailedQueryIsFinal() {
-        val r = Rig(ArrayDeque()); var queries = 0
-        assertFalse(persists(r) { queries += 1; false })
-        assertEquals(1, queries); assertEquals(0, r.tapped); assertEquals(0L, r.clock)
+        val r = Rig(emptyList()); assertFalse(r.persists { false }); assertEquals(1, r.queries); assertEquals(0, r.tapped); assertEquals(0L, r.clock)
     }
-
-    @Test fun persistenceToleratedDialogIsTappedThenQueriedAgain() {
-        val r = Rig(ArrayDeque(listOf(launcher))); var queries = 0
-        assertTrue(persists(r) { queries += 1; queries >= 2 })
-        assertEquals(1, r.tapped); assertEquals(2, queries); assertEquals(1, r.captured.size)
+    @Test fun persistenceToleratedDialogIsCapturedTappedThenQueriedAgain() {
+        val r = Rig(listOf(launcher)); assertTrue(r.persists { r.queries >= 2 }); assertEquals(listOf("capture1", "tap"), r.events); assertEquals(2, r.queries)
     }
-
-    @Test fun persistenceToleratedDialogButWindowStillMissingFails() {
-        val r = Rig(ArrayDeque(listOf(launcher)))
-        assertFalse(persists(r) { false }); assertEquals(1, r.tapped)
+    @Test fun persistenceToleratedDialogButWindowStillMissingFails() { val r = Rig(listOf(launcher)); assertFalse(r.persists { false }); assertEquals(1, r.tapped) }
+    @Test fun persistenceForeignDialogThrowsWithoutCaptureOrTap() {
+        val r = Rig(listOf(appAnr)); expectFailure("not dismissed") { r.persists { false } }; assertEquals(emptyList<String>(), r.events)
     }
-
-    @Test fun persistenceForeignDialogThrowsWithoutTap() {
-        val r = Rig(ArrayDeque(listOf(AnrDialogGate.Dialog("Zephyr isn't responding", "android"))))
-        try { persists(r) { false }; fail("must throw") } catch (e: AssertionError) { }
-        assertEquals(0, r.tapped)
+    @Test fun persistenceFailedTapDoesNotEarnAnotherQuery() {
+        val r = Rig(listOf(launcher)); r.tapFails = true
+        expectFailure("tap failed") { r.persists { false } }; assertEquals(1, r.queries)
     }
-
+    @Test fun persistenceFailedCaptureThrowsBeforeTheTap() {
+        val r = Rig(listOf(launcher)); r.captureFails = true
+        expectFailure("cannot capture") { r.persists { false } }; assertEquals(0, r.tapped); assertEquals(1, r.queries)
+    }
     @Test fun persistenceSharesTheTapCapWithTheArrivalWait() {
-        val r = Rig(ArrayDeque(List(AnrDialogGate.MAX_TAPS) { launcher }), windowUpAtPoll = AnrDialogGate.MAX_TAPS)
-        assertTrue(r.run()); assertEquals(AnrDialogGate.MAX_TAPS, r.tapped)
+        val r = Rig(List(AnrDialogGate.MAX_TAPS) { launcher }, windowUpAtPoll = AnrDialogGate.MAX_TAPS)
+        assertTrue(r.wait()); assertEquals(AnrDialogGate.MAX_TAPS, r.tapped)
         r.dialogs.addLast(launcher)
-        try { persists(r) { false }; fail("sixth shared tap must throw") } catch (e: AssertionError) { assertTrue(e.message!!.contains("keeps returning")) }
-        assertEquals(AnrDialogGate.MAX_TAPS, r.tapped)
+        expectFailure("keeps returning") { r.persists { false } }; assertEquals(AnrDialogGate.MAX_TAPS, r.tapped)
+    }
+
+    // The last gate before the click (race and replacement cases)
+    private fun verify(again: AnrDialogGate.Dialog? = launcher, nodes: Int = 1, waits: Int = 1, waitPkg: String? = "android", first: AnrDialogGate.Dialog = launcher) =
+        AnrDialogGate.verifyBeforeClick(first, again, nodes, waits, waitPkg)
+    @Test fun verifyAcceptsTheUnchangedExactDialog() { verify() }
+    @Test fun verifyRejectsAnAppAnrDialogThatReplacedIt() { expectFailure("changed") { verify(again = appAnr) } }
+    @Test fun verifyRejectsTheSameTitleFromAnotherPackageNow() { expectFailure("changed") { verify(again = AnrDialogGate.Dialog("Pixel Launcher isn't responding", "com.zephyr.remote")) } }
+    @Test fun verifyRejectsADialogThatVanished() { expectFailure("vanished") { verify(again = null) } }
+    @Test fun verifyRejectsAFirstReadThatWasNotTolerated() { expectFailure("not a tolerated") { verify(first = appAnr, again = appAnr) } }
+    @Test fun verifyRejectsTwoDialogsOnScreen() { expectFailure("exactly one ANR dialog") { verify(nodes = 2) } }
+    @Test fun verifyRejectsNoWaitOrTwoWaitsInsideTheDialog() {
+        expectFailure("exactly one Wait") { verify(waits = 0) }
+        expectFailure("exactly one Wait") { verify(waits = 2) }
+    }
+    @Test fun verifyRejectsAWaitNotOwnedByAndroid() {
+        expectFailure("not owned") { verify(waitPkg = "com.zephyr.remote") }
+        expectFailure("not owned") { verify(waitPkg = null) }
     }
 }

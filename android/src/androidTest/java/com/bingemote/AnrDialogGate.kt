@@ -34,7 +34,7 @@ object AnrDialogGate {
         now: () -> Long,
         dialog: () -> Dialog?,
         capture: (tapNumber: Int, d: Dialog) -> Unit,
-        tap: () -> Unit,
+        tap: (Dialog) -> Unit,
         windowUp: (waitMs: Long) -> Boolean,
     ): Boolean {
         val end = now() + budgetMs
@@ -55,7 +55,7 @@ object AnrDialogGate {
         taps: Taps,
         dialog: () -> Dialog?,
         capture: (tapNumber: Int, d: Dialog) -> Unit,
-        tap: () -> Unit,
+        tap: (Dialog) -> Unit,
         hasWindow: () -> Boolean,
     ): Boolean {
         while (true) {
@@ -65,13 +65,30 @@ object AnrDialogGate {
         }
     }
 
-    private fun dismiss(d: Dialog, taps: Taps, capture: (Int, Dialog) -> Unit, tap: () -> Unit) {
+    private fun dismiss(d: Dialog, taps: Taps, capture: (Int, Dialog) -> Unit, tap: (Dialog) -> Unit) {
         if (classify(d.title, d.pkg) == Verdict.REJECT) {
             throw AssertionError("unexpected ANR dialog during cold open, not dismissed: title=${d.title} pkg=${d.pkg}")
         }
         taps.count += 1
         if (taps.count > MAX_TAPS) throw AssertionError("Pixel Launcher ANR dialog keeps returning (taps=${taps.count})")
         capture(taps.count, d)
-        tap()
+        tap(d)
+    }
+
+    /**
+     * Last gate before the click, fed with a RE-READ taken immediately before it: the same dialog node's title and package now
+     * (null if it vanished), how many "isn't responding" nodes are on screen, and the Wait buttons found INSIDE that dialog's own
+     * container. Throws unless it is still exactly the classified dialog, alone on screen, with exactly one Wait owned by "android".
+     * An app ANR dialog (also served by "android") that replaced or joined it fails here.
+     */
+    fun verifyBeforeClick(first: Dialog, again: Dialog?, dialogNodeCount: Int, waitCount: Int, waitPackage: String?) {
+        if (again == null) throw AssertionError("ANR dialog vanished before the tap")
+        if (classify(first.title, first.pkg) != Verdict.TOLERATE) throw AssertionError("not a tolerated dialog: title=${first.title} pkg=${first.pkg}")
+        if (again.title != first.title || again.pkg != first.pkg) {
+            throw AssertionError("ANR dialog changed before the tap: was title=${first.title} pkg=${first.pkg}, now title=${again.title} pkg=${again.pkg}")
+        }
+        if (dialogNodeCount != 1) throw AssertionError("expected exactly one ANR dialog on screen, found $dialogNodeCount")
+        if (waitCount != 1) throw AssertionError("expected exactly one Wait button inside the dialog, found $waitCount")
+        if (waitPackage != TOLERATED_PACKAGE) throw AssertionError("Wait button not owned by $TOLERATED_PACKAGE: $waitPackage")
     }
 }
