@@ -5,6 +5,7 @@ import com.bingemote.*
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -155,5 +156,100 @@ class ZephyrFollowWiringTest {
         r.store.selectedSource = Source.ZEPHYR
         r.remote.onZephyrAuthenticatedPoll(target(r), System.currentTimeMillis())
         assertNull(r.remote.zephyrMovedTo)
+    }
+
+    // ---- source switch through the production selectSource (MediaControls.sync only stops a service when lock-screen controls are off) ----
+    @Test fun aSourceSwitchClearsAShowingAPendingNoticeAndThePairAgainHint() {
+        val r = rig("sw"); val (before, out) = move(r, listOf(h("192.168.1.77")))
+        r.remote.applyZephyrMove(before, out)
+        r.remote.onZephyrAuthenticatedPoll(target(r), System.currentTimeMillis())
+        assertEquals("Office PC", r.remote.zephyrMovedTo)
+        r.remote.selectSource(Source.VLC)
+        assertNull(r.remote.zephyrMovedTo)
+        // pending (not yet shown) is dropped too
+        r.remote.selectSource(Source.ZEPHYR)
+        val (b2, o2) = move(r, listOf(h("192.168.1.88")))
+        r.remote.applyZephyrMove(b2, o2)
+        r.remote.selectSource(Source.VLC); r.remote.selectSource(Source.ZEPHYR)
+        r.remote.onZephyrAuthenticatedPoll(target(r), System.currentTimeMillis())
+        assertNull(r.remote.zephyrMovedTo)
+        // the pair-again hint too
+        val (b3, o3) = move(r, listOf(h("192.168.1.66")), verifies = false)
+        r.remote.applyZephyrMove(b3, o3); assertEquals("Office PC", r.remote.zephyrPairAgainFor)
+        r.remote.selectSource(Source.VLC)
+        assertNull(r.remote.zephyrPairAgainFor)
+    }
+
+    // ---- cancellation through the production attempt body (zephyrAttempt), real store, stub network ----
+    private fun cancelAfter(r: Rig, jobRef: () -> kotlinx.coroutines.Job): ZephyrMove.Port {
+        val real = r.store.zephyrMovePort()
+        return object : ZephyrMove.Port {
+            override fun snapshot() = real.snapshot()
+            override fun commit(v: SecureHttp.VerifiedAddress) = real.commit(v).also { jobRef().cancel() }
+        }
+    }
+
+    @Test fun aCancelAfterTheWriteStartedLeavesWholeNewRecordButNeverReachesTheMainApplyBlock() = kotlinx.coroutines.runBlocking {
+        val r = rig("cx1"); r.remote.zephyrNoteFailure(); r.remote.zephyrNoteFailure()
+        lateinit var job: kotlinx.coroutines.Job
+        job = kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Default, start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            r.remote.zephyrAttempt(cancelAfter(r) { job }, pingSaved = { false }, discover = { listOf(h("192.168.1.77")) }, verify = { _, _, _ -> true },
+                main = kotlin.coroutines.EmptyCoroutineContext)
+        }
+        job.start(); job.join()
+        assertTrue(job.isCancelled)
+        assertEquals("192.168.1.77", target(r).host)                       // the write was atomic and completed
+        assertEquals(listOf(tok, pin), listOf(target(r).token, target(r).pinHex))
+        assertEquals(2, r.remote.zephyrFailureCount)                        // apply never ran: no reset
+        r.remote.onZephyrAuthenticatedPoll(target(r), System.currentTimeMillis())
+        assertNull(r.remote.zephyrMovedTo)                                  // and no notice was armed
+    }
+
+    @Test fun aCancelDuringTheProbeLeavesTheStoreUntouchedAndAnUncancelledRunIsApplied() = kotlinx.coroutines.runBlocking {
+        val r = rig("cx2"); r.remote.zephyrNoteFailure(); r.remote.zephyrNoteFailure()
+        val before = r.store.zephyrTarget()!!
+        lateinit var job: kotlinx.coroutines.Job
+        job = kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Default, start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            r.remote.zephyrAttempt(r.store.zephyrMovePort(), pingSaved = { false }, discover = { listOf(h("192.168.1.77")) },
+                verify = { _, _, _ -> job.cancel(); true }, main = kotlin.coroutines.EmptyCoroutineContext)
+        }
+        job.start(); job.join()
+        assertTrue(job.isCancelled)
+        assertTrue(before.same(r.store.zephyrTarget()))                    // byte-for-byte the same tuple, nothing written
+        assertEquals(2, r.remote.zephyrFailureCount)
+        // control: the same attempt without a cancel is applied
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.Default) {
+            r.remote.zephyrAttempt(r.store.zephyrMovePort(), pingSaved = { false }, discover = { listOf(h("192.168.1.77")) }, verify = { _, _, _ -> true },
+                main = kotlin.coroutines.EmptyCoroutineContext)
+        }.join()
+        assertEquals("192.168.1.77", target(r).host); assertEquals(0, r.remote.zephyrFailureCount)
+    }
+
+    // ---- ABA: an identical stored record never produces a spurious second notice; legitimate future moves still do ----
+    @Test fun anIdenticalStoredRecordAfterAShownNoticeNeverAnnouncesAgainButARealLaterMoveDoes() {
+        val r = rig("aba")
+        val snap0 = r.store.zephyrMovePort().snapshot()!!
+        val (b1, o1) = move(r, listOf(h("192.168.1.77")))            // A -> B
+        r.remote.applyZephyrMove(b1, o1)
+        val t0 = System.currentTimeMillis()
+        r.remote.onZephyrAuthenticatedPoll(target(r), t0); assertEquals("Office PC", r.remote.zephyrMovedTo)
+        r.remote.onZephyrAuthenticatedPoll(target(r), t0 + 11_000); assertNull(r.remote.zephyrMovedTo)
+        // (a) a stale replay of the first verified address (record A) is refused by the full-record compare: nothing written, no notice
+        val stale = r.store.zephyrMovePort().commit(SecureHttp.VerifiedAddress(snap0.credential.pcId, "192.168.1.77", 47823, snap0.raw))
+        assertTrue(stale === ZephyrMove.Commit.Refused)
+        r.remote.applyZephyrMove(target(r), ZephyrMove.Outcome.Refused)
+        // (b) the record already IS B: an identical write is UNCHANGED (committed=false), arms nothing
+        val cur = r.store.zephyrMovePort().snapshot()!!
+        val same = r.store.zephyrMovePort().commit(SecureHttp.VerifiedAddress(cur.credential.pcId, "192.168.1.77", 47823, cur.raw)) as ZephyrMove.Commit.Written
+        assertFalse(same.committed)
+        r.remote.applyZephyrMove(target(r), ZephyrMove.Outcome.Moved(same.credential, "Office PC", false))
+        r.remote.onZephyrAuthenticatedPoll(target(r), t0 + 20_000)
+        assertNull("no second notice for the identical stored record", r.remote.zephyrMovedTo)
+        // (c) legitimate later moves B -> C -> B each announce once after their own authenticated poll
+        val (b2, o2) = move(r, listOf(h("192.168.1.88"))); r.remote.applyZephyrMove(b2, o2)
+        r.remote.onZephyrAuthenticatedPoll(target(r), t0 + 30_000); assertEquals("Office PC", r.remote.zephyrMovedTo)
+        val (b3, o3) = move(r, listOf(h("192.168.1.77"))); r.remote.applyZephyrMove(b3, o3)
+        r.remote.onZephyrAuthenticatedPoll(target(r), t0 + 45_000); assertEquals("Office PC", r.remote.zephyrMovedTo)
+        assertEquals("192.168.1.77", target(r).host)
     }
 }

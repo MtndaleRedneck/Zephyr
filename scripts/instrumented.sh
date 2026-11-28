@@ -74,6 +74,7 @@ com.bingemote.AutomaticOnlySetupTest
 com.bingemote.ModernizationUiTest
 com.bingemote.RefinementsUiTest
 com.bingemote.ReleaseIdentityTest
+com.bingemote.ZephyrFollowTlsTest
 "
 
 # Clear only our own FailureDumpRule/test-failure outputs so anything pulled later belongs to THIS run.

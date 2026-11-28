@@ -291,12 +291,25 @@ class RemoteState(
 
     private fun zephyrRediscover() {
         // Back off and one-in-flight through the atomic admission; its completion handler is the only release.
-        zephyrAdmission.launchIfAdmitted(scope, Dispatchers.IO) {
-            // The saved token never goes to a discovered host: the handshake carries no application bytes, only the stored key decides (ZephyrMove).
-            val before = store.zephyrTarget() ?: return@launchIfAdmitted
-            val out = ZephyrMove.attempt(store.zephyrMovePort(), discover = { ZephyrClient.discoverPlayers(3000) }, ensureActive = { ensureActive() })
-            withContext(Dispatchers.Main) { applyZephyrMove(before, out) }
-        }
+        zephyrAdmission.launchIfAdmitted(scope, Dispatchers.IO) { zephyrAttempt() }
+    }
+
+    /** The body of one admitted attempt (the production code path; the parameters default to production and exist so a test can drive it with a stub port and no network).
+     *  The saved token never goes to a discovered host: the handshake carries no application bytes, only the stored key decides (ZephyrMove).
+     *  A cancel seen after the probe stops before the store is touched; a cancelled coroutine never reaches the Main apply block (withContext checks cancellation on entry),
+     *  so a write that already started is whole old or whole new and raises no notice and no counter change. */
+    internal suspend fun zephyrAttempt(
+        port: ZephyrMove.Port = store.zephyrMovePort(),
+        pingSaved: (ZephyrCredential) -> Boolean = { c -> ZephyrMove.handshakeMatches(c, c.host, c.port) },
+        discover: () -> List<DiscoveredHelper> = { ZephyrClient.discoverPlayers(3000) },
+        verify: (ZephyrCredential, String, Int) -> Boolean = { c, h, p -> ZephyrMove.handshakeMatches(c, h, p) },
+        addressOk: (String) -> Boolean = HelperRediscover::isPrivateLiteral,
+        main: kotlin.coroutines.CoroutineContext = Dispatchers.Main,
+    ) {
+        val before = store.zephyrTarget() ?: return
+        val ctx = kotlin.coroutines.coroutineContext
+        val out = ZephyrMove.attempt(port, pingSaved, discover, verify, addressOk, ensureActive = { ctx.ensureActive() })
+        withContext(main) { applyZephyrMove(before, out) }
     }
 
     /** Main thread: the effects of one attempt. [before] is the target the attempt started from. */
