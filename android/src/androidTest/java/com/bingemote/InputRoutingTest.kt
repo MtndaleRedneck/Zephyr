@@ -32,19 +32,19 @@ class InputRoutingTest {
 
     @Before fun setUp() {
         zephyr = TlsFakePlayer.server()
-        helper = MockWebServer(); helper.start()
+        helper = TlsFakePlayer.server()   // the helper is HTTPS-only: a TLS fake, paired by its key
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         store = Store(context)
         // Isolate: a real paired state must not leak in from an earlier class.
         ZephyrTestSeed.seed(store, "127.0.0.1", zephyr.port)
-        store.host = "127.0.0.1"; store.helperPort = helper.port; store.helperToken = "ht"
+        ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port)
         remote = RemoteState(context, store, kotlinx.coroutines.MainScope())
-        remote.publishAddress("127.0.0.1", helper.port, "ht")
+        remote.publishAddress("127.0.0.1", helper.port, ZephyrTestSeed.HELPER_TOKEN)
     }
 
     @After fun tearDown() {
         store.selectedSource = Source.VLC
-        ZephyrTestSeed.clear(store)
+        ZephyrTestSeed.clear(store); ZephyrTestSeed.clearHelper(store)
         zephyr.shutdown(); helper.shutdown()
     }
 
@@ -56,7 +56,7 @@ class InputRoutingTest {
         val hit = zephyr.takeRequest(3, TimeUnit.SECONDS)
         assertNotNull("zephyr never got the frame", hit)
         assertEquals("/input/move", hit!!.path)
-        assertEquals("Bearer zt", hit.getHeader("Authorization"))
+        assertEquals("Bearer ${ZephyrTestSeed.TOKEN}", hit.getHeader("Authorization"))
         assertNull("helper got traffic while Zephyr selected", helper.takeRequest(1, TimeUnit.SECONDS))
     }
 

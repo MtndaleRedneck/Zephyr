@@ -67,7 +67,7 @@ class ZephyrCaptionDeliveryTest {
                 withContext(Dispatchers.Main) { remote.pickSubtitle(2) }
                 await { pc.captionBodies.size == 1 }
                 assertTrue(pc.captionBodies[0], pc.captionBodies[0].contains("\"track\":2"))
-                assertTrue(pc.captionBodies[0], pc.captionBodies[0].contains("Bearer fixture"))
+                assertTrue(pc.captionBodies[0], pc.captionBodies[0].contains("Bearer ${ZephyrTestSeed.TOKEN}"))
             } finally { scope.cancel() }
         }
     }

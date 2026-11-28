@@ -21,6 +21,7 @@ class StoreMigrationTest {
         Store.resetZephyrRecordForTests()   // the reopen must come from storage, not the process cache
         assertEquals(token, Store(ctx).zephyrTarget()?.token)
         org.junit.Assert.assertFalse(Store(ctx).secureStoreBroken)
+        ZephyrTestSeed.clear(Store(ctx))
     }
 
     @Test
@@ -46,6 +47,9 @@ class StoreMigrationTest {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         val prefs = ctx.getSharedPreferences("settings", Context.MODE_PRIVATE)
         prefs.edit().clear().commit()
+        // Hermetic: an earlier test in this class saves a real (encrypted) Zephyr pairing that clearing "settings" does not remove.
+        // The expectation below, unpaired with an old plain token left alone, is about a genuine old install, so start from none.
+        ZephyrTestSeed.clear(Store(ctx))
         prefs.edit()
             .putString("pcName", "DESKTOP-TEST")
             .putString("host", "192.168.1.50")

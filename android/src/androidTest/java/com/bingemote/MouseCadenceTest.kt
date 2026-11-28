@@ -3,8 +3,6 @@ package com.bingemote
 import android.os.SystemClock
 import android.util.Log
 import android.view.MotionEvent
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
@@ -67,15 +65,10 @@ class MouseCadenceTest {
             .putInt("vlcPort", port)
             .putBoolean("setupDone", true)
             .apply()
-        val secrets = EncryptedSharedPreferences.create(
-            ctx, "secrets",
-            MasterKey.Builder(ctx).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-        secrets.edit().putString("vlcPassword", "rig").putString("helperToken", "rigtoken").apply()
+        // The helper is HTTPS-only: pair securely against the TLS fake below (same process/UID).
+        ZephyrTestSeed.seedHelper(Store(ctx), "127.0.0.1", port, "rig")
 
-        val server = ServerSocket(port, 50, InetAddress.getByName("127.0.0.1"))
+        val server = TlsFakePlayer.sslContext.serverSocketFactory.createServerSocket(port, 50, InetAddress.getByName("127.0.0.1"))
         val serverThread = thread { serveLoop(server) }
 
         val device = UiDevice.getInstance(instrumentation)

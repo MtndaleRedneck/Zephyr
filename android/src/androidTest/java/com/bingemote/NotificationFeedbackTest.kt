@@ -121,8 +121,9 @@ class HapticTickTest {
                 .putBoolean("haptics", haptics)
                 .putInt("skipMainSec", 5)
                 .apply()
-            Store(ctx).vlcPassword = "x"
-            Store(ctx).helperToken = ""
+            // Secure-only: the phone is configured only with a Secure helper pairing. The helper itself is not under test here (VLC is driven
+            // by the local stub), so the pairing points at a dead helper port; the VLC password is stored with the pairing as a real pairing does.
+            ZephyrTestSeed.seedHelper(Store(ctx), "127.0.0.1", deadPort(), "x")
         }
     }
 

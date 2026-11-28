@@ -41,8 +41,7 @@ class ModernizationUiTest {
             val port = HapticTickTest.deadPort()
             HapticTickTest.seedPrefs(ctx, false, port)
             val store = Store(ctx)
-            store.helperToken = "modernization-fixture"
-            store.helperPort = port
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", port, token = "b3".repeat(32))   // Secure pairing to a dead helper
             val remote = RemoteState(ctx, store, scope)
             remote.pollOnce()
             remote.vlcClosed = true

@@ -26,7 +26,7 @@ class SubtitleClientTest {
 
     private class Stub : AutoCloseable {
         val requests = CopyOnWriteArrayList<String>()
-        private val server = ServerSocket(0)
+        private val server = TlsFakePlayer.sslContext.serverSocketFactory.createServerSocket(0)   // the helper is HTTPS-only
         val port = server.localPort
         @Volatile var oldPc = false
         @Volatile var errorCode = 0
@@ -60,12 +60,13 @@ class SubtitleClientTest {
     }
     @Test fun listIsReadOnlyAndLoadSendsOpaqueIdsWithPairingToken() {
         Stub().use { stub ->
-            val listing = HelperClient.subtitleFiles("127.0.0.1", stub.port, "fixture-token")
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
+            val listing = HelperClient.subtitleFiles("127.0.0.1", stub.port, ZephyrTestSeed.HELPER_TOKEN)
             assertEquals("Movie.en.srt", listing.files.single().name)
             assertEquals(1, stub.requests.size)
             assertTrue(stub.requests.single().startsWith("GET /subtitles/list"))
-            assertTrue(stub.requests.single().contains("X-Zephyr-VLC-Remote-Token: fixture-token", true))
-            assertTrue(HelperClient.loadSubtitle("127.0.0.1",stub.port,"fixture-token",listing.mediaId,listing.files.single().id))
+            assertTrue(stub.requests.single().contains("X-Zephyr-VLC-Remote-Token: ${ZephyrTestSeed.HELPER_TOKEN}", true))
+            assertTrue(HelperClient.loadSubtitle("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN,listing.mediaId,listing.files.single().id))
             val request = stub.requests.last()
             assertTrue(request.startsWith("POST /subtitles/load"))
             assertTrue(request.contains("opaque-movie")); assertTrue(request.contains("opaque-file"))
@@ -75,9 +76,10 @@ class SubtitleClientTest {
     @Test fun oldPcFailureHidesFolderQuietlyAndKeepsExistingLoadedTracks() = runBlocking {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.oldPc = true
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store = Store(ctx);store.helperToken="fixture";store.helperPort=stub.port
+            val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
             val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try {
                 val remote = RemoteState(ctx,store,scope)
@@ -100,9 +102,10 @@ class SubtitleClientTest {
     @Test fun unavailableMessageClearsOnNextQuietFailure() = runBlocking {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.unavailableList = true
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store = Store(ctx);store.helperToken="fixture";store.helperPort=stub.port
+            val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
             val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try {
                 val remote = RemoteState(ctx,store,scope)
@@ -129,9 +132,10 @@ class SubtitleClientTest {
     @Test fun answeringPcFailureShowsListErrorAndClearsFolder() = runBlocking {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.errorCode = 503
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store = Store(ctx);store.helperToken="fixture";store.helperPort=stub.port
+            val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
             val scope = CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try {
                 val remote = RemoteState(ctx,store,scope)
@@ -149,30 +153,34 @@ class SubtitleClientTest {
     }
     @Test fun selectFallsBackOnlyForExplicit404() {
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.oldPc = true
-            assertFalse(HelperClient.selectSubtitle("127.0.0.1",stub.port,"fixture",-1))
+            assertFalse(HelperClient.selectSubtitle("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN,-1))
             stub.oldPc = false
-            assertTrue(HelperClient.selectSubtitle("127.0.0.1",stub.port,"fixture",-1))
+            assertTrue(HelperClient.selectSubtitle("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN,-1))
         }
     }
     @Test fun oversizedSubtitleResponseIsRejected() {
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.responseBytes = 524289
-            try { HelperClient.subtitleFiles("127.0.0.1",stub.port,"fixture"); fail("oversize accepted") }
+            try { HelperClient.subtitleFiles("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN); fail("oversize accepted") }
             catch (_: HelperClient.Unreachable) { }
         }
     }
 
     @Test fun delayedSelectAndErrorNeverMasqueradeAs404Fallback() {
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.delayMs = 2300
             val start=System.nanoTime()
-            assertTrue(HelperClient.selectSubtitle("127.0.0.1",stub.port,"fixture",-1))
+            assertTrue(HelperClient.selectSubtitle("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN,-1))
             assertTrue((System.nanoTime()-start)/1_000_000 >= 2000)
         }
         ServerSocket(0).use { absent ->
             val port=absent.localPort;absent.close()
-            try { HelperClient.selectSubtitle("127.0.0.1",port,"fixture",-1);fail("unreachable accepted") }
+            ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", port)   // paired, but nothing listens
+            try { HelperClient.selectSubtitle("127.0.0.1",port,ZephyrTestSeed.HELPER_TOKEN,-1);fail("unreachable accepted") }
             catch (_: Exception) { }
         }
     }
@@ -180,9 +188,10 @@ class SubtitleClientTest {
     @Test fun quietRefreshCoalescesSlowListingInsteadOfStarvingIt() = runBlocking {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.delayMs=3000
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store=Store(ctx);store.helperToken="fixture";store.helperPort=stub.port
+            val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
             val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try {
                 val remote=RemoteState(ctx,store,scope)
@@ -206,8 +215,9 @@ class SubtitleClientTest {
         val ctx=InstrumentationRegistry.getInstrumentation().targetContext
         java.io.File(ctx.filesDir,"subtitle-operations.json").delete()
         Stub().use { stub ->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store=Store(ctx);store.helperToken="fixture";store.helperPort=stub.port
+            val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
             val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try {
                 val remote=RemoteState(ctx,store,scope)
@@ -229,11 +239,12 @@ class SubtitleClientTest {
 
     @Test fun typedSubtitleRejectionDistinguishesPostMutationUnknown() {
         Stub().use {stub->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             stub.errorCode=409
-            try{HelperClient.loadSubtitle("127.0.0.1",stub.port,"fixture","movie","file");fail("rejection accepted")}
+            try{HelperClient.loadSubtitle("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN,"movie","file");fail("rejection accepted")}
             catch (_:HelperClient.SubtitleRejected){}
             stub.unknown=true
-            try{HelperClient.loadSubtitle("127.0.0.1",stub.port,"fixture","movie","file");fail("unknown accepted")}
+            try{HelperClient.loadSubtitle("127.0.0.1",stub.port,ZephyrTestSeed.HELPER_TOKEN,"movie","file");fail("unknown accepted")}
             catch (_:HelperClient.Unreachable){}
         }
     }
@@ -242,8 +253,9 @@ class SubtitleClientTest {
         val ctx=InstrumentationRegistry.getInstrumentation().targetContext
         java.io.File(ctx.filesDir,"subtitle-operations.json").delete()
         Stub().use {stub->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store=Store(ctx);store.helperToken="fixture";store.helperPort=stub.port
+            val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
             val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try {
                 val remote=RemoteState(ctx,store,scope)
@@ -275,8 +287,10 @@ class SubtitleClientTest {
         val ctx=InstrumentationRegistry.getInstrumentation().targetContext
         java.io.File(ctx.filesDir,"subtitle-operations.json").delete()
         Stub().use{stub->
+        ZephyrTestSeed.seedHelper(Store(InstrumentationRegistry.getInstrumentation().targetContext), "127.0.0.1", stub.port)
             HapticTickTest.seedPrefs(ctx,false,stub.port)
-            val store=Store(ctx);store.helperToken="lifecycle-fixture";store.helperPort=stub.port
+            val lifecycleToken="c3".repeat(32); val repairedToken="d4".repeat(32)
+            val store=Store(ctx); ZephyrTestSeed.seedHelper(store,"127.0.0.1",stub.port,token=lifecycleToken)
             val scope=CoroutineScope(SupervisorJob()+Dispatchers.Main)
             try{
                 val remote=RemoteState(ctx,store,scope)
@@ -287,12 +301,12 @@ class SubtitleClientTest {
                 val recreated=withContext(Dispatchers.Main){RemoteState(ctx,store,scope)}
                 delay(300)
                 assertTrue("in-flight marker must exist before response",recreated.subtitleOutcomeUnknown)
-                store.helperToken="repaired-fixture"
+                ZephyrTestSeed.seedHelper(store,"127.0.0.1",stub.port,token=repairedToken)
                 val repaired=withContext(Dispatchers.Main){RemoteState(ctx,store,scope)}
                 delay(300)
                 assertFalse("different pair token must not inherit warning",repaired.subtitleOutcomeUnknown)
                 delay(3000)
-                store.helperToken="lifecycle-fixture"
+                ZephyrTestSeed.seedHelper(store,"127.0.0.1",stub.port,token=lifecycleToken)
                 withContext(Dispatchers.Main){recreated.refreshSubtitleFiles(quiet=true)}
                 delay(300)
                 assertFalse("completed request reconciles reconstructed state",recreated.subtitleOutcomeUnknown)

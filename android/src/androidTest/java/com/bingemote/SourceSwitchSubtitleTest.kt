@@ -12,7 +12,7 @@ import kotlin.concurrent.thread
 class SourceSwitchSubtitleTest {
     private class Stub : AutoCloseable {
         val requests = CopyOnWriteArrayList<String>()
-        private val server = ServerSocket(0)
+        private val server = TlsFakePlayer.sslContext.serverSocketFactory.createServerSocket(0)
         val port = server.localPort
         @Volatile var listDelayMs = 0L
         @Volatile var loadDelayMs = 0L
@@ -49,7 +49,7 @@ class SourceSwitchSubtitleTest {
     private fun setup(stub: Stub, source: Source): Triple<Store, RemoteState, CoroutineScope> {
         val ctx = InstrumentationRegistry.getInstrumentation().targetContext
         HapticTickTest.seedPrefs(ctx, false, stub.port)
-        val store = Store(ctx); store.host = "127.0.0.1"; store.helperToken = "fixture"; store.helperPort = stub.port
+        val store = Store(ctx); ZephyrTestSeed.seedHelper(store, "127.0.0.1", stub.port)
         store.selectedSource = source
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
         return Triple(store, RemoteState(ctx, store, scope), scope)

@@ -16,4 +16,20 @@ object ZephyrTestSeed {
         store.zephyrPairStore.credential = ""
         Store.resetZephyrRecordForTests()
     }
+
+    const val HELPER_TOKEN = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+
+    /** Test-only: a Secure helper pairing through the real save protocol, so [Store.isConfigured] is true. Used by fixtures that drive VLC
+     *  through a local stub: the helper port may be dead, but the pairing record must exist because the phone no longer treats an
+     *  unpaired plain-token setup as configured. The pin is the fake's key; [vlcPassword] is stored with it as in a real pairing. */
+    fun seedHelper(store: Store, host: String, helperPort: Int, vlcPassword: String = "x", token: String = HELPER_TOKEN, pinHex: String = PIN) {
+        val r = SecurePairSave.save(store.securePairStore, host, helperPort, "", vlcPassword, SecureHttp.BoundPin(pinHex, token), PairedCredential.newPcId())
+        check(r == SecurePairSave.Outcome.SAVED) { "test helper seed did not save: $r" }
+    }
+
+    /** Back to no helper pairing (test teardown only). */
+    fun clearHelper(store: Store) {
+        store.securePairStore.intent = ""
+        store.securePairStore.credential = ""
+    }
 }

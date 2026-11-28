@@ -20,8 +20,9 @@ import java.util.concurrent.atomic.AtomicInteger
 class AutoSetupCheckTest {
 
     /** Minimal threaded HTTP fake: the handler maps (method, path, authorization, body) to (code, body). */
-    private class FakeServer(private val handler: (String, String, String?, String) -> Pair<Int, String>) {
-        private val socket = ServerSocket(0)
+    private class FakeServer(private val tls: Boolean = false, private val handler: (String, String, String?, String) -> Pair<Int, String>) {
+        /** tls = the PC helper (HTTPS-only, paired by the fake key); VLC stays plain HTTP on loopback. */
+        private val socket = if (tls) TlsFakePlayer.sslContext.serverSocketFactory.createServerSocket(0) else ServerSocket(0)
         val port: Int = socket.localPort
         @Volatile private var stopped = false
         private val thread = Thread {
@@ -78,7 +79,7 @@ class AutoSetupCheckTest {
         }.start()
 
     private fun helperServer(configured: Boolean, pending: Boolean, adoptPassword: String? = null, adoptCalls: AtomicInteger? = null): FakeServer =
-        FakeServer { _, path, _, body ->
+        FakeServer(tls = true) { _, path, _, body ->
             when {
                 path == "/vlc/setup-status" -> 200 to """{"configured":$configured,"pending":$pending}"""
                 path == "/vlc/adopt" && adoptPassword != null && !body.contains("\"ack\":true") -> {
@@ -98,7 +99,7 @@ class AutoSetupCheckTest {
         val vlc = vlcServer("pw-1")
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = vlc.port
-            store.helperToken = "tok"; store.vlcPassword = "pw-1"
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "pw-1")
             assertEquals(AutoSetupCheck.Outcome.OK, AutoSetupCheck.run(store))
         } finally { helper.stop(); vlc.stop() }
     }
@@ -111,7 +112,7 @@ class AutoSetupCheckTest {
         val vlc = vlcServer("pw-1", vlcHits) // must never be contacted: old settings still live
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = vlc.port
-            store.helperToken = "tok"; store.vlcPassword = "pw-1"
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "pw-1")
             assertEquals(AutoSetupCheck.Outcome.OK_DEFERRED, AutoSetupCheck.run(store))
             assertEquals(0, vlcHits.get())
         } finally { helper.stop(); vlc.stop() }
@@ -124,7 +125,7 @@ class AutoSetupCheckTest {
         val deadPort = ServerSocket(0).use { it.localPort } // closed the moment the socket frees
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = deadPort
-            store.helperToken = "tok"; store.vlcPassword = "pw-1"
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "pw-1")
             assertEquals(AutoSetupCheck.Outcome.OK_NOT_OPEN, AutoSetupCheck.run(store))
         } finally { helper.stop() }
     }
@@ -137,7 +138,7 @@ class AutoSetupCheckTest {
         val vlc = vlcServer("pw-2") // VLC only takes the PC's current password
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = vlc.port
-            store.helperToken = "tok"; store.vlcPassword = "stale" // the phone's copy is wrong
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "stale") // the phone's copy is wrong
             assertEquals(AutoSetupCheck.Outcome.OK, AutoSetupCheck.run(store))
             assertEquals(1, adoptCalls.get()) // exactly one adoption fetch
             assertEquals("pw-2", store.vlcPassword) // adopted, never pushed
@@ -152,7 +153,7 @@ class AutoSetupCheckTest {
         val vlc = vlcServer("other") // every password the phone has is refused
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = vlc.port
-            store.helperToken = "tok"; store.vlcPassword = "stale"
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "stale")
             assertEquals(AutoSetupCheck.Outcome.REFUSED, AutoSetupCheck.run(store))
             assertEquals("stale", store.vlcPassword) // a refusal never overwrites the stored copy
         } finally { helper.stop(); vlc.stop() }
@@ -166,7 +167,7 @@ class AutoSetupCheckTest {
         val vlc = vlcServer("pw-1", vlcHits)
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = vlc.port
-            store.helperToken = "tok"; store.vlcPassword = "pw-1"
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "pw-1")
             assertEquals(AutoSetupCheck.Outcome.REFUSED, AutoSetupCheck.run(store))
             assertEquals(0, vlcHits.get()) // no probe: the PC says nothing is set up
         } finally { helper.stop(); vlc.stop() }
@@ -177,17 +178,17 @@ class AutoSetupCheckTest {
         val store = freshStore()
         val deadPort = ServerSocket(0).use { it.localPort }
         store.host = "127.0.0.1"; store.helperPort = deadPort; store.vlcPort = deadPort
-        store.helperToken = "tok"; store.vlcPassword = "pw-1"
+        ZephyrTestSeed.seedHelper(store, "127.0.0.1", deadPort, "pw-1")
         assertEquals(AutoSetupCheck.Outcome.PC_UNREACHABLE, AutoSetupCheck.run(store))
     }
 
     @Test
     fun badTokenIsRefused() {
         val store = freshStore()
-        val helper = FakeServer { _, _, _, _ -> 401 to """{"error":"bad token"}""" }.start()
+        val helper = FakeServer(tls = true) { _, _, _, _ -> 401 to """{"error":"bad token"}""" }.start()
         try {
             store.host = "127.0.0.1"; store.helperPort = helper.port; store.vlcPort = helper.port
-            store.helperToken = "tok"; store.vlcPassword = "pw-1"
+            ZephyrTestSeed.seedHelper(store, "127.0.0.1", helper.port, "pw-1")
             assertEquals(AutoSetupCheck.Outcome.REFUSED, AutoSetupCheck.run(store))
         } finally { helper.stop() }
     }

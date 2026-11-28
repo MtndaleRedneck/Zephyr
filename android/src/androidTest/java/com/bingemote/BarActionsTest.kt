@@ -117,8 +117,8 @@ class BarActionsTest {
             .putBoolean("demoControls", false)
             .putInt("skipMainSec", 5)
             .apply()
-        Store(ctx).vlcPassword = "x"
-        Store(ctx).helperToken = ""
+        // Secure-only: configured needs a Secure helper pairing (dead helper port; VLC is the stub under test).
+        ZephyrTestSeed.seedHelper(Store(ctx), "127.0.0.1", HapticTickTest.deadPort(), "x")
         ctx.startService(Intent(ctx, MediaControlsService::class.java))
         val nm = ctx.getSystemService(NotificationManager::class.java)
         fun bar() = nm.activeNotifications.firstOrNull { it.id == 101 }?.notification
