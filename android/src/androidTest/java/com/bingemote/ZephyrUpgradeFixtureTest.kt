@@ -66,13 +66,17 @@ class ZephyrUpgradeFixtureTest {
         ctx.startActivity(launch)
         // Real arrival: the app's own window must be on screen (not just a live process).
         val device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
-        val windowUp = device.wait(Until.hasObject(By.pkg(ctx.packageName).depth(0)), 20000)
+        // The criterion is unchanged (the app's own window, same query, same 20 s budget, same assert). Run 46113470197 showed the app
+        // resumed and drawn while the emulator's "Pixel Launcher isn't responding" system dialog took focus and hid the app from
+        // UiAutomator's query. AnrDialogGate tolerates exactly that one dialog (captured, then Wait tapped); any other "isn't responding"
+        // dialog, including one for this app, fails the test explicitly and is never dismissed.
+        val windowUp = waitForAppWindow(device, 20000)
         // Diagnostic only, BEFORE the assertion fails and the instrumentation tears the app down: what the screen, the focus
         // and the accessibility tree looked like. The pass/fail criterion below is unchanged (same query, same 20 s, same assert).
         if (!windowUp) captureWindowFailure(device)
         assertTrue("app window never appeared after cold open", windowUp)
         Thread.sleep(3000)
-        assertTrue("app window gone after cold open", device.hasObject(By.pkg(ctx.packageName).depth(0)))
+        assertTrue("app window gone after cold open", appWindowPersists(device))
         val am = ctx.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
         // Plain loop, no Iterable.any (kotlin inline today, but one less stdlib dependency on the shipped app's shrunk classes).
         var alive = false
@@ -108,6 +112,44 @@ class ZephyrUpgradeFixtureTest {
     // Diagnostic only; never changes the verdict. No kotlin stdlib calls (the shipped release app shrinks them): Java APIs, int
     // loops, string + concatenation, no ==, no templates, no `!!`, no extensions. The whole capture is one try/catch so that
     // nothing here (context lookup, files dir, IO) can throw past the caller; the assert stays outside, in verify().
+    private val taps = AnrDialogGate.Taps()
+
+    private fun foundDialog(device: UiDevice) = device.findObject(By.textContains("isn't responding"))?.let {
+        AnrDialogGate.Dialog(it.text, it.applicationPackage)
+    }
+
+    private fun captureDialog(device: UiDevice, n: Int, d: AnrDialogGate.Dialog) {
+        val dir = ctx.getExternalFilesDir(null)
+        Log.i("ZephyrUpgradeFixture", "tolerated system ANR dialog #$n: title=${d.title} pkg=${d.pkg}")
+        if (dir == null) return
+        runCatching { device.takeScreenshot(java.io.File(dir, "bm-andialog-upgrade-verify-$n-before.png")) }
+        runCatching { device.dumpWindowHierarchy(java.io.File(dir, "bm-andialog-upgrade-verify-$n-before.uix")) }
+        runCatching { java.io.File(dir, "bm-dismissed-dialogs.txt").appendText("test=upgrade-verify n=$n title=${d.title} pkg=${d.pkg}\n") }
+    }
+
+    private fun waitForAppWindow(device: UiDevice, budgetMs: Long): Boolean {
+        val sel = By.pkg(ctx.packageName).depth(0)
+        return AnrDialogGate.waitForWindow(
+            budgetMs = budgetMs, pollMs = 1000, taps = taps, now = { System.currentTimeMillis() },
+            dialog = { foundDialog(device) },
+            capture = { n, d -> captureDialog(device, n, d) },
+            tap = { device.findObject(By.text("Wait"))?.click() },
+            windowUp = { ms -> device.wait(Until.hasObject(sel), ms) },
+        )
+    }
+
+    /** Same instant query as the original second check; a tolerated dialog on screen is captured, tapped, then the query runs again. */
+    private fun appWindowPersists(device: UiDevice): Boolean {
+        val sel = By.pkg(ctx.packageName).depth(0)
+        return AnrDialogGate.persists(
+            taps = taps,
+            dialog = { foundDialog(device) },
+            capture = { n, d -> captureDialog(device, n, d) },
+            tap = { device.findObject(By.text("Wait"))?.click() },
+            hasWindow = { device.hasObject(sel) },
+        )
+    }
+
     private fun captureWindowFailure(device: UiDevice) {
         val tag = "ZephyrVerifyDiag"
         try {
