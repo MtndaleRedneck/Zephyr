@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Exercises the actual RemoteViews PendingIntents, not manufactured action strings. */
 class NotificationTapMatrixTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @get:Rule val failureDump = FailureDumpRule()
 
     private val inst = InstrumentationRegistry.getInstrumentation()

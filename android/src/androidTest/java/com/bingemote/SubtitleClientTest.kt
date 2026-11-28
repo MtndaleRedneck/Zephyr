@@ -10,6 +10,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.concurrent.thread
 
 class SubtitleClientTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @get:Rule val failureDump = FailureDumpRule()
 
     @org.junit.Before fun isolateFromForegroundPolling() {

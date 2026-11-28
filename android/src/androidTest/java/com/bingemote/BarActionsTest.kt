@@ -27,6 +27,7 @@ import kotlin.concurrent.thread
  * (1.12.2 swallowed it, which is why a dead card looked fine).
  */
 class BarActionsTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @Before fun notificationPermission() {
         val inst = InstrumentationRegistry.getInstrumentation()
         val device = UiDevice.getInstance(inst)

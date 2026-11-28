@@ -11,6 +11,7 @@ import org.junit.Test
 /** 1.9 settings migrations on existing installs: the removed toggles leave no
  * stale keys, and the retired cancel-style setting is removed. */
 class StoreMigrationTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @get:Rule val failureDump = FailureDumpRule()
 
     @Test

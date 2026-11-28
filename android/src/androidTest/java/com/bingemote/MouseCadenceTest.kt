@@ -46,6 +46,7 @@ import kotlin.concurrent.thread
  * request), and times every /mouse/move.
  */
 class MouseCadenceTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     data class Frame(val atNanos: Long, val dx: Double, val dy: Double)
 
     private val frames = Collections.synchronizedList(mutableListOf<Frame>())

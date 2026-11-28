@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * setup screen's LaunchedEffect makes.
  */
 class AutoSetupCheckTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
 
     /** Minimal threaded HTTP fake: the handler maps (method, path, authorization, body) to (code, body). */
     private class FakeServer(private val tls: Boolean = false, private val handler: (String, String, String?, String) -> Pair<Int, String>) {

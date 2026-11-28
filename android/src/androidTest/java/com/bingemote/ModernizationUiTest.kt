@@ -12,6 +12,7 @@ import org.junit.Test
 import java.io.File
 
 class ModernizationUiTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @get:Rule val failureDump = FailureDumpRule()
     private val inst = InstrumentationRegistry.getInstrumentation()
     private val ctx get() = inst.targetContext

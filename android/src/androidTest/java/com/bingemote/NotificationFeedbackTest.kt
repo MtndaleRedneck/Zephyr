@@ -37,6 +37,7 @@ private fun awaitServiceDestroyed(ctx: Context) {
  * it, (4) the 2 s status poll never ticks.
  */
 class HapticTickTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @get:Rule val failureDump = FailureDumpRule()
 
     private val hits = AtomicInteger(0)
@@ -213,6 +214,7 @@ class HapticTickTest {
  * repro of the reported issue.
  */
 class ImmediateFlipTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     // Same failure-evidence rule as the sheet tests: this class failed in run
     // 45310990361 with zero captures; never leave a failure undocumented.
     @get:Rule val failureDump = FailureDumpRule()

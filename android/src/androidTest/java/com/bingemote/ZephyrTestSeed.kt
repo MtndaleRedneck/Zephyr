@@ -31,5 +31,13 @@ object ZephyrTestSeed {
     fun clearHelper(store: Store) {
         store.securePairStore.intent = ""
         store.securePairStore.credential = ""
+        runCatching { store.helperVlcSnapshot() }   // republish the now-empty tuple so no later class sees the old pairing
+    }
+
+    /** Hermetic teardown for every fixture that pairs: no Secure helper and no Zephyr pairing left for the next class. */
+    fun cleanup(ctx: android.content.Context) {
+        val store = Store(ctx)
+        clearHelper(store)
+        clear(store)
     }
 }

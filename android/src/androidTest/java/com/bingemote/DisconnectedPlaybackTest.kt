@@ -7,6 +7,7 @@ import org.junit.Rule
 import org.junit.Test
 
 class DisconnectedPlaybackTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     @get:Rule val failureDump = FailureDumpRule()
 
     @Test fun appDisconnectedTapKeepsStateAndSendsNothing() = runBlocking {

@@ -13,6 +13,7 @@ import kotlin.concurrent.thread
  *  dropped when the subtitle generation moved on (a source switch away and back keeps the source gate open, so only
  *  the generation rule can drop it). */
 class ZephyrCaptionDeliveryTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     private class FakePc : AutoCloseable {
         val captionBodies = CopyOnWriteArrayList<String>()
         val firstGate = java.util.concurrent.CountDownLatch(1)

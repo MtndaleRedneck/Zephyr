@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit
 /** Drive the real Compose code field, actual HTTP pairing and secure persistence.
  * A green protocol test alone does not prove sixth-digit submission. */
 class ZephyrAutoPairTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     /** Failure ground truth (screenshot, hierarchy, resumed activity) captured while the app is still up, before the harness tears down. */
     @get:org.junit.Rule val failureDump = FailureDumpRule()
     /** The pairing screen is a scrolling column: a node can exist below the fold. Wait, then scroll up to 4 times, waiting after each. */
@@ -42,9 +43,10 @@ class ZephyrAutoPairTest {
                 .putExtra("screen", "settings-pair-2"))
             // BingeMote flow: choose the PC first (typed address -> "Use this address"), then the code card appears.
             assertNotNull("address field absent", device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000))
-            // The screen scans for a PC when it opens: while it scans, a spinner moves the address field and button, and when the scan ends
-            // the layout moves back. Positive readiness: the scan has finished when the "Find my PC" button is back and enabled.
-            assertNotNull("opening scan did not settle (Find my PC not enabled)", device.wait(Until.findObject(By.text("Find my PC").enabled(true)), 15000))
+            // The screen scans for a PC when it opens. While it scans a spinner moves the address field and button; when the scan ends the
+            // layout moves back and the result message appears. No Player answers on this emulator (nothing sends or listens on discovery
+            // here), so the settled state is the positive "No PC answered" message. Wait for it before typing or tapping.
+            assertNotNull("opening scan did not settle (no \"No PC answered\" message)", device.wait(Until.findObject(By.textStartsWith("No PC answered")), 15000))
             val addr = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000)
             assertNotNull("address field absent after scan", addr)
             addr!!.text = "127.0.0.1:${server.port}"

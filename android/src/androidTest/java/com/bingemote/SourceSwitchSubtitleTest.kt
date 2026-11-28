@@ -10,6 +10,7 @@ import kotlin.concurrent.thread
 
 /** Helper-only subtitle work must not run, or survive, when Zephyr Player is the selected source. */
 class SourceSwitchSubtitleTest {
+    @org.junit.After fun cleanSecurePairing() { ZephyrTestSeed.cleanup(androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext) }
     private class Stub : AutoCloseable {
         val requests = CopyOnWriteArrayList<String>()
         private val server = TlsFakePlayer.sslContext.serverSocketFactory.createServerSocket(0)
