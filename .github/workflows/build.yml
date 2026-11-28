@@ -46,6 +46,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@d9c87d481d55275bb5441eef3fe0e46805f9ef70 # v3.5.0
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
+      - name: Robolectric unit tests (simulated framework, separate task; counted separately from the plain tests)
+        run: ./gradlew --no-daemon robolectricDebugUnitTest
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
       - name: Android lint (errors fail the job)
