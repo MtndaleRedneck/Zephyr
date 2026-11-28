@@ -266,8 +266,9 @@ Assert ($leftRules.Count -eq 0) "uninstall removes every journaled rule (read ba
 $aclAfter = netsh http show urlacl | Out-String
 Assert ($aclAfter -notmatch 'https://\+:8493/') "uninstall removes our journaled 8493 listen permission (read back absent)"
 Assert ($null -eq (Get-ScheduledTask -TaskName 'Zephyr VLC Remote Watchdog (installed)' -ErrorAction SilentlyContinue)) "uninstall leaves no journaled watchdog task"
-# Harness cleanup on a disposable runner (not a product step): any fixture or leftover by display name.
-Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+# Harness cleanup: only the earlier-build fixtures this script planted, by exact name (never a product Zephyr-<hex> rule).
+. (Join-Path $PSScriptRoot 'zephyr_fw_assert.ps1')
+Remove-ZPlantedLegacyRules @('Zephyr VLC Remote','Zephyr VLC Remote Helper','Zephyr VLC Remote VLC')
 netsh http delete urlacl url=http://+:8492/ | Out-Null
 Write-Host "ok: per-user install, clean-build hook proof, uninstall"
 
@@ -899,5 +900,5 @@ try {
     Write-Host "HELPER E2E PASSED ($script:assertCount assertions)"
 } finally {
     if ($p -and -not $p.HasExited) { Stop-HelperVerified }
-    Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+    . (Join-Path $PSScriptRoot 'zephyr_fw_assert.ps1'); Remove-ZJournaledRules 'ZephyrVlcRemote'; Remove-ZPlantedLegacyRules @('Zephyr VLC Remote','Zephyr VLC Remote Helper','Zephyr VLC Remote VLC')
 }

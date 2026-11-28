@@ -1077,8 +1077,9 @@ jobs:
           if ((Get-FileHash $journalB -Algorithm SHA256).Hash -ne $jHashBefore) { throw 'T6b: the lifecycle journal changed during an uninstall that must have touched nothing' }
           netsh http delete urlacl url=https://+:47824/ | Out-Null
           netsh http delete urlacl url=http://+:47823/ | Out-Null
-          # Harness cleanup of the fixture on a disposable runner (not a product step).
-          Get-NetFirewallRule -DisplayName 'Zephyr Player*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
+          # Harness cleanup: the product's rules by the unique keys in its own journal (the foreign-reservation uninstall left them by design), then the planted earlier-build fixtures by exact name.
+          Remove-ZJournaledRules 'ZephyrPlayer'
+          Remove-ZPlantedLegacyRules @('Zephyr Player','Zephyr Player Discovery')
           Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
 
       - name: Legacy HKLM uninstall entry behavior proof (upgrade, setup declined)

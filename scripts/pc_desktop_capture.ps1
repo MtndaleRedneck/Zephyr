@@ -1055,7 +1055,7 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
 netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
 netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
-Get-NetFirewallRule -DisplayName 'Zephyr Player*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule   # harness cleanup on a disposable runner
+. "$PSScriptRoot/zephyr_fw_assert.ps1"; Remove-ZJournaledRules 'ZephyrPlayer'   # this script's own setup run created them; removed by the product journal's unique keys
 
 # Verdicts: video area must be alive (moving pattern => many lit pixels in the
 # center band), and the bottom bar band must show lit control pixels.

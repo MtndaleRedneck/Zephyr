@@ -348,7 +348,7 @@ finally {
     $ec2 = $LASTEXITCODE
     netsh http delete urlacl url=http://+:47823/ 2>&1 | Out-Null
     $ec3 = $LASTEXITCODE
-    Get-NetFirewallRule -DisplayName 'Zephyr Player*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule   # harness cleanup on a disposable runner (the candidate's own rules, by display name)
+    $zf = Join-Path $PSScriptRoot 'zephyr_fw_assert.ps1'; . $zf; Remove-ZJournaledRules 'ZephyrPlayer'   # the candidate's rules, by the unique keys in its own journal
     Note 'cleanup_native_exit_codes' "firewall rule 1 = $ec1, firewall rule 2 = $ec2, urlacl = $ec3"
     Note 'script_state_at_exit' "all assertions passed = $allAssertionsPassed; LASTEXITCODE before reset (reflects the last cleanup netsh call only) = $LASTEXITCODE"
     # Read-only evidence, no deletes (after the exit-code notes above so it cannot alter them): what the candidate's own uninstall left of its https listen permission and binding.

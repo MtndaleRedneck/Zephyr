@@ -23,3 +23,14 @@ function Assert-ZPlayerRules([string]$exePath) {
   Assert-ZRule 'Zephyr Player Discovery 8490 UDP (Private)' 'Private' 'UDP' '8490' 'LocalSubnet' $exePath | Out-Null
   Assert-ZRule 'Zephyr Player Discovery 8490 UDP (Public)' 'Public' 'UDP' '8490' 'LocalSubnet4' $exePath | Out-Null
 }
+# Harness cleanup that touches only what is provably ours or the harness's own fixtures:
+# product rules by the unique Name keys in the product's own protected journal; planted earlier-build fixtures by their exact display names AND only when their Name is not a Zephyr-<hex> product key.
+function Remove-ZJournaledRules([string]$productDir) {
+  $j = Join-Path $env:ProgramData "$productDir\lifecycle.json"
+  if (Test-Path $j) {
+    try { $o = Get-Content $j -Raw | ConvertFrom-Json; foreach ($r in @($o.Rules)) { if ($r.Key -match '^Zephyr-[0-9a-f]{32}$') { Get-NetFirewallRule -Name $r.Key -ErrorAction SilentlyContinue | Remove-NetFirewallRule } } } catch { Write-Host "journal cleanup skipped: $($_.Exception.Message)" }
+  }
+}
+function Remove-ZPlantedLegacyRules([string[]]$exactDisplayNames) {
+  foreach ($d in $exactDisplayNames) { Get-NetFirewallRule -DisplayName $d -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^Zephyr-[0-9a-f]{32}$' } | Remove-NetFirewallRule }
+}

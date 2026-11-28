@@ -168,6 +168,19 @@ SSL Certificate bindings:
         Assert.Equal(0, UrlAclMigrationPlanner.AddHttpsReservation(() => { calls++; return (0, ""); }).Exit); Assert.Equal(1, calls);
     }
 
+    [Fact] public void MarkerPortAcceptance_IsExactlyPriorToCurrent_AndNothingElse()
+    {
+        int prior = TlsProduct.PriorHttpsPort, cur = TlsProduct.CurrentHttpsPort;
+        Assert.True(TlsPolicy.MarkerPortAcceptable(cur, cur, prior, cur));          // current marker, current port
+        Assert.True(TlsPolicy.MarkerPortAcceptable(prior, cur, prior, cur));        // prior marker bound to the new default
+        Assert.False(TlsPolicy.MarkerPortAcceptable(cur, prior, prior, cur));       // reverse direction refused
+        Assert.False(TlsPolicy.MarkerPortAcceptable(prior, cur + 1, prior, cur));   // prior marker for any other requested port refused
+        Assert.False(TlsPolicy.MarkerPortAcceptable(12345, cur, prior, cur));       // an unrelated marker port refused
+        Assert.False(TlsPolicy.MarkerPortAcceptable(12345, prior, prior, cur));
+        Assert.Equal(Program.HttpPort, cur);
+        Assert.NotEqual(prior, cur);
+    }
+
     [Fact] public void LegacyHttpPortIsTheOldPlainHttpPortNotTheNewHttpsPort()
     {
         Assert.Equal(8492, FirewallSetup.LegacyHttpPort);

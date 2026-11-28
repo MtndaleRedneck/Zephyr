@@ -26,6 +26,7 @@ internal static class TlsProduct
 #if ZEPHYR_PLAYER
     /// <summary>The HTTPS port earlier builds of this product used. An identity marker written for it is reusable (same key, same pin) when binding the new default port; any other marker port still fails closed.</summary>
     internal const int PriorHttpsPort = 47823;
+    internal const int CurrentHttpsPort = 47824;
     internal const string DirName = "ZephyrPlayer";
     internal const string AppIdText = "9c1e4a7b-3d52-4f08-8b6e-71a2c5d90e34";
     internal const string FriendlyName = "Zephyr Player LAN identity";
@@ -33,6 +34,7 @@ internal static class TlsProduct
     internal const string SetupMutex = @"Global\ZephyrPlayerTlsSetup";
 #else
     internal const int PriorHttpsPort = 8492;
+    internal const int CurrentHttpsPort = 8493;
     internal const string DirName = "ZephyrVlcRemote";
     internal const string AppIdText = "5b0d6f6e-7a0e-4f4f-9a3c-2f1d9e0c4a11";
     internal const string FriendlyName = "Zephyr VLC Remote LAN identity";
@@ -73,6 +75,10 @@ internal sealed record TlsObservation(
 /// <summary>PROPOSAL, default strict (both families required). If ever approved, set true: with no IPv6 stack, a missing [::] binding is not required. It never applies to a present-but-wrong binding. http.sys behavior with IPv6 disabled is UNVERIFIED.</summary>
 internal static class TlsPolicy
 {
+    /// <summary>A marker is for this port when its port equals the requested one, or when it is exactly the prior HTTPS port and the requested port is exactly the current default. Nothing else is accepted (not the reverse direction, not any other port). The marker's certificate, key and pin checks are separate and unchanged.</summary>
+    internal static bool MarkerPortAcceptable(int markerPort, int requestedPort, int priorPort, int currentPort) =>
+        markerPort == requestedPort || (markerPort == priorPort && requestedPort == currentPort);
+
     internal const bool V6OptionalWhenStackAbsent = false;
     internal static bool V6Required(bool ipv6Capable) => ipv6Capable || !V6OptionalWhenStackAbsent;
 }
@@ -516,7 +522,7 @@ internal static class TlsInspector
         if (elevated && all == null) { v4 = v4 == BindingState.ExactExpected ? v4 : BindingState.Unknown; v6 = v6 == BindingState.ExactExpected ? v6 : BindingState.Unknown; }
         bool orphan = ms == MarkerState.Absent && HasOrphanOurCert();
         bool due = c != null && TlsLifetime.IsRenewalDue(new DateTimeOffset(c.NotAfter), DateTimeOffset.UtcNow);
-        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && marker.Port != port && marker.Port != TlsProduct.PriorHttpsPort, c != null && new DateTimeOffset(c.NotAfter) <= DateTimeOffset.UtcNow);
+        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && !TlsPolicy.MarkerPortAcceptable(marker.Port, port, TlsProduct.PriorHttpsPort, TlsProduct.CurrentHttpsPort), c != null && new DateTimeOffset(c.NotAfter) <= DateTimeOffset.UtcNow);
     }
 
     /// <summary>Precise, non-secret reason a binding is not treated as ours. Never leads to deletion: an app-id match alone is not ownership, and a binding naming a certificate that is gone stays untouched.</summary>
