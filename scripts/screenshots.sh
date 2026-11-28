@@ -61,7 +61,11 @@ for i in 1 2 3 4; do adb shell input swipe 540 1900 540 700 300; sleep 1; done
 sleep 2
 adb exec-out screencap -p > screenshots/settings-feedback-card.png
 shoot feedback feedback
+shoot yourpc yourpc
 shoot update-offer update
+# Palette evidence: picker (8 swatches, two rows of four) and Home controls under a non-default accent.
+shoot settings-accent3 settings --ei accent 3
+shoot main-connected-accent3 main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase cur-ok --ei accent 3
 adb shell wm size reset
 adb shell wm density reset
 

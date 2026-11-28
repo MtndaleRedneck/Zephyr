@@ -218,7 +218,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
                 BrowseItem(name = "Documentaries", isDir = true, path = "demo://d1", uri = "demo://d1", sizeBytes = 0L),
                 BrowseItem(name = "The Big Example Movie (2024).mkv", isDir = false, path = "demo://m1", uri = "demo://m1", sizeBytes = 4_280_000_000L),
                 BrowseItem(name = "Another Sample Film.mp4", isDir = false, path = "demo://m2", uri = "demo://m2", sizeBytes = 1_640_000_000L),
-            )
+            ) + (if (DebugRig.manyMovies) (1..40).map { BrowseItem(name = "Demo Film %02d.mkv".format(it), isDir = false, path = "demo://x$it", uri = "demo://x$it", sizeBytes = 1_000_000_000L) } else emptyList())
             loading = false
             error = null
             return
@@ -599,6 +599,8 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
 
     // The PC's setting wins when the helper has one; the phone's copy is the fallback.
     LaunchedEffect(Unit) {
+        // Debug demo list only: show it at once, never wait on a PC/helper round trip (the demo seed holds a token for an address that does not exist).
+        if (demoPhone && BuildConfig.DEBUG) { gate.bump(); loadPhone(); return@LaunchedEffect }
         if (!remote.pcReachable) { gate.bump(); loading = false; return@LaunchedEffect }
         val g0 = gate.current()
         val fromPc = withContext(Dispatchers.IO) {
@@ -621,7 +623,7 @@ fun MoviesScreen(remote: RemoteState, listState: LazyListState, onBack: () -> Un
     BackHandler(enabled = !insideFolder && !insidePhoneFolder) { onBack() }
 
     Column(Modifier.fillMaxSize().background(Bg)) {
-        ScreenHeader("Movies", hapticsOn = remote.store.haptics, onBack = onBack)
+        ScreenHeader("Movies", hapticsOn = remote.store.haptics, matchHomeRow = true, onBack = onBack)
         // The reconnect banner, verbatim from the home hero: same gradient, radius, ink,
         // sizes and strings. The Movies title and back arrow stay put above it.
         if (lost) {

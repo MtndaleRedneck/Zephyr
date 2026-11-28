@@ -30,7 +30,7 @@ fun YourPCScreen(remote: RemoteState, scrollState: ScrollState, onBack: () -> Un
     val store = remote.store
     val unreachable = !remote.pcReachable
     Column(Modifier.fillMaxSize().background(Bg).verticalScroll(scrollState).padding(start = 16.dp, end = 16.dp, bottom = 16.dp)) {
-        ScreenHeader("Your PC", edge = 0.dp, onBack = onBack)
+        ScreenHeader("Your PC", edge = 0.dp, matchHomeRow = true, onBack = onBack)
         Spacer(Modifier.height(6.dp))
         BackHandler { onBack() }
 
