@@ -40,11 +40,20 @@ class HelperMoveTest {
         assertTrue(out === HelperMove.Outcome.SavedEndpointSeen); assertFalse(discovered); assertEquals(0, s.commits)
     }
 
-    @Test fun savedEndpointListedInOtherTextFormsIsNotAMove() {
+    @Test fun aDiscoveryReplyWithTheSavedAddressDoesNotProveItAliveOrStopTheSearch() {
         val s = paired("fd00::1")
         val out = HelperMove.attempt(s, pingSaved = { false }, discover = { listOf(h("[FD00:0:0:0:0:0:0:1]")) },
             verify = { r, a, p -> fail("must not probe the saved endpoint $a:$p"); null })
-        assertTrue(out === HelperMove.Outcome.SavedEndpointSeen); assertEquals(0, s.commits)
+        assertTrue(out === HelperMove.Outcome.NoneVerified); assertEquals(0, s.commits)
+    }
+
+    @Test fun aSpoofedSavedAddressEntryDoesNotHideTheRealMovedPc() {
+        val s = paired()
+        val probed = mutableListOf<String>()
+        val out = HelperMove.attempt(s, pingSaved = { false }, discover = { listOf(h("192.168.1.5"), h("192.168.1.77")) },
+            verify = { r, a, p -> probed += a; verifyOk(r, a, p) })
+        out as HelperMove.Outcome.Moved
+        assertEquals("192.168.1.77", out.credential.host); assertEquals(listOf("192.168.1.77"), probed); assertEquals(1, s.commits)
     }
 
     @Test fun verifiedMoveWritesOnceAndReturnsTheFreshStoredRecord() {

@@ -2,7 +2,7 @@ package com.bingemote
 
 /**
  * One rediscovery attempt for the remembered helper PC, as plain functions over injected calls so JVM tests can drive it.
- * Order: the saved endpoint is tried first (pinned, token only to the saved endpoint). Otherwise the discovered helpers are
+ * Order: the saved endpoint is tried first (pinned, token only to the saved endpoint). Otherwise the discovered helpers (a listing of the saved address itself is ignored) are
  * handshake-checked against the STORED key with no token and no application bytes; only a key match can move the stored address.
  * After a move the fresh stored record is re-read and returned, never values carried from earlier steps.
  * Not a statement about power-loss durability: [Outcome.Moved.committed] only says the store reported the commit as successful.
@@ -11,7 +11,7 @@ internal object HelperMove {
     sealed interface Outcome {
         /** No usable secure pairing is stored. */
         object NotPaired : Outcome
-        /** The saved endpoint answered, or discovery listed it: nothing to move. */
+        /** The pinned check of the saved endpoint answered: nothing to move. A discovery listing alone never produces this. */
         object SavedEndpointSeen : Outcome
         /** No acceptable discovered helper proved the stored key. */
         object NoneVerified : Outcome
@@ -37,8 +37,8 @@ internal object HelperMove {
         val name = try { store.pcName } catch (e: Exception) { "" }
         if (pingSaved(snap)) return Outcome.SavedEndpointSeen
         val found = discover()
-        val savedKey = HelperRediscover.addressKey(snap.host, snap.port)
-        if (found.any { HelperRediscover.addressKey(it.host, it.port) == savedKey }) return Outcome.SavedEndpointSeen
+        // An unauthenticated discovery reply carrying the saved address proves nothing (anyone on the LAN can send it): only the
+        // pinned pingSaved above proves the saved endpoint is alive. The candidate search already drops the saved address.
         val v = HelperRediscover.findVerifiedMove(snap.host, snap.port, name, raw, found, addressOk) { h, p -> verify(raw, h, p) }
             ?: return Outcome.NoneVerified
         val r = SecurePairSave.updateAddress(store, v)
