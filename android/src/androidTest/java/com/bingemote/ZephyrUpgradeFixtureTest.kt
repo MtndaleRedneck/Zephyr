@@ -139,7 +139,11 @@ class ZephyrUpgradeFixtureTest {
         try { device.dumpWindowHierarchy(uix) } catch (e: java.io.IOException) { throw AssertionError("cannot capture the ANR dialog: hierarchy dump failed: ${e.message}") }
         if (!uix.exists() || uix.length() == 0L) throw AssertionError("cannot capture the ANR dialog: hierarchy file empty")
         val log = java.io.File(dir, "bm-dismissed-dialogs.txt")
-        try { log.appendText("test=upgrade-verify n=$n title=${d.title} pkg=${d.pkg}\n") } catch (e: java.io.IOException) { throw AssertionError("cannot capture the ANR dialog: log write failed: ${e.message}") }
+        // java.io only (no kotlin.io/kotlin.text extension): the minified signed-upgrade run lacked kotlin.io.FilesKt for appendText.
+        try {
+            val w = java.io.FileWriter(log, true)
+            try { w.write("test=upgrade-verify n=$n title=${d.title} pkg=${d.pkg}\n") } finally { w.close() }
+        } catch (e: java.io.IOException) { throw AssertionError("cannot capture the ANR dialog: log write failed: ${e.message}") }
     }
 
     /**
