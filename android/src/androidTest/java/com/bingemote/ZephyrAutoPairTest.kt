@@ -14,6 +14,8 @@ import java.util.concurrent.TimeUnit
 /** Drive the real Compose code field, actual HTTP pairing and secure persistence.
  * A green protocol test alone does not prove sixth-digit submission. */
 class ZephyrAutoPairTest {
+    /** Failure ground truth (screenshot, hierarchy, resumed activity) captured while the app is still up, before the harness tears down. */
+    @get:org.junit.Rule val failureDump = FailureDumpRule()
     /** The pairing screen is a scrolling column: a node can exist below the fold. Wait, then scroll up to 4 times, waiting after each. */
     private fun findScrolling(device: UiDevice, sel: androidx.test.uiautomator.BySelector, firstWaitMs: Long): androidx.test.uiautomator.UiObject2? {
         var node = device.wait(Until.findObject(sel), firstWaitMs)
@@ -39,8 +41,12 @@ class ZephyrAutoPairTest {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
                 .putExtra("screen", "settings-pair-2"))
             // BingeMote flow: choose the PC first (typed address -> "Use this address"), then the code card appears.
-            val addr = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000)
-            assertNotNull("address field absent", addr)
+            assertNotNull("address field absent", device.wait(Until.findObject(By.clazz("android.widget.EditText")), 15000))
+            // The screen scans for a PC when it opens: "Looking..." shows a spinner that moves the address field and button, and when the
+            // scan ends the layout moves back. Wait for the scan to finish so the tap below lands on the button where it really is.
+            device.wait(Until.gone(By.text("Looking\u2026")), 10000)
+            val addr = device.wait(Until.findObject(By.clazz("android.widget.EditText")), 5000)
+            assertNotNull("address field absent after scan", addr)
             addr!!.text = "127.0.0.1:${server.port}"
             val use = device.wait(Until.findObject(By.text("Use this address")), 5000)
             assertNotNull("Use this address missing", use)
