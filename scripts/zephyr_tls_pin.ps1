@@ -33,7 +33,7 @@ function Set-ZephyrPin {
 # Any request to the installed/hooked Player over pinned HTTPS. Returns @{ Status; Body }; Status 0 = no answer.
 function Invoke-ZephyrTls([string]$method, [string]$path, [string]$token, [string]$body) {
   Set-ZephyrPin
-  $r = [ZephyrPin]::Send($method, "https://127.0.0.1:47823$path", $token, $body)
+  $r = [ZephyrPin]::Send($method, "https://127.0.0.1:47824$path", $token, $body)
   return @{ Status = [int]$r[0]; Body = $r[1] }
 }
 function Get-TlsStatus([string]$token) { return (Invoke-ZephyrTls 'GET' '/control/status' $token $null).Status }

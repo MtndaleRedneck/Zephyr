@@ -455,27 +455,22 @@ jobs:
           if ($fw.ExitCode -ne 0) {
             Write-Host "passed SID: $sid"
             $aclAll = netsh http show urlacl | Out-String
-            $block = ($aclAll -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
-            Write-Host "47823 reservation after setup:"; Write-Host $block
+            $block = ($aclAll -split "\r?\n\r?\n" | Where-Object { $_ -match ':47824/' } | Select-Object -First 1)
+            Write-Host "47824 reservation after setup:"; Write-Host $block
             throw "--install-firewall exit $($fw.ExitCode)"
           }
-          $tcp = netsh advfirewall firewall show rule name="Zephyr Player" verbose | Out-String
-          if ($tcp -notmatch 'LocalPort:\s*47823') { throw 'TCP rule missing 47823' }
-          if ($tcp -notmatch 'System') { throw 'TCP rule must scope program=System (http.sys attribution)' }
-          if ($tcp -notmatch 'Private') { throw 'TCP rule must be Private-only' }
-          if ($tcp -notmatch 'Local subnet|Localsubnet|localsubnet') { throw 'TCP rule must be LocalSubnet' }
-          $udp = netsh advfirewall firewall show rule name="Zephyr Player Discovery" verbose | Out-String
-          if ($udp -notmatch [regex]::Escape($installed.Replace('\','\')) -and $udp -notmatch 'ZephyrPlayer.exe') { throw 'UDP rule must scope the exe' }
+          . ./scripts/zephyr_fw_assert.ps1
+          Assert-ZPlayerRules $installed
           $acl = netsh http show urlacl | Out-String
-          if ($acl -notmatch '47823') { throw 'URL ACL for 47823 missing' }
+          if ($acl -notmatch '47824') { throw 'URL ACL for 47824 missing' }
           # netsh stores well-known accounts as SDDL aliases (RID-500 admin -> "LA"):
           # compare parsed security descriptors, not the raw SID string.
-          $block = ($acl -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
+          $block = ($acl -split "\r?\n\r?\n" | Where-Object { $_ -match ':47824/' } | Select-Object -First 1)
           $sddlMatch = [regex]::Match($block, 'SDDL:\s*(\S+)')
           $actualSddl = if ($sddlMatch.Success) { (New-Object System.Security.AccessControl.RawSecurityDescriptor($sddlMatch.Groups[1].Value)).GetSddlForm('All') } else { '' }
           $expectedSddl = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sid)")).GetSddlForm('All')
-          if ($actualSddl -ne $expectedSddl) { Write-Host "47823 reservation:"; Write-Host $block; Write-Host "expected SDDL: $expectedSddl"; throw 'URL ACL must scope the installing user SID' }
-          Write-Output "firewall shape: TCP System/47823/Private/LocalSubnet, UDP exe/Private/LocalSubnet, ACL user SID - verified"
+          if ($actualSddl -ne $expectedSddl) { Write-Host "47824 reservation:"; Write-Host $block; Write-Host "expected SDDL: $expectedSddl"; throw 'URL ACL must scope the installing user SID' }
+          Write-Output "firewall shape (Get-NetFirewallRule by unique Name): TCP System/47824 and UDP exe/8490, each Private+LocalSubnet and Public+LocalSubnet4, ACL user SID - read back on a hosted runner (rule shape only, no two-host traffic)"
           # Secure mode is HTTPS only (no plaintext fallback). Pinned-HTTPS status helper (Get-TlsStatus), shared by every smoke that talks to the installed Player.
           . ./scripts/zephyr_tls_pin.ps1
           # Negative-hook test on the SHIPPED binary (round-6 G6): even with the capture
@@ -504,7 +499,7 @@ jobs:
           Write-Output 'NEGATIVE HOOK: PASS - shipped exe rejects ci-capture-token even with ZEPHYR_CI_CAPTURE=1 (HTTPS, 401)'
           # No authenticated plaintext answer: the same request over http must not return 200 (this does not claim the port never speaks HTTP).
           $plainCode = 0
-          try { $plainCode = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer local-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
+          try { $plainCode = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47824/control/status' -Headers @{ Authorization = 'Bearer local-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
           if ($plainCode -eq 200) { throw 'PLAINTEXT 200: installed exe returned 200 for the paired token over plain http' }
           Write-Output "NO PLAINTEXT 200: PASS - the paired token over plain http did not return 200 (status $plainCode, 0 = no answer); this does not claim the port never speaks HTTP"
           $neg.Kill()
@@ -668,35 +663,45 @@ jobs:
           Start-Sleep -Seconds 2
           $sidUp = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
           # Diagnostics (read-only): the setup copy's own stderr/stdout and the reservation/binding state before and after, printed on every run.
-          Write-Output "--- before post-upgrade setup: urlacl 47823 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
-          Write-Output "--- before post-upgrade setup: sslcert 47823 ---"; netsh http show sslcert ipport=0.0.0.0:47823 | Out-String
+          Write-Output "--- before post-upgrade setup: urlacl 47824 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+          Write-Output "--- before post-upgrade setup: sslcert 47824 ---"; netsh http show sslcert ipport=0.0.0.0:47824 | Out-String
           $fwErr = Join-Path $env:RUNNER_TEMP 'upgrade-setup.err'; $fwOut = Join-Path $env:RUNNER_TEMP 'upgrade-setup.out'
           $fwUp = Start-Process $installed -ArgumentList "--install-firewall `"$sidUp`"" -Wait -PassThru -RedirectStandardError $fwErr -RedirectStandardOutput $fwOut
           Write-Output "post-upgrade setup exit $($fwUp.ExitCode)"; Write-Output "--- setup stderr ---"; Get-Content $fwErr -ErrorAction SilentlyContinue; Write-Output "--- setup stdout ---"; Get-Content $fwOut -ErrorAction SilentlyContinue
-          Write-Output "--- after post-upgrade setup: urlacl 47823 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
-          Write-Output "--- after post-upgrade setup: sslcert 47823 ---"; netsh http show sslcert ipport=0.0.0.0:47823 | Out-String
+          Write-Output "--- after post-upgrade setup: urlacl 47824 ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+          Write-Output "--- after post-upgrade setup: sslcert 47824 ---"; netsh http show sslcert ipport=0.0.0.0:47824 | Out-String
           if ($fwUp.ExitCode -ne 0) {
             # Diagnostic only (disposable runner), failure path only: the setup copy swallows netsh output, so repeat its exact https reservation command here with output and exit visible, record the state, remove only what this probe added, then fail as before.
             Write-Output "--- diagnostic probe: the setup's https listen-permission command, output captured ---"
-            $probe = (netsh http add urlacl url=https://+:47823/ sddl="D:(A;;GX;;;$sidUp)") 2>&1 | Out-String
+            $probe = (netsh http add urlacl url=https://+:47824/ sddl="D:(A;;GX;;;$sidUp)") 2>&1 | Out-String
             Write-Output "probe netsh add https urlacl exit $LASTEXITCODE"; Write-Output $probe
             $probeAdded = ($LASTEXITCODE -eq 0)
-            Write-Output "--- diagnostic probe: urlacl 47823 after probe ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
-            if ($probeAdded) { netsh http delete urlacl url=https://+:47823/ | Out-Null }
+            Write-Output "--- diagnostic probe: urlacl 47824 after probe ---"; (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' }
+            if ($probeAdded) { netsh http delete urlacl url=https://+:47824/ | Out-Null }
             Write-Output "--- firewall rules after the failed setup ---"; netsh advfirewall firewall show rule name="Zephyr Player" | Out-String; netsh advfirewall firewall show rule name="Zephyr Player Discovery" | Out-String
             throw "post-upgrade firewall migration exit $($fwUp.ExitCode)"
           }
           $acc = Start-Process $hooked -ArgumentList '--firewall-shape-ok', ('"' + $installed + '"') -Wait -PassThru
           if ($acc.ExitCode -ne 0) { throw "Player unelevated check did not ACCEPT the migrated shape (exit $($acc.ExitCode))" }
-          # The migration must leave the CURRENT shape, not 1.1.0's: TCP System + 47823 +
+          # The migration must leave the CURRENT shape (new unique-Name rules on 47824/8490),
           # LocalSubnet, UDP exe + 8490 + LocalSubnet, and no Everyone listen grant.
-          $tcpUp = netsh advfirewall firewall show rule name="Zephyr Player" verbose | Out-String
-          if ($tcpUp -notmatch 'LocalPort:\s*47823' -or $tcpUp -notmatch 'Program:\s*System' -or $tcpUp -notmatch 'Local subnet|LocalSubnet|localsubnet') { Write-Output $tcpUp; throw 'upgrade migration: TCP rule is not the current shape' }
-          $udpUp = netsh advfirewall firewall show rule name="Zephyr Player Discovery" verbose | Out-String
-          if ($udpUp -notmatch 'LocalPort:\s*8490' -or $udpUp -notmatch [regex]::Escape($installed) -or $udpUp -notmatch 'Local subnet|LocalSubnet|localsubnet') { Write-Output $udpUp; throw 'upgrade migration: UDP rule is not the current shape (8490, exe, LocalSubnet)' }
-          $aclBlock = ((netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
-          if (-not $aclBlock) { throw 'upgrade migration: no listen permission for 47823' }
-          if ($aclBlock -match 'WD\)') { Write-Output $aclBlock; throw 'upgrade migration: the 1.1.0 Everyone grant survived' }
+          . ./scripts/zephyr_fw_assert.ps1
+          Assert-ZPlayerRules $installed
+          # The real 1.1.0 rules (same display names as before, any-address 47823 / UDP 8489) are LEFT AS FOUND by design and reported, never rewritten or deleted.
+          $legacyTcp = @(Get-NetFirewallRule -DisplayName 'Zephyr Player' -ErrorAction SilentlyContinue)
+          Write-Output "legacy 1.1.0 rule 'Zephyr Player' present after migration: $($legacyTcp.Count) (expected: retained, not created by this build)"
+          $legacyUdp = @(Get-NetFirewallRule -DisplayName 'Zephyr Player Discovery' -ErrorAction SilentlyContinue)
+          Write-Output "legacy 1.1.0 rule 'Zephyr Player Discovery' present after migration: $($legacyUdp.Count)"
+          if ($legacyTcp.Count -eq 0 -and $legacyUdp.Count -eq 0) { throw 'upgrade fixture: the real 1.1.0 install left no legacy rules to retain (fixture changed?)' }
+          if (-not (Select-String -Path $fwErr -Pattern 'firewall inventory:' -Quiet)) { throw 'the elevated setup did not report the other rules it found (inventory lines missing)' }
+          $jr = Get-Content (Join-Path $env:ProgramData 'ZephyrPlayer\lifecycle.json') -Raw | ConvertFrom-Json
+          if (@($jr.Rules).Count -ne 4) { throw "lifecycle journal has $(@($jr.Rules).Count) rules, expected 4" }
+          if (-not $jr.UrlAcl -or $jr.UrlAcl.Url -ne 'https://+:47824/') { throw 'lifecycle journal has no https 47824 listen-permission entry' }
+          $aclBlock = ((netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:47824/' } | Select-Object -First 1)
+          if (-not $aclBlock) { throw 'upgrade migration: no https listen permission for 47824' }
+          if ($aclBlock -match 'WD\)') { Write-Output $aclBlock; throw 'upgrade migration: the new https reservation is an Everyone grant' }
+          $oldHttp = ((netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'http://\+:47823/' } | Select-Object -First 1)
+          Write-Output "old 1.1.0 http://+:47823/ reservation after migration (expected: left as found): $(if ($oldHttp) { 'present' } else { 'absent' })"
           # The leftover 1.1.0 HKLM uninstall entry must be gone (it pointed at this
           # install and claimed the 1.1.x version - the only shape the app removes).
           foreach ($k in 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1','HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Zephyr Player_is1') {
@@ -711,8 +716,8 @@ jobs:
           # verify. "App is running" alone passes even with the elevation dialog up.
           $marker = Join-Path $env:LOCALAPPDATA 'ZephyrPlayer\firewall.ok'
           for ($i = 0; $i -lt 10 -and -not (Test-Path $marker); $i++) { Start-Sleep -Seconds 1 }
-          if (-not (Test-Path $marker)) { throw 'v2 firewall marker missing after the upgraded relaunch - the app live check did not pass' }
-          if ((Get-Content $marker -First 1) -ne 'v2') { throw "firewall marker is not v2: $(Get-Content $marker -First 1)" }
+          if (-not (Test-Path $marker)) { throw 'v3 firewall marker missing after the upgraded relaunch - the app live check did not pass' }
+          if ((Get-Content $marker -First 1) -ne 'v3') { throw "firewall marker is not v3: $(Get-Content $marker -First 1)" }
           # Settings values must survive (1.2.0 may extend the file; values must not move).
           $s = Get-Content $settingsPath -Raw | ConvertFrom-Json
           if ($s.LastVolume -ne 47) { throw "upgrade lost LastVolume (got $($s.LastVolume))" }
@@ -730,7 +735,7 @@ jobs:
           $unauthCode = Get-TlsStatus $null
           if ($unauthCode -ne 401) { throw "unauthenticated /control/status was not 401 after upgrade (got $unauthCode)" }
           $plainUp = 0
-          try { $plainUp = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = 'Bearer upgrade-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
+          try { $plainUp = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47824/control/status' -Headers @{ Authorization = 'Bearer upgrade-smoke-token' } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
           if ($plainUp -eq 200) { throw 'PLAINTEXT 200: upgraded app returned 200 for the migrated token over plain http' }
           Write-Output 'PUBLISHED_UPGRADE_CONTINUITY: PASS - original CI 1.1.0 installer recovered from run40413487207, ran, upgraded in place; settings values preserved; 1.1.0-format pairing token still authorizes /control/status (200 with, 401 without).'
           Get-Process ZephyrPlayer -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -741,14 +746,7 @@ jobs:
           # reservation on 47823, run the post-upgrade uninstaller, and require the
           # reservation to survive; the log is printed either way for inspection.
           # http:// and https:// reservations for one port collide (error 183, observed), so the foreign http reservation can only be planted once our https one is gone. Ownership is verified, not assumed: delete the https reservation only when its parsed descriptor is exactly the one this smoke's own setup creates for $sidUp (the migration step above already passed, so it exists). Absent is fine; anything different is not ours, is never deleted, and fails the fixture.
-          $httpsNow = (netsh http show urlacl url=https://+:47823/) | Out-String
-          $httpsSddl = [regex]::Match($httpsNow, 'SDDL:\s*(\S+)')
-          if ($httpsSddl.Success) {
-            $httpsActual = (New-Object System.Security.AccessControl.RawSecurityDescriptor($httpsSddl.Groups[1].Value)).GetSddlForm('All')
-            $httpsOurs = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sidUp)")).GetSddlForm('All')
-            if ($httpsActual -ne $httpsOurs) { throw 'N-10 fixture: the https 47823 reservation is not the one this smoke setup created; refusing to delete it' }
-            netsh http delete urlacl url=https://+:47823/ | Out-Null
-          }
+          # The product's https reservation is on 47824 now, so no collision with the foreign http 47823 fixture below and nothing of ours is deleted here.
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           netsh http add urlacl url=http://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
           $aclBefore = (netsh http show urlacl url=http://+:47823/) | Out-String
@@ -1032,9 +1030,12 @@ jobs:
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP\uninstall-t6a.log" -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6 uninstaller timed out' }
           Start-Sleep -Seconds 3
-          $left = (netsh http show urlacl url=http://+:47823/) 2>&1 | Out-String
-          if ($left -match 'SDDL:') { throw 'T6: our own 47823 reservation was LEFT behind by the fresh-install uninstall' }
-          Write-Output 'T6 FRESH: our own reservation was removed by the uninstall.'
+          $left = (netsh http show urlacl url=https://+:47824/) 2>&1 | Out-String
+          if ($left -match 'SDDL:') { throw 'T6: our own journaled 47824 reservation was LEFT behind by the fresh-install uninstall' }
+          foreach ($d in 'Zephyr Player 47824 TCP (Private)','Zephyr Player 47824 TCP (Public)','Zephyr Player Discovery 8490 UDP (Private)','Zephyr Player Discovery 8490 UDP (Public)') {
+            if (@(Get-NetFirewallRule -DisplayName $d -ErrorAction SilentlyContinue).Count -ne 0) { throw "T6: journaled rule '$d' was LEFT behind by the fresh-install uninstall" }
+          }
+          Write-Output 'T6 FRESH: our own journaled reservation and four rules were removed by the uninstall (read back absent).'
           # Round-9 T6b: fresh install with a FOREIGN reservation planted over ours:
           # the uninstall must leave the reservation AND the rules untouched.
           Remove-Item "$env:LOCALAPPDATA\Programs\Zephyr Player" -Recurse -Force -ErrorAction SilentlyContinue
@@ -1052,24 +1053,24 @@ jobs:
           $exeB = "$env:LOCALAPPDATA\Programs\Zephyr Player\ZephyrPlayer.exe"
           $fwB = Start-Process $exeB -ArgumentList "--install-firewall `"$sidB`"" -Wait -PassThru
           if ($fwB.ExitCode -ne 0) { throw "T6b setup exit $($fwB.ExitCode)" }
-          # The Player's reservation is the https:// one (FirewallSetup.ClassifyUrlAcl reads https://+:47823/; the http:// one is only the
+          # The Player's reservation is the https:// one (FirewallSetup.ClassifyUrlAcl reads https://+:47824/; the http:// one is only the
           # old pre-TLS reservation). Plant the FOREIGN reservation over the https one setup just created.
-          netsh http delete urlacl url=https://+:47823/ | Out-Null
-          netsh http add urlacl url=https://+:47823/ sddl="D:(A;;GX;;;SY)" | Out-Null
-          $aclPlanted = (netsh http show urlacl url=https://+:47823/) | Out-String
+          netsh http delete urlacl url=https://+:47824/ | Out-Null
+          netsh http add urlacl url=https://+:47824/ sddl="D:(A;;GX;;;SY)" | Out-Null
+          $aclPlanted = (netsh http show urlacl url=https://+:47824/) | Out-String
           if ($aclPlanted -notmatch 'SDDL:') { throw 'T6b: the foreign https reservation was not planted' }
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP\uninstall-t6b.log" -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6b uninstaller timed out' }
           Start-Sleep -Seconds 3
-          $aclB = (netsh http show urlacl url=https://+:47823/) | Out-String
+          $aclB = (netsh http show urlacl url=https://+:47824/) | Out-String
           $normB = { param($t) ($t -replace '\s+', ' ').Trim() }
           if ((& $normB $aclB) -ne (& $normB $aclPlanted)) { Write-Output "--- planted ---`n$aclPlanted`n--- after ---`n$aclB"; throw 'T6b: the foreign reservation did not survive the fresh-install uninstall byte-identical' }
-          $rulesB = netsh advfirewall firewall show rule name="Zephyr Player" | Out-String
-          if ($rulesB -notmatch 'Zephyr Player') { Write-Output $rulesB; Get-Content "$env:RUNNER_TEMP/uninstall-chain-smoke.log" -Tail 60 -ErrorAction SilentlyContinue; throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
-          netsh http delete urlacl url=https://+:47823/ | Out-Null
+          $rulesB = (Get-NetFirewallRule -DisplayName 'Zephyr Player*47824*' -ErrorAction SilentlyContinue | Out-String)
+          if ($rulesB -notmatch 'Zephyr Player 47824') { Write-Output $rulesB; Get-Content "$env:RUNNER_TEMP/uninstall-chain-smoke.log" -Tail 60 -ErrorAction SilentlyContinue; throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
+          netsh http delete urlacl url=https://+:47824/ | Out-Null
           netsh http delete urlacl url=http://+:47823/ | Out-Null
-          netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
-          netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
+          # Harness cleanup of the fixture on a disposable runner (not a product step).
+          Get-NetFirewallRule -DisplayName 'Zephyr Player*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
           Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
 
       - name: Legacy HKLM uninstall entry behavior proof (upgrade, setup declined)
