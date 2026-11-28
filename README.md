@@ -12,7 +12,7 @@ A phone remote app and Zephyr Media Player for Windows, plus VLC phone remote su
 2. Open Zephyr Player on the PC, then pair from the phone app with the short code.
 3. Keep the phone and PC on the same Wi-Fi.
 
-Keep both devices on the same trusted home network; traffic is not encrypted, so never forward its ports to the internet.
+Keep both devices on the same trusted home network and never forward their ports to the internet. The phone connects to Zephyr Player and Zephyr VLC Remote over HTTPS; VLC's own web remote on the PC is a separate plain-HTTP interface.
 
 Already using BingeMote with VLC? That connection stays separate; set it up under VLC PC in the phone app's Settings. Zephyr supersedes BingeMote.
 
