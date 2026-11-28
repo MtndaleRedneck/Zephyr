@@ -7,7 +7,7 @@
 ; MySourceDir selects which published exe is packaged: "out" is the CI test build
 ; (PAIR_CODE_HOOK compiled in, never shipped); "release-out" is the clean shipped build.
 #ifndef MyAppVersion
-  #define MyAppVersion "1.2.0"
+  #define MyAppVersion "1.3.0"
 #endif
 #ifndef MySourceDir
   #define MySourceDir "release-out"

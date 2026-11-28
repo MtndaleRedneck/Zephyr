@@ -12,7 +12,7 @@
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <RestoreLockedMode Condition="'$(ContinuousIntegrationBuild)' == 'true'">true</RestoreLockedMode>
     <AssemblyName>ZephyrPlayer</AssemblyName>
-    <Version>3.1.0</Version>
+    <Version>3.2.0</Version>
     <ApplicationIcon>assets\icon.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
