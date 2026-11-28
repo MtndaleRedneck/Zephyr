@@ -62,11 +62,11 @@ class StoreMigrationTest {
         return plain to secrets
     }
 
-    @Test fun `legacy 8488 retargets to 8492 with the token kept and the notice flagged`() {
+    @Test fun `legacy 8488 retargets to 8493 with the token kept and the notice flagged`() {
         val (plain, secrets) = legacy11Config()
         val store = Store(plain, secrets)
         assertTrue(store.migrateLegacyHelperPort())
-        assertEquals(8492, store.helperPort)
+        assertEquals(8493, store.helperPort)
         assertTrue(store.vlcRemoteNoticePending)
         // The saved pairing token is never touched: the PC helper imports it.
         assertEquals("a1".repeat(32), secrets.map["helperToken"])
@@ -84,12 +84,12 @@ class StoreMigrationTest {
         plain.writtenKeys.clear()
         val again = Store(plain, secrets)
         assertFalse(again.migrateLegacyHelperPort())
-        assertEquals(8492, again.helperPort)
+        assertEquals(8493, again.helperPort)
         assertFalse(plain.writtenKeys.contains("helperPort"))
     }
 
     @Test fun `fresh install never migrates and never flags the notice`() {
-        val plain = MapPrefs() // a fresh 1.2 install: helperPort defaults to 8492
+        val plain = MapPrefs() // a fresh 1.2 install: helperPort defaults to 8493
         val store = Store(plain, MapPrefs())
         assertFalse(store.migrateLegacyHelperPort())
         assertFalse(store.vlcRemoteNoticePending)

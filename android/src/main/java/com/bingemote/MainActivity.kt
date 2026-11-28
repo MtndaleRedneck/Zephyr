@@ -69,7 +69,7 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG) intent.getIntExtra("accent", -1).let { if (it in AccentSwatches.indices) AccentPrefs.choose(AccentSwatches[it]) }
         store = Store(this)
         // 1.1 -> 1.2: retarget a saved BingeMote helper pairing to Zephyr VLC
-        // Remote (port 8492) and flag the one-time "what changed" notice.
+        // Remote (HelperClient.DEFAULT_PORT) and flag the one-time "what changed" notice.
         // The migration and the debug seeds below write helper/VLC tuple fields, and each write publishes the tuple (a Keystore load): they run
         // together on IO, in this order, and RemoteState waits for the job before it first publishes or polls.
         val startup = lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {

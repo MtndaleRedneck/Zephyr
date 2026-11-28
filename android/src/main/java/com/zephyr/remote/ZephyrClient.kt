@@ -38,6 +38,8 @@ object ZephyrClient {
      *  keeps 8489 unconditionally, so the player never binds it. Players still on
      *  1.1.0 answer on 8489. "Find my PC" must hear BOTH generations. */
     const val DISCOVERY_PORT = 8490
+    /** Zephyr Player HTTPS port (1.1.0 plain http used 47823; the PC leaves that reservation alone). Manual entry without a port, and a display fallback, use this. */
+    const val DEFAULT_PORT = 47824
     const val LEGACY_DISCOVERY_PORT = 8489
     fun discoverPlayers(waitMs: Int = 1500, targets: List<java.net.InetAddress>? = null): List<com.bingemote.DiscoveredHelper> {
         // Both generations are probed IN PARALLEL (S5): serial waits doubled

@@ -80,7 +80,7 @@ class RobolectricStoreRuntimeTest {
         r.store.migrateLegacyHelperPort()                       // the startup work, done by the test
         startup.complete()
         q.runAll()                                              // the preload resumes after the join and publishes
-        assertEquals(8492, r.store.pairingPeek()?.endpoint?.port)
+        assertEquals(8493, r.store.pairingPeek()?.endpoint?.port)
         scope.coroutineContext[Job]?.cancel()
     }
 

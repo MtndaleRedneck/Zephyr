@@ -157,7 +157,7 @@ public class SubtitleTests : IDisposable
         using var server = new HttpServer();server.Start();
         using var client = HelperTestTls.Client();
         foreach(var path in new[]{"list","media","load","select"}) {
-            using var denied = await client.GetAsync("https://127.0.0.1:8492/subtitles/"+path);
+            using var denied = await client.GetAsync("https://127.0.0.1:8493/subtitles/"+path);
             Assert.Equal(System.Net.HttpStatusCode.Unauthorized,denied.StatusCode);
         }
         const string token="unit-subtitle-token";
@@ -165,10 +165,10 @@ public class SubtitleTests : IDisposable
         try {
             client.DefaultRequestHeaders.Add("X-Zephyr-VLC-Remote-Token",token);
             foreach(var path in new[]{"load","select"}) {
-                using var wrong = await client.GetAsync("https://127.0.0.1:8492/subtitles/"+path);
+                using var wrong = await client.GetAsync("https://127.0.0.1:8493/subtitles/"+path);
                 Assert.Equal(System.Net.HttpStatusCode.MethodNotAllowed,wrong.StatusCode);
             }
-            using var listWrong=await client.PostAsync("https://127.0.0.1:8492/subtitles/list",new StringContent("{}"));
+            using var listWrong=await client.PostAsync("https://127.0.0.1:8493/subtitles/list",new StringContent("{}"));
             Assert.Equal(System.Net.HttpStatusCode.MethodNotAllowed,listWrong.StatusCode);
         } finally {
             lock(Program.PhonesLock) Program.Phones.RemoveAll(p=>p.Token==token);

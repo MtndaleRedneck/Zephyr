@@ -43,7 +43,7 @@ an explicit choice.
 
 ## Discovery (player 1.2.0: own port)
 - "Find my PC": phone broadcasts BINGEMOTE_DISCOVER_V1 over UDP; the player
-  answers on its OWN port 8490 with ZEPHYR_PLAYER_HERE_V1|name|47823.
+  answers on its OWN port 8490 with ZEPHYR_PLAYER_HERE_V1|name|47824.
 - The player NEVER binds 8489. The BingeMote helper binds 8489 without address
   reuse, so any socket of ours there could make the helper's bind fail
   depending on start order. BingeMote keeps 8489 unconditionally, in both
@@ -62,7 +62,7 @@ an explicit choice.
   1.2.0 restores automatic discovery (8490). Update-sequencing guidance:
   install the phone update; manual entry covers the gap until then.
 - A failed 8490 bind surfaces in the UI ("Find my PC is off"), never swallowed.
-- Windows firewall rules (installer): UDP 8490 + TCP 47823, Private only.
+- Windows firewall rules (installer): UDP 8490 + TCP 47824 (HTTPS), Private LocalSubnet and Public LocalSubnet4 only; the 1.1.0 plain-http port 47823 is no longer used and its rules/reservation are left as found.
 
 ## Streaming (NEW, phone -> Zephyr Player)
 - Zephyr Player opens playback with a URL the phone hands it:

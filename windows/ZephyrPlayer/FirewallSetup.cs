@@ -195,9 +195,6 @@ namespace ZephyrPlayer
                 && udp.All(r => RuleMatches(r, 17, DiscoveryResponder.OwnPort, exePath));
         }
 
-        /// <summary>Deleting a pre-existing http:// reservation to make room for https is a shape-based delete (no creation witness). Off: the 1.1.0 upgrade path then fails closed at the https add (exit 3) until a decision is made.</summary>
-        internal const bool AllowShapeBasedOldHttpDelete = false;
-
         /// <summary>Uninstall: delete the https reservation only if the journal says this build added it AND the live descriptor is still equivalent; then it must read back absent.</summary>
         internal static bool RemoveJournaledUrlAcl(ZephyrLifecycle.UrlAclEntry e)
         {
@@ -472,9 +469,9 @@ namespace ZephyrPlayer
                             var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
                                 () => Run("netsh", "http add urlacl url=" + url + " sddl=" + grant),
                                 () => ClassifyOldHttpUrlAcl(sid),
-                                () => AllowShapeBasedOldHttpDelete ? Run("netsh", "http delete urlacl url=http://+:" + PlaybackServer.DefaultPort + "/").ExitCode : -1);
+                                () => -1 /* no delete callback: an old http:// reservation has no creation witness and is never deleted */);
                             if (addRes.FirstExit != 0)
-                                Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (AllowShapeBasedOldHttpDelete ? "" : " (disabled: an old http reservation has no creation witness and is never deleted by shape)"));
+                                Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + " (an old http reservation is never deleted)");
                             if (addRes.Exit != 0 || !UrlAclExists()) return 3;
                             var (foundNow, liveSddl) = QueryUrlAcl(url);
                             if (foundNow && liveSddl != null && ZephyrLifecycle.SddlUtil.Equivalent(liveSddl, grant))

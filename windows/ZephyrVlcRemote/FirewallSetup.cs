@@ -43,9 +43,6 @@ internal static class FirewallSetup
 
     private static bool TlsStepDone;
 
-    /// <summary>Deleting a pre-existing http:// reservation to make room for https is a shape-based delete (no creation witness). Off: the 1.1.0 upgrade path then fails closed at the https add (exit 3) until a decision is made.</summary>
-    internal const bool AllowShapeBasedOldHttpDelete = false;
-
     /// <summary>The unelevated "is everything in place" check. firewall.ok only records that this check passed; it holds no identity data and the identity marker is a separate, elevated-written file.</summary>
     internal static bool SetupIsCurrent()
     {
@@ -126,9 +123,9 @@ internal static class FirewallSetup
                         var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
                             () => RunCapture("netsh", "http add urlacl url=" + url + " sddl=" + grant),
                             () => ClassifyOldHttpUrlAcl(sid),
-                            () => AllowShapeBasedOldHttpDelete ? Run("netsh", "http delete urlacl url=http://+:" + Program.HttpPort + "/") : -1);
+                            () => -1 /* no delete callback: an old http:// reservation has no creation witness and is never deleted */);
                         if (addRes.FirstExit != 0)
-                            Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + (AllowShapeBasedOldHttpDelete ? "" : " (disabled: an old http reservation has no creation witness and is never deleted by shape)"));
+                            Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + " (an old http reservation is never deleted)");
                         if (addRes.Exit != 0 || !UrlAclExists())
                         {
                             Program.Log("firewall setup: the listen permission could not be added (netsh exit " + addRes.Exit + "); nothing existing was replaced.");

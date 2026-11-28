@@ -64,7 +64,7 @@ class Store internal constructor(
         set(v) = pairingSection { prefs.edit().putInt("vlcPort", v).apply() }
 
     var helperPort: Int
-        get() = (helperPairing() as? PairedCredential.State.Secure)?.credential?.port ?: prefs.getInt("helperPort", 8492) // Zephyr VLC Remote default
+        get() = (helperPairing() as? PairedCredential.State.Secure)?.credential?.port ?: prefs.getInt("helperPort", HelperClient.DEFAULT_PORT) // Zephyr VLC Remote default
         set(v) = pairingSection { prefs.edit().putInt("helperPort", v).apply() }
 
     /** One-time notice after a 1.1 -> 1.2 upgrade retargeted the helper: the PC
@@ -78,8 +78,8 @@ class Store internal constructor(
      *  retarget the port; flag the one-time notice so the change is never silent
      *  (round-3 A3). Returns true only on the upgrade path. */
     fun migrateLegacyHelperPort(): Boolean {
-        if (prefs.getInt("helperPort", 8492) != 8488) return false
-        pairingSection { prefs.edit().putInt("helperPort", 8492).putBoolean("vlcRemoteNoticePending", true).apply() }
+        if (prefs.getInt("helperPort", HelperClient.DEFAULT_PORT) != 8488) return false
+        pairingSection { prefs.edit().putInt("helperPort", HelperClient.DEFAULT_PORT).putBoolean("vlcRemoteNoticePending", true).apply() }
         return true
     }
 
@@ -268,7 +268,7 @@ class Store internal constructor(
         get() = prefs.getString("zephyrPcName", "") ?: ""
         private set(v) = prefs.edit().putString("zephyrPcName", v).apply()
 
-    val zephyrPort: Int get() = zephyrTarget()?.port ?: 47823
+    val zephyrPort: Int get() = zephyrTarget()?.port ?: com.zephyr.remote.ZephyrClient.DEFAULT_PORT
 
     /** The phone's Connected Sources selection (protocol.md Source routing): which PC
      * target input frames go to. Default VLC = today's behavior; nothing re-routes

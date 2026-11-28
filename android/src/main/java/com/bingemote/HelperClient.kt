@@ -14,14 +14,14 @@ data class DiscoveredHelper(val host: String, val port: Int, val name: String)
 
 /**
  * Client for the Zephyr VLC Remote Windows helper: mouse, scroll, zoom and keyboard over LAN HTTPS.
- * It only ever talks the Zephyr VLC Remote identity (port 8491 discovery / 8492 HTTP),
+ * It only ever talks the Zephyr VLC Remote identity (port 8491 discovery / 8493 HTTPS),
  * so a BingeMote install on the same PC is never discovered or driven by this app.
  * Every request carries the pairing token and goes over HTTPS pinned to the PC's key,
  * which the phone remembers the first time it pairs. Pairing trades a one-time 6-digit code
  * (shown on the PC) for the token. A different key later is refused and needs a new pairing.
  */
 object HelperClient {
-    const val DEFAULT_PORT = 8492 // Zephyr VLC Remote HTTP (BingeMote keeps 8488)
+    const val DEFAULT_PORT = 8493 // Zephyr VLC Remote HTTPS (earlier plain-http builds used 8492; BingeMote keeps 8488)
     const val DISCOVERY_PORT = 8491 // Zephyr VLC Remote discovery (BingeMote keeps 8489)
     private const val DISCOVER_MAGIC = "BINGEMOTE_DISCOVER_V1"
     internal const val REPLY_MAGIC = "ZEPHYR_VLC_REMOTE_HERE_V1"

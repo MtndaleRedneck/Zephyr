@@ -49,7 +49,7 @@ public class CoexistenceTests
         Assert.Equal("BINGEMOTE_HERE_V1|TESTPC|8488", Ask(8489));
         Assert.Equal("ZEPHYR_PLAYER_HERE_V1|TESTPC|47823", Ask(8490));
         // The real responder under test: our magic and our HTTP port.
-        Assert.Equal($"ZEPHYR_VLC_REMOTE_HERE_V1|{Program.MachineLabel()}|8492", Ask(8491));
+        Assert.Equal($"ZEPHYR_VLC_REMOTE_HERE_V1|{Program.MachineLabel()}|8493", Ask(8491));
     }
 
     [Fact]

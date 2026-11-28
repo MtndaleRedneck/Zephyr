@@ -17,7 +17,7 @@ namespace ZephyrVlcRemote;
 
 internal static class Program
 {
-    internal const int HttpPort = 8492;      // BingeMote keeps 8488; Zephyr Player owns 47823
+    internal const int HttpPort = 8493;      // HTTPS port. Earlier plain-http builds used 8492 (their http:// reservation is left alone, never deleted); BingeMote keeps 8488; Zephyr Player owns 47824
     internal const int DiscoveryPort = 8491; // BingeMote keeps 8489, Zephyr Player owns 8490
     internal const string DiscoverMagic = "BINGEMOTE_DISCOVER_V1"; // the shared wire question every Zephyr discovery responder answers
     internal const string ReplyMagic = "ZEPHYR_VLC_REMOTE_HERE_V1";

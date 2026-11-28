@@ -20,7 +20,7 @@ namespace ZephyrPlayer
     /// </summary>
     public sealed class PlaybackServer : IDisposable
     {
-        public const int DefaultPort = 47823; // distinct from BingeMote helper's port
+        public const int DefaultPort = 47824; // HTTPS port. 1.1.0 plain http used 47823 (its http:// reservation is left alone, never deleted); distinct from BingeMote helper's port
         private readonly HttpListener _listener = new HttpListener();
         private readonly SemaphoreSlim _requests = new(16);
         private readonly SemaphoreSlim _pairRequests = new(4);

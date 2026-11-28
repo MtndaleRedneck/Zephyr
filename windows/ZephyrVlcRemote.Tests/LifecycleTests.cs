@@ -8,7 +8,7 @@ namespace ZephyrVlcRemote.Tests;
 // Pure logic only. Firewall, COM, DACL and journal-directory behavior are NOT covered here and stay unproven until a Windows run.
 public class LifecycleTests
 {
-    private static readonly RuleSpec Tcp = new("T (Private)", "Private", "TCP", 8492, "LocalSubnet", "System");
+    private static readonly RuleSpec Tcp = new("T (Private)", "Private", "TCP", 8493, "LocalSubnet", "System");
     private static string[] Good(RuleSpec s) => new[] { "True", "Inbound", "Allow", s.Profile, s.Protocol, s.Port.ToString(), "Any", s.Remote, "Any", s.Program, "Any", "Block" };
     private const string K1 = "Zephyr-0123456789abcdef0123456789abcdef";
 
@@ -88,12 +88,12 @@ public class LifecycleTests
     public void ConflictsAreReportedNotOwned()
     {
         var owned = new HashSet<string> { K1 };
-        var ports = new HashSet<int> { 8492 }; var legacy = new HashSet<string> { "Zephyr VLC Remote" };
+        var ports = new HashSet<int> { 8493 }; var legacy = new HashSet<string> { "Zephyr VLC Remote" };
         string[] Row(string key, string disp, string en, string port, string remote) => new[] { key, disp, en, "Inbound", "Allow", "Public", "TCP", port, remote, "Any" };
-        Assert.False(ZephyrRules.IsConflict(Row(K1, "ours", "True", "8492", "LocalSubnet4"), owned, ports, legacy));
-        Assert.True(ZephyrRules.IsConflict(Row("x", "someone", "True", "8492", "Any"), owned, ports, legacy));
+        Assert.False(ZephyrRules.IsConflict(Row(K1, "ours", "True", "8493", "LocalSubnet4"), owned, ports, legacy));
+        Assert.True(ZephyrRules.IsConflict(Row("x", "someone", "True", "8493", "Any"), owned, ports, legacy));
         Assert.True(ZephyrRules.IsConflict(Row("x", "Zephyr VLC Remote", "True", "9999", "Any"), owned, ports, legacy));
-        Assert.False(ZephyrRules.IsConflict(Row("x", "Zephyr VLC Remote", "False", "8492", "Any"), owned, ports, legacy));
+        Assert.False(ZephyrRules.IsConflict(Row("x", "Zephyr VLC Remote", "False", "8493", "Any"), owned, ports, legacy));
         Assert.False(ZephyrRules.IsConflict(Row("x", "other", "True", "1234", "Any"), owned, ports, legacy));
         var progs = new HashSet<string> { "C:\\vlc\\vlc.exe" };
         var byProg = Row("x", "Allow VLC", "True", "Any", "Any"); byProg[9] = "c:\\VLC\\vlc.exe";
@@ -172,11 +172,11 @@ public class UrlAclWitnessTests
     public void JournalAcceptsOnlyAnHttpsPlusUrl()
     {
         var k = "Zephyr-0123456789abcdef0123456789abcdef";
-        var j = new LifecycleJournal(1, new(), null, new(), new UrlAclEntry("https://+:8492/", "D:(A;;GX;;;" + Sid + ")"));
+        var j = new LifecycleJournal(1, new(), null, new(), new UrlAclEntry("https://+:8493/", "D:(A;;GX;;;" + Sid + ")"));
         Assert.True(LifecycleJournalStore.IsValid(j));
-        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("http://+:8492/", "x") }));
-        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("https://+:8492/ ; rm", "x") }));
-        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("https://+:8492/", "") }));
+        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("http://+:8493/", "x") }));
+        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("https://+:8493/ ; rm", "x") }));
+        Assert.False(LifecycleJournalStore.IsValid(j with { UrlAcl = new UrlAclEntry("https://+:8493/", "") }));
         Assert.NotNull(k);
     }
 
