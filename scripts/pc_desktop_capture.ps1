@@ -1054,7 +1054,8 @@ StopZephyr
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
 . "$PSScriptRoot/zephyr_fw_assert.ps1"; Remove-ZJournaledRules 'ZephyrPlayer'   # this script's own setup run created them; removed by the product journal's unique keys
-$global:LASTEXITCODE = 0   # cleanup only: a leftover native nonzero code would become the step exit code; real failures exit 1 explicitly below
+Write-Host "capture cleanup: last native exit code before reset = $global:LASTEXITCODE (best-effort cleanup only; every capture gate below still fails the step explicitly)"
+$global:LASTEXITCODE = 0
 
 # Verdicts: video area must be alive (moving pattern => many lit pixels in the
 # center band), and the bottom bar band must show lit control pixels.
@@ -1104,4 +1105,5 @@ if (-not $pauseGateOk) { Write-Host "::error::functional pause proof failed: $fn
 if ($stResume -ne 'Playing') { Write-Host "::error::the second click did not resume playback (status $stResume)"; $barGateFailed = $true }
 if ($fgVerdict -ne 'PROVEN') { Write-Host "::error::Player forget state proof failed ($fgDetail)"; $barGateFailed = $true }
 if ($brVerdict -ne 'PROVEN') { Write-Host "::error::Player broken-store state proof failed ($brDetail)"; $barGateFailed = $true }
+if ($incomplete) { Write-Host "::error::capture incomplete: window sizes home_empty=$sz1 home_library=$sz1b settings=$sz3 settings_bottom=$sz4 player_windowed=$sz5 player_fullscreen=$sz6 (a 0 x 0 window never produced pixels)" }
 if ($incomplete -or $barGateFailed) { exit 1 }
