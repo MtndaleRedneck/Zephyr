@@ -72,6 +72,8 @@ class UpgradeConnectionTest {
         Thread.sleep(500)
         println("UPGRADE: prior release seeded ordinary+encrypted preferences; helper/VLC auth passed")
     }
+    /** Store.pairingNeedsRepair by reflection: this file is also compiled into the OLD release's test APK (seed side), whose Store has no such member, and only the new build runs verify. */
+    private fun needsRepair(s: Store): Boolean = s.javaClass.getMethod("getPairingNeedsRepair").invoke(s) as Boolean
     @Test fun verifyNewReleaseAfterUpdate() {
         val s=Store(ctx)
         // Legacy retention: everything the old plain pairing stored survives the update untouched.
@@ -82,7 +84,7 @@ class UpgradeConnectionTest {
         assertTrue("setupDone retained",s.setupDone);assertTrue("lockScreenControls retained",s.lockScreenControls)
         assertEquals("seeded124",ctx.getSharedPreferences("settings",0).getString("upgradeFixture",null))
         // The secure-only build never treats an old plain-HTTP helper pairing as a connection: it must read "pair again".
-        assertTrue("legacy plain helper pairing must need repair",s.pairingNeedsRepair)
+        assertTrue("legacy plain helper pairing must need repair",needsRepair(s))
         assertFalse("legacy plain helper pairing must not count as configured",s.isConfigured)
         assertFalse("legacy plain helper pairing must not count as paired",s.isPaired(Source.VLC))
         val pc=Pc(token,password)
@@ -96,7 +98,7 @@ class UpgradeConnectionTest {
                 inst.runOnMainSync { ctx.startActivity(Intent(ctx,MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                 Thread.sleep(6_000)
                 assertEquals("no plaintext helper request after the upgrade",0,pc.helper.get())
-                assertTrue("still needs repair after polling and launch",s.pairingNeedsRepair)
+                assertTrue("still needs repair after polling and launch",needsRepair(s))
                 println("UPGRADE: legacy plain pairing retained and shown as pair-again; no plaintext helper request")
                 device.pressHome();Thread.sleep(500)
             } finally { scope.cancel() }
