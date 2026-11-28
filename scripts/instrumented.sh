@@ -77,7 +77,7 @@ com.bingemote.ReleaseIdentityTest
 
 # Clear only our own FailureDumpRule/test-failure outputs so anything pulled later belongs to THIS run.
 EVDIR=/sdcard/Android/data/$PKG/files
-if ! adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*"; then
+if ! adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-updates-* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*"; then
   echo "CLEAR DIAG: stale-evidence cleanup failed - pulls may include files from an earlier run on this emulator"
 fi
 # Verified pull: temp name, per-type signature check, keep-or-log. A failed or error-text pull is deleted
@@ -116,6 +116,10 @@ for cls in $CLASSES; do
     adb exec-out cat "$f" > "instrument-results/$(basename $f)" 2>/dev/null || true
     adb shell rm -f "$f"
   done
+  # Evidence the tests write on purpose (update-success expiry: the appeared and the expired frames), pulled on pass AND fail.
+  for f in $(adb shell "ls $EVDIR/bm-updates-*.png" 2>/dev/null | tr -d '\r'); do
+    adb exec-out cat "$f" > "instrument-results/$(basename $cls).$(basename $f)" 2>/dev/null || true
+  done
   if grep -q 'PICKER UNVERIFIED' "instrument-results/$(basename $cls).txt"; then
     echo "WARNING: $cls skipped as UNVERIFIED (assumption-skip reports as OK) - not a pass"
   fi
@@ -141,7 +145,7 @@ for cls in $CLASSES; do
     dumps=$(printf '%s\n' "$dump_listing" | tr -d '\r' | grep -E '^bm-(dump|andialog|dismissed-dialogs|setup-selected-pc-fail|setup-confirmed-address-fail)' || true)
     if [ -z "$dumps" ]; then echo "PULL DIAG: no FailureDumpRule/test-failure evidence files listed for $cls"; fi
     for dump in $dumps; do pull_device_file "$dump" "$(basename $cls)"; done
-    adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*" 2>/dev/null || true
+    adb shell "rm -f $EVDIR/bm-dump* $EVDIR/bm-updates-* $EVDIR/bm-andialog* $EVDIR/bm-dismissed-dialogs.txt $EVDIR/bm-setup-selected-pc-fail.* $EVDIR/bm-setup-confirmed-address-fail.*" 2>/dev/null || true
     # First-failure capture, taken right after the session (diagnostic only; never changes the verdict, never reruns):
     # screen, focus, hierarchy, the class's raw log (logcat was cleared before this class) and the log lines that name an ANR,
     # crash, focus change, launch or slow main thread. Kept under the class name so the FIRST failure is never overwritten.

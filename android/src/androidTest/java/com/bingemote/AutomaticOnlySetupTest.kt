@@ -78,13 +78,14 @@ class AutomaticOnlySetupTest {
         val deadline = android.os.SystemClock.elapsedRealtime() + 7000
         var expired = false
         while (android.os.SystemClock.elapsedRealtime() < deadline) {
-            val now = java.io.File(ctx.getExternalFilesDir(null), "bm-updates-poll.png")
+            val now = java.io.File(ctx.getExternalFilesDir(null), "bm-updates-expired.png")   // last poll frame is kept, pass or fail
             if (device.takeScreenshot(now) && visibleTextPixels(now, region) * 20 < baseline) { expired = true; break }
             Thread.sleep(250)
         }
-        assertTrue("success text still drawn after 7 s", expired)
+        // Diagnostic only, never an assert: what the accessibility tree says once the pixels are judged. The first failing run had the node here with no pixels.
+        println("UPDATES EXPIRY: pixelsExpired=$expired a11yTreeStillHasNode=${device.hasObject(By.text("You're up to date."))}")
+        assertTrue("success text still drawn after 7 s (frames bm-updates-success.png / bm-updates-expired.png; first-run note: the accessibility tree held the node after the pixels were gone)", expired)
         assertTrue(device.hasObject(By.text("Version " + BuildConfig.VERSION_NAME)))
-        device.takeScreenshot(java.io.File(ctx.getExternalFilesDir(null), "bm-updates-expired.png"))
     }
 
     @Test fun cancelReturnsToSettingsAndBottomBackIsAbsent() {
