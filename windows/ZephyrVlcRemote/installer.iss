@@ -59,9 +59,6 @@ Filename: "{app}\ZephyrVlcRemote.exe"; Description: "Open Zephyr VLC Remote"; Fl
 ; After a silent update, reopen the app for him as the signed-in user.
 Filename: "{app}\ZephyrVlcRemote.exe"; Flags: nowait skipifnotsilent runasoriginaluser
 
-[UninstallRun]
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Zephyr VLC Remote Watchdog"" /F"; Flags: runhidden waituntilterminated skipifdoesntexist; RunOnceId: "delwatchdog"
-
 ; Firewall note: the UDP discovery rule is program-scoped to {app}\ZephyrVlcRemote.exe
 ; (inert once the exe is deleted, but removed anyway by the cleanup below). The vlc.exe
 ; rule (program-scoped, Private-only, LocalSubnet) may be shared with a co-installed

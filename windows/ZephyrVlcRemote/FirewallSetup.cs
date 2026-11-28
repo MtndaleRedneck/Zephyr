@@ -17,7 +17,7 @@ namespace ZephyrVlcRemote;
 internal static class FirewallSetup
 {
     /// <summary>First line of the firewall.ok marker. Bump when the required shape changes.</summary>
-    internal const string MarkerVersion = "v3";   // v3: HTTPS listener reservation plus certificate identity and sslcert bindings
+    internal const string MarkerVersion = "v4";   // v3: HTTPS listener reservation plus certificate identity and sslcert bindings
 
     /// <summary>Who the port's URL reservation belongs to.</summary>
     internal enum AclOwnership { None, Ours, Legacy, Foreign }
@@ -97,32 +97,18 @@ internal static class FirewallSetup
                 return 8;
             }
             TlsStepDone = true;
-            Run("netsh", $"advfirewall firewall delete rule name=\"{Program.LegacyFirewallRule}\""); // 1.x installs
-            // Re-add our own rules from scratch: by name they are ours, whatever shape an
-            // older build gave them (a 1.x exe-scoped TCP rule included). BingeMote's
-            // rules (8488/8489) and any other app's rules are never named here.
-            Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
-            AddRule("TCP", Program.HttpPort);
-            AddRule("UDP", Program.DiscoveryPort);
-            // VLC's web remote needs inbound too: one Private-networks-only rule for vlc.exe.
+            // Create-only, unique-Name, journaled rules (ProgramData journal, admin-written). Nothing is deleted or rewritten by DisplayName:
+            // earlier builds' rules ("Zephyr VLC Remote", "Zephyr VLC Remote VLC", "Zephyr VLC Remote Helper") stay as found and are reported below.
+            ZephyrLifecycle.ProtectedFile.App = "ZephyrVlcRemote";
+            ZephyrLifecycle.LifeLog.Sink = Program.Log;
             var vlc = Movies.FindVlc();
-            if (vlc != null)
-            {
-                Run("netsh", $"advfirewall firewall delete rule name=\"{Program.VlcFirewallRule}\"");
-                var vcode = Run("netsh", $"advfirewall firewall add rule name=\"{Program.VlcFirewallRule}\" dir=in action=allow program=\"{vlc}\" profile=private remoteip=localsubnet");
-                if (vcode != 0) Console.Error.WriteLine("The VLC firewall rule could not be added (the phone may still reach VLC if Windows already allows it).");
-                else
-                {
-                    // Ownership marker: a future elevated cleanup may remove only what we
-                    // created - never a rule another app (or Windows' own prompt) owns.
-                    try { File.WriteAllText(VlcRuleMarkerPath(dataDir), vlc + "\n" + DateTime.UtcNow.ToString("O")); } catch { }
-                }
-            }
-            else Console.Error.WriteLine("VLC is not installed - its firewall rule was skipped.");
-            // Report, never touch: any broad vlc.exe rules from elsewhere (all networks, or
-            // all programs) are listed for the helper log. Zephyr VLC Remote only adds its own
-            // Private-only rule above.
-            try { File.WriteAllText(VlcInventoryPath(dataDir), InventoryVlcRules()); } catch { }
+            var specs = ExpectedSpecs(Environment.ProcessPath ?? "", vlc);
+            if (vlc == null) Console.Error.WriteLine("VLC is not installed - its firewall rule was skipped.");
+            var rulesOk = ZephyrLifecycle.ZephyrRules.Install(specs);
+            if (!rulesOk) Console.Error.WriteLine("Some firewall rules could not be created as expected; see the helper log. Existing rules were not changed.");
+            ReportOtherRules();
+            var wdExit = ZephyrLifecycle.WatchdogSetup.RunInstall();   // 0 ok, 5 skipped, 6 failed: the watchdog never blocks the network setup
+            Program.Log("firewall setup: watchdog step exit " + wdExit + ".");
             // The listen permission: replace only what is ours (already correct, or the
             // broad Everyone grant a 1.x build wrote). A reservation belonging to another
             // app or another Windows user is NEVER overwritten - that is their port.
@@ -172,9 +158,9 @@ internal static class FirewallSetup
             catch (Exception ex) { Program.Log("firewall setup: old http reservation check failed (" + ex.GetType().Name + "); left alone."); }
             Program.Log("firewall setup: rules added (TCP System/" + Program.HttpPort + ", UDP exe/" +
                 Program.DiscoveryPort + "), listen permission scoped to SID " + sid + ".");
-            if (!RuleExists())
+            if (!rulesOk || !RulesHaveCurrentShape())
             {
-                Console.Error.WriteLine("The firewall rule could not be verified after adding it.");
+                Console.Error.WriteLine("The firewall rules could not be verified after adding them.");
                 return 2;
             }
             // The marker is written by the UNELEVATED copy after it verifies the rules
@@ -324,7 +310,31 @@ internal static class FirewallSetup
     /// 1.x shape, which is exactly the upgrade bug this guards against.</summary>
     public static bool RulesHaveCurrentShape()
     {
-        return RulesHaveCurrentShape(ReadRulesByName(Program.FirewallRule, Program.LegacyFirewallRule), Environment.ProcessPath ?? "");
+        // Our own journaled-shape rules read Exact by live read. This says nothing about OTHER rules (older builds' broader ones may still exist): see ReportOtherRules.
+        return ZephyrLifecycle.ZephyrRules.AllExact(ExpectedSpecs(Environment.ProcessPath ?? "", null));
+    }
+
+    /// <summary>Four rules (Private LocalSubnet, Public LocalSubnet4) per port: TCP is System (http.sys), UDP is this exe; the vlc.exe rule stays Private + LocalSubnet only.</summary>
+    internal static ZephyrLifecycle.RuleSpec[] ExpectedSpecs(string exe, string? vlcExe)
+    {
+        var l = new List<ZephyrLifecycle.RuleSpec>();
+        l.AddRange(ZephyrLifecycle.ZephyrRules.ForPort("Zephyr VLC Remote " + Program.HttpPort + " TCP", "TCP", Program.HttpPort, "System"));
+        l.AddRange(ZephyrLifecycle.ZephyrRules.ForPort("Zephyr VLC Remote " + Program.DiscoveryPort + " UDP", "UDP", Program.DiscoveryPort, exe));
+        if (vlcExe != null) l.Add(new ZephyrLifecycle.RuleSpec("Zephyr VLC Remote VLC web remote (Private)", "Private", "Any", 0, "LocalSubnet", vlcExe));
+        return l.ToArray();
+    }
+
+    internal static readonly string[] LegacyRuleNames = { Program.FirewallRule, Program.VlcFirewallRule, Program.LegacyFirewallRule };
+
+    /// <summary>Report, never touch: other enabled inbound allow rules naming our ports or carrying earlier Zephyr names.</summary>
+    internal static void ReportOtherRules()
+    {
+        var (_, j) = ZephyrLifecycle.LifecycleJournalStore.Read();
+        var owned = new HashSet<string>(j?.Rules.Select(r => r.Key) ?? Enumerable.Empty<string>());
+        var (ok, list) = ZephyrLifecycle.ZephyrRules.Conflicts(owned, new HashSet<int> { Program.HttpPort, Program.DiscoveryPort }, new HashSet<string>(LegacyRuleNames));
+        if (!ok) { Program.Log("firewall inventory: other rules could not be read; the boundary is not claimed."); return; }
+        if (list.Count == 0) Program.Log("firewall inventory: no other enabled inbound allow rules found for these ports or earlier Zephyr names.");
+        foreach (var c in list) Program.Log("firewall inventory: existing rule left as found (not created by this build, not removed): " + c);
     }
 
     internal static bool RulesHaveCurrentShape(List<RuleShape>? rules, string exePath)
@@ -616,7 +626,10 @@ internal static class FirewallSetup
             Console.Error.WriteLine("The listen permission on " + Program.HttpPort + " belongs to another app or Windows user; the firewall rules were left in place too.");
             return 0;
         }
-        Run("netsh", $"advfirewall firewall delete rule name=\"{Program.FirewallRule}\"");
+        // Rules and watchdog: only what the protected journal says this build created, by unique key, each read back. Earlier builds' rules and the legacy task are left.
+        ZephyrLifecycle.ProtectedFile.App = "ZephyrVlcRemote";
+        ZephyrLifecycle.LifeLog.Sink = Program.Log;
+        ZephyrLifecycle.ZephyrRules.UninstallCleanup(ZephyrLifecycle.WatchdogSetup.RemoveJournaled);
         if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
         {
             Run("netsh", "http delete urlacl url=https://+:" + Program.HttpPort + "/");

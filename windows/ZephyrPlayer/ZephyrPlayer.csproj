@@ -30,6 +30,7 @@
   <ItemGroup>
     <!-- The helper's reviewed secure-identity source, compiled once more for the Player with its own identity values (TlsProduct). -->
     <Compile Include="..\ZephyrVlcRemote\HelperTls.cs" Link="HelperTls.cs" />
+    <Compile Include="..\ZephyrVlcRemote\ZephyrLifecycle.cs" Link="ZephyrLifecycle.cs" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />

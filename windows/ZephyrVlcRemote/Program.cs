@@ -459,7 +459,7 @@ internal static class Program
             NoteDialog.Show(null, "Could not start listening for the phone. If Windows asked for administrator permission earlier, choose Yes - it is needed once to open the port.\n\n" + ex.Message);
             return 1;
         }
-        RegisterWatchdog(); // only a working app gets the watchdog: no 5-minute relaunch loop after a failed setup
+        // The watchdog task is registered only by the elevated, journaled setup step (never from this unelevated start).
 
         using var showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
         using var quitEvent = new EventWaitHandle(false, EventResetMode.AutoReset, QuitEventName);
@@ -1189,42 +1189,5 @@ internal static class Program
         try { File.WriteAllText(QuitMarkerPath, ""); } catch { }
         Log("Quit from the tray menu (staying off until the next sign-in or manual start).");
         Application.Exit();
-    }
-
-    /// <summary>A per-user scheduled task relaunches the app (silent --ensure-running) every
-    /// 5 minutes when it is not running. Runs as him, so no admin prompt; uninstall deletes it.</summary>
-    private static void RegisterWatchdog()
-    {
-        try
-        {
-            var exe = Environment.ProcessPath;
-            if (exe == null) return;
-            // XML, not schtasks flags: the defaults stop the task after 3 days, pause it on
-            // battery and run it below normal priority - all wrong for keeping the app alive.
-            var xml = "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n"
-                + "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n"
-                + "  <Triggers><TimeTrigger><StartBoundary>2020-01-01T00:00:00</StartBoundary>"
-                + "<Repetition><Interval>PT5M</Interval></Repetition></TimeTrigger></Triggers>\n"
-                + "  <Settings>"
-                + "<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>"
-                + "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>"
-                + "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>"
-                + "<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>"
-                + "<StartWhenAvailable>true</StartWhenAvailable>"
-                + "<Priority>4</Priority>"
-                + "</Settings>\n"
-                + "  <Actions><Exec><Command>" + System.Security.SecurityElement.Escape(exe) + "</Command>"
-                + "<Arguments>--ensure-running</Arguments></Exec></Actions>\n"
-                + "</Task>";
-            var tmp = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-vlc-remote-watchdog.xml");
-            System.IO.File.WriteAllText(tmp, xml, System.Text.Encoding.Unicode);
-            var psi = new System.Diagnostics.ProcessStartInfo("schtasks",
-                "/Create /F /TN \"Zephyr VLC Remote Watchdog\" /XML \"" + tmp + "\"")
-            { CreateNoWindow = true, UseShellExecute = false };
-            using var p = System.Diagnostics.Process.Start(psi);
-            p?.WaitForExit(10000);
-            try { System.IO.File.Delete(tmp); } catch { }
-        }
-        catch { /* the watchdog is a safety net, not a requirement */ }
     }
 }

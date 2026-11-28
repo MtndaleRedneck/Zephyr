@@ -34,7 +34,7 @@ namespace ZephyrPlayer
         public const string UdpRuleName = "Zephyr Player Discovery";
 
         /// <summary>First line of the firewall marker. Bump when the required shape changes.</summary>
-        internal const string MarkerVersion = "v2";
+        internal const string MarkerVersion = "v3";
 
         /// <summary>Who the port's URL reservation belongs to.</summary>
         internal enum AclOwnership { None, Ours, Legacy, Foreign }
@@ -153,7 +153,27 @@ namespace ZephyrPlayer
         /// the names but not the shape.</summary>
         public static bool RulesHaveCurrentShape()
         {
-            return RulesHaveCurrentShape(ReadRulesByName(TcpRuleName, UdpRuleName), Environment.ProcessPath ?? "");
+            return RulesHaveCurrentShapeFor(Environment.ProcessPath ?? "");
+        }
+
+        /// <summary>Four rules (Private LocalSubnet, Public LocalSubnet4) per port: TCP System (http.sys), UDP this exe. No Domain, no Any remote.</summary>
+        internal static ZephyrLifecycle.RuleSpec[] ExpectedSpecs(string exe)
+        {
+            var l = new List<ZephyrLifecycle.RuleSpec>();
+            l.AddRange(ZephyrLifecycle.ZephyrRules.ForPort("Zephyr Player " + PlaybackServer.DefaultPort + " TCP", "TCP", PlaybackServer.DefaultPort, "System"));
+            l.AddRange(ZephyrLifecycle.ZephyrRules.ForPort("Zephyr Player Discovery " + DiscoveryResponder.OwnPort + " UDP", "UDP", DiscoveryResponder.OwnPort, exe));
+            return l.ToArray();
+        }
+
+        /// <summary>Report, never touch: other enabled inbound allow rules naming our ports or carrying earlier Zephyr Player names (1.1.0 any-address 47823 and UDP 8489 included by name).</summary>
+        internal static void ReportOtherRules()
+        {
+            var (_, j) = ZephyrLifecycle.LifecycleJournalStore.Read();
+            var owned = new HashSet<string>(j?.Rules.Select(r => r.Key) ?? Enumerable.Empty<string>());
+            var (ok, list) = ZephyrLifecycle.ZephyrRules.Conflicts(owned, new HashSet<int> { PlaybackServer.DefaultPort, DiscoveryResponder.OwnPort, 8489 }, new HashSet<string> { TcpRuleName, UdpRuleName });
+            if (!ok) { Console.Error.WriteLine("firewall inventory: other rules could not be read; the boundary is not claimed."); return; }
+            if (list.Count == 0) Console.Error.WriteLine("firewall inventory: no other enabled inbound allow rules found for these ports or earlier Zephyr Player names.");
+            foreach (var c in list) Console.Error.WriteLine("firewall inventory: existing rule left as found (not created by this build, not removed): " + c);
         }
 
         /// <summary>CI hook entry: check the rules against an EXPLICIT expected exe
@@ -162,7 +182,8 @@ namespace ZephyrPlayer
         /// 40508776538: the unelevated check failed on its own path, not the shape).</summary>
         internal static bool RulesHaveCurrentShapeFor(string exePath)
         {
-            return RulesHaveCurrentShape(ReadRulesByName(TcpRuleName, UdpRuleName), exePath);
+            ZephyrLifecycle.ProtectedFile.App = "ZephyrPlayer";
+            return ZephyrLifecycle.ZephyrRules.AllExact(ExpectedSpecs(exePath));
         }
 
         internal static bool RulesHaveCurrentShape(List<RuleShape>? rules, string exePath)
@@ -417,15 +438,13 @@ namespace ZephyrPlayer
                     Console.Error.WriteLine("Secure setup could not be completed, so Zephyr Player did not open the network port. No firewall rule or listen permission was changed by this run (secure setup exit " + tlsExit + ").");
                     return 8;
                 }
-                // Re-add our own rules from scratch: by name they are ours, whatever shape
-                // the 1.1.0 installer gave them (any-address TCP 47823, UDP 8489 - which
-                // was BingeMote's port and must go). Other apps' rules are never named.
-                Run("netsh", $"advfirewall firewall delete rule name=\"{TcpRuleName}\"");
-                var tcp = Run("netsh", $"advfirewall firewall add rule name=\"{TcpRuleName}\" dir=in action=allow protocol=TCP localport={PlaybackServer.DefaultPort} program=System profile=private remoteip=localsubnet");
-                if (tcp.ExitCode != 0) return 2;
-                Run("netsh", $"advfirewall firewall delete rule name=\"{UdpRuleName}\"");
-                var udp = Run("netsh", $"advfirewall firewall add rule name=\"{UdpRuleName}\" dir=in action=allow protocol=UDP localport={DiscoveryResponder.OwnPort} program=\"{exe}\" profile=private remoteip=localsubnet");
-                if (udp.ExitCode != 0) return 2;
+                // Create-only, unique-Name, journaled rules (ProgramData journal, admin-written). Nothing is deleted or rewritten by DisplayName:
+                // the 1.1.0 rules and any earlier "Zephyr Player" / "Zephyr Player Discovery" rules stay as found and are reported below.
+                ZephyrLifecycle.ProtectedFile.App = "ZephyrPlayer";
+                var specs = ExpectedSpecs(exe);
+                var rulesOk = ZephyrLifecycle.ZephyrRules.Install(specs);
+                ReportOtherRules();
+                if (!rulesOk) return 2;
                 switch (aclOwner)
                 {
                     case AclOwnership.Ours:
@@ -454,7 +473,7 @@ namespace ZephyrPlayer
                 }
                 catch (Exception) { }
                 RemoveLegacy110UninstallEntry();
-                return RulesExist() ? 0 : 2;
+                return RulesHaveCurrentShapeFor(exe) ? 0 : 2;
             }
             catch (Exception ex)
             {
@@ -544,8 +563,9 @@ namespace ZephyrPlayer
                 Console.Error.WriteLine("The listen permission on " + PlaybackServer.DefaultPort + " belongs to another app or Windows user; the firewall rules were left in place too.");
                 return 0;
             }
-            Run("netsh", $"advfirewall firewall delete rule name=\"{TcpRuleName}\"");
-            Run("netsh", $"advfirewall firewall delete rule name=\"{UdpRuleName}\"");
+            // Only what the protected journal says this build created, by unique key, each read back. 1.1.0 and earlier-name rules are left.
+            ZephyrLifecycle.ProtectedFile.App = "ZephyrPlayer";
+            ZephyrLifecycle.ZephyrRules.UninstallCleanup(null);
             if (owner == AclOwnership.Ours || owner == AclOwnership.Legacy)
                 Run("netsh", "http delete urlacl url=https://+:" + PlaybackServer.DefaultPort + "/");
             // The old http reservation too, only when positively ours or legacy.
