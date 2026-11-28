@@ -350,7 +350,7 @@ fun SettingsScreen(
                 if (store.selectedSource == Source.ZEPHYR)
                     "Open Zephyr Player on the PC and check both are on the same Wi-Fi."
                 else
-                    "Open Zephyr VLC Remote on the PC and tap \u201CThis is my home Wi-Fi\u201D.",
+                    "Open Zephyr VLC Remote on the PC and check both are on the same Wi-Fi.",
                 color = TextC, fontSize = 14.sp,
             )
         }

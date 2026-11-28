@@ -376,47 +376,5 @@ namespace ZephyrPlayer.Tests
             Assert.Equal("Last seen yesterday", PairingPanel.PhoneStatus(false, now.AddDays(-1).ToUniversalTime(), now));
             Assert.StartsWith("Last seen Oct", PairingPanel.PhoneStatus(false, now.AddDays(-5).ToUniversalTime(), now));
         }
-
-        [Fact]
-        public void PublicWifiBanner_NoticeOnly_AndCheckIsReadOnly()
-        {
-            Sta(() =>
-            {
-                var dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "zephyr-wifi-" + Guid.NewGuid().ToString("N"));
-                System.IO.Directory.CreateDirectory(dir);
-                var store = new PairedStore(System.IO.Path.Combine(dir, "paired.json"));
-                var before = ConnectionState.PublicWifiName;
-                try
-                {
-                    ConnectionState.PublicWifiName = "CoffeeShop";
-                    var panel = new PairingPanel(new PairingGate(), store, _ => { });
-                    var host = new Window { Content = panel, Width = 640, Height = 600, ShowInTaskbar = false };
-                    host.Show(); host.UpdateLayout();
-                    var banner = (Border)panel.FindName("WifiBanner")!;
-                    Assert.Equal(Visibility.Visible, banner.Visibility);
-                    var text = ((TextBlock)panel.FindName("WifiBannerText")!).Text;
-                    Assert.Contains("public", text);
-                    Assert.Contains("can block", text);       // honest: may, not "is blocked"
-                    Assert.DoesNotContain("is blocked", text);
-                    string? said = null;
-                    Action<string> h = s => said = s;
-                    PairingPanel.SuppressDialogsForTest = true;
-                    PairingPanel.FirewallCheckResult += h;
-                    try { ((Button)panel.FindName("FirewallCheckButton")!).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); }
-                    finally { PairingPanel.FirewallCheckResult -= h; PairingPanel.SuppressDialogsForTest = false; }
-                    Assert.NotNull(said);
-                    Assert.DoesNotContain("shut", said!, StringComparison.OrdinalIgnoreCase);
-                    ConnectionState.PublicWifiName = null;
-                    panel.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Background);
-                    host.Close();
-                    var panel2 = new PairingPanel(new PairingGate(), store, _ => { });
-                    var host2 = new Window { Content = panel2, Width = 640, Height = 600, ShowInTaskbar = false };
-                    host2.Show(); host2.UpdateLayout();
-                    Assert.Equal(Visibility.Collapsed, ((Border)panel2.FindName("WifiBanner")!).Visibility);
-                    host2.Close();
-                }
-                finally { ConnectionState.PublicWifiName = before; }
-            });
-        }
     }
 }

@@ -151,8 +151,6 @@ namespace ZephyrPlayer
             // Connection findings surface here too (they live on the Pairing screen).
             if (ConnectionState.DiscoveryOff)
                 status += "  ·  Find my PC is off: another app is using it.";
-            else if (ConnectionState.PublicWifiName != null)
-                status += "  ·  Windows is treating this Wi-Fi as public, which can block your phone.";
             StatusText.Text = status;
             var active = _store.Entries().FirstOrDefault(e => _store.IsConnected(e.Token));
             PhoneCardName.Text = active?.Name ?? (paired > 0 ? "Paired phones" : "Pair a phone");

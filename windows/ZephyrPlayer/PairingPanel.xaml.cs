@@ -13,7 +13,7 @@ namespace ZephyrPlayer
     /// code + countdown that renews before expiry (the pre-1.2 code silently
     /// dies after 10 minutes and Settings clobbers it), "This PC:" address for
     /// manual entry, the paired-phones list with Remove, and a status row for
-    /// discovery / public-Wi-Fi findings. One instance, owned by App; the
+    /// discovery findings. One instance, owned by App; the
     /// Settings "Android remote" section opens it too, so every place shows the
     /// SAME live gate - no more per-window codes clobbering each other.
     /// </summary>
@@ -227,7 +227,6 @@ namespace ZephyrPlayer
         private void RefreshStatus()
         {
             WarningPanel.Visibility = Visibility.Visible;
-            WifiBanner.Visibility = ConnectionState.PublicWifiName != null ? Visibility.Visible : Visibility.Collapsed;
             var ip = ConnectionState.PrimaryIPv4();
             ThisPcText.Text = ip != null ? "This PC: " + ip : "This PC: address unavailable";
             ResetPairingsButton.Visibility = _store.CanResetUnreadable ? Visibility.Visible : Visibility.Collapsed;
@@ -262,27 +261,7 @@ namespace ZephyrPlayer
             }
         }
 
-        /// <summary>The banner's button runs the EXISTING firewall check (read only: the same
-        /// verification the app runs at every start) and says what it found. It never changes
-        /// a firewall rule, the network profile or any other Windows setting.</summary>
-        private void OnFirewallCheck(object sender, RoutedEventArgs e)
-        {
-            var current = FirewallSetup.SetupIsCurrent();
-            var text = FirewallSetup.LastReadFailed
-                ? "Windows Firewall settings could not be read on this PC, so Zephyr cannot check its setup right now. A restart of Windows usually fixes the read."
-                : current
-                    ? "Zephyr's firewall setup is in place. Keep your phone and this PC on the same Wi-Fi."
-                    : "Zephyr's firewall setup is not complete. Quit Zephyr from the tray icon and open it again: it will offer the setup.";
-            FirewallCheckResult?.Invoke(text);
-            var dlg = FirewallSetup.NoteWindow(text, "Firewall setup");
-            var owner = Window.GetWindow(this);
-            if (owner != null && owner.IsVisible) { dlg.Owner = owner; dlg.WindowStartupLocation = WindowStartupLocation.CenterOwner; }
-            if (SuppressDialogsForTest) return;
-            dlg.ShowDialog();
-        }
-
-        /// <summary>Test seams: the firewall check's text, and no modal dialogs on test threads.</summary>
-        internal static event Action<string>? FirewallCheckResult;
+        /// <summary>Test seam: no modal dialogs on test threads.</summary>
         internal static bool SuppressDialogsForTest;
 
         private void OnResetPairings(object sender,RoutedEventArgs e)

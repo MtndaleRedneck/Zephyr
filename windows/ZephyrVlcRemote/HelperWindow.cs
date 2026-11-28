@@ -61,13 +61,6 @@ internal sealed class HelperWindow : Form
     private readonly System.Windows.Forms.Timer _timer;
     private readonly ContextMenuStrip _menu;
     private readonly LinkLabel _firstRun;
-    private readonly RoundedPanel _wifiBorder;
-    private readonly Label _wifiNote;
-    private readonly Button _wifiBtn;
-    private NetProfile? _wifiProfile;
-    private bool _wifiStripVisible;
-    private bool _wifiDialogOpen;
-    private readonly System.Windows.Forms.Timer? _wifiTimer;
     private readonly Dictionary<Control, int> _baseTops = new();
     private int _baseHeight;
     private readonly bool _windowShot;
@@ -264,39 +257,8 @@ internal sealed class HelperWindow : Form
 
         ClientSize = new Size(490, y);
 
-        // The public-Wi-Fi strip: sits at the top of the window while the network is
-        // public, so the fix is never buried. The 30s poll keeps it in sync.
-        // One anti-aliased card with a 1px orange edge (it used to be an orange panel with a
-        // card clipped inside it, both cut by pixel regions).
-        _wifiBorder = new RoundedPanel
-        {
-            Left = margin, Top = margin, Width = contentW, Height = 62,
-            Radius = 8, BorderColor = Orange, Visible = false,
-        };
-        var wifiText = new Label
-        {
-            Text = "Windows is treating this Wi-Fi as public, so it's blocking your phone.",
-            Font = new Font("Segoe UI", 9f),
-            Left = 13, Top = 9, Width = contentW - 12 - 160 - 16, Height = 62 - 16,
-        };
-        _wifiBtn = MakeButton("This is my home Wi-Fi", contentW - 160 - 10 + 1, 7 + 1, 160);
-        _wifiBtn.Height = 28;
-        StylePrimary(_wifiBtn);
-        _wifiBtn.Click += (_, _) => FixHomeWifi();
-        _wifiNote = new Label
-        {
-            Text = "(Windows will ask for permission)",
-            Font = new Font("Segoe UI", 7.5f),
-            Width = 160, TextAlign = ContentAlignment.TopCenter,
-            Left = contentW - 160 - 10 + 1, Top = 40 + 1, Height = 16,
-        };
-        _wifiBorder.Controls.Add(wifiText);
-        _wifiBorder.Controls.Add(_wifiBtn);
-        _wifiBorder.Controls.Add(_wifiNote);
-
         Controls.AddRange(new Control[]
         {
-            _wifiBorder,
             _pairHeader, _firstRun, _nameBoxPanel, _pair, _codeCaption, _code, _cancelPair, _codeNote,
             _phonesHeader, _phoneList, _removeAll, _vlcNote,
             _aboutHeader, _feedbackCard, _updatesCard,
@@ -333,38 +295,6 @@ internal sealed class HelperWindow : Form
         {
             try { BeginInvoke(new Action(() => { RefreshPhones(); TickStatus(); })); } catch { }
         };
-
-        // Public Wi-Fi silently blocks the phone: an in-window strip with the one-click fix
-        // stays up while the network is public, and the popup still asks at launch and on
-        // network changes (at most once per Wi-Fi name, except home networks, which re-ask).
-        Action<NetProfile> showWifi = p =>
-        {
-            try { BeginInvoke(new Action(() => { _wifiProfile = p; SetWifiStripVisible(true); ShowPublicWifiDialog(p); })); } catch { }
-        };
-        if (windowShot)
-        {
-            _wifiProfile = new NetProfile { Name = "Home Wi-Fi", Category = "Public" };
-            SetWifiStripVisible(true);
-        }
-        else
-        Task.Run(() => { try { NetworkCheck.CheckNow(showWifi); } catch { /* never stop startup */ } });
-        System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, _) =>
-        {
-            try { NetworkCheck.QueueCheck(showWifi); } catch { }
-        };
-        // A profile flipped to Private in Windows Settings raises no network event, so the
-        // strip re-checks every 30 seconds. The same poll re-asks for a home network.
-        if (!windowShot)
-        {
-            _wifiTimer = new System.Windows.Forms.Timer { Interval = 30000 };
-            _wifiTimer.Tick += (_, _) =>
-            {
-                // The 30s re-check exists for the strip/dialog; no PowerShell while nothing
-                // Wi-Fi-related is on screen. Network changes raise their own event.
-                if (Visible || _wifiProfile != null || _wifiDialogOpen) ProbeWifi();
-            };
-            _wifiTimer.Start();
-        }
 
         // Follow the Windows dark/light mode setting, live.
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += (_, _) =>
@@ -413,16 +343,13 @@ internal sealed class HelperWindow : Form
         if (Visible) { TickStatus(); _timer.Start(); }
     }
 
-    private const int StripH = 74;
-
-    /// <summary>Base layout + the optional blocks (Wi-Fi strip on top, first-run line
+    /// <summary>Base layout + the optional blocks (first-run line
     /// under the pair header, pairing code under the name row): everything below a
     /// hidden block moves up. Uses our own flags, not Control.Visible, which reads false
     /// for every child while the window itself is hidden.</summary>
     private void ApplyLayout()
     {
-        if (_baseHeight == 0 || _firstRun == null || _wifiBorder == null) return;
-        var stripDy = _wifiStripVisible ? StripH : 0;
+        if (_baseHeight == 0 || _firstRun == null) return;
         var firstRunDy = _firstRunShown ? 0 : -_firstRunH;
         var codeDy = _codeShown ? 0 : -_codeBlockH;
         // The phone list is as tall as its rows (one line when empty, three rows at most,
@@ -437,8 +364,7 @@ internal sealed class HelperWindow : Form
         var vlcTop = _baseTops[_vlcNote];
         foreach (Control c in Controls)
         {
-            if (c == _wifiBorder) { c.Top = _baseTops[c]; continue; }
-            var dy = stripDy;
+            var dy = 0;
             if (_baseTops[c] > frTop) dy += firstRunDy;
             if (_baseTops[c] > codeEnd) dy += codeDy;
             if (_baseTops[c] > listTop) dy += listDy;
@@ -447,7 +373,7 @@ internal sealed class HelperWindow : Form
             c.Top = _baseTops[c] + dy;
         }
         _phoneList.Height = _listH;
-        ClientSize = new Size(490, _baseHeight + stripDy + firstRunDy + codeDy + listDy + removeDy + vlcDy);
+        ClientSize = new Size(490, _baseHeight + firstRunDy + codeDy + listDy + removeDy + vlcDy);
     }
 
     // Called from the HTTP listener thread when SendInput starts (or stops) coming back
@@ -523,75 +449,6 @@ internal sealed class HelperWindow : Form
     }
 #endif
 
-    private void SetWifiStripVisible(bool show)
-    {
-        if (show == _wifiStripVisible) return;
-        _wifiStripVisible = show;
-        _wifiBorder.Visible = show;
-        ApplyLayout();
-    }
-
-    /// <summary>Which home network already got its one re-ask for this Public flip; cleared
-    /// when the network is Private again.</summary>
-    private string? _homeReasked;
-
-    /// <summary>The 30-second profile re-check: sync the strip with reality (a network fixed
-    /// in Windows Settings raises no event). The popup itself belongs to launch and real
-    /// network changes; the only popup from the poll is one re-ask per Public flip for a
-    /// network marked home, which "Not now" must not bury.</summary>
-    private void ProbeWifi()
-    {
-        if (_wifiDialogOpen) return;
-        Task.Run(() =>
-        {
-            var p = NetworkCheck.DefaultRouteProfile();
-            var isPublic = p != null && p.Category.Equals("Public", StringComparison.OrdinalIgnoreCase);
-            try { BeginInvoke(new Action(() =>
-            {
-                _wifiProfile = isPublic ? p : null;
-                SetWifiStripVisible(isPublic);
-                if (!isPublic || p == null) { _homeReasked = null; return; }
-                var knownHome = Program.HomeNetworks.Any(n => string.Equals(n, p.Name, StringComparison.OrdinalIgnoreCase));
-                if (knownHome && _homeReasked != p.Name)
-                {
-                    _homeReasked = p.Name;
-                    ShowPublicWifiDialog(p);
-                }
-            })); } catch { }
-        });
-    }
-
-    /// <summary>The strip's one-click fix: mark this Wi-Fi Private (one elevated Windows prompt).</summary>
-    private void FixHomeWifi()
-    {
-        var profile = _wifiProfile;
-        if (profile == null) return;
-        _wifiBtn.Enabled = false;
-        Task.Run(() =>
-        {
-            var ok = NetworkCheck.MarkPrivate(profile);
-            try { BeginInvoke(new Action(() =>
-            {
-                _wifiBtn.Enabled = true;
-                if (ok)
-                {
-                    var saved = Program.SetNetworkChoice(profile.Name, home: true);
-                    Program.Log("Network \"" + profile.Name + "\" marked Private from the window strip." + (saved ? "" : " The remembered choice could not be saved."));
-                    _wifiProfile = null;
-                    SetWifiStripVisible(false);
-                    NoteDialog.Show(this,
-                        PrivateDoneText(saved));
-                }
-                else
-                {
-                    NoteDialog.Show(this,
-                        "The change did not go through. Opening the Windows setting so you can switch this Wi-Fi to Private by hand.");
-                    OpenWifiSettings();
-                }
-            })); } catch { }
-        });
-    }
-
     /// <summary>CI-only: show the window offscreen, let layout settle, and save a PNG of it.
     /// DrawToBitmap renders in memory, so no visible desktop is needed.</summary>
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
@@ -645,7 +502,7 @@ internal sealed class HelperWindow : Form
             sb.AppendLine("AutoScaleMode=" + AutoScaleMode + " AutoScaleDimensions=" + CurrentAutoScaleDimensions + " (saved " + AutoScaleDimensions + ")");
             foreach (var (n, c) in new (string, Control)[] {
                 ("firstRun", _firstRun), ("nameBox", _nameBox), ("pair", _pair),
-                ("codeCaption", _codeCaption), ("wifiBorder", _wifiBorder) })
+                ("codeCaption", _codeCaption) })
             {
                 string region;
                 try { using var g = Graphics.FromHwnd(IntPtr.Zero);
@@ -1037,14 +894,6 @@ internal sealed class HelperWindow : Form
         _firstRun.LinkColor = Orange;
         _firstRun.ActiveLinkColor = Orange;
         _firstRun.VisitedLinkColor = Orange;
-        _wifiBorder.BackColor = card;
-        _wifiBorder.BorderColor = Orange;
-        foreach (Control c in _wifiBorder.Controls)
-        {
-            if (c is Button) continue;
-            c.BackColor = card;
-            c.ForeColor = text;
-        }
         _feedbackCard.BackColor = card;
         _updatesCard.BackColor = card;
         _feedbackCard.BorderColor = border;
@@ -1391,71 +1240,6 @@ internal sealed class HelperWindow : Form
                 })); } catch { }
             }
         });
-    }
-
-    /// <summary>The public-Wi-Fi popup: names the network, one click marks it Private.</summary>
-    private void ShowPublicWifiDialog(NetProfile profile)
-    {
-        if (_wifiDialogOpen) return;
-        _wifiDialogOpen = true;
-        try
-        {
-        using var dlg = new WifiDialog(profile);
-        switch (dlg.ShowDialog(this))
-        {
-            case WifiDialog.Result.Home:
-                // MarkPrivate waits on the Windows permission prompt (up to 30 s): run it off
-                // the UI thread so the window stays alive, like the strip button does.
-                Task.Run(() =>
-                {
-                    var ok = false;
-                    try { ok = NetworkCheck.MarkPrivate(profile); } catch { }
-                    try { BeginInvoke(new Action(() =>
-                    {
-                        if (ok)
-                        {
-                            var saved = Program.SetNetworkChoice(profile.Name, home: true);
-                            _wifiProfile = null;
-                            SetWifiStripVisible(false);
-                            Program.Log("Network \"" + profile.Name + "\" marked Private from the popup.");
-                            NoteDialog.Show(this,
-                                PrivateDoneText(saved));
-                        }
-                        else
-                        {
-                            NoteDialog.Show(this,
-                                "The change did not go through. Opening the Windows setting so you can switch this Wi-Fi to Private by hand.");
-                            OpenWifiSettings();
-                        }
-                    })); } catch { }
-                });
-                break;
-            case WifiDialog.Result.Settings:
-                OpenWifiSettings();
-                break;
-            case WifiDialog.Result.NotNow:
-                // Saying "Not now" on a network once marked home means it is not home after all.
-                var declinedSaved = Program.SetNetworkChoice(profile.Name, home: false);
-                Program.Log("Public-network popup declined for \"" + profile.Name + "\"" + (declinedSaved ? " - not asking again." : " - the choice could not be saved, so it may ask again."));
-                break;
-        }
-        }
-        finally { _wifiDialogOpen = false; }
-    }
-
-    /// <summary>Windows is Private either way; only claim the app remembers it when the save worked.</summary>
-    internal static string PrivateDoneText(bool saved) =>
-        saved
-            ? "\u2713 Done. Your phone can reach this PC now.\n\nThis Wi-Fi is now marked Private in Windows, and Windows remembers it."
-            : "\u2713 Done in Windows. This Wi-Fi is now Private, so your phone can reach this PC.\n\nThis app could not save its own note about it, so it may ask about this Wi-Fi again.";
-
-    private static void OpenWifiSettings()
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo("ms-settings:network-wifi") { UseShellExecute = true });
-        }
-        catch { /* the popup text still tells him what to do */ }
     }
 
     /// <summary>Bring the window up from the tray (menu, double-click, or a second launch of the exe).</summary>

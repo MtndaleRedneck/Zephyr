@@ -1,102 +1,3 @@
-using System;
-using System.Diagnostics;
-using System.Threading.Tasks;
-
-namespace ZephyrPlayer
-{
-    /// <summary>The network profile of the adapter the phone's traffic actually arrives on.</summary>
-    internal sealed class NetProfile
-    {
-        public string Name = "";
-        public string Category = "";
-        public int InterfaceIndex;
-    }
-
-    /// <summary>
-    /// Public-Wi-Fi detection, ported from the BingeMote helper's NetworkCheck.
-    /// The installer's firewall rules are Private-networks-only (the right
-    /// posture); when Windows thinks the Wi-Fi is "Public", the phone is
-    /// silently blocked. Zephyr Player surfaces that as a NOTICE ONLY
-    /// (no button that changes Windows settings).
-    /// </summary>
-    internal static class NetworkCheck
-    {
-        /// <summary>
-        /// The profile of the adapter that owns the default IPv4 route, so a VPN
-        /// or second adapter doesn't trip the warning. Null when it can't be
-        /// determined. Never throws.
-        /// </summary>
-        public static NetProfile? DefaultRouteProfile()
-        {
-            try
-            {
-                var psi = new ProcessStartInfo("powershell",
-                    "-NoLogo -NoProfile -NonInteractive -Command \"$i=(Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex; $p=Get-NetConnectionProfile -InterfaceIndex $i -ErrorAction SilentlyContinue; if ($p) { '{0}|{1}|{2}' -f $p.Name,$p.NetworkCategory,$p.InterfaceIndex }\"")
-                {
-                    RedirectStandardOutput = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                };
-                using var p = Process.Start(psi)!;
-                // Wait first, read after: reading before the timeout would hang
-                // forever on a stuck PowerShell.
-                // 30 s: a cold Windows PowerShell plus the NetTCPIP module took past 15 s on a
-                // busy CI runner (run 41003548980); the probe runs off the UI thread.
-                if (!p.WaitForExit(30000))
-                {
-                    try { p.Kill(); } catch { }
-                    return null;
-                }
-                var output = p.StandardOutput.ReadToEnd().Trim();
-                var outputLine = output;
-                return ParseProfileLine(outputLine);
-            }
-            catch { return null; }
-        }
-
-        /// <summary>Probe the active network; when it is Public, hand it to [show].
-        /// Runs on a background thread; [show] marshals. Never throws.</summary>
-        public static void CheckNow(Action<NetProfile> show)
-        {
-            Task.Run(() =>
-            {
-                NetProfile? p = null;
-                try { p = DefaultRouteProfile(); } catch { }
-                if (p == null || !p.Category.Equals("Public", StringComparison.OrdinalIgnoreCase)) return;
-                try { show(p); } catch { }
-            });
-        }
-
-        private static readonly object Gate = new();
-        private static bool _queued;
-
-        /// <summary>Network changes arrive in bursts; probe once, three seconds after the first of a burst.</summary>
-        public static void QueueCheck(Action<NetProfile> show)
-        {
-            lock (Gate)
-            {
-                if (_queued) return;
-                _queued = true;
-            }
-            Task.Run(async () =>
-            {
-                await Task.Delay(3000);
-                lock (Gate) _queued = false;
-                CheckNow(show);
-            });
-        }
-
-        /// <summary>Parse "name|category|index" - from the RIGHT: a Wi-Fi name may
-        /// itself contain '|' (round-8 N-9). Null when the shape is not what we asked for.</summary>
-        internal static NetProfile? ParseProfileLine(string output)
-        {
-            var parts = output.Trim().Split('|');
-            if (parts.Length < 3 || !int.TryParse(parts[^1], out var idx)) return null;
-            return new NetProfile { Name = string.Join('|', parts[..^2]), Category = parts[^2], InterfaceIndex = idx };
-        }
-    }
-}
-
 namespace ZephyrPlayer
 {
     /// <summary>Latest connection findings, surfaced on the Home status strip and
@@ -107,10 +8,7 @@ namespace ZephyrPlayer
         /// <summary>The own discovery port (8490) could not be bound.</summary>
         public static volatile bool DiscoveryOff;
 
-        /// <summary>The Wi-Fi name when Windows treats it as Public (notice-only), else null.</summary>
-        public static volatile string? PublicWifiName;
-
-        /// <summary>Raised when DiscoveryOff or PublicWifiName changes (any thread);
+        /// <summary>Raised when DiscoveryOff or the network changes (any thread);
         /// UI subscribers must marshal to their dispatcher before touching controls.</summary>
         public static event System.Action? Changed;
 

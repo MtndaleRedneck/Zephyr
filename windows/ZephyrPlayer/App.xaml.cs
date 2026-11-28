@@ -345,15 +345,8 @@ namespace ZephyrPlayer
             try { _discovery = new DiscoveryResponder(_server.Port); ConnectionState.DiscoveryOff = false; }
             catch (Exception) { _discovery = null; ConnectionState.DiscoveryOff = true; }
             ConnectionState.NotifyChanged();
-            // Public-Wi-Fi NOTICE (notice only, no Windows-setting
-            // changes): at launch and whenever the network changes.
-            NetworkCheck.CheckNow(_ => { ConnectionState.PublicWifiName = _.Name; ConnectionState.NotifyChanged(); });
-            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, __) =>
-            {
-                ConnectionState.PublicWifiName = null;
-                ConnectionState.NotifyChanged();
-                NetworkCheck.QueueCheck(p => { ConnectionState.PublicWifiName = p.Name; ConnectionState.NotifyChanged(); });
-            };
+            // Re-read the connection findings (this PC's address) whenever the network changes.
+            System.Net.NetworkInformation.NetworkChange.NetworkAddressChanged += (_, __) => ConnectionState.NotifyChanged();
             // Automatic update check: at launch, every 6 hours while the app runs (it lives in the tray
             // for days), and when it comes back from the tray (RestoreApp, at most every 30 minutes). A later
             // failed check keeps an offer already found.
