@@ -315,16 +315,22 @@ jobs:
             new/instrument-results/*
             new/instrument-results-from-1.5.0/*
           retention-days: 2
-      # Failure evidence: the exact signed app and instrumentation APKs this job built, kept 1 day so their dex can be inspected.
-      # The keystore was removed by the build step's EXIT trap; these two files carry the public release signature only.
+      # Failure evidence, low effect: NO APK is uploaded. Only the APK hashes and a fixed-target dex listing (is a handful of
+      # Kotlin runtime classes defined, and how many references point at them) go into a 1-day text artifact. continue-on-error:
+      # a listing problem is printed and can never change the job's result or hide the original failure.
+      - name: Targeted dex listing for the exact app and test APKs (evidence only)
+        if: failure()
+        continue-on-error: true
+        run: |
+          mkdir -p /tmp/dexlist
+          python3 new/scripts/dex-targets.py /tmp/up/new-app.apk /tmp/up/new-test.apk > /tmp/dexlist/dex-targets.txt 2>&1 || echo "listing step failed" >> /tmp/dexlist/dex-targets.txt
+          cat /tmp/dexlist/dex-targets.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: failure()
+        continue-on-error: true
         with:
-          name: signed-upgrade-failure-apks
-          path: |
-            /tmp/up/new-app.apk
-            /tmp/up/new-test.apk
-            /tmp/up/new-app.sha256
+          name: signed-upgrade-dex-listing
+          path: /tmp/dexlist/dex-targets.txt
           retention-days: 1
           if-no-files-found: warn
       # Release candidate: ONLY the exact signed APK that just passed pass 1 and pass 2 above, plus a public provenance log.
