@@ -154,90 +154,25 @@ SSL Certificate bindings:
         Assert.True(TlsLifetime.Validity < TimeSpan.FromDays(3650));
     }
 
-    [Theory]
-    [InlineData("Ours", "DeleteOldHttpReservation")]
-    [InlineData("Legacy", "DeleteOldHttpReservation")]
-    [InlineData("Foreign", "LeaveForeign")]
-    [InlineData("None", "None")]
-    public void OldHttpReservationIsOnlyPlannedForRemovalWhenOwned(string owner, string expected)
-        => Assert.Equal(expected, UrlAclMigrationPlanner.PlanOld(Enum.Parse<FirewallSetup.AclOwnership>(owner)).ToString());
-
-    // The 1.1.0 upgrade collision (add https fails 183 while the old http reservation exists): drive the SAME function both setups call, with fakes for netsh and the classifier.
     private const string E183 = "\r\nUrl reservation add failed, Error: 183\r\nCannot create a file when that file already exists.\r\n";
-    private const string E5 = "\r\nUrl reservation add failed, Error: 5\r\nAccess is denied.\r\n";
-    private sealed class Fake
+    [Fact] public void HttpsReservationAddIsCreateOnly_ACollisionIsReturnedAndNothingIsDeletedOrRetried()
     {
-        public (int, string)[] Adds = Array.Empty<(int, string)>(); public int AddCalls, DeleteCalls, ClassifyCalls;
-        public FirewallSetup.AclOwnership[] Classes = { FirewallSetup.AclOwnership.Ours }; public bool Throws; public int DeleteExit;
-        public UrlAclMigrationPlanner.HttpsAddResult Go() => UrlAclMigrationPlanner.AddHttpsReservation(
-            () => Adds[Math.Min(AddCalls++, Adds.Length - 1)],
-            () => { var c = Classes[Math.Min(ClassifyCalls++, Classes.Length - 1)]; return Throws ? throw new InvalidOperationException("unreadable") : c; },
-            () => { DeleteCalls++; return DeleteExit; });
-    }
-
-    [Theory]
-    [InlineData("Ours")]
-    [InlineData("Legacy")]
-    public void Collision183WithOurOrLegacyOldHttp_RemovesItOnceVerifiesAndRetriesOnce(string owner)
-    {
-        var f = new Fake { Adds = new[] { (1, E183), (0, "") }, Classes = new[] { Enum.Parse<FirewallSetup.AclOwnership>(owner), FirewallSetup.AclOwnership.None } };
-        var r = f.Go();
-        Assert.Equal((0, 2, 1, 2, true), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls, r.OldHttpDeleteAttempted));
-        Assert.Equal(1, r.FirstExit); Assert.Contains("183", r.FirstOutput);   // the original add diagnostics are kept
-    }
-
-    [Theory]
-    [InlineData("Foreign")]   // also what an unreadable reservation classifies as
-    [InlineData("None")]
-    public void Collision183WithForeignOrAbsentOldHttp_NeverDeletesAndKeepsTheFailure(string owner)
-    {
-        var f = new Fake { Adds = new[] { (1, E183) }, Classes = new[] { Enum.Parse<FirewallSetup.AclOwnership>(owner) } };
-        var r = f.Go();
-        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));
-    }
-
-    [Fact] public void OnlyTheSpecific183CollisionTriggersCleanup_AccessDeniedNeverDeletes()
-    {
-        var f = new Fake { Adds = new[] { (1, E5) } };
-        var r = f.Go();
-        Assert.Equal((1, 1, 0, 0), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls));
+        int calls = 0;
+        var r = UrlAclMigrationPlanner.AddHttpsReservation(() => { calls++; return (1, E183); });
+        Assert.Equal((1, 1, 1, false), (r.Exit, calls, r.FirstExit, r.OldHttpDeleteAttempted));
+        Assert.Null(r.DeleteExit); Assert.Null(r.RetryExit); Assert.Contains("183", r.FirstOutput);
+        Assert.True(UrlAclMigrationPlanner.IsAlreadyExists(1, E183));
         Assert.False(UrlAclMigrationPlanner.IsAlreadyExists(0, E183));
         Assert.False(UrlAclMigrationPlanner.IsAlreadyExists(1, "Error: 1831"));
+        calls = 0;
+        Assert.Equal(0, UrlAclMigrationPlanner.AddHttpsReservation(() => { calls++; return (0, ""); }).Exit); Assert.Equal(1, calls);
     }
 
-    [Fact] public void ClassifierFailureMeansNoDeletion()
+    [Fact] public void LegacyHttpPortIsTheOldPlainHttpPortNotTheNewHttpsPort()
     {
-        var f = new Fake { Adds = new[] { (1, E183) }, Throws = true };
-        var r = f.Go();
-        Assert.Equal((1, 1, 0, false), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));
-    }
-
-    [Fact] public void FailedDeleteMeansNoRetry_AndTheOriginalFailureIsReturned()
-    {
-        var f = new Fake { Adds = new[] { (1, E183), (0, "") }, DeleteExit = 5 };
-        var r = f.Go();
-        Assert.Equal((1, 1, 1, true), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted)); Assert.Equal(5, r.DeleteExit); Assert.Null(r.RetryExit);   // a delete was attempted (it failed); no retry
-    }
-
-    [Fact] public void OldHttpStillPresentAfterDeleteMeansNoRetry_PartialStateIsReported()
-    {
-        var f = new Fake { Adds = new[] { (1, E183), (0, "") }, Classes = new[] { FirewallSetup.AclOwnership.Ours, FirewallSetup.AclOwnership.Ours } };
-        var r = f.Go();
-        Assert.Equal((1, 1, 1, true), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted));   // attempted=true: a delete was attempted, absence is not proven; no retry
-    }
-
-    [Fact] public void RetryFailureIsReportedTruthfully_AndNothingIsRolledBack()
-    {
-        var f = new Fake { Adds = new[] { (1, E183), (183, E183) }, Classes = new[] { FirewallSetup.AclOwnership.Ours, FirewallSetup.AclOwnership.None } };
-        var r = f.Go();
-        Assert.Equal((183, 2, 1, true, 1), (r.Exit, f.AddCalls, f.DeleteCalls, r.OldHttpDeleteAttempted, r.FirstExit)); Assert.Equal(183, r.RetryExit);   // no third try
-    }
-
-    [Fact] public void FirstAddSuccess_TouchesNothingElse()
-    {
-        var f = new Fake { Adds = new[] { (0, "") } };
-        var r = f.Go();
-        Assert.Equal((0, 1, 0, 0), (r.Exit, f.AddCalls, f.DeleteCalls, f.ClassifyCalls));
+        Assert.Equal(8492, FirewallSetup.LegacyHttpPort);
+        Assert.NotEqual(Program.HttpPort, FirewallSetup.LegacyHttpPort);
+        Assert.Equal(8492, TlsProduct.PriorHttpsPort);
     }
 
     [Fact] public void StaleOwnedBindingNeedsExplicitSetupAndBecomesAnUpdate()

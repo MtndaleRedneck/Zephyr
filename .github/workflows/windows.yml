@@ -693,7 +693,10 @@ jobs:
           $legacyUdp = @(Get-NetFirewallRule -DisplayName 'Zephyr Player Discovery' -ErrorAction SilentlyContinue)
           Write-Output "legacy 1.1.0 rule 'Zephyr Player Discovery' present after migration: $($legacyUdp.Count)"
           if ($legacyTcp.Count -eq 0 -and $legacyUdp.Count -eq 0) { throw 'upgrade fixture: the real 1.1.0 install left no legacy rules to retain (fixture changed?)' }
-          if (-not (Select-String -Path $fwErr -Pattern 'firewall inventory:' -Quiet)) { throw 'the elevated setup did not report the other rules it found (inventory lines missing)' }
+          # Require the ACTUAL planted legacy entries, not the generic prefix (a "no other rules found" line also starts with 'firewall inventory:').
+          $invLines = @(Select-String -Path $fwErr -Pattern 'firewall inventory: existing rule left as found' | ForEach-Object { $_.Line })
+          if ($invLines.Count -lt 1) { throw 'the elevated setup did not report any existing legacy rule as left as found' }
+          if (-not ($invLines -match 'Zephyr Player')) { throw 'the inventory did not name the planted 1.1.0 Zephyr Player rules' }
           $jr = Get-Content (Join-Path $env:ProgramData 'ZephyrPlayer\lifecycle.json') -Raw | ConvertFrom-Json
           if (@($jr.Rules).Count -ne 4) { throw "lifecycle journal has $(@($jr.Rules).Count) rules, expected 4" }
           if (-not $jr.UrlAcl -or $jr.UrlAcl.Url -ne 'https://+:47824/') { throw 'lifecycle journal has no https 47824 listen-permission entry' }
@@ -1059,14 +1062,19 @@ jobs:
           netsh http add urlacl url=https://+:47824/ sddl="D:(A;;GX;;;SY)" | Out-Null
           $aclPlanted = (netsh http show urlacl url=https://+:47824/) | Out-String
           if ($aclPlanted -notmatch 'SDDL:') { throw 'T6b: the foreign https reservation was not planted' }
+          $journalB = Join-Path $env:ProgramData 'ZephyrPlayer\lifecycle.json'
+          $jHashBefore = (Get-FileHash $journalB -Algorithm SHA256).Hash
+          . ./scripts/zephyr_fw_assert.ps1
+          Assert-ZPlayerRules $exeB   # all four rules exist before the uninstall
           $uu = Start-Process $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/LOG=$env:RUNNER_TEMP\uninstall-t6b.log" -PassThru
           if (-not $uu.WaitForExit(150000)) { throw 'T6b uninstaller timed out' }
           Start-Sleep -Seconds 3
           $aclB = (netsh http show urlacl url=https://+:47824/) | Out-String
           $normB = { param($t) ($t -replace '\s+', ' ').Trim() }
           if ((& $normB $aclB) -ne (& $normB $aclPlanted)) { Write-Output "--- planted ---`n$aclPlanted`n--- after ---`n$aclB"; throw 'T6b: the foreign reservation did not survive the fresh-install uninstall byte-identical' }
-          $rulesB = (Get-NetFirewallRule -DisplayName 'Zephyr Player*47824*' -ErrorAction SilentlyContinue | Out-String)
-          if ($rulesB -notmatch 'Zephyr Player 47824') { Write-Output $rulesB; Get-Content "$env:RUNNER_TEMP/uninstall-chain-smoke.log" -Tail 60 -ErrorAction SilentlyContinue; throw 'T6b: the firewall rules were deleted while the reservation was foreign' }
+          # Foreign reservation over our https port: the product must touch NOTHING (all four rules and the journal), not just the TCP rule.
+          try { Assert-ZPlayerRules $exeB } catch { Get-Content "$env:RUNNER_TEMP\uninstall-t6b.log" -Tail 60 -ErrorAction SilentlyContinue; throw "T6b: a journaled rule was changed or removed while a foreign reservation owned the port: $($_.Exception.Message)" }
+          if ((Get-FileHash $journalB -Algorithm SHA256).Hash -ne $jHashBefore) { throw 'T6b: the lifecycle journal changed during an uninstall that must have touched nothing' }
           netsh http delete urlacl url=https://+:47824/ | Out-Null
           netsh http delete urlacl url=http://+:47823/ | Out-Null
           # Harness cleanup of the fixture on a disposable runner (not a product step).

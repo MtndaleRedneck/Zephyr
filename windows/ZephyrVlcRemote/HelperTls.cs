@@ -24,12 +24,15 @@ namespace ZephyrVlcRemote;
 internal static class TlsProduct
 {
 #if ZEPHYR_PLAYER
+    /// <summary>The HTTPS port earlier builds of this product used. An identity marker written for it is reusable (same key, same pin) when binding the new default port; any other marker port still fails closed.</summary>
+    internal const int PriorHttpsPort = 47823;
     internal const string DirName = "ZephyrPlayer";
     internal const string AppIdText = "9c1e4a7b-3d52-4f08-8b6e-71a2c5d90e34";
     internal const string FriendlyName = "Zephyr Player LAN identity";
     internal const string CertSubject = "CN=Zephyr Player";
     internal const string SetupMutex = @"Global\ZephyrPlayerTlsSetup";
 #else
+    internal const int PriorHttpsPort = 8492;
     internal const string DirName = "ZephyrVlcRemote";
     internal const string AppIdText = "5b0d6f6e-7a0e-4f4f-9a3c-2f1d9e0c4a11";
     internal const string FriendlyName = "Zephyr VLC Remote LAN identity";
@@ -143,38 +146,19 @@ internal static class TlsPlanner
     private static TlsPlan Fail(string why, string notes = "") => new(TlsAction.FailClosed, why, Notes: notes);
 }
 
-/// <summary>What to do with the old http:// reservation when the https:// one is created. Planning only; nothing calls it with side effects yet.</summary>
+/// <summary>Adds the https:// listen permission, create-only. No old http:// reservation is ever deleted or planned for deletion (a reservation without a creation witness is left as found); the https port differs from every earlier plain-http port, so no collision is expected. Any add failure is returned as it came.</summary>
 internal static class UrlAclMigrationPlanner
 {
-    internal enum Action { None, DeleteOldHttpReservation, LeaveForeign }
-    internal static Action PlanOld(FirewallSetup.AclOwnership oldHttp) => oldHttp switch
-    {
-        FirewallSetup.AclOwnership.Ours or FirewallSetup.AclOwnership.Legacy => Action.DeleteOldHttpReservation,
-        FirewallSetup.AclOwnership.Foreign => Action.LeaveForeign,
-        _ => Action.None,
-    };
-
-    /// <summary>DeleteExit and RetryExit are null when that step never ran. OldHttpDeleteAttempted records an attempt, not proof the reservation is gone.</summary>
+    /// <summary>Retained fields for existing callers; OldHttpDeleteAttempted is always false and DeleteExit/RetryExit always null because this code has no delete or retry step.</summary>
     internal sealed record HttpsAddResult(int Exit, int FirstExit, string FirstOutput, bool OldHttpDeleteAttempted, int? DeleteExit, int? RetryExit, string RetryOutput);
 
-    /// <summary>Matches netsh's "Error: 183" text (ERROR_ALREADY_EXISTS), as observed in the English output on the runner. If netsh prints it differently (for example a localized label) this does not match and the code fails closed: nothing is deleted and the original add failure is returned.</summary>
+    /// <summary>Matches netsh's "Error: 183" text (ERROR_ALREADY_EXISTS), English output as observed on the runner.</summary>
     internal static bool IsAlreadyExists(int exit, string output) => exit != 0 && System.Text.RegularExpressions.Regex.IsMatch(output ?? "", @"Error:\s*183\b");
 
-    /// <summary>Adds the https:// listen permission. Observed on the 1.1.0 upgrade path (run 46073822526): while the old http:// reservation for the same port exists, the https add fails with error 183. ONLY that specific failure, and only when a fresh classification (made right after the failed add) says the old reservation is positively ours or legacy, removes it and retries the add ONCE.
-    /// Any other failure (access denied, bad SID, ...) never deletes anything. A delete that fails, or an old reservation that is still classified as present afterwards, means no retry: the ORIGINAL add failure is returned. Every step's exit and output is in the result for the caller to log.
-    /// There is no rollback: if the retry fails the old http reservation stays removed (plain http is retired, nothing serves it); the setup is re-runnable and the next run starts from "no reservation".</summary>
-    internal static HttpsAddResult AddHttpsReservation(System.Func<(int Exit, string Output)> addHttps, System.Func<FirewallSetup.AclOwnership> classifyOldHttp, System.Func<int> deleteOldHttp)
+    internal static HttpsAddResult AddHttpsReservation(System.Func<(int Exit, string Output)> addHttps)
     {
         var first = addHttps();
-        if (first.Exit == 0) return new(0, 0, first.Output, false, null, null, "");
-        HttpsAddResult Fail(bool attempted = false, int? del = null) => new(first.Exit, first.Exit, first.Output, attempted, del, null, "");
-        if (!IsAlreadyExists(first.Exit, first.Output)) return Fail();
-        try { if (PlanOld(classifyOldHttp()) != Action.DeleteOldHttpReservation) return Fail(); } catch { return Fail(); }
-        var del = deleteOldHttp();
-        if (del != 0) return Fail(true, del);
-        try { if (classifyOldHttp() != FirewallSetup.AclOwnership.None) return Fail(true, del); } catch { return Fail(true, del); }
-        var retry = addHttps();
-        return new(retry.Exit, first.Exit, first.Output, true, del, retry.Exit, retry.Output);
+        return new(first.Exit, first.Exit, first.Output, false, null, null, "");
     }
 }
 
@@ -532,7 +516,7 @@ internal static class TlsInspector
         if (elevated && all == null) { v4 = v4 == BindingState.ExactExpected ? v4 : BindingState.Unknown; v6 = v6 == BindingState.ExactExpected ? v6 : BindingState.Unknown; }
         bool orphan = ms == MarkerState.Absent && HasOrphanOurCert();
         bool due = c != null && TlsLifetime.IsRenewalDue(new DateTimeOffset(c.NotAfter), DateTimeOffset.UtcNow);
-        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && marker.Port != port, c != null && new DateTimeOffset(c.NotAfter) <= DateTimeOffset.UtcNow);
+        return new TlsObservation(ms, marker, cert, matches, orphan, v4, v6, specific, due, explicitSetup, System.Net.Sockets.Socket.OSSupportsIPv6, diag, marker != null && marker.Port != port && marker.Port != TlsProduct.PriorHttpsPort, c != null && new DateTimeOffset(c.NotAfter) <= DateTimeOffset.UtcNow);
     }
 
     /// <summary>Precise, non-secret reason a binding is not treated as ours. Never leads to deletion: an app-id match alone is not ownership, and a binding naming a certificate that is gone stays untouched.</summary>

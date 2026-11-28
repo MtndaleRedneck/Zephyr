@@ -400,9 +400,11 @@ namespace ZephyrPlayer
         }
 
         /// <summary>The pre-TLS http:// reservation: classified separately so it is deleted only when positively ours or legacy.</summary>
+        /// <summary>The plain-http port of the 1.x/2.0.x builds. Report-only; never a deletion target.</summary>
+        internal const int LegacyHttpPort = 47823;
         internal static AclOwnership ClassifyOldHttpUrlAcl(string? sid)
         {
-            var (found, sddl) = QueryUrlAcl("http://+:" + PlaybackServer.DefaultPort + "/");
+            var (found, sddl) = QueryUrlAcl("http://+:" + LegacyHttpPort + "/");
             return found ? ClassifySddl(sddl, sid) : AclOwnership.None;
         }
 
@@ -467,11 +469,9 @@ namespace ZephyrPlayer
                             var url = "https://+:" + PlaybackServer.DefaultPort + "/";
                             var grant = ZephyrLifecycle.SddlUtil.PerUserListenGrant(sid);
                             var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
-                                () => Run("netsh", "http add urlacl url=" + url + " sddl=" + grant),
-                                () => ClassifyOldHttpUrlAcl(sid),
-                                () => -1 /* no delete callback: an old http:// reservation has no creation witness and is never deleted */);
+                                () => Run("netsh", "http add urlacl url=" + url + " sddl=" + grant));
                             if (addRes.FirstExit != 0)
-                                Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + " (an old http reservation is never deleted)");
+                                Console.Error.WriteLine("https listen-permission add exit " + addRes.FirstExit + " (nothing was deleted or retried)");
                             if (addRes.Exit != 0 || !UrlAclExists()) return 3;
                             var (foundNow, liveSddl) = QueryUrlAcl(url);
                             if (foundNow && liveSddl != null && ZephyrLifecycle.SddlUtil.Equivalent(liveSddl, grant))

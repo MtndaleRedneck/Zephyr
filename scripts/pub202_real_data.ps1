@@ -55,9 +55,9 @@ function Wait-InProc($procId, $id, $seconds) {
     return $null
 }
 function Invoke-Uia($el) { $el.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke() }
-function Wait-Server($seconds) {
+function Wait-Server($seconds, [int]$port = 47823) {
     for ($i = 0; $i -lt ($seconds * 2); $i++) {
-        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 47823); $c.Close(); return $true } catch { Start-Sleep -Milliseconds 500 }
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', $port); $c.Close(); return $true } catch { Start-Sleep -Milliseconds 500 }
     }
     return $false
 }
@@ -306,7 +306,7 @@ try {
         if ((Get-FileHash "$dataDir\$f" -Algorithm SHA256).Hash -ne $before[$f]) { throw "the candidate setup changed $f" }
     }
     $null = Start-Process $exe -PassThru
-    if (-not (Wait-Server 40)) { throw 'candidate control server never came up on the real 2.0.2 data' }
+    if (-not (Wait-Server 40 47824)) { throw 'candidate control server never came up on the real 2.0.2 data' }
     Start-Sleep -Seconds 4
     $c200 = $false
     for ($i = 0; $i -lt 15 -and -not $c200; $i++) { $c200 = ((Get-TlsStatus $token) -eq 200); if (-not $c200) { Start-Sleep -Seconds 1 } }
@@ -316,7 +316,7 @@ try {
     Note 'http[candidate-wrong-token]' "pinned HTTPS GET /control/status -> $wrong (want 401)"
     if ($wrong -ne 401) { throw "candidate-wrong-token answered $wrong, expected 401" }
     $plain = 0
-    try { $plain = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47823/control/status' -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
+    try { $plain = [int](Invoke-WebRequest -Uri 'http://127.0.0.1:47824/control/status' -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 3 -UseBasicParsing -SkipHttpErrorCheck).StatusCode } catch {}
     Note 'http[candidate-plaintext]' "plain http GET /control/status -> $plain (want not 200)"
     if ($plain -eq 200) { throw 'PLAINTEXT 200: the candidate answered the real token over plain http' }
     Stop-Player
@@ -348,11 +348,12 @@ finally {
     $ec2 = $LASTEXITCODE
     netsh http delete urlacl url=http://+:47823/ 2>&1 | Out-Null
     $ec3 = $LASTEXITCODE
+    Get-NetFirewallRule -DisplayName 'Zephyr Player*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule   # harness cleanup on a disposable runner (the candidate's own rules, by display name)
     Note 'cleanup_native_exit_codes' "firewall rule 1 = $ec1, firewall rule 2 = $ec2, urlacl = $ec3"
     Note 'script_state_at_exit' "all assertions passed = $allAssertionsPassed; LASTEXITCODE before reset (reflects the last cleanup netsh call only) = $LASTEXITCODE"
     # Read-only evidence, no deletes (after the exit-code notes above so it cannot alter them): what the candidate's own uninstall left of its https listen permission and binding.
-    Write-Output '--- post-uninstall state (read-only): https urlacl 47823 ---'; (netsh http show urlacl url=https://+:47823/ 2>&1 | Out-String)
-    Write-Output '--- post-uninstall state (read-only): sslcert 0.0.0.0:47823 ---'; (netsh http show sslcert ipport=0.0.0.0:47823 2>&1 | Out-String)
+    Write-Output '--- post-uninstall state (read-only): https urlacl 47824 ---'; (netsh http show urlacl url=https://+:47824/ 2>&1 | Out-String)
+    Write-Output '--- post-uninstall state (read-only): sslcert 0.0.0.0:47824 ---'; (netsh http show sslcert ipport=0.0.0.0:47824 2>&1 | Out-String)
     # Only a script whose every assertion passed may drop the leaked native status of the cleanup commands. A failure
     # (throw) is never reset: it still propagates out of this finally block.
     if ($allAssertionsPassed) { $global:LASTEXITCODE = 0 }

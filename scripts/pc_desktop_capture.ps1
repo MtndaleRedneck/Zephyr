@@ -24,7 +24,7 @@ function DumpCrashLog($why) {
 }
 
 # Firewall + listen permission via the app's own setup step (round-6 N-8 shape:
-# TCP program=System/47823/Private/LocalSubnet, UDP exe/8490/Private/LocalSubnet,
+# TCP program=System/47824 and UDP exe/8490, each Private+LocalSubnet and Public+LocalSubnet4,
 # URL ACL scoped to this user). The runner is elevated, so the same code the
 # explained first-run elevation takes runs headless. (The old inline rules used
 # the wrong discovery port and a program-less TCP rule that http.sys ignores.)
@@ -33,8 +33,8 @@ $fw = Start-Process "windows/capture-out/ZephyrPlayer.exe" -ArgumentList '--inst
 if ($fw.ExitCode -ne 0) {
     Write-Host "passed SID: $sid"
     $aclAll = netsh http show urlacl | Out-String
-    $block = ($aclAll -split "\r?\n\r?\n" | Where-Object { $_ -match ':47823/' } | Select-Object -First 1)
-    Write-Host "47823 reservation after setup:"; Write-Host $block
+    $block = ($aclAll -split "\r?\n\r?\n" | Where-Object { $_ -match ':47824/' } | Select-Object -First 1)
+    Write-Host "47824 reservation after setup:"; Write-Host $block
     throw "capture firewall setup exit $($fw.ExitCode)"
 }
 
@@ -723,7 +723,7 @@ $hdr = @{ Authorization = "Bearer ci-capture-token" }
 # instead of POSTing into a closed port and silently capturing the home window.
 $ctrlUp = $false
 foreach ($i in 1..40) {
-    try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 47823); $c.Close(); $ctrlUp = $true; break }
+    try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 47824); $c.Close(); $ctrlUp = $true; break }
     catch { Start-Sleep -Milliseconds 500 }
 }
 if (-not $ctrlUp) { throw "control server did not come up for the phone-start bar proof" }
@@ -1055,6 +1055,7 @@ Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
 netsh advfirewall firewall delete rule name="Zephyr Player" | Out-Null
 netsh advfirewall firewall delete rule name="Zephyr Player Discovery" | Out-Null
+Get-NetFirewallRule -DisplayName 'Zephyr Player*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule   # harness cleanup on a disposable runner
 
 # Verdicts: video area must be alive (moving pattern => many lit pixels in the
 # center band), and the bottom bar band must show lit control pixels.

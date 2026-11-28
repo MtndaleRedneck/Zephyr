@@ -1,7 +1,7 @@
 # Zephyr VLC Remote helper runtime tests on a real Windows machine (CI runner).
 # Exercises: the elevated firewall/URL-ACL setup, the BingeMote pairing migration,
 # the pairing flow, token auth, every input endpoint, the volume endpoints, and UDP
-# discovery identity. Ports are Zephyr's own (8491/8492); BingeMote's are never touched.
+# discovery identity. Ports are Zephyr's own (8491/8493); BingeMote's are never touched.
 $ErrorActionPreference = 'Stop'
 $exe = "windows/ZephyrVlcRemote/out/ZephyrVlcRemote.exe"
 if (-not (Test-Path $exe)) { throw "helper exe missing at $exe" }
@@ -46,7 +46,7 @@ function Show-Log([string]$path, [int]$tail) {
     $out = foreach ($k in $cats.Keys) { "$k=$(@($lines | Where-Object { $_ -match $cats[$k] }).Count)" }
     Write-Host "helper.log: $($lines.Count) lines read; known-message counts: $($out -join ', '); line text withheld from the public log"
 }
-# Secure mode is HTTPS only (no plaintext fallback). Every request to the helper goes over HTTPS to 127.0.0.1:8492 and accepts ONLY the certificate whose
+# Secure mode is HTTPS only (no plaintext fallback). Every request to the helper goes over HTTPS to 127.0.0.1:8493 and accepts ONLY the certificate whose
 # thumbprint is the helper's own stored identity (CN=Zephyr VLC Remote, created by the elevated setup): a pin, not "skip validation". No answer at all
 # (connect or TLS failure, including a pin mismatch) THROWS, like Invoke-WebRequest did, so it can never satisfy an assertion. Headers (token, Origin, Host)
 # and the form-encoded string body are sent exactly as before; the helper's status and body are returned unchanged.
@@ -77,7 +77,7 @@ function Invoke-HelperTls([string]$method, [string]$path, $headers, $body, [int]
     [ZephyrVlcPin]::Thumb = $ids[0].Thumbprint
     $names = @(); $vals = @()
     foreach ($k in $headers.Keys) { $names += [string]$k; $vals += [string]$headers[$k] }
-    $r = [ZephyrVlcPin]::Send($method, "https://127.0.0.1:8492$path", [string[]]$names, [string[]]$vals, $body, $timeoutSec)
+    $r = [ZephyrVlcPin]::Send($method, "https://127.0.0.1:8493$path", [string[]]$names, [string[]]$vals, $body, $timeoutSec)
     return @{ code = [int]$r[0]; body = $r[1] }
 }
 function Invoke-Helper($path, $body, $token, [int]$timeoutSec = 10) {
@@ -108,7 +108,7 @@ function Read-ConfigJson([string]$path) {
 
 # CI-ONLY cleanup (never product behavior): kill every helper copy by NAME, then VERIFY
 # none remains. A stale-PID kill would leave the old instance holding the single-instance
-# mutex and answering on 8492 while the "restarted" copy silently exits.
+# mutex and answering on 8493 while the "restarted" copy silently exits.
 function Stop-HelperVerified {
     Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
     foreach ($i in 1..20) {
@@ -119,13 +119,13 @@ function Stop-HelperVerified {
     throw "a helper process survived the kill"
 }
 
-# Wait until 8492 answers AND prove the serving process is the just-started copy:
+# Wait until 8493 answers AND prove the serving process is the just-started copy:
 # exactly one helper process exists and it is the expected PID. (http.sys listens in the
 # kernel, so the TCP connection's OwningProcess is System - identity is proven by
 # exclusivity + the started PID, not by the socket table.)
 function Wait-HelperListening([int]$pidToServe, [string]$what) {
     foreach ($i in 1..40) {
-        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8492); $c.Close()
+        try { $c = New-Object Net.Sockets.TcpClient; $c.Connect('127.0.0.1', 8493); $c.Close()
             $procs = @(Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue)
             if ($procs.Count -eq 1 -and ($pidToServe -le 0 -or $procs[0].Id -eq $pidToServe)) { return }
         } catch { }
@@ -145,37 +145,34 @@ function Wait-HelperListening([int]$pidToServe, [string]$what) {
 # LocalSubnet; UDP discovery is program-scoped to the exe + Private + LocalSubnet; the
 # listen permission names the installing user's SID, not Everyone.
 function Assert-HelperFirewallRules([string]$exePath) {
+    # Rules are read back by their real unique Name/DisplayName (Get-NetFirewallRule), not netsh display text.
+    . (Join-Path $PSScriptRoot 'zephyr_fw_assert.ps1')
     # The rule stores the exe's FULL path; a relative argument can never match.
     $exePath = (Resolve-Path $exePath).Path
-    $ruleV = netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Out-String
-    $blocks = $ruleV -split "\r?\n\r?\n"
-    $tcp = ($blocks | Where-Object { $_ -match 'Protocol:\s*TCP' } | Select-Object -First 1)
-    $udp = ($blocks | Where-Object { $_ -match 'Protocol:\s*UDP' } | Select-Object -First 1)
-    Assert ($null -ne $tcp) "a TCP firewall rule exists"
-    Assert ($tcp -match 'Program:\s*System') "the TCP rule names program System (http.sys owns the listener)"
-    Assert ($tcp -match 'LocalPort:\s*8492') "the TCP rule is scoped to port 8492"
-    Assert ($tcp -match 'Profiles:\s*Private') "the TCP rule is Private-only"
-    Assert ($tcp -match 'LocalSubnet') "the TCP rule is LocalSubnet-scoped"
-    Assert ($null -ne $udp) "a UDP firewall rule exists"
-    Assert ($udp -match 'Program:\s*' + [regex]::Escape($exePath)) "the UDP discovery rule is program-scoped to the exe"
-    Assert ($udp -match 'Profiles:\s*Private') "the UDP rule is Private-only"
-    Assert ($udp -match 'LocalSubnet') "the UDP rule is LocalSubnet-scoped"
+    try {
+        Assert-ZRule 'Zephyr VLC Remote 8493 TCP (Private)' 'Private' 'TCP' '8493' 'LocalSubnet' 'System' | Out-Null
+        Assert-ZRule 'Zephyr VLC Remote 8493 TCP (Public)' 'Public' 'TCP' '8493' 'LocalSubnet4' 'System' | Out-Null
+        Assert-ZRule 'Zephyr VLC Remote 8491 UDP (Private)' 'Private' 'UDP' '8491' 'LocalSubnet' $exePath | Out-Null
+        Assert-ZRule 'Zephyr VLC Remote 8491 UDP (Public)' 'Public' 'UDP' '8491' 'LocalSubnet4' $exePath | Out-Null
+        $ok = $true
+    } catch { Write-Host "rule shape check failed: $($_.Exception.Message)"; $ok = $false }
+    Assert $ok "the four journaled-shape rules (TCP System 8493, UDP exe 8491; Private+LocalSubnet and Public+LocalSubnet4) read back by unique Name"
     $acl = netsh http show urlacl | Out-String
-    Assert ($acl -match ':8492/') "the listen permission exists"
+    Assert ($acl -match 'https://\+:8493/') "the https listen permission exists on 8493"
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     # netsh stores well-known accounts as SDDL aliases (a RID-500 local admin comes
     # back as "LA", Everyone as "WD"), so compare PARSED security descriptors, not
     # the raw SID string.
-    $block = ($acl -split "\r?\n\r?\n" | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
+    $block = ($acl -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8493/' } | Select-Object -First 1)
     $sddlMatch = [regex]::Match($block, 'SDDL:\s*(\S+)')
     $actual = if ($sddlMatch.Success) { (New-Object System.Security.AccessControl.RawSecurityDescriptor($sddlMatch.Groups[1].Value)).GetSddlForm('All') } else { '' }
     $expected = (New-Object System.Security.AccessControl.RawSecurityDescriptor("D:(A;;GX;;;$sid)")).GetSddlForm('All')
     if ($actual -ne $expected) {
-        Write-Host "8492 reservation block:"; Write-Host $block
+        Write-Host "8493 reservation block:"; Write-Host $block
         Write-Host "expected SDDL: $expected (user SID $sid)"
     }
     Assert ($actual -eq $expected) "the listen permission names the installing user's SID, not Everyone"
-    Assert ($acl -notmatch 'S-1-1-0') "the listen permission is not Everyone"
+    Assert ($block -notmatch 'S-1-1-0|WD\)') "the 8493 listen permission is not Everyone"
 }
 function Invoke-HelperGet($path, $token, [int]$timeoutSec = 10) {
     $headers = @{}
@@ -223,14 +220,13 @@ $installed = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\ZephyrVlcRe
 Assert (Test-Path $installed) "per-user silent install lands in the installing user's profile"
 # The installer reopens the app after a silent install (for updates). On headless CI
 # that copy sits on the explained first-run elevation prompt holding the single-instance
-# mutex, so nothing else can bind 8492. Close it; the --install-firewall run below is
+# mutex, so nothing else can bind 8493. Close it; the --install-firewall run below is
 # exactly what a real user reaches by clicking through that prompt.
 Start-Sleep -Seconds 2
 Get-Process ZephyrVlcRemote -ErrorAction SilentlyContinue | Stop-Process -Force
 # The installer no longer touches the firewall (it runs unelevated by design): the
 # app's explained first-run elevation owns the rules.
-$rule0 = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String
-Assert ($rule0 -notmatch 'Zephyr VLC Remote') "unelevated installer adds no firewall rule (the app's explained elevation owns it)"
+Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote*' -ErrorAction SilentlyContinue).Count -eq 0) "unelevated installer adds no firewall rule (the app's explained elevation owns it)"
 # The elevated setup, run from the installed exe (CI runners are already admin).
 # Pass the user's SID + data dir exactly as the unelevated parent does in production,
 # so the listen permission is scoped to the user even if the prompt's identity differs.
@@ -244,8 +240,8 @@ if ($fw0.ExitCode -ne 0) {
     $log0 = Join-Path $data0 'helper.log'
     if (Test-Path $log0) { Write-Host "== helper.log tail =="; Show-Log $log0 20 }
     $acl0 = netsh http show urlacl | Out-String
-    $block0 = ($acl0 -split "\r?\n\r?\n" | Where-Object { $_ -match ':8492/' } | Select-Object -First 1)
-    Write-Host "8492 reservation after setup:"; Write-Host $block0
+    $block0 = ($acl0 -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8493/' } | Select-Object -First 1)
+    Write-Host "8493 reservation after setup:"; Write-Host $block0
 }
 Assert ($fw0.ExitCode -eq 0) "installed exe's elevated firewall setup succeeds"
 Assert-HelperFirewallRules $installed
@@ -265,13 +261,13 @@ $unins = Join-Path $env:LOCALAPPDATA 'Programs\Zephyr VLC Remote\unins000.exe'
 & $unins /VERYSILENT /NORESTART | Out-Null
 Start-Sleep -Seconds 5
 Assert (-not (Test-Path $installed)) "uninstaller removes the installed exe"
-$ruleAfter = netsh advfirewall firewall show rule name="Zephyr VLC Remote" 2>$null | Out-String
-Assert ($ruleAfter -notmatch 'Zephyr VLC Remote') "uninstall removes the helper firewall rules"
+$leftRules = @(Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Zephyr-*' -and $_.DisplayName -like 'Zephyr VLC Remote*' })
+Assert ($leftRules.Count -eq 0) "uninstall removes every journaled rule (read back absent; $($leftRules.Count) left)"
 $aclAfter = netsh http show urlacl | Out-String
-Assert ($aclAfter -notmatch ':8492/') "uninstall removes the listen permission"
-# Belt and braces for later phases (the vlc.exe rule is intentionally left by uninstall).
-netsh advfirewall firewall delete rule name="Zephyr VLC Remote" | Out-Null
-netsh advfirewall firewall delete rule name="Zephyr VLC Remote VLC" | Out-Null
+Assert ($aclAfter -notmatch 'https://\+:8493/') "uninstall removes our journaled 8493 listen permission (read back absent)"
+Assert ($null -eq (Get-ScheduledTask -TaskName 'Zephyr VLC Remote Watchdog (installed)' -ErrorAction SilentlyContinue)) "uninstall leaves no journaled watchdog task"
+# Harness cleanup on a disposable runner (not a product step): any fixture or leftover by display name.
+Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 netsh http delete urlacl url=http://+:8492/ | Out-Null
 Write-Host "ok: per-user install, clean-build hook proof, uninstall"
 
@@ -287,11 +283,24 @@ Write-Host "== install-firewall =="
 $fw = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
 $fwExit = $fw.ExitCode
 Write-Host "install-firewall exit code: $fwExit"
-netsh advfirewall firewall show rule name="Zephyr VLC Remote"
+Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote*' -ErrorAction SilentlyContinue | Format-Table Name,DisplayName,Enabled,Profile -AutoSize | Out-String | Write-Host
 $aclOut = netsh http show urlacl
-$aclOut | Select-String '8492'
+$aclOut | Select-String '8493'
 if ($fwExit -ne 0) { throw "install-firewall failed with exit $fwExit" }
-if (-not ($aclOut | Select-String ':8492/')) { throw "URL ACL for port 8492 missing after setup" }
+if (-not ($aclOut | Select-String 'https://\+:8493/')) { throw "URL ACL for port 8493 missing after setup" }
+$jv = Get-Content (Join-Path $env:ProgramData 'ZephyrVlcRemote\lifecycle.json') -Raw | ConvertFrom-Json
+Assert (@($jv.Rules).Count -ge 4) "the protected lifecycle journal lists the created rules ($(@($jv.Rules).Count))"
+Assert ($jv.UrlAcl -and $jv.UrlAcl.Url -eq 'https://+:8493/') "the lifecycle journal lists the https 8493 listen permission"
+# Watchdog task read-back (product COM create-only). The step can legitimately be skipped (exit 5) or fail (6) on a runner, so assert CONSISTENCY, and say which happened.
+$wdTask = Get-ScheduledTask -TaskName 'Zephyr VLC Remote Watchdog (installed)' -ErrorAction SilentlyContinue
+if ($jv.Watchdog) {
+    Assert ($null -ne $wdTask) "the journal lists the watchdog task and it reads back from Task Scheduler"
+    Assert ($jv.Watchdog.Verified -eq $true) "the journaled watchdog entry is marked verified"
+    Write-Host "WATCHDOG: created and journaled (task read back)"
+} else {
+    Assert ($null -eq $wdTask) "no watchdog journal entry and no task (nothing unjournaled was created)"
+    Write-Host "WATCHDOG: NOT created on this runner (skipped/failed by product); COM create path is NOT proven by this run"
+}
 Assert-HelperFirewallRules $exe
 
 # --- Part 1b: an old install's rules + ACL + marker are MIGRATED, not trusted ---------
@@ -302,44 +311,37 @@ Assert-HelperFirewallRules $exe
 # the gate (a bare-timestamp firewall.ok must not count) is reviewed in source: the
 # app side is FirewallMarkerCurrent + the shape check, and the dialog cannot be driven
 # headless here.
-Write-Host "== firewall migration from the old shape =="
-netsh advfirewall firewall delete rule name="Zephyr VLC Remote" | Out-Null
-netsh http delete urlacl url=http://+:8492/ | Out-Null
-# The round-6 shape: exe-scoped TCP, no LocalSubnet scoping.
+Write-Host "== earlier-build rules are left as found and reported, never rewritten =="
+# Plant what 1.x builds left (harness fixtures, not product output): an exe-scoped TCP rule without LocalSubnet, a 1.x helper rule, and the broad plain-http Everyone grant on the OLD port.
 netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=TCP localport=8492 program="$exe" profile=private | Out-Null
-# The 1.x helper rule and the 1.x broad (Everyone) listen grant.
 netsh advfirewall firewall add rule name="Zephyr VLC Remote Helper" dir=in action=allow protocol=TCP localport=8492 profile=private | Out-Null
+netsh http delete urlacl url=http://+:8492/ | Out-Null
 netsh http add urlacl url=http://+:8492/ sddl="D:(A;;GX;;;WD)" | Out-Null
-New-Item -ItemType Directory -Force $data0 | Out-Null
-Set-Content (Join-Path $data0 'firewall.ok') (Get-Date).ToUniversalTime().ToString("o")
-# The UNELEVATED detection itself (round-8 N-4): the hooked exe's --firewall-shape-ok
-# runs the same live shape read the app gates on - it must REJECT the planted old
-# shape, no dialog needed.
-$shapeBefore = Start-Process $exe -ArgumentList "--firewall-shape-ok" -Wait -PassThru
-Assert ($shapeBefore.ExitCode -eq 1) "the unelevated shape check rejects the planted old shape (exit $($shapeBefore.ExitCode))"
 $fwm = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
-Assert ($fwm.ExitCode -eq 0) "elevated setup migrates the old shape (exit $($fwm.ExitCode))"
+Assert ($fwm.ExitCode -eq 0) "elevated setup succeeds with earlier-build rules present (exit $($fwm.ExitCode))"
 $shapeAfter = Start-Process $exe -ArgumentList "--firewall-shape-ok" -Wait -PassThru
-Assert ($shapeAfter.ExitCode -eq 0) "the unelevated shape check accepts the migrated shape (exit $($shapeAfter.ExitCode))"
+Assert ($shapeAfter.ExitCode -eq 0) "the unelevated shape check accepts the current rules (exit $($shapeAfter.ExitCode))"
 Assert-HelperFirewallRules $exe
-$legacy = netsh advfirewall firewall show rule name="Zephyr VLC Remote Helper" 2>$null | Out-String
-Assert ($legacy -notmatch 'Zephyr VLC Remote Helper') "migration removes the 1.x helper rule"
+Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote' -ErrorAction SilentlyContinue).Count -ge 1) "the earlier-build exe rule is left as found (not deleted by setup)"
+Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote Helper' -ErrorAction SilentlyContinue).Count -ge 1) "the 1.x helper rule is left as found (not deleted by setup)"
+Assert ((netsh http show urlacl | Out-String) -match 'http://\+:8492/') "the old plain-http 8492 reservation is left as found"
+$logTxt = Get-Content (Join-Path $data0 'helper.log') -Raw -ErrorAction SilentlyContinue
+Assert ($logTxt -match 'firewall inventory: existing rule left as found[^\r\n]*Zephyr VLC Remote') "the helper log names the planted earlier rules as left as found"
 
 # --- Part 1c: a FOREIGN port reservation is a conflict, never an overwrite -------------
 # Another app or another Windows user's reservation on 8492 is not ours: setup must stop
 # with the conflict exit and leave it in place (round-7 N4 + multi-user rule).
 Write-Host "== foreign URL ACL conflict =="
 # The product classifies the https reservation (plain http is retired): plant the foreign one there, after removing only the reservations this run's own setup created.
-netsh http delete urlacl url=http://+:8492/ | Out-Null
-netsh http delete urlacl url=https://+:8492/ | Out-Null
-netsh http add urlacl url=https://+:8492/ sddl="D:(A;;GX;;;SY)" | Out-Null
-$plantedBlock = (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8492/' } | Select-Object -First 1
+netsh http delete urlacl url=https://+:8493/ | Out-Null
+netsh http add urlacl url=https://+:8493/ sddl="D:(A;;GX;;;SY)" | Out-Null
+$plantedBlock = (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8493/' } | Select-Object -First 1
 Assert ($plantedBlock -match 'S-1-5-18|\(A;;GX;;;SY\)') "the foreign https reservation is planted before the conflict run"
 $fwf = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
 Assert ($fwf.ExitCode -eq 4) "a foreign reservation stops setup with the conflict exit (got $($fwf.ExitCode))"
-$foreignBlock = (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8492/' } | Select-Object -First 1
+$foreignBlock = (netsh http show urlacl | Out-String) -split "\r?\n\r?\n" | Where-Object { $_ -match 'https://\+:8493/' } | Select-Object -First 1
 Assert ($foreignBlock -match 'S-1-5-18|\(A;;GX;;;SY\)') "the foreign reservation is left untouched"
-netsh http delete urlacl url=https://+:8492/ | Out-Null
+netsh http delete urlacl url=https://+:8493/ | Out-Null
 netsh http delete urlacl url=http://+:8492/ | Out-Null
 # Restore the good state for the rest of the suite.
 $fw2 = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
@@ -351,7 +353,7 @@ Write-Host "== helper runtime =="
 $env:ZEPHYR_VLC_REMOTE_PAIR_CODE = '4242'
 $p = Start-Process $exe -PassThru
 try {
-    Wait-HelperListening $p.Id "helper did not start listening on 8492"
+    Wait-HelperListening $p.Id "helper did not start listening on 8493"
     Write-Host "helper is listening"
 
     # --- Part 2a: BingeMote migration on a real old config (settled: no forced re-pair) ---
@@ -746,7 +748,7 @@ try {
     $reply = [Text.Encoding]::UTF8.GetString($udp.Receive([ref]$ep))
     $udp.Close()
     Assert ($reply -like 'ZEPHYR_VLC_REMOTE_HERE_V1|*') "discovery reply carries the Zephyr VLC Remote identity: $reply"
-    Assert ($reply -like '*|8492') "discovery reply advertises HTTP port 8492: $reply"
+    Assert ($reply -like '*|8493') "discovery reply advertises HTTP port 8493: $reply"
 
     # A copy launched from a different folder (an "installed" copy vs a Downloads copy)
     # takes over: the running copy quits, the new one serves the same token.
@@ -828,14 +830,12 @@ try {
     # What it does NOT prove: the across-paths first-launch firewall prompt - that
     # behavior is untested (the dialog renders prove appearance only).
     function Set-TakeoverUdpRule([string]$program) {
-        netsh advfirewall firewall delete rule name="Zephyr VLC Remote" protocol=UDP localport=8491 | Out-Null
-        $addOut = netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=UDP localport=8491 program="$program" profile=private remoteip=localsubnet 2>&1 | Out-String
-        if ($LASTEXITCODE -ne 0) { throw "netsh add UDP rule failed (exit $LASTEXITCODE): $addOut" }
-        $shown = netsh advfirewall firewall show rule name="Zephyr VLC Remote" verbose | Out-String
-        $udpBlock = ($shown -split "Rule Name:" | Where-Object { $_ -match "Protocol:\s+UDP" }) -join ""
-        if (-not ($udpBlock -match [regex]::Escape($program))) {
-            throw "UDP rule did not land for $program - actual rules:`n$shown"
-        }
+        # Product-faithful fixture: the elevated setup from THAT copy creates its own journaled, unique-Name rules (a by-name netsh rule is no longer a valid witness).
+        $prog = (Resolve-Path $program).Path
+        $t = Start-Process $prog -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
+        if ($t.ExitCode -ne 0) { throw "takeover fixture: elevated setup from $prog exited $($t.ExitCode)" }
+        $m = @(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote 8491 UDP*' -ErrorAction SilentlyContinue | Where-Object { ($_ | Get-NetFirewallApplicationFilter).Program -eq $prog })
+        if ($m.Count -lt 1) { throw "takeover fixture: no UDP discovery rule for $prog after its setup" }
     }
     # Continuity first (round-11 R11-1): with the rules still naming the RUNNING
     # copy's path, the other-folder copy must NOT kill the working helper - it waits
@@ -866,7 +866,7 @@ try {
     $p2 = Start-Process $exe2 -PassThru
     $oldExited = $p.WaitForExit(25000)
     Assert $oldExited "running copy quits when a copy from another folder launches"
-    Wait-HelperListening $p2.Id "taking-over copy did not start listening on 8492"
+    Wait-HelperListening $p2.Id "taking-over copy did not start listening on 8493"
     $r = Invoke-Helper '/ping' '{}' $token
     Assert ($r.code -eq 200) "taking-over copy serves the saved token"
     $p = $p2
@@ -899,5 +899,5 @@ try {
     Write-Host "HELPER E2E PASSED ($script:assertCount assertions)"
 } finally {
     if ($p -and -not $p.HasExited) { Stop-HelperVerified }
-    netsh advfirewall firewall delete rule name="Zephyr VLC Remote" | Out-Null
+    Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote*' -ErrorAction SilentlyContinue | Remove-NetFirewallRule
 }

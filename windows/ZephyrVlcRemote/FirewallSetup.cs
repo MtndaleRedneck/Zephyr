@@ -121,11 +121,9 @@ internal static class FirewallSetup
                         var url = "https://+:" + Program.HttpPort + "/";
                         var grant = ZephyrLifecycle.SddlUtil.PerUserListenGrant(sid);
                         var addRes = UrlAclMigrationPlanner.AddHttpsReservation(
-                            () => RunCapture("netsh", "http add urlacl url=" + url + " sddl=" + grant),
-                            () => ClassifyOldHttpUrlAcl(sid),
-                            () => -1 /* no delete callback: an old http:// reservation has no creation witness and is never deleted */);
+                            () => RunCapture("netsh", "http add urlacl url=" + url + " sddl=" + grant));
                         if (addRes.FirstExit != 0)
-                            Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + "; old http reservation delete attempted=" + addRes.OldHttpDeleteAttempted + " (an old http reservation is never deleted)");
+                            Program.Log("firewall setup: first https listen-permission add exit " + addRes.FirstExit + " (nothing was deleted or retried)");
                         if (addRes.Exit != 0 || !UrlAclExists())
                         {
                             Program.Log("firewall setup: the listen permission could not be added (netsh exit " + addRes.Exit + "); nothing existing was replaced.");
@@ -527,9 +525,11 @@ internal static class FirewallSetup
     /// version returned None on an unparsed block and setup would have DELETED a
     /// reservation it could not read).</summary>
     /// <summary>Ownership of the OLD http:// reservation, for migration planning only (UrlAclMigrationPlanner). Nothing deletes it yet.</summary>
+    /// <summary>The plain-http port of the earlier helper builds. Report-only; never a deletion target.</summary>
+    internal const int LegacyHttpPort = 8492;
     internal static AclOwnership ClassifyOldHttpUrlAcl(string? sid)
     {
-        var (found, sddl) = QueryUrlAcl("http://+:" + Program.HttpPort + "/");
+        var (found, sddl) = QueryUrlAcl("http://+:" + LegacyHttpPort + "/");
         return found ? ClassifySddl(sddl, sid) : AclOwnership.None;
     }
 
