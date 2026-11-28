@@ -128,6 +128,11 @@ class RemoteState(
         if (BuildConfig.DEBUG) status = VlcStatus("playing", "Demo", 1500, 6624, 128, false, emptyList())
     }
 
+    /** Screenshot-rig only: renders the REAL shipped "Player moved" notice branch (the same state the authenticated-poll gate publishes). */
+    fun debugShowZephyrMoved(name: String) {
+        if (BuildConfig.DEBUG) zephyrMovedTo = name
+    }
+
     /** Screenshot-rig only: mock hero note line for the status-notice proposal
      * renders (the proposed E/unpaired subtitle). Never set outside the rig. */
     var mockHeroNote by mutableStateOf<String?>(null)

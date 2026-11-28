@@ -99,6 +99,8 @@ class MainActivity : ComponentActivity() {
             "cur-ok" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = false) }
             "prop-e" -> { remote.debugSeedStatus(); remote.mockHeroNote = "Zephyr VLC Remote on the PC isn't answering - open it to use mouse, keyboard and PC volume." }
             "prop-unpaired" -> { remote.debugSeedStatus(); remote.mockHeroNote = "This phone isn't paired with the PC anymore - pair again." }
+            // The real shipped "Zephyr Player moved" hero notice on a connected hero.
+            "moved-zephyr" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = false); remote.debugShowZephyrMoved("Living Room PC") }
             // Post-1.11.0 production states: the REAL shipped notice branches
             // (post-debounce helper notice / 401 pair-again), no mock slot.
             "prod-e" -> { remote.debugSeedStatus(); remote.debugForceStatus(unreachable = false, helperDown = true, helperNotice = true) }
