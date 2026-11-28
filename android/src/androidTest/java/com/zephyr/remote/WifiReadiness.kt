@@ -7,20 +7,16 @@ import java.net.Inet4Address
 import java.net.InetAddress
 
 /**
- * Precondition for the suites that need the phone stream server: the emulator must have an ACTIVE Wi-Fi network with an IPv4
- * address, the exact predicate StreamService.wifiAddress() uses (activeNetwork + TRANSPORT_WIFI + first Inet4Address). A bounded
+ * Precondition for the suites that need the phone stream server: the emulator must have a Wi-Fi network with an IPv4
+ * address, the product's own selection (StreamService.findWifiIpv4). A bounded
  * poll, then a hard failure that prints what the platform reports, so a missing network is labelled as such instead of showing
  * up as a bare "server not ready". It changes no product code, timeout or assertion, and it is NOT called by the deliberate
  * no-network suite (StreamServiceNoWifiTest). Closes an evidence gap only; it does not explain why Wi-Fi was absent.
  */
 object WifiReadiness {
-    fun wifiIpv4(ctx: Context): InetAddress? {
-        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = cm.activeNetwork ?: return null
-        val caps = cm.getNetworkCapabilities(network) ?: return null
-        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
-        return cm.getLinkProperties(network)?.linkAddresses?.map { it.address }?.firstOrNull { it is Inet4Address }
-    }
+    /** The product's own selection (StreamService.findWifiIpv4), so the precondition cannot drift from what the service does. */
+    fun wifiIpv4(ctx: Context): InetAddress? =
+        StreamService.findWifiIpv4(ctx.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
 
     @Suppress("DEPRECATION")
     fun describe(ctx: Context): String {

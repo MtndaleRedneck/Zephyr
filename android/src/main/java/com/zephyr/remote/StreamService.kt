@@ -161,17 +161,41 @@ class StreamService : Service() {
         super.onDestroy()
     }
 
-    private fun wifiAddress(): java.net.InetAddress? {
-        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = cm.activeNetwork ?: return null
-        val caps = cm.getNetworkCapabilities(network) ?: return null
-        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
-        return cm.getLinkProperties(network)?.linkAddresses
-            ?.map { it.address }
-            ?.firstOrNull { it is java.net.Inet4Address }
-    }
+    private fun wifiAddress(): java.net.InetAddress? =
+        findWifiIpv4(getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager)
 
     companion object {
+        /**
+         * IPv4 address of a connected Wi-Fi network, for binding the stream server to the Wi-Fi interface only. The default (active)
+         * network is used when it is Wi-Fi, exactly as before. When Android keeps another network (e.g. cellular) as the default
+         * because the Wi-Fi has no validated internet (a LAN-only Wi-Fi), the first Wi-Fi network that has an IPv4 address
+         * is used instead; the bind is still to that one Wi-Fi address, never a wildcard.
+         */
+        @Suppress("DEPRECATION")
+        internal fun findWifiIpv4(cm: ConnectivityManager): java.net.InetAddress? {
+            fun v4(n: android.net.Network): java.net.InetAddress? {
+                val caps = cm.getNetworkCapabilities(n) ?: return null
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null
+                return cm.getLinkProperties(n)?.linkAddresses?.map { it.address }?.firstOrNull { it is java.net.Inet4Address }
+            }
+            fun vpn(n: android.net.Network): Boolean = cm.getNetworkCapabilities(n)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+            return pickWifi(cm.activeNetwork, cm.allNetworks, { it.networkHandle }, ::v4, ::vpn)
+        }
+
+        /** Selection rule, framework-free so plain unit tests cover it: the active network's Wi-Fi address first; otherwise the Wi-Fi
+         *  address of the non-VPN candidate with the lowest [order] key (a fixed order, whatever order the platform lists networks in). */
+        internal fun <N> pickWifi(active: N?, all: Array<N>, order: (N) -> Long, wifiV4: (N) -> java.net.InetAddress?, isVpn: (N) -> Boolean): java.net.InetAddress? {
+            if (active != null) { val a = wifiV4(active); if (a != null) return a }
+            var best: java.net.InetAddress? = null
+            var bestKey = 0L
+            for (n in all) {
+                if (isVpn(n)) continue   // fallback only: never choose a tunnel by lowest handle; the active path is unchanged
+                val a = wifiV4(n) ?: continue
+                val k = order(n)
+                if (best == null || k < bestKey) { best = a; bestKey = k }
+            }
+            return best
+        }
         const val CHANNEL = "stream"
         const val NOTIF_ID = 4101
         const val ACTION_STOP = "com.zephyr.remote.STOP_STREAM"
