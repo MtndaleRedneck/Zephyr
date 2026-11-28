@@ -87,7 +87,7 @@ class ZephyrUpgradeFixtureTest {
     // Reads the entries of the encrypted prefs file (name -> stored ciphertext) without decrypting; Java file APIs only.
     private fun secretEntries(bytes: ByteArray): java.util.HashMap<String, String> {
         val out = java.util.HashMap<String, String>()
-        val m = java.util.regex.Pattern.compile("<string name=\"([^\"]+)\">([^<]*)</string>").matcher(String(bytes, Charsets.UTF_8))
+        val m = java.util.regex.Pattern.compile("<string name=\"([^\"]+)\">([^<]*)</string>").matcher(String(bytes, java.nio.charset.StandardCharsets.UTF_8))
         while (m.find()) out.put(m.group(1), m.group(2))
         return out
     }
