@@ -5,6 +5,9 @@ set -euo pipefail
 PKG=com.zephyr.remote.debug
 mkdir -p screenshots
 adb install -r android/build/outputs/apk/debug/app-debug.apk
+# Explicit initial rig state (install -r keeps the app's prefs, incl. a Player selection left by an earlier capture) and failure-safe cleanup.
+adb shell pm clear $PKG >/dev/null 2>&1 || true
+trap 'adb shell pm clear $PKG >/dev/null 2>&1 || true' EXIT
 dismiss_anr() {
   adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || return 0
   adb shell cat /sdcard/ui.xml | grep -q "isn't responding" || return 0
