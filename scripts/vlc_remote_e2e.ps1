@@ -314,15 +314,21 @@ Assert-HelperFirewallRules $exe
 # headless here.
 Write-Host "== earlier-build rules are left as found and reported, never rewritten =="
 # Plant what 1.x builds left (harness fixtures, not product output): an exe-scoped TCP rule without LocalSubnet, a 1.x helper rule, and the broad plain-http Everyone grant on the OLD port.
-netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=TCP localport=8492 program="$exe" profile=private | Out-Null
-netsh advfirewall firewall add rule name="Zephyr VLC Remote Helper" dir=in action=allow protocol=TCP localport=8492 profile=private | Out-Null
+# Planted-fixture output is shown (not swallowed) so a missing fixture is visible in the log, and read back by exact DisplayName BEFORE setup runs.
+netsh advfirewall firewall add rule name="Zephyr VLC Remote" dir=in action=allow protocol=TCP localport=8492 program="$exe" profile=private
+Write-Host "fixture add rule 'Zephyr VLC Remote' exit $LASTEXITCODE"
+netsh advfirewall firewall add rule name="Zephyr VLC Remote Helper" dir=in action=allow protocol=TCP localport=8492 profile=private
+Write-Host "fixture add rule 'Zephyr VLC Remote Helper' exit $LASTEXITCODE"
 netsh http delete urlacl url=http://+:8492/ | Out-Null
 netsh http add urlacl url=http://+:8492/ sddl="D:(A;;GX;;;WD)" | Out-Null
+Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote' -ErrorAction SilentlyContinue).Count -ge 1) "fixture precondition: the planted exe rule exists BEFORE setup runs"
+Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote Helper' -ErrorAction SilentlyContinue).Count -ge 1) "fixture precondition: the planted 1.x helper rule exists BEFORE setup runs"
 $fwm = Start-Process $exe -ArgumentList "--install-firewall `"$sid0`" `"$data0`"" -Wait -PassThru
 Assert ($fwm.ExitCode -eq 0) "elevated setup succeeds with earlier-build rules present (exit $($fwm.ExitCode))"
 $shapeAfter = Start-Process $exe -ArgumentList "--firewall-shape-ok" -Wait -PassThru
 Assert ($shapeAfter.ExitCode -eq 0) "the unelevated shape check accepts the current rules (exit $($shapeAfter.ExitCode))"
 Assert-HelperFirewallRules $exe
+if (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote' -ErrorAction SilentlyContinue).Count -lt 1) { Write-Host "rules whose DisplayName starts 'Zephyr VLC Remote' after setup:"; Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'Zephyr VLC Remote*' } | Select-Object Name,DisplayName,Enabled,Profile | Format-Table -AutoSize | Out-String | Write-Host; Write-Host (Get-Content (Join-Path $data0 'helper.log') -Raw -ErrorAction SilentlyContinue) }
 Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote' -ErrorAction SilentlyContinue).Count -ge 1) "the earlier-build exe rule is left as found (not deleted by setup)"
 Assert (@(Get-NetFirewallRule -DisplayName 'Zephyr VLC Remote Helper' -ErrorAction SilentlyContinue).Count -ge 1) "the 1.x helper rule is left as found (not deleted by setup)"
 Assert ((netsh http show urlacl | Out-String) -match 'http://\+:8492/') "the old plain-http 8492 reservation is left as found"
