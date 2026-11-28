@@ -156,3 +156,16 @@
 # renamed, jvm.internal.Intrinsics kept) are rewritten consistently by
 # R8, and the test call site is Object-erased.
 -keep class kotlin.ResultKt { *; }
+#
+# Signed-upgrade release proof (ZephyrUpgradeFixtureTest.verify, candidate fixture), run 46089523624 (38b3a78): NoClassDefFoundError
+# com.bingemote.ZephyrCredential$State$NeedsRepair at ZephyrUpgradeFixtureTest.kt:53. The test compares s.zephyrPairing() (Store member,
+# kept above; that call resolved) to the NeedsRepair singleton by its original name (kt:53 and :84); the app R8 has no class by that
+# name, so the identity check cannot run. Keep exactly that singleton class with its members (INSTANCE) so the same object the app
+# returns is the one the test reads. Only the class the failing instruction names; State/ZephyrCredential are not referenced by name.
+-keep class com.bingemote.ZephyrCredential$State$NeedsRepair { *; }
+#
+# Same verify() then uses Source.ZEPHYR (kt:57-58: selectedSource and isPaired(Source.ZEPHYR)), the next app class the test names.
+# No earlier release-run test names Source, so this one is enumerated from the fixture source, not from a failure yet (static audit:
+# the fixture otherwise names only Store, kept above, and kotlin Intrinsics, kept above). Enum kept with members so ZEPHYR resolves
+# by original name and the enum is not unboxed or renamed across the boundary.
+-keep class com.bingemote.Source { *; }
