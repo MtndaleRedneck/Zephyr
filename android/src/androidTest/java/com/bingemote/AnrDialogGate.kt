@@ -12,9 +12,11 @@ object AnrDialogGate {
     const val TOLERATED_PACKAGE = "android"
     const val MAX_TAPS = 5
 
-    enum class Verdict { TOLERATE, REJECT }
+    // Not an enum: a Kotlin enum's static init calls kotlin.enums.EnumEntriesKt, which was missing at runtime in the minified
+    // signed-upgrade run. Compile-time Int constants need no stdlib class (no enum entries, no sealed-class constructor marker).
+    object Verdict { const val TOLERATE = 1; const val REJECT = 2 }
 
-    fun classify(title: String?, pkg: String?): Verdict =
+    fun classify(title: String?, pkg: String?): Int =
         if (title == TOLERATED_TITLE && pkg == TOLERATED_PACKAGE) Verdict.TOLERATE else Verdict.REJECT
 
     /** Tap count shared by the arrival wait and the persistence check of one test, so MAX_TAPS caps both together. */
