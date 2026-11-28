@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -110,6 +111,10 @@ class RemoteState(
         winVolume = null; connecting = true; muted = false; keyChanged = false   // keyChanged is recomputed from shared state on the next poll
     }
 
+    /** A SAVED Player pairing (the pairing screen's real save path) replaces the PC identity: a pending or showing Player "moved" notice and the pair-again hint
+     *  described the old pairing. The helper's [onRePaired] does not stand in for this. Main thread. */
+    fun onZephyrRePaired() { zephyrGate.clear(); zephyrMovedTo = null; zephyrPairAgainFor = null }
+
     /** Main thread only, no suspension between the read and the setter: publishes the stored record, optionally only while it is still [expectedRecord]. */
     fun publishIfCurrent(expectedRecord: String?): Boolean = LivePublication.publishIfCurrent(store.securePairStore, expectedRecord, ::publishAddress)
 
@@ -191,6 +196,7 @@ class RemoteState(
         subtitleListLoading = false; subtitleMutationLoading = false; subtitleListInFlight = false
         muted = false; vlcClosed = false; vlcRefused = false
         helperDown = false; helperNotice = false; helperMovedTo = null; movedGate.clear(); unpaired = false
+        zephyrGate.clear(); zephyrMovedTo = null; zephyrPairAgainFor = null
         failures = 0; connecting = true; unreachable = true
         retry()
     }
@@ -235,7 +241,7 @@ class RemoteState(
             // A good poll also clears "pair again" (N2): after a re-pair the hero must
             // not keep accusing the NEW pairing until an app restart.
             PairingStatePolicy.onSuccess().also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
-            zephyrMovedTo = null
+            onZephyrAuthenticatedPoll(zPoll)
             vlcClosed = false; vlcRefused = false; helperNotice = false; helperDown = false
         } catch (e: ZephyrClient.BadToken) {
             if (store.selectedSource != Source.ZEPHYR || !zPoll.same(store.zephyrTarget())) return
@@ -248,48 +254,69 @@ class RemoteState(
             if (store.selectedSource != Source.ZEPHYR || !zPoll.same(store.zephyrTarget())) return
             // A refused pin check says nothing about the PC: no outage count, no "pair again", no rediscovery.
             if (e is ZephyrClient.PairingChanged || e is ZephyrClient.PinUnavailable) return
-            PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
-                .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
-            connecting = false
             // A DHCP address change looks like an outage: re-find the player and keep
             // the saved pairing (teardown C3). The token is the PC's identity.
-            if (failures >= 2) zephyrRediscover()
+            if (zephyrNoteFailure()) zephyrRediscover()
         }
     }
 
-    @Volatile private var zephyrRediscovering = false
-    /** S11: set when the saved PC appears at a NEW address. The token never follows;
-     *  the hero offers the safe re-pair path instead. Cleared on a good poll. */
-    var zephyrMovedTo by mutableStateOf<String?>(null)
-    private var zephyrLastRediscoverAt = 0L
+    /** One failed Player poll: counts toward the outage card. Only an authenticated success (or a verified move) ever resets this; discovery never does. True when a rediscovery is due. */
+    internal fun zephyrNoteFailure(): Boolean {
+        PairingStatePolicy.onFailure(PairingStatePolicy.Flags(unpaired, unreachable, failures), UNREACHABLE_AFTER)
+            .also { unpaired = it.unpaired; unreachable = it.unreachable; failures = it.failures }
+        connecting = false
+        return failures >= 2
+    }
+
+    /** The sole publisher of [zephyrMovedTo]: an authenticated poll that used [t] (the endpoint that poll actually targeted). Main thread. */
+    internal fun onZephyrAuthenticatedPoll(t: Store.ZephyrTarget, now: Long = System.currentTimeMillis()) {
+        zephyrMovedTo = zephyrGate.onAuthenticatedPoll(now, zephyrEndpointKey(t.host, t.port, t.token))
+        zephyrPairAgainFor = null
+    }
+    private fun zephyrEndpointKey(host: String, port: Int, token: String) = HelperRediscover.addressKey(host, port) + "|" + token
+
+    /** Internal for tests: current failure count and outage flag as the hero reads them. */
+    internal val zephyrFailureCount: Int get() = failures
+
+    /** Separate atomic admission (one attempt in flight + 60 s gap) for the Player; the helper's is its own, so neither blocks the other. */
+    private val zephyrAdmission = RediscoverAdmission()
+    /** Own gate instance: a Player move can never be confirmed by a helper poll or the reverse. */
+    private val zephyrGate = MovedNoticeGate()
+    /** The Player moved to a new address and the phone followed it by proving the stored key. Shown only after an authenticated poll on the moved endpoint
+     *  ([onZephyrAuthenticatedPoll] is its only writer besides clears). */
+    var zephyrMovedTo by mutableStateOf<String?>(null); private set
+    /** A Player with the saved name answered at another address but did NOT prove the stored key (a renamed-key PC or an impostor): the phone moved nothing
+     *  and says to pair again. A label only; nothing follows it. Cleared on an authenticated poll, a source switch and a Player re-pair. */
+    var zephyrPairAgainFor by mutableStateOf<String?>(null); private set
+
     private fun zephyrRediscover() {
-        if (zephyrRediscovering) return
-        // Back off: rediscovering on every failing poll is a 3-6 s broadcast loop for
-        // as long as the PC stays off (S11).
-        val nowMs = System.currentTimeMillis()
-        if (nowMs - zephyrLastRediscoverAt < 60_000) return
-        zephyrLastRediscoverAt = nowMs
-        zephyrRediscovering = true
-        scope.launch(Dispatchers.IO) {
-            try {
-                // S11 (security): the saved bearer token is NEVER sent to a discovered
-                // host - a spoofed same-name answer proves nothing. run() takes no
-                // token and no HTTP client at all (ZephyrRediscover.kt).
-                val zr = store.zephyrTarget() ?: return@launch
-                val plan = com.zephyr.remote.ZephyrRediscover.run(
-                    zr.host, zr.port, store.zephyrPcName,
-                    discover = { ZephyrClient.discoverPlayers(3000) })
-                withContext(Dispatchers.Main) {
-                    if (!zr.same(store.zephyrTarget())) return@withContext   // re-paired meanwhile: the notice is about the old PC
-                    when (plan) {
-                        is com.zephyr.remote.ZephyrRediscover.Plan.MovedNotice ->
-                            zephyrMovedTo = plan.name // the hero says what to do; re-pair is the safe path
-                        else -> { /* saved endpoint seen or nothing: the poll recovers on its own */ }
-                    }
-                }
-            } finally {
-                zephyrRediscovering = false
+        // Back off and one-in-flight through the atomic admission; its completion handler is the only release.
+        zephyrAdmission.launchIfAdmitted(scope, Dispatchers.IO) {
+            // The saved token never goes to a discovered host: the handshake carries no application bytes, only the stored key decides (ZephyrMove).
+            val before = store.zephyrTarget() ?: return@launchIfAdmitted
+            val out = ZephyrMove.attempt(store.zephyrMovePort(), discover = { ZephyrClient.discoverPlayers(3000) }, ensureActive = { ensureActive() })
+            withContext(Dispatchers.Main) { applyZephyrMove(before, out) }
+        }
+    }
+
+    /** Main thread: the effects of one attempt. [before] is the target the attempt started from. */
+    internal fun applyZephyrMove(before: Store.ZephyrTarget, out: ZephyrMove.Outcome) {
+        if (store.selectedSource != Source.ZEPHYR) return
+        when (out) {
+            is ZephyrMove.Outcome.Moved -> {
+                // Our own move is accepted only when the stored pairing now IS the committed tuple (same id, key and token as before, new host/port).
+                // A re-pair, another move or a forget meanwhile is an external mutation: nothing here, no notice about the old PC.
+                val c = out.credential
+                val committedTuple = Store.ZephyrTarget(c.host, c.port, c.token, c.pcId, c.pinHex)
+                if (c.pcId != before.pcId || c.pinHex != before.pinHex || c.token != before.token) return
+                if (!committedTuple.same(store.zephyrTarget())) return
+                // The candidate proved the stored key by handshake, so this verified move may clear the outage count; the NOTICE still waits for an authenticated poll.
+                failures = 0; unreachable = false
+                if (out.committed) zephyrGate.onDurableMove(out.pcName.ifBlank { c.host }, zephyrEndpointKey(c.host, c.port, c.token), System.currentTimeMillis())
             }
+            is ZephyrMove.Outcome.NoneVerified ->
+                if (before.same(store.zephyrTarget())) zephyrPairAgainFor = out.sameNameSeen
+            else -> { /* saved endpoint seen, refused, blocked (the store already says pair again) or not paired: no counter or notice changes */ }
         }
     }
 

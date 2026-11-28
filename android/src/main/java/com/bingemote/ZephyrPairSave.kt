@@ -56,6 +56,54 @@ internal object ZephyrPairSave {
         return if (done) SecurePairSave.Outcome.SAVED else SecurePairSave.Outcome.FAILED_BLOCKED
     }
 
+    /**
+     * Verified address move of the stored Zephyr record: the same pcId, key and token, only host and port replaced. Runs inside the same write lock as [save].
+     * REFUSED, nothing written, when latched, unhealthy, a save is in flight, the stored record is not exactly [expectedRecord] (the full record is the
+     * generation: a re-pair or another move invalidates it) or the PC was marked key-changed. Results map exactly like the helper's SecurePairSave.updateAddress.
+     * Callers that publish the process-wide cache must wrap this in the record's write (Store.moveZephyrAddress); alone it only touches storage.
+     */
+    internal fun updateAddress(s: ZephyrPairStore, expectedRecord: String, host: String, port: Int): SecurePairSave.MoveResult =
+        SecurePairSave.underWriteLock { updateAddressLocked(s, expectedRecord, host, port) }
+
+    private fun updateAddressLocked(s: ZephyrPairStore, expectedRecord: String, host: String, port: Int): SecurePairSave.MoveResult {
+        if (isLatched(s)) return SecurePairSave.MoveResult.REFUSED
+        val old: ZephyrCredential; val oldRaw: String
+        try {
+            if (!s.healthy() || s.intent.isNotEmpty()) return SecurePairSave.MoveResult.REFUSED
+            oldRaw = s.credential
+            if (oldRaw != expectedRecord) return SecurePairSave.MoveResult.REFUSED
+            old = ZephyrCredential.decode(oldRaw) ?: return SecurePairSave.MoveResult.REFUSED
+        } catch (e: Exception) { return SecurePairSave.MoveResult.REFUSED }
+        if (KeyChangeState.isChanged(old.pcId)) return SecurePairSave.MoveResult.REFUSED
+        val newRec = ZephyrCredential.of(old.pcId, old.pinHex, host, port, old.token)?.encode() ?: return SecurePairSave.MoveResult.REFUSED
+        if (newRec == oldRaw) return SecurePairSave.MoveResult.UNCHANGED
+        val committed = try { s.credential = newRec; true } catch (e: Exception) { false }
+        val after = try { if (s.healthy()) s.credential else null } catch (e: Exception) { null }
+        if (committed && after == newRec) return SecurePairSave.MoveResult.COMMITTED
+        val c = after?.let { ZephyrCredential.decode(it) }
+        if (c != null && after == oldRaw && !committed) return SecurePairSave.MoveResult.REFUSED
+        if (c != null && after == newRec) return SecurePairSave.MoveResult.SESSION_USABLE
+        latched.add(s)
+        return SecurePairSave.MoveResult.BLOCKED
+    }
+
+    /**
+     * [updateAddress] plus the post-write proof (C1): the record read back afterwards must equal the verified record with ONLY host and port replaced
+     * (same pcId, key and token). Anything else is never reported as a move. The re-read is this function's own, never a carried value.
+     */
+    internal fun commitMove(s: ZephyrPairStore, v: SecureHttp.VerifiedAddress): ZephyrMove.Commit {
+        val old = ZephyrCredential.decode(v.record) ?: return ZephyrMove.Commit.Refused
+        val expectedNew = ZephyrCredential.of(old.pcId, old.pinHex, v.host, v.port, old.token)?.encode() ?: return ZephyrMove.Commit.Refused
+        val r = updateAddress(s, v.record, v.host, v.port)
+        if (r == SecurePairSave.MoveResult.REFUSED) return ZephyrMove.Commit.Refused
+        if (r == SecurePairSave.MoveResult.BLOCKED) return ZephyrMove.Commit.Blocked
+        val raw = try { s.credential } catch (e: Exception) { return ZephyrMove.Commit.Blocked }
+        val fresh = ZephyrCredential.decode(raw)
+        // Only a COMMITTED result is a confirmed commit; UNCHANGED and SESSION_USABLE moved nothing durable and never raise a notice.
+        return if (fresh == null || raw != expectedNew) ZephyrMove.Commit.Refused
+        else ZephyrMove.Commit.Written(fresh, committed = r == SecurePairSave.MoveResult.COMMITTED)
+    }
+
     /** What a freshly loaded phone should do. [legacyPresent] only reports that an old plain-HTTP pairing exists; its values are never read. */
     fun load(s: ZephyrPairStore, legacyPresent: () -> Boolean): ZephyrCredential.State {
         if (isLatched(s)) return ZephyrCredential.State.Blocked

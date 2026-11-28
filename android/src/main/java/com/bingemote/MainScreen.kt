@@ -253,10 +253,18 @@ private fun HomeContent(
             // S11: the saved PC appeared at a NEW address. The saved token never
             // follows a discovered host - re-pairing (fresh code from the PC screen)
             // is the only safe way to use the new address.
-            remote.zephyrMovedTo?.let { movedName ->
+            remote.zephyrPairAgainFor?.let { movedName ->
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "Found $movedName at a new address. For your safety this phone did not log in automatically - open Settings and pair again to use it.",
+                    color = OnAccentSub, fontSize = 13.sp,
+                )
+            }
+            // The saved Player appeared at a NEW address and proved the stored key, so the stored address moved. The token was never sent to the new address.
+            remote.zephyrMovedTo?.let { movedName ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Zephyr Player ($movedName) moved to a new address. This phone checked its key and updated the address, nothing to do.",
                     color = OnAccentSub, fontSize = 13.sp,
                 )
             }

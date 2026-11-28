@@ -105,6 +105,7 @@ fun ZephyrSetupScreen(
                         }
                         code = ""
                         remote.refreshPairing()
+                        remote.onZephyrRePaired()
                         pairedName = store.zephyrPcName.ifBlank { h }
                         store.zephyrTarget()?.let { checkAfterPair(it) }
                     } catch (e: SecureStoreUnavailable) {

@@ -219,6 +219,34 @@ class Store internal constructor(
         return outcome
     }
 
+    /** The only mover of the Player address. Runs as a [zephyrRecord] write exactly like [saveZephyrPairing]: the shared cache is unloaded for the duration
+     *  (the pin check says UNAVAILABLE and nothing is sent), then republished from a fresh re-read of the stored record, never from carried values.
+     *  The network probe that produced [v] ran outside every lock. Lock order: record lock, then the write lock inside [ZephyrPairSave]. */
+    internal fun moveZephyrAddress(v: SecureHttp.VerifiedAddress): ZephyrMove.Commit {
+        var out: ZephyrMove.Commit = ZephyrMove.Commit.Refused
+        try {
+            zephyrRecord.write {
+                out = ZephyrPairSave.commitMove(zephyrPairStore, v)
+                targetOf(zephyrPairing())
+            }
+        } catch (e: Exception) {
+            // The record stays unloaded and reloads from storage on the next read, so no stale tuple stays published; nothing here claims a move.
+            return ZephyrMove.Commit.Refused
+        }
+        return out
+    }
+
+    /** The store as one address-follow attempt sees it: one snapshot read, and the single writer above. */
+    internal fun zephyrMovePort(): ZephyrMove.Port = object : ZephyrMove.Port {
+        override fun snapshot(): ZephyrMove.Snapshot? {
+            val raw = try { zephyrPairStore.credential } catch (e: Exception) { return null }
+            val c = (zephyrPairing() as? ZephyrCredential.State.Secure)?.credential ?: return null
+            if (c.encode() != raw) return null
+            return ZephyrMove.Snapshot(c, raw, zephyrPcName)
+        }
+        override fun commit(v: SecureHttp.VerifiedAddress): ZephyrMove.Commit = moveZephyrAddress(v)
+    }
+
     companion object {
         private val zephyrRecord = ZephyrRecord<ZephyrTarget>()
         /** Test-only: forget the process-shared cache so each test starts unloaded. */
