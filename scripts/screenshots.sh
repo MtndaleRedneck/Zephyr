@@ -53,7 +53,6 @@ shoot setup-cancel setup --ez pairdemo true --ez setupcancel true
 shoot banner-unreachable main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-g
 shoot banner-helper-note main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-e
 shoot banner-unpaired-note main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase prop-unpaired
-shoot banner-zephyr-moved main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase moved-zephyr
 # Settings scrolled to the Feedback card so its forward arrow is in frame.
 adb shell am force-stop $PKG
 adb shell am start -n $PKG/com.bingemote.MainActivity --es screen settings >/dev/null
@@ -96,3 +95,5 @@ adb shell input keyevent KEYCODE_HOME
 if [ "$DRAWER_OK" != "1" ]; then
   echo "LAUNCHER CAPTURE UNVERIFIED: drawer never reached settled grid state"
 fi
+# LAST on purpose: the moved-notice case selects the Player in the debug app's prefs, which later captures must not inherit. Render of the shipped branch with seeded state only.
+shoot banner-zephyr-moved main --ez pcdemo true --ez demopaired true --ez demostatus true --es statuscase moved-zephyr

@@ -130,7 +130,12 @@ class RemoteState(
 
     /** Screenshot-rig only: renders the REAL shipped "Player moved" notice branch (the same state the authenticated-poll gate publishes). */
     fun debugShowZephyrMoved(name: String) {
-        if (BuildConfig.DEBUG) zephyrMovedTo = name
+        if (BuildConfig.DEBUG) {
+            // Player selected through the same Store setter the real flow uses, shown as paired for the hero branch; render evidence only.
+            store.selectedSource = Source.ZEPHYR
+            debugForceZephyrPaired = true; refreshPairing()
+            zephyrMovedTo = name
+        }
     }
 
     /** Screenshot-rig only: mock hero note line for the status-notice proposal
@@ -345,11 +350,12 @@ class RemoteState(
     var vlcPaired by mutableStateOf(false); private set
     /** Screenshot-rig only: render the VLC source as paired without a real pairing. Never set outside the rig. */
     @Volatile var debugForcePaired = false
+    @Volatile var debugForceZephyrPaired = false
 
     init { refreshPairing() } // once at creation; then per poll + after pair/clear
     init { scope.launch(ioDispatcher) { try { startup?.join(); store.helperVlcSnapshot() } catch (e: Exception) { } } }   // first publication of the pairing tuple, off Main
     fun refreshPairing() {
-        zephyrPaired = store.isPaired(Source.ZEPHYR)
+        zephyrPaired = store.isPaired(Source.ZEPHYR) || (BuildConfig.DEBUG && debugForceZephyrPaired)
         vlcPaired = store.isPaired(Source.VLC) || (BuildConfig.DEBUG && debugForcePaired)
     }
     fun pairedForSelected(): Boolean = if (store.selectedSource == Source.ZEPHYR) zephyrPaired else vlcPaired
