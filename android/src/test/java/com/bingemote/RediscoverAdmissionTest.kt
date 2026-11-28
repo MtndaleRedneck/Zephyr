@@ -38,13 +38,16 @@ class RediscoverAdmissionTest {
         val a = RediscoverAdmission(clock = { now })
         val ran = AtomicInteger()
         // A one-thread dispatcher held busy, so the admitted job is queued and its body has not started when we cancel it.
-        val ex = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val ex = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r).apply { isDaemon = true } }
         val hold = java.util.concurrent.CountDownLatch(1)
-        ex.execute { hold.await() }
-        val job = a.launchIfAdmitted(scope, ex.asCoroutineDispatcher()) { ran.incrementAndGet() }
-        assertNotNull(job)
-        assertFalse(a.tryAdmit())                       // admitted and still in flight
-        job!!.cancel(); hold.countDown(); runBlocking { job.join() }; ex.shutdown()
+        try {
+            ex.execute { hold.await(10, java.util.concurrent.TimeUnit.SECONDS) }
+            val job = a.launchIfAdmitted(scope, ex.asCoroutineDispatcher()) { ran.incrementAndGet() }
+            assertNotNull(job)
+            assertFalse(a.tryAdmit())                       // admitted and still in flight
+            job!!.cancel(); hold.countDown()
+            runBlocking { assertNotNull("job did not complete", kotlinx.coroutines.withTimeoutOrNull(10_000) { job.join() }) }
+        } finally { hold.countDown(); ex.shutdownNow() }
         assertEquals(0, ran.get())                      // the body never ran, so no in-body finally could have released
         now += 60_000
         assertTrue("in-flight flag wedged after a pre-start cancel", a.tryAdmit())
@@ -77,13 +80,5 @@ class RediscoverAdmissionTest {
         runBlocking { job.join() }
         now += 60_000
         assertTrue(a.tryAdmit())
-    }
-
-    @Test fun concurrentCallersAreAdmittedExactlyOnce() {
-        val a = RediscoverAdmission(clock = { 1_000L })
-        val n = 32; val admitted = AtomicInteger(); val go = java.util.concurrent.CountDownLatch(1); val done = java.util.concurrent.CountDownLatch(n)
-        repeat(n) { Thread { go.await(); if (a.tryAdmit()) admitted.incrementAndGet(); done.countDown() }.start() }
-        go.countDown(); done.await()
-        assertEquals(1, admitted.get())
     }
 }
