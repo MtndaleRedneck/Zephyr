@@ -1,7 +1,6 @@
 package com.bingemote
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.coroutines.CoroutineContext
@@ -32,13 +31,13 @@ class RediscoverAdmission(private val clock: () -> Long = { System.currentTimeMi
 
     @Synchronized internal fun release() { inFlight = false }
 
-    /** Admits, launches [block], and releases when the job completes or is cancelled, even before it starts. Null when not admitted. */
+    /** Admits, launches [block] (always the default start: a never-started lazy job would never complete and would wedge the flag), and releases when the job completes or is cancelled, even before it starts. Null when not admitted. */
     fun launchIfAdmitted(
-        scope: CoroutineScope, context: CoroutineContext = EmptyCoroutineContext, start: CoroutineStart = CoroutineStart.DEFAULT,
+        scope: CoroutineScope, context: CoroutineContext = EmptyCoroutineContext,
         block: suspend CoroutineScope.() -> Unit,
     ): Job? {
         if (!tryAdmit()) return null
-        val job = try { scope.launch(context, start, block) } catch (e: Throwable) { release(); throw e }
+        val job = try { scope.launch(context, block = block) } catch (e: Throwable) { release(); throw e }
         job.invokeOnCompletion { release() }
         return job
     }

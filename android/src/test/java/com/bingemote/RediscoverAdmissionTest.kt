@@ -2,10 +2,10 @@ package com.bingemote
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,10 +37,14 @@ class RediscoverAdmissionTest {
         var now = 1_000L
         val a = RediscoverAdmission(clock = { now })
         val ran = AtomicInteger()
-        val job = a.launchIfAdmitted(scope, start = CoroutineStart.LAZY) { ran.incrementAndGet() }
+        // A one-thread dispatcher held busy, so the admitted job is queued and its body has not started when we cancel it.
+        val ex = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val hold = java.util.concurrent.CountDownLatch(1)
+        ex.execute { hold.await() }
+        val job = a.launchIfAdmitted(scope, ex.asCoroutineDispatcher()) { ran.incrementAndGet() }
         assertNotNull(job)
         assertFalse(a.tryAdmit())                       // admitted and still in flight
-        job!!.cancel(); runBlocking { job.join() }
+        job!!.cancel(); hold.countDown(); runBlocking { job.join() }; ex.shutdown()
         assertEquals(0, ran.get())                      // the body never ran, so no in-body finally could have released
         now += 60_000
         assertTrue("in-flight flag wedged after a pre-start cancel", a.tryAdmit())
@@ -73,5 +77,13 @@ class RediscoverAdmissionTest {
         runBlocking { job.join() }
         now += 60_000
         assertTrue(a.tryAdmit())
+    }
+
+    @Test fun concurrentCallersAreAdmittedExactlyOnce() {
+        val a = RediscoverAdmission(clock = { 1_000L })
+        val n = 32; val admitted = AtomicInteger(); val go = java.util.concurrent.CountDownLatch(1); val done = java.util.concurrent.CountDownLatch(n)
+        repeat(n) { Thread { go.await(); if (a.tryAdmit()) admitted.incrementAndGet(); done.countDown() }.start() }
+        go.countDown(); done.await()
+        assertEquals(1, admitted.get())
     }
 }
