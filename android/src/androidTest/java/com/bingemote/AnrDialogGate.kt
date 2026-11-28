@@ -72,10 +72,12 @@ object AnrDialogGate {
     const val REMOVAL_SLICE_MS = 250L
 
     /**
-     * Removal confirmation after a real tap on [tapped]. Runs one event wait per slice (goneWait, which is true only when NO
-     * "isn't responding" node is on screen). Each non-gone slice re-reads the dialog: a different title/package (a replacement or a
-     * second dialog) throws at once; the same one keeps waiting. One ceiling measured from the start, never extended, then throws.
-     * After goneWait is true the screen is read once more and any dialog throws. Never queries the app window, never sleeps.
+     * Removal confirmation after a real tap on [tapped]. Strict bound: one ceiling measured from the start, never extended. Before every
+     * slice the remaining time is checked and the event wait is clamped to min(slice, remaining); a result that arrives after the bound
+     * is rejected. goneWait is true only when NO "isn't responding" node is on screen. ONLY that positive predicate followed by a clean
+     * screen read (no dialog) confirms removal. A not-gone slice never confirms: a different title/package (replacement, second dialog,
+     * multi-dialog marker) throws at once; the same dialog, or a null read (a stale node maps to null), just keeps waiting until the
+     * ceiling, then throws. Never queries the app window, never sleeps.
      */
     fun awaitRemoval(
         tapped: Dialog,
@@ -87,17 +89,20 @@ object AnrDialogGate {
     ) {
         val end = now() + ceilingMs
         while (true) {
-            if (goneWait(sliceMs)) {
+            val remaining = end - now()
+            if (remaining <= 0) throw AssertionError("tapped ANR dialog was not removed within ${ceilingMs} ms")
+            val gone = goneWait(if (sliceMs < remaining) sliceMs else remaining)
+            if (now() > end) throw AssertionError("removal wait ran past its ${ceilingMs} ms bound")
+            if (gone) {
                 val left = dialog()
                 if (left != null) throw AssertionError("a dialog is on screen again after the tapped one went: title=${left.title} pkg=${left.pkg}")
+                if (now() > end) throw AssertionError("removal wait ran past its ${ceilingMs} ms bound")
                 return
             }
             val d = dialog()
-            if (d == null) return
-            if (d.title != tapped.title || d.pkg != tapped.pkg) {
+            if (d != null && (d.title != tapped.title || d.pkg != tapped.pkg)) {
                 throw AssertionError("a different ANR dialog replaced the tapped one: title=${d.title} pkg=${d.pkg}")
             }
-            if (now() >= end) throw AssertionError("tapped ANR dialog was not removed within ${ceilingMs} ms")
         }
     }
 

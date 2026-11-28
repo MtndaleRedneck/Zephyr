@@ -173,23 +173,42 @@ class AnrDialogGateTest {
     @Test fun noRemovalWaitWhenNoDialogWasTapped() {
         val r = Rig(emptyList()); assertFalse(r.persists { false }); assertEquals(listOf("query"), r.events)
     }
-    private class Removal(val goneAtSlice: Int = Int.MAX_VALUE, screens: List<AnrDialogGate.Dialog?> = emptyList()) {
-        var clock = 0L; var slices = 0; var apps = 0
+    private class Removal(val goneAtSlice: Int = Int.MAX_VALUE, screens: List<AnrDialogGate.Dialog?> = emptyList(), val extraMs: Long = 0) {
+        var clock = 0L; var slices = 0
+        val waited = mutableListOf<Long>()
         val screens = ArrayDeque(screens)
-        fun run(tapped: AnrDialogGate.Dialog) = AnrDialogGate.awaitRemoval(
+        fun run(tapped: AnrDialogGate.Dialog, ceiling: Long = AnrDialogGate.REMOVAL_CEILING_MS) = AnrDialogGate.awaitRemoval(
             tapped = tapped, now = { clock },
-            goneWait = { ms -> slices += 1; clock += ms; slices >= goneAtSlice },
-            dialog = { if (screens.isEmpty()) tapped else screens.removeFirst() })
+            goneWait = { ms -> slices += 1; waited.add(ms); clock += ms + extraMs; slices >= goneAtSlice },
+            dialog = { if (screens.isEmpty()) tapped else screens.removeFirst() }, ceilingMs = ceiling)
     }
-    @Test fun removalCompletesWhenNothingIsLeftOnScreen() {
+    @Test fun removalCompletesOnlyOnGonePlusACleanRead() {
         val r = Removal(goneAtSlice = 3, screens = listOf(launcher, launcher, null)); r.run(launcher); assertEquals(3, r.slices)
     }
-    @Test fun removalCompletesWhenTheDialogIsNoLongerThereAfterASlice() {
-        val r = Removal(screens = listOf(launcher, null)); r.run(launcher); assertEquals(2, r.slices)
+    @Test fun aNullRereadOnANotGoneSliceIsNotConfirmedRemoval() {
+        // stale node maps to null: must keep waiting, and with gone never true it fails at the ceiling
+        val r = Removal(screens = List(40) { null }); expectFailure("not removed within 5000") { r.run(launcher) }
+        assertEquals(20, r.slices)
+    }
+    @Test fun aNullRereadThenGoneStillCompletes() {
+        val r = Removal(goneAtSlice = 3, screens = listOf(null, null, null)); r.run(launcher); assertEquals(3, r.slices)
     }
     @Test fun removalTimesOutAtTheCeilingAndDoesNotExtendIt() {
         val r = Removal(); expectFailure("not removed within 5000") { r.run(launcher) }
         assertEquals(AnrDialogGate.REMOVAL_CEILING_MS / AnrDialogGate.REMOVAL_SLICE_MS, r.slices.toLong())
+    }
+    @Test fun theLastSliceIsClampedToTheRemainingTime() {
+        val r = Removal(); expectFailure("not removed within 600") { r.run(launcher, ceiling = 600) }
+        assertEquals(listOf(250L, 250L, 100L), r.waited)
+    }
+    @Test fun noSliceIsStartedOnceTheCeilingIsSpent() {
+        val r = Removal(); expectFailure("not removed within 250") { r.run(launcher, ceiling = 250) }; assertEquals(1, r.slices)
+    }
+    @Test fun aGoneResultThatArrivesAfterTheBoundIsRejected() {
+        val r = Removal(goneAtSlice = 1, extraMs = 400); expectFailure("past its 250 ms bound") { r.run(launcher, ceiling = 250) }
+    }
+    @Test fun aNotGoneSliceThatRunsPastTheBoundIsRejectedToo() {
+        val r = Removal(extraMs = 400); expectFailure("past its 250 ms bound") { r.run(launcher, ceiling = 250) }
     }
     @Test fun removalFailsWhenAnAppAnrReplacesTheTappedDialog() {
         val r = Removal(screens = listOf(appAnr)); expectFailure("different ANR dialog") { r.run(launcher) }; assertEquals(1, r.slices)
