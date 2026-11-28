@@ -1054,8 +1054,7 @@ StopZephyr
 Stop-Process -Id $srv.Id -Force -ErrorAction SilentlyContinue
 
 . "$PSScriptRoot/zephyr_fw_assert.ps1"; Remove-ZJournaledRules 'ZephyrPlayer'   # this script's own setup run created them; removed by the product journal's unique keys
-Write-Host "capture cleanup: last native exit code before reset = $global:LASTEXITCODE (best-effort cleanup only; every capture gate below still fails the step explicitly)"
-$global:LASTEXITCODE = 0
+Write-Host "capture end: last native exit code = $global:LASTEXITCODE (not reset; the removed by-name rule deletes were the only natives after ffmpeg)"
 
 # Verdicts: video area must be alive (moving pattern => many lit pixels in the
 # center band), and the bottom bar band must show lit control pixels.

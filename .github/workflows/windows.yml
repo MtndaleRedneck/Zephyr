@@ -1075,13 +1075,14 @@ jobs:
           # Foreign reservation over our https port: the product must touch NOTHING (all four rules and the journal), not just the TCP rule.
           try { Assert-ZPlayerRules $exeB } catch { Get-Content "$env:RUNNER_TEMP\uninstall-t6b.log" -Tail 60 -ErrorAction SilentlyContinue; throw "T6b: a journaled rule was changed or removed while a foreign reservation owned the port: $($_.Exception.Message)" }
           if ((Get-FileHash $journalB -Algorithm SHA256).Hash -ne $jHashBefore) { throw 'T6b: the lifecycle journal changed during an uninstall that must have touched nothing' }
+          $exitBeforeCleanup = $LASTEXITCODE   # an earlier native's code is kept as-is; only the two fixture-cleanup deletes below (exit 1 if already absent) are excluded
           netsh http delete urlacl url=https://+:47824/ | Out-Null
           netsh http delete urlacl url=http://+:47823/ | Out-Null
+          Write-Output "T6 cleanup: exit code before cleanup = $exitBeforeCleanup, after the two best-effort reservation deletes = $LASTEXITCODE (restored to the former)"
+          if ($null -ne $exitBeforeCleanup) { $global:LASTEXITCODE = $exitBeforeCleanup } else { Remove-Variable -Name LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
           # Harness cleanup: the product's rules by the unique keys in its own journal (the foreign-reservation uninstall left them by design), then the planted earlier-build fixtures by exact name.
           Remove-ZJournaledRules 'ZephyrPlayer'
           Remove-ZPlantedLegacyRules @('Zephyr Player','Zephyr Player Discovery')
-          Write-Output "T6 cleanup: last native exit code before reset = $global:LASTEXITCODE (fixture cleanup deletes only; the foreign-reservation, rule and journal asserts above already threw on failure)"
-          $global:LASTEXITCODE = 0
           Write-Output 'T6 FOREIGN: the foreign reservation and the rules survived the fresh-install uninstall.'
 
       - name: Legacy HKLM uninstall entry behavior proof (upgrade, setup declined)
