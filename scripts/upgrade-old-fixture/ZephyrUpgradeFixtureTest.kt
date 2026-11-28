@@ -42,6 +42,10 @@ class ZephyrUpgradeFixtureTest {
         // REAL shipped 1.5.0 app, whose R8 names for stdlib classes differ from this build's (NoSuchMethodError on run 45666571505).
         assertTrue("seed commit refused for settings", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).edit().commit())
         assertTrue("seed commit refused for secrets", ctx.getSharedPreferences("secrets", android.content.Context.MODE_PRIVATE).edit().commit())
+        // Snapshot of the encrypted secrets file as the old app left it (Java APIs only, no kotlin-stdlib calls). verify() in the
+        // new build requires every entry in it to still be there, byte-identical, after the upgrade and the cold open.
+        val secretsXml = java.io.File(ctx.dataDir, "shared_prefs/secrets.xml").toPath()
+        java.nio.file.Files.write(java.io.File(ctx.filesDir, "seed-secrets.xml").toPath(), java.nio.file.Files.readAllBytes(secretsXml))
     }
 
     @Test

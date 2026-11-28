@@ -51,10 +51,9 @@ class ZephyrUpgradeFixtureTest {
         assertEquals("Upgrade Fixture PC", s.zephyrPcName)
         assertEquals(null, s.zephyrTarget())
         assertTrue(s.zephyrPairing() === ZephyrCredential.State.NeedsRepair)
-        // The legacy token must still be on disk: in the plain prefs (older v13-dev layout, written by the seed above) or in the
-        // encrypted "secrets" file (what the real prior releases write). Nothing deleted it.
-        assertTrue("old token left in place", ctx.getSharedPreferences("settings", android.content.Context.MODE_PRIVATE).contains("zephyrToken") ||
-            ctx.getSharedPreferences("secrets", android.content.Context.MODE_PRIVATE).all.size > 0)
+        // The legacy token must be retained exactly: every encrypted entry the old app left in "secrets" (snapshot taken by the old-tree
+        // seed) is still present with identical bytes. An unrelated or new key cannot satisfy this; a deleted or rewritten token fails it.
+        assertLegacySecretsRetained()
         assertFalse(s.isPaired(Source.ZEPHYR))
         assertEquals(Source.ZEPHYR, s.selectedSource)
         assertEquals(15, s.skipMainSec)
@@ -83,6 +82,27 @@ class ZephyrUpgradeFixtureTest {
         assertTrue("app process died after cold open", alive)
         // State still intact after the app itself ran against it.
         assertTrue(Store(ctx).zephyrPairing() === ZephyrCredential.State.NeedsRepair)
+    }
+
+    // Reads the entries of the encrypted prefs file (name -> stored ciphertext) without decrypting; Java file APIs only.
+    private fun secretEntries(bytes: ByteArray): java.util.HashMap<String, String> {
+        val out = java.util.HashMap<String, String>()
+        val m = java.util.regex.Pattern.compile("<string name=\"([^\"]+)\">([^<]*)</string>").matcher(String(bytes, Charsets.UTF_8))
+        while (m.find()) out.put(m.group(1), m.group(2))
+        return out
+    }
+
+    private fun assertLegacySecretsRetained() {
+        val snap = java.io.File(ctx.filesDir, "seed-secrets.xml").toPath()
+        assertTrue("seed snapshot of the encrypted secrets file is missing", java.nio.file.Files.exists(snap))
+        val before = secretEntries(java.nio.file.Files.readAllBytes(snap))
+        assertTrue("seed left no encrypted entry (the legacy token)", before.size > 0)
+        val now = secretEntries(java.nio.file.Files.readAllBytes(java.io.File(ctx.dataDir, "shared_prefs/secrets.xml").toPath()))
+        val it = before.entries.iterator()
+        while (it.hasNext()) {
+            val e = it.next()
+            assertEquals("encrypted secret entry changed or removed by the upgrade", e.value, now.get(e.key))
+        }
     }
 
     // Diagnostic only; never changes the verdict. No kotlin stdlib calls (the shipped release app shrinks them): Java APIs, int
