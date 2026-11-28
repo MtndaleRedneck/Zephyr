@@ -60,6 +60,7 @@ internal object ZephyrMove {
         if (pingSaved(c)) return Outcome.SavedEndpointSeen
         ensureActive()
         val found = discover()
+        ensureActive()   // a cancel during the (blocking) discovery stops before any candidate is probed
         val v = HelperRediscover.findVerifiedMove(c.host, c.port, snap.name, snap.raw, found, addressOk) { h, p ->
             if (verify(c, h, p)) SecureHttp.VerifiedAddress(c.pcId, h, p, snap.raw) else null
         }
