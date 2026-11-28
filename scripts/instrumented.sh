@@ -39,6 +39,7 @@ com.bingemote.TopBarParityTest
 com.bingemote.HeaderGeometryTest
 com.bingemote.AutoSetupCheckTest
 com.bingemote.StoreMigrationTest
+com.bingemote.LegacyRepairAfterMigrationTest
 com.bingemote.NoticeTokenResetTest
 com.zephyr.remote.StreamServerAndroidTest
 com.zephyr.remote.StreamServiceRefusalAndroidTest
