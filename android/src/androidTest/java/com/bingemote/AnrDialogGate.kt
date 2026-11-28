@@ -81,14 +81,31 @@ object AnrDialogGate {
      * container. Throws unless it is still exactly the classified dialog, alone on screen, with exactly one Wait owned by "android".
      * An app ANR dialog (also served by "android") that replaced or joined it fails here.
      */
-    fun verifyBeforeClick(first: Dialog, again: Dialog?, dialogNodeCount: Int, waitCount: Int, waitPackage: String?) {
+    /** Grounded on the real dialog hierarchy (run 155 dump): panel android:id/parentPanel holds alertTitle and aerr_wait. */
+    const val PANEL_ID = "android:id/parentPanel"
+    const val TITLE_ID = "android:id/alertTitle"
+    const val WAIT_ID = "android:id/aerr_wait"
+    class Box(val l: Int, val t: Int, val r: Int, val b: Int) {
+        fun valid() = r > l && b > t
+        fun contains(o: Box) = o.valid() && valid() && o.l >= l && o.t >= t && o.r <= r && o.b <= b
+    }
+    /** What was read from ONE panel node: nothing outside it is ever searched. */
+    class Panel(val panelId: String?, val panelBounds: Box?, val titleId: String?, val titleBounds: Box?,
+                val waitCount: Int, val waitPackage: String?, val waitId: String?, val waitBounds: Box?)
+
+    fun verifyBeforeClick(first: Dialog, again: Dialog?, dialogNodeCount: Int, p: Panel?) {
         if (again == null) throw AssertionError("ANR dialog vanished before the tap")
         if (classify(first.title, first.pkg) != Verdict.TOLERATE) throw AssertionError("not a tolerated dialog: title=${first.title} pkg=${first.pkg}")
         if (again.title != first.title || again.pkg != first.pkg) {
             throw AssertionError("ANR dialog changed before the tap: was title=${first.title} pkg=${first.pkg}, now title=${again.title} pkg=${again.pkg}")
         }
         if (dialogNodeCount != 1) throw AssertionError("expected exactly one ANR dialog on screen, found $dialogNodeCount")
-        if (waitCount != 1) throw AssertionError("expected exactly one Wait button inside the dialog, found $waitCount")
-        if (waitPackage != TOLERATED_PACKAGE) throw AssertionError("Wait button not owned by $TOLERATED_PACKAGE: $waitPackage")
+        if (p == null || p.panelId != PANEL_ID || p.panelBounds == null) throw AssertionError("no dialog panel ($PANEL_ID) found above the title; refusing to search wider")
+        if (p.titleId != TITLE_ID) throw AssertionError("title node is not $TITLE_ID: ${p.titleId}")
+        if (p.titleBounds == null || !p.panelBounds.contains(p.titleBounds)) throw AssertionError("title bounds not inside the dialog panel")
+        if (p.waitCount != 1) throw AssertionError("expected exactly one Wait button inside the dialog panel, found ${p.waitCount}")
+        if (p.waitPackage != TOLERATED_PACKAGE) throw AssertionError("Wait button not owned by $TOLERATED_PACKAGE: ${p.waitPackage}")
+        if (p.waitId != WAIT_ID) throw AssertionError("Wait button is not $WAIT_ID: ${p.waitId}")
+        if (p.waitBounds == null || !p.panelBounds.contains(p.waitBounds)) throw AssertionError("Wait bounds not inside the dialog panel")
     }
 }

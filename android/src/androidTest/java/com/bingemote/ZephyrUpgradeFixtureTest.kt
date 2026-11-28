@@ -144,24 +144,27 @@ class ZephyrUpgradeFixtureTest {
      * of its title node that holds a Wait), never a global By.text("Wait"). Any stale, changed, second or ambiguous dialog throws.
      * UiAutomator has no atomic click-if-unchanged, so a replacement in the few ms between this re-read and the click is not excluded.
      */
+    private fun box(r: android.graphics.Rect?) = r?.let { AnrDialogGate.Box(it.left, it.top, it.right, it.bottom) }
     private fun tapWaitInsideDialog(device: UiDevice, first: AnrDialogGate.Dialog) {
-        val nodes = device.findObjects(By.textContains("isn't responding"))
-        val node = nodes.firstOrNull()
-        val again = try { node?.let { AnrDialogGate.Dialog(it.text, it.applicationPackage) } }
-            catch (e: androidx.test.uiautomator.StaleObjectException) { null }
-        var container = try { node?.parent } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
-        var waits: List<androidx.test.uiautomator.UiObject2> = emptyList()
-        var depth = 0
-        while (container != null && depth < 4) {
-            waits = try { container.findObjects(By.text("Wait")) } catch (e: androidx.test.uiautomator.StaleObjectException) { emptyList() }
-            if (waits.isNotEmpty()) break
-            container = try { container.parent } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
-            depth += 1
-        }
-        val waitPkg = try { waits.firstOrNull()?.applicationPackage } catch (e: androidx.test.uiautomator.StaleObjectException) { null }
-        AnrDialogGate.verifyBeforeClick(first, again, nodes.size, waits.size, waitPkg)
-        try { waits[0].click() } catch (e: androidx.test.uiautomator.StaleObjectException) {
-            throw AssertionError("Wait button vanished before the click")
+        val stale = "dialog changed while reading it"
+        try {
+            val nodes = device.findObjects(By.textContains("isn't responding"))
+            val node = nodes.firstOrNull()
+            val again = node?.let { AnrDialogGate.Dialog(it.text, it.applicationPackage) }
+            // Panel = the nearest ancestor whose resource id is the dialog panel; if none within 6 levels, fail closed (no wider search).
+            var panel: androidx.test.uiautomator.UiObject2? = node?.parent
+            var up = 0
+            while (panel != null && panel.resourceName != AnrDialogGate.PANEL_ID && up < 6) { panel = panel.parent; up += 1 }
+            if (panel != null && panel.resourceName != AnrDialogGate.PANEL_ID) panel = null
+            val waits = panel?.findObjects(By.res(AnrDialogGate.WAIT_ID).text("Wait")) ?: emptyList()
+            val w = waits.firstOrNull()
+            val p = if (node == null || panel == null) null else AnrDialogGate.Panel(
+                panel.resourceName, box(panel.visibleBounds), node.resourceName, box(node.visibleBounds),
+                waits.size, w?.applicationPackage, w?.resourceName, box(w?.visibleBounds))
+            AnrDialogGate.verifyBeforeClick(first, again, nodes.size, p)
+            w!!.click()
+        } catch (e: androidx.test.uiautomator.StaleObjectException) {
+            throw AssertionError(stale)
         }
     }
 

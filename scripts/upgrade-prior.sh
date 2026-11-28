@@ -199,6 +199,7 @@ retry_window_only() { # $1 class#method, $2 result name
   dismiss_foreign_anr "$2" || return 0
   echo "NOTE: $2 failed only the window assertion with an allowlisted non-app ANR dialog in focus; ONE rerun (first failure kept as $2-first.txt)"
   cp "instrument-results/$2.txt" "instrument-results/$2-first.txt"
+  rm -rf "instrument-results/$2-first-device"; cp -r "instrument-results/$2-device" "instrument-results/$2-first-device" 2>/dev/null || true
   for part in rawlog.txt syslog.txt focus.txt ui.xml anr-log.txt; do cp "instrument-results/$2-$part" "instrument-results/$2-first-$part" 2>/dev/null || true; done
   run "$1" "$2"
 }

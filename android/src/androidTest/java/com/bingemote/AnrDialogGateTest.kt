@@ -116,20 +116,44 @@ class AnrDialogGateTest {
     }
 
     // The last gate before the click (race and replacement cases)
-    private fun verify(again: AnrDialogGate.Dialog? = launcher, nodes: Int = 1, waits: Int = 1, waitPkg: String? = "android", first: AnrDialogGate.Dialog = launcher) =
-        AnrDialogGate.verifyBeforeClick(first, again, nodes, waits, waitPkg)
+    private val pb = AnrDialogGate.Box(70, 1021, 1010, 1443)
+    private fun panel(panelId: String? = AnrDialogGate.PANEL_ID, panelBounds: AnrDialogGate.Box? = pb, titleId: String? = AnrDialogGate.TITLE_ID,
+                      titleBounds: AnrDialogGate.Box? = AnrDialogGate.Box(133, 1068, 947, 1131), waits: Int = 1, waitPkg: String? = "android",
+                      waitId: String? = AnrDialogGate.WAIT_ID, waitBounds: AnrDialogGate.Box? = AnrDialogGate.Box(70, 1296, 1010, 1422)) =
+        AnrDialogGate.Panel(panelId, panelBounds, titleId, titleBounds, waits, waitPkg, waitId, waitBounds)
+    private fun verify(again: AnrDialogGate.Dialog? = launcher, nodes: Int = 1, p: AnrDialogGate.Panel? = panel(), first: AnrDialogGate.Dialog = launcher) =
+        AnrDialogGate.verifyBeforeClick(first, again, nodes, p)
     @Test fun verifyAcceptsTheUnchangedExactDialog() { verify() }
     @Test fun verifyRejectsAnAppAnrDialogThatReplacedIt() { expectFailure("changed") { verify(again = appAnr) } }
     @Test fun verifyRejectsTheSameTitleFromAnotherPackageNow() { expectFailure("changed") { verify(again = AnrDialogGate.Dialog("Pixel Launcher isn't responding", "com.zephyr.remote")) } }
     @Test fun verifyRejectsADialogThatVanished() { expectFailure("vanished") { verify(again = null) } }
     @Test fun verifyRejectsAFirstReadThatWasNotTolerated() { expectFailure("not a tolerated") { verify(first = appAnr, again = appAnr) } }
     @Test fun verifyRejectsTwoDialogsOnScreen() { expectFailure("exactly one ANR dialog") { verify(nodes = 2) } }
-    @Test fun verifyRejectsNoWaitOrTwoWaitsInsideTheDialog() {
-        expectFailure("exactly one Wait") { verify(waits = 0) }
-        expectFailure("exactly one Wait") { verify(waits = 2) }
+    @Test fun verifyRejectsNoWaitOrTwoWaitsInsideThePanel() {
+        expectFailure("exactly one Wait") { verify(p = panel(waits = 0)) }
+        expectFailure("exactly one Wait") { verify(p = panel(waits = 2)) }
     }
     @Test fun verifyRejectsAWaitNotOwnedByAndroid() {
-        expectFailure("not owned") { verify(waitPkg = "com.zephyr.remote") }
-        expectFailure("not owned") { verify(waitPkg = null) }
+        expectFailure("not owned") { verify(p = panel(waitPkg = "com.zephyr.remote")) }
+        expectFailure("not owned") { verify(p = panel(waitPkg = null)) }
+    }
+    // Panel boundary: no panel above the title (ancestor walk would have reached the window root) means no search and no click.
+    @Test fun verifyRejectsWhenNoPanelWasFound() { expectFailure("no dialog panel") { verify(p = null) } }
+    @Test fun verifyRejectsAWrongOrMissingPanelId() {
+        expectFailure("no dialog panel") { verify(p = panel(panelId = "android:id/content")) }
+        expectFailure("no dialog panel") { verify(p = panel(panelId = null)) }
+        expectFailure("no dialog panel") { verify(p = panel(panelBounds = null)) }
+    }
+    @Test fun verifyRejectsATitleThatIsNotTheAlertTitleOrOutsideThePanel() {
+        expectFailure("not android:id/alertTitle") { verify(p = panel(titleId = null)) }
+        expectFailure("title bounds") { verify(p = panel(titleBounds = AnrDialogGate.Box(0, 0, 50, 50))) }
+        expectFailure("title bounds") { verify(p = panel(titleBounds = null)) }
+    }
+    @Test fun verifyRejectsAForeignAndroidWaitOutsideOrWithoutTheRightId() {
+        expectFailure("Wait bounds") { verify(p = panel(waitBounds = AnrDialogGate.Box(0, 2000, 1080, 2100))) }
+        expectFailure("Wait bounds") { verify(p = panel(waitBounds = null)) }
+        expectFailure("Wait bounds") { verify(p = panel(waitBounds = AnrDialogGate.Box(500, 500, 500, 600))) }
+        expectFailure("is not android:id/aerr_wait") { verify(p = panel(waitId = "android:id/button1")) }
+        expectFailure("is not android:id/aerr_wait") { verify(p = panel(waitId = null)) }
     }
 }
