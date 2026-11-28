@@ -37,6 +37,7 @@ class StreamServiceRefusalAndroidTest {
     }
 
     @Test fun refusedForegroundStart_buildsNothing_bindFailsFast_thenNormalStartWorks() {
+        WifiReadiness.require(ctx)   // the normal start later in this test needs the stream server, which needs active Wi-Fi
         StreamService.testEvents.clear()
         StreamService.testForegroundRefusal = true
         val t0 = android.os.SystemClock.elapsedRealtime()

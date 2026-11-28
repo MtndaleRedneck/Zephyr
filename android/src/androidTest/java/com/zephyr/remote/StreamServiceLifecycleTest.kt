@@ -34,6 +34,7 @@ class StreamServiceLifecycleTest {
     }
 
     @Test fun coldStartServesRefusesWrongTokenAndStopActionEndsIt() {
+        WifiReadiness.require(context)   // cold bind needs the stream server, which needs active Wi-Fi
         context.startService(Intent(context, StreamService::class.java).setAction(StreamService.ACTION_STOP))
         assertTrue("service still running before the test", waitUntil(8000) { !serviceRunning() })
         val bound = runBlocking { StreamCoordinator.bind(context) }

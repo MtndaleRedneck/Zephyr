@@ -164,6 +164,9 @@ for cls in $CLASSES; do
       echo "FAIL CAPTURE: no usable log for $cls (see $base-rawlog.err)"
     fi
     cp "instrument-results/$(basename $cls).txt" "$base-result.txt" 2>/dev/null || true
+    # Raw platform network state, kept unparsed (post-session, like the other captures; never changes the verdict).
+    adb shell dumpsys connectivity > "$base-connectivity.txt" 2>/dev/null || echo "FAIL CAPTURE: dumpsys connectivity unavailable for $cls"
+    adb shell cmd wifi status > "$base-wifi-status.txt" 2>/dev/null || echo "FAIL CAPTURE: cmd wifi status unavailable for $cls"
     echo "SUITE FAIL: $cls"
     FAIL=1
   fi
