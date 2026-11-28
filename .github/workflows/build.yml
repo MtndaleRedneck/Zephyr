@@ -47,6 +47,8 @@ jobs:
         run: ./gradlew --no-daemon testDebugUnitTest
       - name: Build debug APK
         run: ./gradlew --no-daemon assembleDebug
+      - name: Android lint (errors fail the job)
+        run: ./gradlew --no-daemon lintDebug
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Zephyr-Android-debug-apk
